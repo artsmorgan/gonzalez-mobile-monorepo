@@ -5,6 +5,7 @@ const bcrypt = require('bcrypt');
 
 const prisma = new PrismaClient();
 
+
 export async function PUT(req: NextRequest, context: { params: Promise<{ token: string }> }) {
     try {
         const resolvedParams = await context.params
