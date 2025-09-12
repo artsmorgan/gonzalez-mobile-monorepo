@@ -28,7 +28,7 @@ export default function ForgotPassword({ onBackToLogin }: ForgotPasswordProps) {
     setIsLoading(true);
 
     try {
-      const apiUrl = Constants.expoConfig?.extra?.JSON_WEB_SERVER;
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) {
         Alert.alert('Error', 'URL del servidor no configurada');
         return;

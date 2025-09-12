@@ -39,7 +39,7 @@
       "typedRoutes": true
     },
     "extra": {
-      "JSON_WEB_SERVER": "https://c204284e6835.ngrok-free.app",
+      "API_SERVER": "https://c204284e6835.ngrok-free.app",
       "APP_MODE": "dev"
     }
   }

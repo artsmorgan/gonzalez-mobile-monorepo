@@ -78,7 +78,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   const login = async (cedula: string, password: string): Promise<{ success: boolean; error?: string }> => {
     try {
-      const apiUrl = Constants.expoConfig?.extra?.JSON_WEB_SERVER;
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) {
         return { success: false, error: 'Server URL not configured' };
       }
@@ -142,7 +142,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   const logout = async (): Promise<{ status: boolean; message: string }> => {
     try {
-      const apiUrl = Constants.expoConfig?.extra?.JSON_WEB_SERVER;
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       let serverResponse = { status: true, message: 'Sesión cerrada correctamente' };
       
       // Call logout API if we have a refresh token
@@ -193,7 +193,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         return false;
       }
 
-      const apiUrl = Constants.expoConfig?.extra?.JSON_WEB_SERVER;
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) {
         return false;
       }

@@ -64,7 +64,7 @@ export default function PasswordRecovery({ userId, userInfo }: PasswordRecoveryP
     setIsSubmitting(true);
     
     try {
-      const apiUrl = Constants.expoConfig?.extra?.JSON_WEB_SERVER;
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) {
         Alert.alert('Error', 'URL del servidor no configurada');
         return;

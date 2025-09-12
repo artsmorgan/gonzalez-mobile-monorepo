@@ -25,7 +25,7 @@ export default function RootLayout() {
       const initialUrl = await Linking.getInitialURL();
       if (initialUrl) {
         if (initialUrl.includes('/recover-password/')) {
-          const apiUrl = Constants.expoConfig?.extra?.JSON_WEB_SERVER;
+          const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
           let id = initialUrl.split('/recover-password/')[1];
           let response = await fetch(apiUrl + '/api/password/check-recovery-password-token/' + id, {
             method: 'GET',
