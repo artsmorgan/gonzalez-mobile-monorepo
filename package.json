@@ -13,7 +13,6 @@
     "dev": "turbo run dev",
     "build": "cd apps/server && npm run build",
     "start": "cd apps/server && npm start",
-    "postinstall": "cd apps/server && npm install",
     "lint": "turbo run lint"
   }
 }
