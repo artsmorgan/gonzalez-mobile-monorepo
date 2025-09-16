@@ -11,7 +11,9 @@
     "dev:mobile": "cd apps/mobile && expo start",
     "dev:server": "cd apps/server && next dev",
     "dev": "turbo run dev",
-    "build": "turbo run build",
+    "build": "cd apps/server && npm run build",
+    "start": "cd apps/server && npm start",
+    "postinstall": "cd apps/server && npm install",
     "lint": "turbo run lint"
   }
 }
