@@ -1,0 +1,14 @@
+[phases.setup]
+nixPkgs = ["nodejs_18", "npm-9_x", "openssl"]
+
+[phases.install]
+cmds = ["cd apps/server && npm ci"]
+
+[phases.build]
+cmds = [
+  "cd apps/server && npx prisma generate",
+  "cd apps/server && npm run build"
+]
+
+[start]
+cmd = "cd apps/server && npm start"
