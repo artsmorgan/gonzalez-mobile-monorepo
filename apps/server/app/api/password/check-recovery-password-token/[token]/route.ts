@@ -1,4 +1,3 @@
-// app/api/empleados/[id]/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { PrismaClient } from "@prisma/client";
 
@@ -6,7 +5,7 @@ const prisma = new PrismaClient();
 
 export async function GET(req: NextRequest, context: { params: Promise<{ token: string }> }) {
     try {
-        const resolvedParams = await context.params
+        const resolvedParams = await context.params;
         const token = atob(resolvedParams.token);
 
         console.log(token);
@@ -18,7 +17,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ token: 
 
         if (!token_recovery) return NextResponse.json({ message: "Token no encontrado" });
 
-        let expires_in_date = new Date(token_recovery.expira_en + token_recovery.creacion.getTime());
+        const expires_in_date = new Date(token_recovery.expira_en + token_recovery.creacion.getTime());
 
         console.log(2);
 
@@ -39,8 +38,9 @@ export async function GET(req: NextRequest, context: { params: Promise<{ token: 
         console.log(4);
 
         return NextResponse.json({ status: true, message: "Token de recuperación de contraseña encontrado", user: empleado });
-    } catch (error: any) {
-        console.log(error.message);
-        return NextResponse.json({ message: error.message }, { status: 500 });
+    } catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        console.log(errorMessage);
+        return NextResponse.json({ message: errorMessage }, { status: 500 });
     }
 }

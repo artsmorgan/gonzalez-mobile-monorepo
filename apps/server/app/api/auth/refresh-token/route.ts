@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-require-imports */
 import { NextRequest, NextResponse } from 'next/server';
 import { PrismaClient } from '@prisma/client';
 const jwt = require('jsonwebtoken');
@@ -40,13 +41,12 @@ export async function POST(request: NextRequest) {
         }
 
         // Verificar la firma del refresh token
-        let decoded;
         try {
-            decoded = jwt.verify(
+            jwt.verify(
                 refreshToken,
                 process.env.JWT_REFRESH_SECRET
             );
-        } catch (err) {
+        } catch {
             return NextResponse.json(
                 { status: false, message: "Refresh token inválido" },
                 { status: 401 }

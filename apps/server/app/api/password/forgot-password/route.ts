@@ -46,7 +46,7 @@ export async function POST(request: NextRequest) {
                 const indice = Math.floor(Math.random() * caracteres.length);
                 token += caracteres[indice];
             }
-            let exists_token = await prisma.a_recovery_password_token.findFirst({ where: { token: token } });
+            const exists_token = await prisma.a_recovery_password_token.findFirst({ where: { token: token } });
             if (!exists_token) {
                 exists = false;
             }
@@ -65,7 +65,7 @@ export async function POST(request: NextRequest) {
             }
         });
 
-        const info = await transporter.sendMail({
+        await transporter.sendMail({
             from: `Recuperación de contraseña - González <${process.env.EMAIL_USER}>`,
             to: empleado.Email,
             subject: "Recuperación de contraseña",
