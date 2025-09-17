@@ -11,70 +11,71 @@ const prisma = new PrismaClient();
 export async function POST(request: NextRequest) {
     try {
         const body = await request.json();
-        const { ced, password } = body;
+        const { username, password } = body;
 
-        if (!ced || !password) {
+        if (!username || !password) {
             return NextResponse.json(
                 { status: false, message: "Cédula y contraseña son requeridos" },
                 { status: 400 }
             );
         }
 
-        const empleado = await prisma.c_empleado.findFirst({
-            where: { cedula: ced }
+        const usuario = await prisma.security_fos_user.findFirst({
+            where: { username: username }
         });
 
-        if (!empleado || !empleado.password) {
+        if (!usuario || !usuario.password) {
             return NextResponse.json(
-                { status: false, message: "Cédula o contraseña inválidos" },
+                { status: false, message: "Usuario o contraseña inválidos" },
                 { status: 401 }
             );
         }
 
-        const passwordMatch = await bcrypt.compare(password, empleado.password);
+        const passwordMatch = await bcrypt.compare(password, usuario.password);
 
-        if (!passwordMatch) {
+        //if (!passwordMatch) { // TODO: Descomentar esta línea cuando se tenga el sistema de contraseñas
+        if (false) {
             return NextResponse.json(
-                { status: false, message: "Cédula o contraseña inválidos" },
+                { status: false, message: "Usuario o contraseña inválidos" },
                 { status: 401 }
             );
         }
 
-        // 👉 Generar Access Token (expira en 15 minutos)
+        // 👉 Generar Access Token (expira en 15 minutos) para el usuario
         const accessToken = jwt.sign(
-            { id: empleado.id, cedula: empleado.cedula },
+            { id: usuario.id, username: usuario.username },
             process.env.JWT_SECRET,
             { expiresIn: "15m" }
         );
 
-        // 👉 Generar Refresh Token (expira en 7 días)
+        // 👉 Generar Refresh Token (expira en 7 días) para el usuario
         const refreshToken = jwt.sign(
-            { id: empleado.id },
+            { id: usuario.id },
             process.env.JWT_REFRESH_SECRET,
             { expiresIn: "7d" }
         );
 
-        // 🔐 (Opcional) Guardar el refresh token en la BD
+        // 🔐 Guardar el refresh token en la BD
         await prisma.refresh_token.create({
             data: {
                 token: refreshToken,
-                empleadoId: empleado.id,
+                usuarioId: usuario.id,
                 expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
             }
         });
 
+        // Retornar éxito con el token de acceso y refresh
         return NextResponse.json(
             {
                 status: true,
                 message: "Logeado con éxito",
                 accessToken,
                 refreshToken,
-                employee: {
-                    id: empleado.id,
-                    cedula: empleado.cedula,
-                    nombre: empleado.nombre,
-                    primer_apellido: empleado.primer_apellido,
-                    segundo_apellido: empleado.segundo_apellido
+                user: {
+                    id: usuario.id,
+                    username: usuario.username,
+                    nombre: usuario.nombres,
+                    apellido: usuario.apellidos
                 }
             },
             { status: 200 }

@@ -7,9 +7,9 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
     try {
         const resolvedParams = await context.params;
         const id = parseInt(resolvedParams.id);
-        const empleado = await prisma.c_empleado.findUnique({ where: { id } });
-        if (!empleado) return NextResponse.json({ message: "Empleado no encontrado" }, { status: 404 });
-        return NextResponse.json(empleado);
+        const usuario = await prisma.security_fos_user.findUnique({ where: { id } });
+        if (!usuario) return NextResponse.json({ message: "Usuario no encontrado" }, { status: 404 });
+        return NextResponse.json(usuario);
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         return NextResponse.json({ message: errorMessage }, { status: 500 });
@@ -21,8 +21,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         const resolvedParams = await context.params;
         const id = parseInt(resolvedParams.id);
         const data = await req.json();
-        const updatedEmpleado = await prisma.c_empleado.update({ where: { id }, data });
-        return NextResponse.json(updatedEmpleado);
+        const updatedUsuario = await prisma.security_fos_user.update({ where: { id }, data });
+        return NextResponse.json(updatedUsuario);
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         return NextResponse.json({ message: errorMessage }, { status: 500 });
@@ -33,8 +33,8 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
     try {
         const resolvedParams = await context.params;
         const id = parseInt(resolvedParams.id);
-        await prisma.c_empleado.delete({ where: { id } });
-        return NextResponse.json({ message: "Empleado eliminado" });
+        await prisma.security_fos_user.delete({ where: { id } });
+        return NextResponse.json({ message: "Usuario eliminado" });
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         return NextResponse.json({ message: errorMessage }, { status: 500 });

@@ -22,7 +22,7 @@ export async function POST(request: NextRequest) {
         // Verificar que exista en BD y que no esté revocado
         const storedToken = await prisma.refresh_token.findUnique({
             where: { token: refreshToken },
-            include: { empleado: true },
+            include: { security_fos_user: { select: { id: true, username: true } } },
         });
 
         if (!storedToken || storedToken.revoked) {
@@ -53,16 +53,16 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        // Generar nuevo access token
+        // Generar nuevo access token para el usuario
         const newAccessToken = jwt.sign(
-            { id: storedToken.empleado.id, cedula: storedToken.empleado.cedula },
+            { id: storedToken.usuarioId, username: storedToken.security_fos_user.username },
             process.env.JWT_SECRET,
             { expiresIn: "15m" }
         );
 
         // 👉 Opción: rotar refresh tokens (generar uno nuevo y guardar en DB)
         const newRefreshToken = jwt.sign(
-            { id: storedToken.empleado.id },
+            { id: storedToken.usuarioId },
             process.env.JWT_REFRESH_SECRET,
             { expiresIn: "7d" }
         );
@@ -71,7 +71,7 @@ export async function POST(request: NextRequest) {
         await prisma.refresh_token.create({
             data: {
                 token: newRefreshToken,
-                empleadoId: storedToken.empleado.id,
+                usuarioId: storedToken.security_fos_user.id,
                 expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 días
             },
         });
@@ -87,6 +87,10 @@ export async function POST(request: NextRequest) {
                 status: true,
                 accessToken: newAccessToken,
                 refreshToken: newRefreshToken,
+                user: {
+                    id: storedToken.security_fos_user.id,
+                    username: storedToken.security_fos_user.username,
+                }
             },
             { status: 200 }
         );
