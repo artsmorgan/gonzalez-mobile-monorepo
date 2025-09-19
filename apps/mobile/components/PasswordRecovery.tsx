@@ -3,7 +3,8 @@ import { ThemedView } from '@/components/ThemedView';
 import Constants from 'expo-constants';
 import { router } from 'expo-router';
 import React, { useState } from 'react';
-import { ActivityIndicator, Alert, StyleSheet, TextInput, TouchableOpacity } from 'react-native';
+import { ActivityIndicator, Alert, ScrollView, StyleSheet, TextInput, TouchableOpacity, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 
 interface PasswordRecoveryProps {
   userId: string;
@@ -11,9 +12,8 @@ interface PasswordRecoveryProps {
     token: string;
     name: string;
     email: string;
-    cedula: string;
+    username: string;
     telefono: string;
-    tipoCedula: string;
   };
 }
 
@@ -21,6 +21,41 @@ export default function PasswordRecovery({ userId, userInfo }: PasswordRecoveryP
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [passwordErrors, setPasswordErrors] = useState<string[]>([]);
+
+  const validatePasswordRules = (pwd: string): string[] => {
+    const errors: string[] = [];
+    
+    // Mínimo 8 caracteres
+    if (pwd.length < 8) {
+      errors.push('Debe tener 8 caracteres o más');
+    }
+    
+    // Mayúsculas y minúsculas
+    if (!/[a-z]/.test(pwd) || !/[A-Z]/.test(pwd)) {
+      errors.push('Debe haber tanto mayúsculas como minúsculas');
+    }
+    
+    // Letras y números
+    if (!/[a-zA-Z]/.test(pwd) || !/[0-9]/.test(pwd)) {
+      errors.push('Debe haber tanto letras como números');
+    }
+    
+    // Caracteres especiales
+    if (!/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?`~]/.test(pwd)) {
+      errors.push('Debe haber al menos un carácter especial');
+    }
+    
+    return errors;
+  };
+
+  const handlePasswordChange = (text: string) => {
+    setPassword(text);
+    const errors = validatePasswordRules(text);
+    setPasswordErrors(errors);
+  };
 
   const validatePasswords = (): boolean => {
     if (!password.trim()) {
@@ -28,8 +63,9 @@ export default function PasswordRecovery({ userId, userInfo }: PasswordRecoveryP
       return false;
     }
 
-    if (password.length < 6) {
-      Alert.alert('Error', 'La contraseña debe tener al menos 6 caracteres');
+    const errors = validatePasswordRules(password);
+    if (errors.length > 0) {
+      Alert.alert('Error', 'La contraseña no cumple con los requisitos de seguridad');
       return false;
     }
 
@@ -127,7 +163,13 @@ export default function PasswordRecovery({ userId, userInfo }: PasswordRecoveryP
 
   return (
     <ThemedView style={styles.container}>
-      <ThemedView style={styles.contentContainer}>
+      <ScrollView 
+        style={styles.scrollView}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
+        <ThemedView style={styles.contentContainer}>
         <ThemedText type="title" style={styles.title}>
           Recuperar Contraseña
         </ThemedText>
@@ -140,8 +182,8 @@ export default function PasswordRecovery({ userId, userInfo }: PasswordRecoveryP
               {userInfo.name}
             </ThemedText>
             <ThemedText style={styles.userInfoText}>
-              <ThemedText style={styles.userInfoLabel}>Cédula: </ThemedText>
-              {userInfo.cedula} ({userInfo.tipoCedula})
+              <ThemedText style={styles.userInfoLabel}>Usuario: </ThemedText>
+              {userInfo.username}
             </ThemedText>
             <ThemedText style={styles.userInfoText}>
               <ThemedText style={styles.userInfoLabel}>Email: </ThemedText>
@@ -154,30 +196,76 @@ export default function PasswordRecovery({ userId, userInfo }: PasswordRecoveryP
           </ThemedView>
         )}
 
+        {/* Cartel de recomendaciones */}
+        <ThemedView style={styles.recommendationsContainer}>
+          <ThemedText style={styles.recommendationsTitle}>Recomendaciones para crear una contraseña segura:</ThemedText>
+          <View style={styles.recommendationsList}>
+            <ThemedText style={styles.recommendationItem}>• No menos de 8 caracteres</ThemedText>
+            <ThemedText style={styles.recommendationItem}>• Sin secuencias lógicas <ThemedText style={styles.exampleText}>abcd 1234 qwerty</ThemedText></ThemedText>
+            <ThemedText style={styles.recommendationItem}>• Sin info nuestra <ThemedText style={styles.exampleText}>minadre miperro minacimiento</ThemedText></ThemedText>
+            <ThemedText style={styles.recommendationItem}>• Combina mayúsculas y minúsculas <ThemedText style={styles.exampleText}>aDRnTi</ThemedText></ThemedText>
+            <ThemedText style={styles.recommendationItem}>• Combina números y letras <ThemedText style={styles.exampleText}>a1DR4nT76i</ThemedText></ThemedText>
+            <ThemedText style={styles.recommendationItem}>• Con caracteres especiales <ThemedText style={styles.exampleText}>aa18DR"4nT7:6i</ThemedText></ThemedText>
+          </View>
+        </ThemedView>
+
         <ThemedView style={styles.inputContainer}>
           <ThemedText style={styles.label}>Nueva contraseña</ThemedText>
-          <TextInput
-            style={styles.input}
-            value={password}
-            onChangeText={setPassword}
-            placeholder="Ingresa tu nueva contraseña"
-            placeholderTextColor="#999"
-            secureTextEntry
-            autoCapitalize="none"
-          />
+          <View style={styles.passwordInputContainer}>
+            <TextInput
+              style={styles.passwordInput}
+              value={password}
+              onChangeText={handlePasswordChange}
+              placeholder="Ingresa tu nueva contraseña"
+              placeholderTextColor="#999"
+              secureTextEntry={!showPassword}
+              autoCapitalize="none"
+            />
+            <TouchableOpacity
+              style={styles.eyeIcon}
+              onPress={() => setShowPassword(!showPassword)}
+            >
+              <Ionicons
+                name={showPassword ? 'eye-off' : 'eye'}
+                size={24}
+                color="#666"
+              />
+            </TouchableOpacity>
+          </View>
+          
+          {/* Mensajes de error de validación */}
+          {passwordErrors.length > 0 && (
+            <View style={styles.errorsContainer}>
+              {passwordErrors.map((error, index) => (
+                <ThemedText key={index} style={styles.errorText}>• {error}</ThemedText>
+              ))}
+            </View>
+          )}
         </ThemedView>
 
         <ThemedView style={styles.inputContainer}>
           <ThemedText style={styles.label}>Confirmar contraseña</ThemedText>
-          <TextInput
-            style={styles.input}
-            value={confirmPassword}
-            onChangeText={setConfirmPassword}
-            placeholder="Confirma tu nueva contraseña"
-            placeholderTextColor="#999"
-            secureTextEntry
-            autoCapitalize="none"
-          />
+          <View style={styles.passwordInputContainer}>
+            <TextInput
+              style={styles.passwordInput}
+              value={confirmPassword}
+              onChangeText={setConfirmPassword}
+              placeholder="Confirma tu nueva contraseña"
+              placeholderTextColor="#999"
+              secureTextEntry={!showConfirmPassword}
+              autoCapitalize="none"
+            />
+            <TouchableOpacity
+              style={styles.eyeIcon}
+              onPress={() => setShowConfirmPassword(!showConfirmPassword)}
+            >
+              <Ionicons
+                name={showConfirmPassword ? 'eye-off' : 'eye'}
+                size={24}
+                color="#666"
+              />
+            </TouchableOpacity>
+          </View>
         </ThemedView>
 
         <TouchableOpacity 
@@ -195,7 +283,8 @@ export default function PasswordRecovery({ userId, userInfo }: PasswordRecoveryP
         <TouchableOpacity style={styles.backButton} onPress={handleBackToLogin}>
           <ThemedText style={styles.backButtonText}>Volver al inicio de sesión</ThemedText>
         </TouchableOpacity>
-      </ThemedView>
+        </ThemedView>
+      </ScrollView>
     </ThemedView>
   );
 }
@@ -203,9 +292,16 @@ export default function PasswordRecovery({ userId, userInfo }: PasswordRecoveryP
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  scrollView: {
+    flex: 1,
+  },
+  scrollContent: {
+    flexGrow: 1,
     justifyContent: 'center',
     alignItems: 'center',
     padding: 20,
+    minHeight: '100%',
   },
   contentContainer: {
     width: '100%',
@@ -283,5 +379,67 @@ const styles = StyleSheet.create({
     color: '#007AFF',
     fontSize: 14,
     textAlign: 'center',
+  },
+  recommendationsContainer: {
+    width: '100%',
+    backgroundColor: 'gray',
+    padding: 16,
+    borderRadius: 8,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#007AFF',
+  },
+  recommendationsTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 12,
+    textAlign: 'center',
+    color: '#007AFF',
+  },
+  recommendationsList: {
+    gap: 8,
+  },
+  recommendationItem: {
+    fontSize: 14,
+    lineHeight: 20,
+    marginBottom: 4,
+  },
+  exampleText: {
+    color: '#dc3545',
+    fontWeight: '500',
+  },
+  passwordInputContainer: {
+    position: 'relative',
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  passwordInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 16,
+    backgroundColor: '#fff',
+    color: '#000',
+    paddingRight: 50,
+  },
+  eyeIcon: {
+    position: 'absolute',
+    right: 12,
+    padding: 4,
+  },
+  errorsContainer: {
+    marginTop: 8,
+    padding: 12,
+    backgroundColor: '#ffe6e6',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#ffcccc',
+  },
+  errorText: {
+    color: '#dc3545',
+    fontSize: 14,
+    marginBottom: 4,
   },
 });

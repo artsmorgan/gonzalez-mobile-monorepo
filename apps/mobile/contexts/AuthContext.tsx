@@ -2,23 +2,22 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import React, { createContext, ReactNode, useContext, useEffect, useState } from 'react';
 
-interface Employee {
+interface ServerUser {
+  id: string;
+  username: string;
   nombre: string;
-  primer_apellido: string;
-  segundo_apellido: string;
-  cedula: string;
-  Email: string;
-  telefono: string;
-  tipoCedula: string;
+  apellidos?: string;
+  email?: string;
+  Email?: string;
+  telefono?: string;
 }
 
 interface User {
   id: string;
   name: string;
   email: string;
-  cedula: string;
+  username: string;
   telefono: string;
-  tipoCedula: string;
   createdAt: string;
 }
 
@@ -28,7 +27,7 @@ interface AuthContextType {
   refreshToken: string | null;
   isLoading: boolean;
   isAuthenticated: boolean;
-  login: (cedula: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  login: (username: string, password: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => Promise<{ status: boolean; message: string }>;
   refreshAccessToken: () => Promise<boolean>;
 }
@@ -76,7 +75,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     }
   };
 
-  const login = async (cedula: string, password: string): Promise<{ success: boolean; error?: string }> => {
+  const login = async (username: string, password: string): Promise<{ success: boolean; error?: string }> => {
     try {
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) {
@@ -90,7 +89,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           'ngrok-skip-browser-warning': '69420'
         },
         body: JSON.stringify({
-          ced: cedula,
+          username: username,
           password: password
         }),
       });
@@ -101,7 +100,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         return { success: false, error: responseData.message || 'Error de autenticación' };
       }
 
-      const employeeData: Employee = responseData.employee;
+      const userServerData = responseData.user;
       
       // Use real tokens from server response
       const accessToken = responseData.accessToken;
@@ -111,14 +110,13 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         return { success: false, error: 'Tokens no recibidos del servidor' };
       }
 
-      // Create user object from employee data
+      // Create user object from server user data
       const userData: User = {
-        id: employeeData.cedula,
-        name: `${employeeData.nombre} ${employeeData.primer_apellido} ${employeeData.segundo_apellido}`.trim(),
-        email: employeeData.Email,
-        cedula: employeeData.cedula,
-        telefono: employeeData.telefono,
-        tipoCedula: employeeData.tipoCedula,
+        id: userServerData.id,
+        name: userServerData.nombre || `${userServerData.nombre} ${userServerData.apellidos || ''}`.trim(),
+        email: userServerData.email || userServerData.Email,
+        username: userServerData.username,
+        telefono: userServerData.telefono || '',
         createdAt: new Date().toISOString(), // Since we don't have this from the API
       };
 

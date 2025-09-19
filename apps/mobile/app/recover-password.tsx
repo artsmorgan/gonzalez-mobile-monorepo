@@ -6,13 +6,13 @@ import React from 'react';
 import { StyleSheet, TouchableOpacity } from 'react-native';
 
 export default function RecoverPasswordScreen() {
-  const { userId, userName, userEmail, userCedula, userTelefono, userTipoCedula } = useLocalSearchParams<{ 
+  const { userId, userName, userEmail, userUsername, userTelefono } = useLocalSearchParams<{ 
     userId: string; 
     userName?: string; 
     userEmail?: string; 
-    userCedula?: string;
+    userUsername?: string;
+    
     userTelefono?: string;
-    userTipoCedula?: string;
   }>();
 
   const handleBackToLogin = () => {
@@ -41,9 +41,8 @@ export default function RecoverPasswordScreen() {
     token: userId,
     name: userName,
     email: userEmail,
-    cedula: userCedula || '',
-    telefono: userTelefono || '',
-    tipoCedula: userTipoCedula || ''
+    username: userUsername || '',
+    telefono: userTelefono || ''
   } : undefined;
 
   return (

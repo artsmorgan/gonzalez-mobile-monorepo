@@ -36,9 +36,9 @@ export default function UserProfile({ onClose }: UserProfileProps) {
     return phone;
   };
 
-  const formatCedula = (cedula: string, tipoCedula: string) => {
-    if (!cedula) return 'No disponible';
-    return `${tipoCedula || 'CC'} ${cedula}`;
+  const formatUsername = (username: string) => {
+    if (!username) return 'No disponible';
+    return username;
   };
 
   if (!user) {
@@ -64,8 +64,8 @@ export default function UserProfile({ onClose }: UserProfileProps) {
           </ThemedView>
 
           <ThemedView style={styles.dataItem}>
-            <ThemedText style={styles.label}>Cédula:</ThemedText>
-            <ThemedText style={styles.value}>{formatCedula(user.cedula, user.tipoCedula)}</ThemedText>
+            <ThemedText style={styles.label}>Nombre de usuario:</ThemedText>
+            <ThemedText style={styles.value}>{formatUsername(user.username)}</ThemedText>
           </ThemedView>
 
           <ThemedView style={styles.dataItem}>

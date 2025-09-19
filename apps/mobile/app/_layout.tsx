@@ -43,9 +43,8 @@ export default function RootLayout() {
                 userId: id,
                 userName: responseData.user.name,
                 userEmail: responseData.user.email,
-                userCedula: responseData.user.cedula,
-                userTelefono: responseData.user.telefono,
-                userTipoCedula: responseData.user.tipoCedula
+                userUsername: responseData.user.username,
+                userTelefono: responseData.user.telefono
               }
             });
           }
@@ -70,6 +69,10 @@ export default function RootLayout() {
       <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
         <Stack>
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+          <Stack.Screen name="roles" options={{ headerShown: false }} />
+          <Stack.Screen name="rules" options={{ headerShown: false }} />
+          <Stack.Screen name="permissions" options={{ headerShown: false }} />
+          <Stack.Screen name="role-permissions" options={{ headerShown: false }} />
           <Stack.Screen name="+not-found" />
         </Stack>
         <StatusBar style="auto" />

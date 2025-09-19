@@ -10,20 +10,20 @@ interface LoginFormProps {
 }
 
 export default function LoginForm({ onForgotPassword, onLoginSuccess }: LoginFormProps) {
-  const [cedula, setCedula] = useState('');
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const { login } = useAuth();
 
   const handleLogin = async () => {
-    if (!cedula.trim() || !password.trim()) {
-      Alert.alert('Error', 'Por favor ingrese su cédula y contraseña');
+    if (!username.trim() || !password.trim()) {
+      Alert.alert('Error', 'Por favor ingrese su nombre de usuario y contraseña');
       return;
     }
 
     setIsLoading(true);
     try {
-      const result = await login(cedula.trim(), password);
+      const result = await login(username.trim(), password);
       
       if (result.success) {
         // Login successful, the AuthContext will handle the state update
@@ -46,13 +46,12 @@ export default function LoginForm({ onForgotPassword, onLoginSuccess }: LoginFor
         </ThemedText>
         
         <ThemedView style={styles.inputContainer}>
-          <ThemedText style={styles.label}>Cédula</ThemedText>
+          <ThemedText style={styles.label}>Nombre de usuario</ThemedText>
           <TextInput
             style={styles.input}
-            value={cedula}
-            onChangeText={setCedula}
-            placeholder="Ingrese su número de cédula"
-            keyboardType="numeric"
+            value={username}
+            onChangeText={setUsername}
+            placeholder="Ingrese su nombre de usuario"
             autoCapitalize="none"
             autoCorrect={false}
           />

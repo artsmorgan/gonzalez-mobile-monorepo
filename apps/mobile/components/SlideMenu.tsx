@@ -3,22 +3,37 @@ import { ThemedView } from '@/components/ThemedView';
 import { useAuth } from '@/contexts/AuthContext';
 import React from 'react';
 import { ActivityIndicator, Alert, Animated, Dimensions, Modal, StyleSheet, TouchableOpacity } from 'react-native';
+import { router } from 'expo-router';
+import Constants from 'expo-constants';
 
 interface SlideMenuProps {
   isVisible: boolean;
   onClose: () => void;
   onProfilePress: () => void;
   onHomePress: () => void;
+  currentRoute?: string;
+}
+
+interface Action {
+  nombre: string;
+  validate: boolean;
+}
+
+interface Permission {
+  nombre: string;
+  actions: Action[];
 }
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const MENU_WIDTH = SCREEN_WIDTH * 0.75;
 
-export default function SlideMenu({ isVisible, onClose, onProfilePress, onHomePress }: SlideMenuProps) {
+export default function SlideMenu({ isVisible, onClose, onProfilePress, onHomePress, currentRoute }: SlideMenuProps) {
   const { user, logout } = useAuth();
   const slideAnim = React.useRef(new Animated.Value(MENU_WIDTH)).current;
   const [shouldRender, setShouldRender] = React.useState(false);
   const [isLoggingOut, setIsLoggingOut] = React.useState(false);
+  const [expandedSections, setExpandedSections] = React.useState<{[key: string]: boolean}>({});
+  const [permissions, setPermissions] = React.useState<Permission[]>([{nombre: 'Acciones', actions: []}]);
 
   React.useEffect(() => {
     if (isVisible) {
@@ -37,6 +52,7 @@ export default function SlideMenu({ isVisible, onClose, onProfilePress, onHomePr
         setShouldRender(false);
       });
     }
+    fetchPermissions();
   }, [isVisible, slideAnim]);
 
   const handleLogout = () => {
@@ -81,6 +97,27 @@ export default function SlideMenu({ isVisible, onClose, onProfilePress, onHomePr
     );
   };
 
+  const fetchPermissions = async () => {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+    // El id del usuario actual
+    const userId = user?.id;
+    const response = await fetch(`${apiUrl}/api/check-permissions?id=${userId}&actions=acciones`, {
+      method: 'GET',
+      headers: {
+        'ngrok-skip-browser-warning': '69420'
+      },
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    const data = await response.json();
+    
+    setPermissions(data.filter((permission: Permission) => permission.nombre == 'acciones')[0]);
+  };
+
   const handleProfilePress = () => {
     onClose();
     onProfilePress();
@@ -89,6 +126,27 @@ export default function SlideMenu({ isVisible, onClose, onProfilePress, onHomePr
   const handleHomePress = () => {
     onClose();
     onHomePress();
+  };
+
+  const toggleSection = (sectionName: string) => {
+    setExpandedSections(prev => ({
+      ...prev,
+      [sectionName]: !prev[sectionName]
+    }));
+  };
+
+  const handleRolesPress = () => {
+    onClose();
+    router.push('roles' as any);
+  };
+
+  const handleRulesPress = () => {
+    onClose();
+    router.push('/rules');
+  };
+
+  const isActiveRoute = (route: string) => {
+    return currentRoute === route;
   };
 
   if (!shouldRender) {
@@ -127,12 +185,90 @@ export default function SlideMenu({ isVisible, onClose, onProfilePress, onHomePr
 
           {/* Menu Options */}
           <ThemedView style={styles.menuOptions}>
-            <TouchableOpacity style={styles.menuItem} onPress={handleHomePress}>
-              <ThemedText style={styles.menuItemText}>Inicio</ThemedText>
+            {/* Basic Menu Items */}
+            <TouchableOpacity 
+              style={[
+                styles.menuItem, 
+                isActiveRoute('home') && styles.activeMenuItem
+              ]} 
+              onPress={handleHomePress}
+            >
+              <ThemedText 
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('home') && styles.activeMenuItemText
+                ]}
+              >
+                Inicio
+              </ThemedText>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.menuItem} onPress={handleProfilePress}>
-              <ThemedText style={styles.menuItemText}>Perfil de Usuario</ThemedText>
+            <TouchableOpacity 
+              style={[
+                styles.menuItem, 
+                isActiveRoute('profile') && styles.activeMenuItem
+              ]} 
+              onPress={handleProfilePress}
+            >
+              <ThemedText 
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('profile') && styles.activeMenuItemText
+                ]}
+              >
+                Perfil de Usuario
+              </ThemedText>
             </TouchableOpacity>
+
+            {/* Collapsible Sections */}
+            <ThemedView style={styles.collapsibleSection}>
+              {/* Configuraciones Section */}
+              <TouchableOpacity 
+                style={styles.sectionHeader} 
+                onPress={() => toggleSection('configuraciones')}
+              >
+                <ThemedText style={styles.sectionHeaderText}>Configuraciones</ThemedText>
+                <ThemedText style={styles.sectionArrow}>
+                  {expandedSections['configuraciones'] ? '▼' : '▶'}
+                </ThemedText>
+              </TouchableOpacity>
+              
+              {expandedSections['configuraciones'] && (
+                <ThemedView style={styles.sectionContent}>
+                  <TouchableOpacity 
+                    style={[
+                      styles.subMenuItem,
+                      isActiveRoute('roles') && styles.activeSubMenuItem
+                    ]} 
+                    onPress={handleRolesPress}
+                  >
+                    <ThemedText 
+                      style={[
+                        styles.subMenuItemText,
+                        isActiveRoute('roles') && styles.activeSubMenuItemText
+                      ]}
+                    >
+                      Roles
+                    </ThemedText>
+                  </TouchableOpacity>
+                  <TouchableOpacity 
+                    style={[
+                      styles.subMenuItem,
+                      isActiveRoute('rules') && styles.activeSubMenuItem
+                    ]} 
+                    onPress={handleRulesPress}
+                  >
+                    <ThemedText 
+                      style={[
+                        styles.subMenuItemText,
+                        isActiveRoute('rules') && styles.activeSubMenuItemText
+                      ]}
+                    >
+                      Reglas
+                    </ThemedText>
+                  </TouchableOpacity>
+                </ThemedView>
+              )}
+            </ThemedView>
           </ThemedView>
 
           {/* Logout Section at Bottom */}
@@ -218,6 +354,55 @@ const styles = StyleSheet.create({
   },
   menuItemText: {
     fontSize: 16,
+    fontWeight: '500',
+  },
+  collapsibleSection: {
+    marginTop: 10,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 1
+  },
+  sectionHeaderText: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  sectionArrow: {
+    fontSize: 14,
+    color: '#666666',
+  },
+  sectionContent: {
+    
+  },
+  subMenuItem: {
+    paddingHorizontal: 40,
+    paddingVertical: 12,
+    borderBottomWidth: 1
+  },
+  subMenuItemText: {
+    fontSize: 15,
+    fontWeight: '400',
+  },
+  activeMenuItem: {
+    backgroundColor: '#E3F2FD',
+    borderLeftWidth: 4,
+    borderLeftColor: '#007AFF',
+  },
+  activeMenuItemText: {
+    color: '#007AFF',
+    fontWeight: '600',
+  },
+  activeSubMenuItem: {
+    backgroundColor: '#E8F4FD',
+    borderLeftWidth: 4,
+    borderLeftColor: '#007AFF',
+  },
+  activeSubMenuItemText: {
+    color: '#007AFF',
     fontWeight: '500',
   },
   logoutSection: {

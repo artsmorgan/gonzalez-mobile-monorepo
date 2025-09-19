@@ -33,13 +33,15 @@
           "resizeMode": "contain",
           "backgroundColor": "#ffffff"
         }
-      ]
+      ],
+      "expo-font",
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true
     },
     "extra": {
-      "API_SERVER": "http://167.172.18.171:3000",
+      "API_SERVER": "http://167.172.18.171:4005",
       "APP_MODE": "dev"
     }
   }
