@@ -162,13 +162,13 @@ model c_marca_dia {
 
 model a_recovery_password_token {
   id          Int        @id @default(autoincrement())
-  usuarioId Int
+  empleadoId  Int
   expira_en   Int
   creacion    DateTime   @db.DateTime(0)
   token       String     @db.VarChar(255)
-  security_fos_user security_fos_user @relation(fields: [usuarioId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "FK_E35A23BC952BE730")
+  c_empleado c_empleado @relation(fields: [empleadoId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "FK_E35A23BC952BE730")
 
-  @@index([usuarioId], map: "FK_E35A23BC952BE730")
+  @@index([empleadoId], map: "FK_E35A23BC952BE730")
 }
 
 model a_recibo_pago {
@@ -584,6 +584,8 @@ model c_empleado {
   locked                                                                    Boolean?
   codigo_verificacion                                                       String?                                     @db.VarChar(350)
   last_checked_update                                                       DateTime?                                   @db.DateTime(0)
+  refresh_token                                                             refresh_token[]
+  a_recovery_password_token                                                 a_recovery_password_token[]
   b_pago_excluido                                                           b_pago_excluido[]
   c_adendas                                                                 c_adendas[]
   c_bonificaciones                                                          c_bonificaciones[]
@@ -688,13 +690,13 @@ model c_empleado {
 model refresh_token {
   id         Int        @id @default(autoincrement())
   token      String     @unique
-  usuarioId  Int
+  empleadoId  Int
   createdAt  DateTime   @default(now())
   expiresAt  DateTime
   revoked    Boolean    @default(false)
-  security_fos_user security_fos_user @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  c_empleado c_empleado @relation(fields: [empleadoId], references: [id], onDelete: Cascade)
 
-  @@index([usuarioId], map: "refresh_token_usuarioId_fkey")
+  @@index([empleadoId], map: "refresh_token_empleadoId_fkey")
 }
 
 model c_empleado_basedatos_digital {
@@ -3991,8 +3993,6 @@ model security_fos_user {
   permiso_marcar_horario_plaza        Boolean?
   permiso_limite_extras_semanal       Boolean?
   password_expires_at                 DateTime?                             @db.DateTime(0)
-  a_recovery_password_token           a_recovery_password_token[]
-  refresh_token                       refresh_token[]
   e_estructura_cliente_usuario        e_estructura_cliente_usuario[]
   n_ejecutivo_cuenta                  n_ejecutivo_cuenta?                   @relation(fields: [ejecutivoCuenta_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "FK_F611E3AB5CAEAC5D")
   n_coordinado_por                    n_coordinado_por?                     @relation(fields: [coordinadoPor_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "FK_F611E3AB81B56B3")

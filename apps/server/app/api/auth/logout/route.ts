@@ -1,12 +1,11 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { PrismaClient } from '@prisma/client';
+import { NextRequest, NextResponse } from "next/server";
+import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
 
-export async function POST(request: NextRequest) {
+export async function POST(req: NextRequest) {
     try {
-        const body = await request.json();
-        const { refreshToken } = body;
+        const { refreshToken } = await req.json();
 
         if (!refreshToken) {
             return NextResponse.json(
@@ -15,25 +14,26 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        // Buscar y revocar el refresh token
-        const storedToken = await prisma.refresh_token.findUnique({
+        // Buscar el token en la BD
+        const tokenRecord = await prisma.refresh_token.findUnique({
             where: { token: refreshToken },
         });
 
-        if (!storedToken) {
+        if (!tokenRecord) {
             return NextResponse.json(
-                { status: false, message: "Token no encontrado" },
+                { status: false, message: "Refresh token no encontrado" },
                 { status: 404 }
             );
         }
 
+        // Revocar el token
         await prisma.refresh_token.update({
-            where: { id: storedToken.id },
+            where: { id: tokenRecord.id },
             data: { revoked: true },
         });
 
         return NextResponse.json(
-            { status: true, message: "Sesión cerrada correctamente" },
+            { status: true, message: "Logout exitoso. Refresh token revocado." },
             { status: 200 }
         );
     } catch (error) {

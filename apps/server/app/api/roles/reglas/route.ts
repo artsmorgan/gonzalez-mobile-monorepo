@@ -1,11 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { PrismaClient } from "@prisma/client";
 import { actions } from "../../../../public/actions";
+import { verifyAccessToken } from "../../../../utils/verifyToken";
 
 const prisma = new PrismaClient();
 
 export async function GET(request: NextRequest) {
     try {
+        const { valid, payload, message } = verifyAccessToken(request);
+
+        if (!valid) {
+            return NextResponse.json(
+                { status: false, message: message },
+                { status: 401 }
+            );
+        }
+
         const { searchParams } = new URL(request.url);
         const roleName = searchParams.get("roleName");
         if (!roleName) {
