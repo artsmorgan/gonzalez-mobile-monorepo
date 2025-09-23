@@ -1,14 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
 import { PrismaClient } from "@prisma/client";
 import { actions } from "../../../public/actions";
+import { verifyAccessToken } from "../../../utils/verifyToken";
 
 const prisma = new PrismaClient();
 
 export async function GET(request: NextRequest) {
     try {
+        const { valid, payload, message } = verifyAccessToken(request);
+        if (!valid) {
+            return NextResponse.json(
+                { status: false, message: message },
+                { status: 401 }
+            );
+        }
+
         const { searchParams } = new URL(request.url);
         const id = searchParams.get("id");
         const actionsInParams = searchParams.get("actions");
+        /*
 
         if (!id) {
             return NextResponse.json({ message: "Usuario no especificado" }, { status: 404 });
@@ -66,6 +76,8 @@ export async function GET(request: NextRequest) {
         }
 
         return NextResponse.json(actionsForUserWithValidate);
+        */
+        return NextResponse.json([{}], { status: 200 });
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         return NextResponse.json({ message: errorMessage }, { status: 500 });

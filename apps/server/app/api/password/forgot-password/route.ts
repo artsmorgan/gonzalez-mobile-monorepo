@@ -7,33 +7,33 @@ const prisma = new PrismaClient();
 export async function POST(request: NextRequest) {
     try {
         const body = await request.json();
-        const { username } = body;
+        const { cedula } = body;
 
         // Validar que se proporcione la cédula
-        if (!username) {
+        if (!cedula) {
             return NextResponse.json(
-                { status: false, message: "Nombre de usuario es requerido" }
+                { status: false, message: "Cédula es requerida" }
             );
         }
 
-        // Buscar el usuario por nombre de usuario
-        const usuario = await prisma.security_fos_user.findFirst({
+        // Buscar el empleado por cédula
+        const empleado = await prisma.c_empleado.findFirst({
             where: {
-                username: username
+                cedula: cedula
             }
         });
 
-        // Si no se encuentra el usuario
-        if (!usuario) {
+        // Si no se encuentra el empleado
+        if (!empleado) {
             return NextResponse.json(
-                { status: false, message: "Usuario no encontrado" }
+                { status: false, message: "Empleado no encontrado" }
             );
         }
 
-        // Si el usuario no tiene email configurado
-        if (!usuario.email) {
+        // Si el empleado no tiene email configurado
+        if (!empleado.Email) {
             return NextResponse.json(
-                { status: false, message: "Usuario no tiene email configurado" }
+                { status: false, message: "Empleado no tiene email configurado" }
             );
         }
 
@@ -55,11 +55,11 @@ export async function POST(request: NextRequest) {
             }
         }
 
-        // Agregar un registro en la tabla a_recovery_password_token para el usuario
+        // Agregar un registro en la tabla a_recovery_password_token para el empleado
         await prisma.a_recovery_password_token.create({
             data: {
                 token: token,
-                usuarioId: usuario.id,
+                empleadoId: empleado.id,
                 expira_en: 900000,
                 creacion: new Date()
             }
@@ -67,11 +67,11 @@ export async function POST(request: NextRequest) {
 
         await transporter.sendMail({
             from: `Recuperación de contraseña - González <${process.env.EMAIL_USER}>`,
-            to: usuario.email,
+            to: empleado.Email,
             subject: "Recuperación de contraseña",
             html: `
               <h1>Recuperación de contraseña</h1>
-              <p>Hola ${usuario.nombres} ${usuario.apellidos},</p>
+              <p>Hola ${empleado.nombre} ${empleado.primer_apellido} ${empleado.segundo_apellido},</p>
               <p>Para recuperar tu contraseña, haz clic en el siguiente enlace:</p>
               ${process.env.FRONTEND_URL}/recover-password/${btoa(token)}
               <p>Si no solicitaste esta recuperación, por favor ignora este mensaje.</p>
@@ -80,11 +80,11 @@ export async function POST(request: NextRequest) {
             `
         });
 
-        // Retornar éxito con el email del usuario
+        // Retornar éxito con el email del empleado
         return NextResponse.json(
             {
                 status: true,
-                message: `Email de recuperación enviado a ${usuario.email}`
+                message: `Email de recuperación enviado a ${empleado.Email}`
             }
         );
 

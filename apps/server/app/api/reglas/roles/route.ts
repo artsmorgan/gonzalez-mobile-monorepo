@@ -1,10 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { PrismaClient } from "@prisma/client";
+import { verifyAccessToken } from "../../../../utils/verifyToken";
 
 const prisma = new PrismaClient();
 
 export async function GET(request: NextRequest) {
     try {
+        const { valid, payload, message } = verifyAccessToken(request);
+
+        if (!valid) {
+            return NextResponse.json(
+                { status: false, message: message },
+                { status: 401 }
+            );
+        }
+
         const { searchParams } = new URL(request.url);
         const perm = searchParams.get("perm");
         const roles = await prisma.roles_security.findMany();
@@ -29,9 +39,18 @@ export async function GET(request: NextRequest) {
 }
 
 
-export async function POST(req: NextRequest) {
+export async function POST(request: NextRequest) {
     try {
-        const body = await req.json();
+        const { valid, payload, message } = verifyAccessToken(request);
+
+        if (!valid) {
+            return NextResponse.json(
+                { status: false, message: message },
+                { status: 401 }
+            );
+        }
+
+        const body = await request.json();
         const { action, isActive, roleName, moduleName } = body;
 
         const role = await prisma.roles_security.findFirst({ where: { name: roleName } });

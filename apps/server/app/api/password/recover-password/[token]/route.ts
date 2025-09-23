@@ -12,10 +12,10 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ token: 
         const { password } = await req.json();
         const token_recovery = await prisma.a_recovery_password_token.findFirst({ where: { token: token } });
         if (!token_recovery) return NextResponse.json({ status: false, message: "Token de recuperación de contraseña no encontrado" });
-        const usuario = await prisma.security_fos_user.findUnique({ where: { id: token_recovery.usuarioId } });
-        if (!usuario) return NextResponse.json({ status: false, message: "Usuario no encontrado" });
+        const empleado = await prisma.c_empleado.findUnique({ where: { id: token_recovery.empleadoId } });
+        if (!empleado) return NextResponse.json({ status: false, message: "Empleado no encontrado" });
         const hashedPassword = await bcrypt.hash(password, 10);
-        await prisma.security_fos_user.update({ where: { id: token_recovery.usuarioId }, data: { password: hashedPassword } });
+        await prisma.c_empleado.update({ where: { id: token_recovery.empleadoId }, data: { password: hashedPassword } });
         await prisma.a_recovery_password_token.delete({ where: { id: token_recovery.id } });
         // Retornar éxito con la contraseña actualizada
         return NextResponse.json({ status: true, message: "Contraseña actualizada" });

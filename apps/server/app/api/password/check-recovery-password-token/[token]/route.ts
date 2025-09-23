@@ -16,12 +16,12 @@ export async function GET(req: NextRequest, context: { params: Promise<{ token: 
             await prisma.a_recovery_password_token.delete({ where: { id: token_recovery.id } });
             return NextResponse.json({ status: false, message: "Token de recuperación de contraseña expirado" });
         }
-        const usuario = await prisma.security_fos_user.findUnique({ where: { id: token_recovery.usuarioId } });
-        if (!usuario) {
+        const empleado = await prisma.c_empleado.findUnique({ where: { id: token_recovery.empleadoId } });
+        if (!empleado) {
             await prisma.a_recovery_password_token.delete({ where: { id: token_recovery.id } });
-            return NextResponse.json({ status: false, message: "Usuario no encontrado" });
+            return NextResponse.json({ status: false, message: "Empleado no encontrado" });
         }
-        return NextResponse.json({ status: true, message: "Token de recuperación de contraseña encontrado", user: usuario });
+        return NextResponse.json({ status: true, message: "Token de recuperación de contraseña encontrado", empleado: empleado });
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         return NextResponse.json({ message: errorMessage }, { status: 500 });
