@@ -15,8 +15,11 @@ export async function GET(req: NextRequest) {
             );
         }
 
-        const roles = await prisma.roles_security.findMany();
-        return NextResponse.json(roles);
+        return NextResponse.json([
+            { id: 1, name: "ADMINISTRATIVO" },
+            { id: 2, name: "SUPERVISOR" },
+            { id: 3, name: "OPERATIVO" }
+        ], { status: 200 });
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         return NextResponse.json({ message: errorMessage }, { status: 500 });
