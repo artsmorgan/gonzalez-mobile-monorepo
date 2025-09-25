@@ -17,17 +17,16 @@ export async function GET(request: NextRequest) {
 
         const { searchParams } = new URL(request.url);
         const perm = searchParams.get("perm");
-        const roles = await prisma.roles_security.findMany();
+        const roles = ["ADMINISTRATIVO", "SUPERVISOR", "OPERATIVO"];
         const rolesWithActions = [];
         for (const role of roles) {
-            const roleModules = await prisma.roles_security_modules.findFirst({ where: { rol_id: role.id, module_name: perm ?? "" } });
+            const roleModules = await prisma.roles_security_modules.findFirst({ where: { role_name: role, module_name: perm ?? "" } });
             let actions = [];
             if (roleModules && roleModules.actions != null && roleModules.actions != "") {
                 actions = JSON.parse(roleModules.actions);
             }
             rolesWithActions.push({
-                id: role.id,
-                name: role.name,
+                name: role,
                 actions: actions
             });
         }
@@ -53,12 +52,11 @@ export async function POST(request: NextRequest) {
         const body = await request.json();
         const { action, isActive, roleName, moduleName } = body;
 
-        const role = await prisma.roles_security.findFirst({ where: { name: roleName } });
-        if (!role) {
-            return NextResponse.json({ message: "Rol no encontrado" }, { status: 404 });
+        if (!roleName) {
+            return NextResponse.json({ message: "Rol no especificado" }, { status: 404 });
         }
 
-        const roleModule = await prisma.roles_security_modules.findFirst({ where: { module_name: moduleName, rol_id: role.id } });
+        const roleModule = await prisma.roles_security_modules.findFirst({ where: { module_name: moduleName, role_name: roleName } });
 
         let actions = [];
         if (roleModule) {
@@ -76,7 +74,7 @@ export async function POST(request: NextRequest) {
             await prisma.roles_security_modules.update({ where: { id: roleModule.id }, data: { actions: JSON.stringify(actions) } });
         }
         else {
-            await prisma.roles_security_modules.create({ data: { actions: JSON.stringify(actions), rol_id: role.id, module_name: moduleName } });
+            await prisma.roles_security_modules.create({ data: { actions: JSON.stringify(actions), role_name: roleName, module_name: moduleName } });
         }
 
         return NextResponse.json({ message: "Acción actualizada correctamente" }, { status: 201 });

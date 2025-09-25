@@ -21,11 +21,6 @@ export async function GET(request: NextRequest) {
         if (!roleName) {
             return NextResponse.json({ message: "Rol no especificado" }, { status: 404 });
         }
-        const role = await prisma.roles_security.findFirst({ where: { name: roleName } });
-        if (!role) {
-            return NextResponse.json({ message: "Rol no encontrado" }, { status: 404 });
-        }
-
         const actionsForRole = [];
         for (const actionModule of actions) {
             if (actionModule.actions) {
@@ -34,7 +29,7 @@ export async function GET(request: NextRequest) {
                     actionsValidated.push({ nombre: action, validate: false });
                 }
 
-                const roleModule = await prisma.roles_security_modules.findFirst({ where: { rol_id: role.id, module_name: actionModule.nombre } });
+                const roleModule = await prisma.roles_security_modules.findFirst({ where: { role_name: roleName, module_name: actionModule.nombre } });
                 if (roleModule && roleModule.actions != null && roleModule.actions != "") {
                     for (const actionRole of JSON.parse(roleModule.actions)) {
                         const actToValidate = actionsValidated.find(a => a.nombre === actionRole);

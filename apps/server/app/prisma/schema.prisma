@@ -3953,15 +3953,13 @@ model security_fos_group {
 model roles_security {
   id                        Int                         @id @default(autoincrement())
   name                      String                      @unique(map: "UNIQ_23BF45A45E236E06") @db.VarChar(255)
-  roles_security_modules    roles_security_modules[]
 }
 
 model roles_security_modules {
   id                        Int                         @id @default(autoincrement())
-  rol_id                    Int
+  role_name                 String
   module_name               String                      
   actions                   String                      @db.LongText
-  roles_security            roles_security @relation(fields: [rol_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "FK_A2ED9530521E1991")
 }
 
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments

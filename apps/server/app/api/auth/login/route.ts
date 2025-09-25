@@ -122,10 +122,10 @@ export async function POST(request: NextRequest) {
                     role = "OPERATIVO";
                     break;
                 case "MIS":
-                    role = "MISIONERO";
+                    role = "OPERATIVO";
                     break;
                 case "ADM":
-                    role = "ADMINISTRADO";
+                    role = "ADMINISTRATIVO";
                     break;
                 case "COO":
                     role = "SUPERVISOR";
@@ -134,7 +134,7 @@ export async function POST(request: NextRequest) {
                     role = "SUPERVISOR";
                     break;
                 case "OFC":
-                    role = "OFICIAL";
+                    role = "OPERATIVO";
                     break;
             }
 
