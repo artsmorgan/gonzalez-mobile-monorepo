@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { PrismaClient } from '@prisma/client';
 import { transporter } from '../../../../transporter';
+import { toZonedTime } from 'date-fns-tz';
 
 const prisma = new PrismaClient();
 
@@ -37,12 +38,12 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        const caracteres = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+        const caracteres = "0123456789";
         let token = "";
         let exists = true;
 
         while (exists) {
-            for (let i = 0; i < 50; i++) {
+            for (let i = 0; i < 6; i++) {
                 const indice = Math.floor(Math.random() * caracteres.length);
                 token += caracteres[indice];
             }
@@ -61,9 +62,11 @@ export async function POST(request: NextRequest) {
                 token: token,
                 empleadoId: empleado.id,
                 expira_en: 900000,
-                creacion: new Date()
+                creacion: toZonedTime(new Date(), "America/Costa_Rica")
             }
         });
+
+        token = token.split("").join(" ");
 
         await transporter.sendMail({
             from: `Recuperación de contraseña - González <${process.env.EMAIL_USER}>`,
@@ -72,8 +75,8 @@ export async function POST(request: NextRequest) {
             html: `
               <h1>Recuperación de contraseña</h1>
               <p>Hola ${empleado.nombre} ${empleado.primer_apellido} ${empleado.segundo_apellido},</p>
-              <p>Para recuperar tu contraseña, haz clic en el siguiente enlace:</p>
-              ${process.env.FRONTEND_URL}/recover-password/${btoa(token)}
+              <p>Para recuperar tu contraseña, añade el siguiente código a la aplicación:</p><br>
+              <p>${token}</p><br>
               <p>Si no solicitaste esta recuperación, por favor ignora este mensaje.</p>
               <p>Gracias,</p>
               <p>Equipo de Gonzalez</p>

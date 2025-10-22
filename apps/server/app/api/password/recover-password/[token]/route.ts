@@ -8,7 +8,7 @@ const prisma = new PrismaClient();
 export async function PUT(req: NextRequest, context: { params: Promise<{ token: string }> }) {
     try {
         const resolvedParams = await context.params;
-        const token = atob(resolvedParams.token);
+        const token = resolvedParams.token;
         const { password } = await req.json();
         const token_recovery = await prisma.a_recovery_password_token.findFirst({ where: { token: token } });
         if (!token_recovery) return NextResponse.json({ status: false, message: "Token de recuperación de contraseña no encontrado" });
