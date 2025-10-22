@@ -1,6 +1,8 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 import { NextRequest, NextResponse } from 'next/server';
 import { PrismaClient } from '@prisma/client';
+import { v4 as uuidv4 } from 'uuid';
+import { toZonedTime } from 'date-fns-tz';
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const dotenv = require('dotenv');
@@ -31,6 +33,27 @@ export async function POST(request: NextRequest) {
             );
         }
 
+        if (empleado.fecha_contratacion == null) {
+            return NextResponse.json(
+                { status: false, message: "Empleado no ha sido contratado" },
+                { status: 401 }
+            );
+        }
+
+        if (empleado.estado == "BA") {
+            return NextResponse.json(
+                { status: false, message: "Empleado fue dado de baja" },
+                { status: 401 }
+            );
+        }
+
+        if (empleado.password_expires_at && empleado.password_expires_at < toZonedTime(new Date(), "America/Costa_Rica")) {
+            return NextResponse.json(
+                { status: false, passwordExpired: true, message: "Contraseña expirada, debe cambiarla" },
+                { status: 401 }
+            );
+        }
+
         const passwordMatch = await bcrypt.compare(password, empleado.password);
 
         if (!passwordMatch) {
@@ -40,26 +63,32 @@ export async function POST(request: NextRequest) {
             );
         }
 
+        const sessionId = uuidv4();
+
         // 👉 Generar Access Token (expira en 15 minutos) para el usuario
         const accessToken = jwt.sign(
-            { id: empleado.id, cedula: empleado.cedula },
+            { id: empleado.id, cedula: empleado.cedula, sessionId: sessionId },
             process.env.JWT_SECRET,
-            { expiresIn: "5m" }
+            { expiresIn: "15m" }
         );
 
         // 👉 Generar Refresh Token (expira en 7 días) para el usuario
         const refreshToken = jwt.sign(
-            { id: empleado.id },
+            { id: empleado.id, sessionId: sessionId },
             process.env.JWT_REFRESH_SECRET,
-            { expiresIn: "15m" }
+            { expiresIn: "7d" }
         );
+
+        const now = toZonedTime(new Date(), "America/Costa_Rica");
 
         // 🔐 Guardar el refresh token en la BD
         await prisma.refresh_token.create({
             data: {
                 token: refreshToken,
                 empleadoId: empleado.id,
-                expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+                sessionId: sessionId,
+                createdAt: now,
+                expiresAt: toZonedTime(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), "America/Costa_Rica") // 7 días
             }
         });
 
