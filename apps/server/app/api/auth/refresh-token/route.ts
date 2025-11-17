@@ -1,10 +1,9 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
 import { v4 as uuidv4 } from 'uuid';
 import { toZonedTime } from 'date-fns-tz';
+import { prisma } from "../../../../utils/prismaClient";
 const jwt = require("jsonwebtoken");
-const prisma = new PrismaClient();
 
 export async function POST(request: NextRequest) {
     try {
@@ -70,19 +69,31 @@ export async function POST(request: NextRequest) {
             { expiresIn: "7d" }
         );
 
-        await prisma.refresh_token.update({
-            where: { id: storedToken.id },
+        await prisma.refresh_token.updateMany({
+            where: { empleadoId: payload.id, revoked: false },
             data: { revoked: true },
         });
 
-        await prisma.refresh_token.create({
-            data: {
-                token: newRefreshToken,
-                empleadoId: payload.id,
-                sessionId: payload.sessionId,
-                expiresAt: toZonedTime(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), "America/Costa_Rica"),
-            },
-        });
+        // Intentar crear el nuevo token, si ya existe (por condición de carrera), eliminarlo primero
+        try {
+            await prisma.refresh_token.deleteMany({
+                where: { empleadoId: payload.id, revoked: false },
+            });
+            await prisma.refresh_token.create({
+                data: {
+                    token: newRefreshToken,
+                    empleadoId: payload.id,
+                    sessionId: payload.sessionId,
+                    expiresAt: toZonedTime(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), "America/Costa_Rica"),
+                },
+            });
+        } catch (error: unknown) {
+            const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+            return NextResponse.json(
+                { status: false, message: errorMessage },
+                { status: 500 }
+            );
+        }
 
         return NextResponse.json(
             {
@@ -99,7 +110,5 @@ export async function POST(request: NextRequest) {
             { status: false, message: "Error interno del servidor" },
             { status: 500 }
         );
-    } finally {
-        await prisma.$disconnect();
     }
 }

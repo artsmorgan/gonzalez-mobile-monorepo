@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { PrismaClient } from '@prisma/client';
 import { transporter } from '../../../../transporter';
 import { toZonedTime } from 'date-fns-tz';
 
-const prisma = new PrismaClient();
+import { prisma } from "../../../../utils/prismaClient";
 
 export async function POST(request: NextRequest) {
     try {
@@ -69,7 +68,7 @@ export async function POST(request: NextRequest) {
         token = token.split("").join(" ");
 
         await transporter.sendMail({
-            from: `Recuperación de contraseña - González <${process.env.EMAIL_USER}>`,
+            from: `Recuperación de contraseña - <${process.env.EMAIL_USER}>`,
             to: empleado.Email,
             subject: "Recuperación de contraseña",
             html: `
@@ -96,7 +95,5 @@ export async function POST(request: NextRequest) {
         return NextResponse.json(
             { status: false, message: "Error interno del servidor" }
         );
-    } finally {
-        await prisma.$disconnect();
     }
 }

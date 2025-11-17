@@ -1,7 +1,7 @@
+/* eslint-disable @typescript-eslint/no-require-imports */
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
-
-const prisma = new PrismaClient();
+const jwt = require("jsonwebtoken");
+import { prisma } from "../../../../utils/prismaClient";
 
 export async function POST(req: NextRequest) {
     try {
@@ -14,21 +14,26 @@ export async function POST(req: NextRequest) {
             );
         }
 
-        // Buscar el token en la BD
-        const tokenRecord = await prisma.refresh_token.findUnique({
-            where: { token: refreshToken },
-        });
-
-        if (!tokenRecord) {
+        // Obtener el payload del token
+        let decoded = null;
+        try {
+            decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
+        } catch (err) {
             return NextResponse.json(
-                { status: false, message: "Refresh token no encontrado" },
-                { status: 404 }
+                { status: false, message: "Token inválido" },
+                { status: 401 }
+            );
+        }
+        if (!decoded || !decoded.id) {
+            return NextResponse.json(
+                { status: false, message: "Token inválido" },
+                { status: 401 }
             );
         }
 
         // Revocar el token
-        await prisma.refresh_token.update({
-            where: { id: tokenRecord.id },
+        await prisma.refresh_token.updateMany({
+            where: { empleadoId: decoded.id, revoked: false },
             data: { revoked: true },
         });
 
@@ -42,7 +47,5 @@ export async function POST(req: NextRequest) {
             { status: false, message: "Error interno del servidor" },
             { status: 500 }
         );
-    } finally {
-        await prisma.$disconnect();
     }
 }

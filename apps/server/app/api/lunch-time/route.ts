@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
 import { verifyAccessToken } from "../../../utils/verifyToken";
 import { toZonedTime, format } from "date-fns-tz";
+import { prisma } from "../../../utils/prismaClient";
 
-const prisma = new PrismaClient();
 
 export async function POST(req: NextRequest) {
     try {

@@ -1,14 +1,12 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 import { NextRequest, NextResponse } from 'next/server';
-import { PrismaClient } from '@prisma/client';
 import { v4 as uuidv4 } from 'uuid';
 import { toZonedTime } from 'date-fns-tz';
+import { prisma } from '../../../../utils/prismaClient';
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const dotenv = require('dotenv');
 dotenv.config();
-
-const prisma = new PrismaClient();
 
 export async function POST(request: NextRequest) {
     try {
@@ -81,16 +79,39 @@ export async function POST(request: NextRequest) {
 
         const now = toZonedTime(new Date(), "America/Costa_Rica");
 
-        // 🔐 Guardar el refresh token en la BD
-        await prisma.refresh_token.create({
-            data: {
-                token: refreshToken,
+        // revoked = true a todos los tokens del usuario
+        await prisma.refresh_token.updateMany({
+            where: {
                 empleadoId: empleado.id,
-                sessionId: sessionId,
-                createdAt: now,
-                expiresAt: toZonedTime(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), "America/Costa_Rica") // 7 días
+                revoked: false
+            },
+            data: {
+                revoked: true
             }
         });
+
+        // 🔐 Guardar el refresh token en la BD
+        // Si el token ya existe (por condición de carrera), eliminarlo primero
+        try {
+            await prisma.refresh_token.deleteMany({
+                where: { empleadoId: empleado.id, revoked: false },
+            });
+            await prisma.refresh_token.create({
+                data: {
+                    token: refreshToken,
+                    empleadoId: empleado.id,
+                    sessionId: sessionId,
+                    createdAt: now,
+                    expiresAt: toZonedTime(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), "America/Costa_Rica") // 7 días
+                }
+            });
+        } catch (error: unknown) {
+            const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+            return NextResponse.json(
+                { status: false, message: errorMessage },
+                { status: 500 }
+            );
+        }
 
         const empleado_plaza = await prisma.c_empleado_plaza.findMany({
             where: {
@@ -195,7 +216,9 @@ export async function POST(request: NextRequest) {
                     telefono: empleado.telefono,
                     tipoCedula: empleado.tipoCedula,
                     fechaContratacion: empleado.fecha_contratacion,
-                    roles: roles
+                    firmaManual: empleado.firma_manual,
+                    roles: roles,
+                    supervisor_id: empleado.supervisor_id
                 }
             },
             { status: 200 }
@@ -207,7 +230,5 @@ export async function POST(request: NextRequest) {
             { status: false, message: "Error interno del servidor" },
             { status: 500 }
         );
-    } finally {
-        await prisma.$disconnect();
     }
 }
