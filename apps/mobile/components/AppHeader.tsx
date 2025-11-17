@@ -2,23 +2,37 @@ import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import React from 'react';
 import { StyleSheet, TouchableOpacity, View } from 'react-native';
+import { useNavigation, useRoute } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { RootStackParamList } from '../App';
+import Ionicons from '@expo/vector-icons/build/Ionicons';
+
+type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 interface AppHeaderProps {
   onMenuPress: () => void;
+  title: string;
 }
 
-export default function AppHeader({ onMenuPress }: AppHeaderProps) {
+export default function AppHeader({ onMenuPress, title }: AppHeaderProps) {
+
+  const navigation = useNavigation<NavigationProp>();
+  const route = useRoute();
+
   return (
     <ThemedView style={styles.header}>
-      <ThemedText type="subtitle" style={styles.title}>
-        Gonzalez App
-      </ThemedText>
+      <ThemedView style={styles.titleContainer}>
+        {route.name !== 'Home' && (
+          <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
+            <Ionicons name="arrow-undo" size={20} color="#ffffff" />
+          </TouchableOpacity>
+        )}
+        <ThemedText type="subtitle" style={styles.title}>
+          {title}
+        </ThemedText>
+      </ThemedView>
       <TouchableOpacity style={styles.menuButton} onPress={onMenuPress}>
-        <View style={styles.menuIcon}>
-          <View style={styles.menuLine} />
-          <View style={styles.menuLine} />
-          <View style={styles.menuLine} />
-        </View>
+        <Ionicons name="menu" size={30} color="#007AFF" />
       </TouchableOpacity>
     </ThemedView>
   );
@@ -39,8 +53,22 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '600',
   },
+  titleContainer: {
+    display: 'flex',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  backButton: {
+    backgroundColor: '#007AFF',
+    borderRadius: 100,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 4,
+    paddingHorizontal: 8,
+  },
   menuButton: {
-    padding: 8,
+    
   },
   menuIcon: {
     width: 24,

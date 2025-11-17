@@ -16,7 +16,12 @@
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ],
+      "package": "com.abrjpo98.GonzalezMobileApp"
     },
     "web": {
       "bundler": "metro",
@@ -33,13 +38,22 @@
           "resizeMode": "contain",
           "backgroundColor": "#ffffff"
         }
-      ]
+      ],
+      "expo-font",
+      "expo-web-browser",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "La aplicación necesita acceso a la cámara para escanear códigos QR."
+        }
+      ],
+      "expo-audio"
     ],
     "experiments": {
       "typedRoutes": true
     },
     "extra": {
-      "API_SERVER": "http://167.172.18.171:3000",
+      "API_SERVER": "http://167.172.18.171:4005",
       "APP_MODE": "dev"
     }
   }

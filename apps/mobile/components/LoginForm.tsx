@@ -30,6 +30,9 @@ export default function LoginForm({ onForgotPassword, onLoginSuccess }: LoginFor
         onLoginSuccess?.();
       } else {
         Alert.alert('Error de autenticación', result.error || 'Credenciales incorrectas');
+        if (result.passwordExpired) {
+          onForgotPassword?.();
+        }
       }
     } catch (error) {
       Alert.alert('Error', 'Ocurrió un error inesperado');
@@ -51,10 +54,10 @@ export default function LoginForm({ onForgotPassword, onLoginSuccess }: LoginFor
             style={styles.input}
             value={cedula}
             onChangeText={setCedula}
-            placeholder="Ingrese su número de cédula"
-            keyboardType="numeric"
+            placeholder="Ingrese su cédula"
             autoCapitalize="none"
             autoCorrect={false}
+            keyboardType="numeric"
           />
         </ThemedView>
 

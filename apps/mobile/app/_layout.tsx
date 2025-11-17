@@ -36,16 +36,15 @@ export default function RootLayout() {
           });
           let responseData = await response.json();
           if (responseData.status) {
-            // Redirect to password recovery screen with user data
+            // Redirect to password recovery screen with employee data
             router.replace({
               pathname: '/recover-password',
               params: {
-                userId: id,
-                userName: responseData.user.name,
-                userEmail: responseData.user.email,
-                userCedula: responseData.user.cedula,
-                userTelefono: responseData.user.telefono,
-                userTipoCedula: responseData.user.tipoCedula
+                employeeId: id,
+                employeeName: responseData.empleado.nombre,
+                employeeEmail: responseData.empleado.Email,
+                employeeCedula: responseData.empleado.cedula,
+                employeeTelefono: responseData.empleado.telefono
               }
             });
           }
@@ -70,6 +69,12 @@ export default function RootLayout() {
       <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
         <Stack>
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+          <Stack.Screen name="roles" options={{ headerShown: false }} />
+          <Stack.Screen name="rules" options={{ headerShown: false }} />
+          <Stack.Screen name="permissions" options={{ headerShown: false }} />
+          <Stack.Screen name="role-permissions" options={{ headerShown: false }} />
+          <Stack.Screen name="lunch-time" options={{ headerShown: false }} />
+          <Stack.Screen name="digital-signature" options={{ headerShown: false }} />
           <Stack.Screen name="+not-found" />
         </Stack>
         <StatusBar style="auto" />

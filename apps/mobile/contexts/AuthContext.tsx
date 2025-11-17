@@ -1,34 +1,56 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
+import { router } from 'expo-router';
 import React, { createContext, ReactNode, useContext, useEffect, useState } from 'react';
 
-interface Employee {
-  nombre: string;
-  primer_apellido: string;
-  segundo_apellido: string;
-  cedula: string;
-  Email: string;
-  telefono: string;
-  tipoCedula: string;
+interface Role {
+  id: number;
+  name: string;
 }
 
-interface User {
+interface Division {
+  id: number;
+  name: string;
+}
+
+interface EmployeeRole {
+  role: Role;
+  division: Division;
+}
+
+interface ServerEmpleado {
+  id: string;
+  cedula: string;
+  nombre: string;
+  apellido: string;
+  segundo_apellido?: string;
+  Email: string;
+  telefono?: string;
+  tipoCedula?: string;
+  fechaContratacion?: string;
+  roles?: EmployeeRole[];
+}
+
+interface Employee {
   id: string;
   name: string;
   email: string;
   cedula: string;
   telefono: string;
-  tipoCedula: string;
-  createdAt: string;
+  tipoCedula?: string;
+  fechaContratacion: string;
+  roles: EmployeeRole[];
+  firmaManual: string;
+  supervisor_id: number | null;
 }
 
 interface AuthContextType {
-  user: User | null;
+  employee: Employee | null;
   accessToken: string | null;
   refreshToken: string | null;
   isLoading: boolean;
   isAuthenticated: boolean;
-  login: (cedula: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  login: (cedula: string, password: string) => Promise<{ success: boolean; passwordExpired?: boolean; error?: string }>;
   logout: () => Promise<{ status: boolean; message: string }>;
   refreshAccessToken: () => Promise<boolean>;
 }
@@ -41,15 +63,15 @@ interface AuthProviderProps {
 
 const ACCESS_TOKEN_KEY = 'access_token';
 const REFRESH_TOKEN_KEY = 'refresh_token';
-const USER_KEY = 'user_data';
+const EMPLOYEE_KEY = 'employee_data';
 
 export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
-  const [user, setUser] = useState<User | null>(null);
+  const [employee, setEmployee] = useState<Employee | null>(null);
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [refreshToken, setRefreshToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  const isAuthenticated = !!user && !!accessToken;
+  const isAuthenticated = !!employee && !!accessToken;
 
   // Load stored authentication data on app start
   useEffect(() => {
@@ -58,16 +80,16 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   const loadStoredAuth = async () => {
     try {
-      const [storedAccessToken, storedRefreshToken, storedUser] = await Promise.all([
+      const [storedAccessToken, storedRefreshToken, storedEmployee] = await Promise.all([
         AsyncStorage.getItem(ACCESS_TOKEN_KEY),
         AsyncStorage.getItem(REFRESH_TOKEN_KEY),
-        AsyncStorage.getItem(USER_KEY),
+        AsyncStorage.getItem(EMPLOYEE_KEY),
       ]);
 
-      if (storedAccessToken && storedUser) {
+      if (storedAccessToken && storedEmployee) {
         setAccessToken(storedAccessToken);
         setRefreshToken(storedRefreshToken);
-        setUser(JSON.parse(storedUser));
+        setEmployee(JSON.parse(storedEmployee));
       }
     } catch (error) {
       console.error('Error loading stored auth:', error);
@@ -76,7 +98,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     }
   };
 
-  const login = async (cedula: string, password: string): Promise<{ success: boolean; error?: string }> => {
+  const login = async (cedula: string, password: string): Promise<{ success: boolean; passwordExpired?: boolean; error?: string }> => {
     try {
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) {
@@ -90,53 +112,61 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           'ngrok-skip-browser-warning': '69420'
         },
         body: JSON.stringify({
-          ced: cedula,
+          cedula: cedula,
           password: password
         }),
       });
 
+      if (!response.ok) {
+        const responseData = await response.json();
+        return { success: false, error: responseData.message };
+      }
+
       const responseData = await response.json();
 
       if (!responseData.status) {
-        return { success: false, error: responseData.message || 'Error de autenticación' };
+        return { success: false, passwordExpired: responseData.passwordExpired || false, error: responseData.message || 'Error de autenticación' };
       }
 
-      const employeeData: Employee = responseData.employee;
+      const empleadoData = responseData.empleado;
       
       // Use real tokens from server response
       const accessToken = responseData.accessToken;
       const refreshToken = responseData.refreshToken;
       
       if (!accessToken || !refreshToken) {
-        return { success: false, error: 'Tokens no recibidos del servidor' };
+        return { success: false, passwordExpired: false, error: 'Tokens no recibidos del servidor' };
       }
 
-      // Create user object from employee data
-      const userData: User = {
-        id: employeeData.cedula,
-        name: `${employeeData.nombre} ${employeeData.primer_apellido} ${employeeData.segundo_apellido}`.trim(),
-        email: employeeData.Email,
-        cedula: employeeData.cedula,
-        telefono: employeeData.telefono,
-        tipoCedula: employeeData.tipoCedula,
-        createdAt: new Date().toISOString(), // Since we don't have this from the API
+      // Create employee object from server empleado data
+      const employeeData: Employee = {
+        id: empleadoData.id,
+        name: `${empleadoData.nombre} ${empleadoData.apellido} ${empleadoData.segundo_apellido || ''}`.trim(),
+        email: empleadoData.Email,
+        cedula: empleadoData.cedula,
+        telefono: empleadoData.telefono || '',
+        tipoCedula: empleadoData.tipoCedula || '',
+        fechaContratacion: empleadoData.fechaContratacion || null, // Format YYYY-MM-DD
+        roles: empleadoData.roles || [],
+        firmaManual: empleadoData.firmaManual || '',
+        supervisor_id: empleadoData.supervisor_id || null,
       };
 
-      // Store tokens and user data
+      // Store tokens and employee data
       await Promise.all([
         AsyncStorage.setItem(ACCESS_TOKEN_KEY, accessToken),
         AsyncStorage.setItem(REFRESH_TOKEN_KEY, refreshToken),
-        AsyncStorage.setItem(USER_KEY, JSON.stringify(userData)),
+        AsyncStorage.setItem(EMPLOYEE_KEY, JSON.stringify(employeeData)),
       ]);
 
       setAccessToken(accessToken);
       setRefreshToken(refreshToken);
-      setUser(userData);
+      setEmployee(employeeData);
 
-      return { success: true };
+      return { success: true, passwordExpired: false };
     } catch (error) {
       console.error('Login error:', error);
-      return { success: false, error: 'Error de conexión' };
+      return { success: false, passwordExpired: false, error: 'Error de conexión' };
     }
   };
 
@@ -173,12 +203,13 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       await Promise.all([
         AsyncStorage.removeItem(ACCESS_TOKEN_KEY),
         AsyncStorage.removeItem(REFRESH_TOKEN_KEY),
-        AsyncStorage.removeItem(USER_KEY),
+        AsyncStorage.removeItem(EMPLOYEE_KEY),
+        AsyncStorage.removeItem('temp_state'),
       ]);
 
       setAccessToken(null);
       setRefreshToken(null);
-      setUser(null);
+      setEmployee(null);
 
       return serverResponse;
     } catch (error) {
@@ -213,6 +244,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       const responseData = await response.json();
 
       if (!responseData.status || !responseData.accessToken) {
+        // logout
         return false;
       }
 
@@ -237,7 +269,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   };
 
   const value: AuthContextType = {
-    user,
+    employee,
     accessToken,
     refreshToken,
     isLoading,

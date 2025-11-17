@@ -14,14 +14,14 @@ export default function ForgotPassword({ onBackToLogin }: ForgotPasswordProps) {
 
   const handleResetPassword = async () => {
     if (!cedula.trim()) {
-      Alert.alert('Error', 'Por favor ingresa tu número de cédula');
+      Alert.alert('Error', 'Por favor ingresa tu cédula');
       return;
     }
 
     // Basic cedula validation (numeric and reasonable length)
-    const cedulaRegex = /^\d{6,12}$/;
+    const cedulaRegex = /^[0-9]{7,12}$/;
     if (!cedulaRegex.test(cedula.trim())) {
-      Alert.alert('Error', 'Por favor ingresa un número de cédula válido (6-12 dígitos)');
+      Alert.alert('Error', 'Por favor ingresa una cédula válida (7-12 dígitos numéricos)');
       return;
     }
 
@@ -41,7 +41,7 @@ export default function ForgotPassword({ onBackToLogin }: ForgotPasswordProps) {
           'ngrok-skip-browser-warning': '69420'
         },
         body: JSON.stringify({
-          ced: cedula.trim(),
+          cedula: cedula.trim(),
         }),
       });
 
@@ -74,24 +74,24 @@ export default function ForgotPassword({ onBackToLogin }: ForgotPasswordProps) {
     <ThemedView style={styles.container}>
       <ThemedView style={styles.contentContainer}>
         <ThemedText type="title" style={styles.title}>
-          ¿Olvidó su contraseña?
+          Cambiar contraseña
         </ThemedText>
         
         <ThemedText style={styles.description}>
-          Ingrese su número de cédula y le enviaremos un enlace para restablecer su contraseña.
+          Ingrese su cédula y le enviaremos un enlace para restablecer su contraseña.
         </ThemedText>
 
         <ThemedView style={styles.inputContainer}>
-          <ThemedText style={styles.label}>Número de cédula</ThemedText>
+          <ThemedText style={styles.label}>Cédula</ThemedText>
           <TextInput
             style={styles.input}
             value={cedula}
             onChangeText={setCedula}
-            placeholder="Ingrese su número de cédula"
-            keyboardType="numeric"
+            placeholder="Ingrese su cédula"
             autoCapitalize="none"
             autoCorrect={false}
             editable={!isLoading}
+            keyboardType="numeric"
             maxLength={12}
           />
         </ThemedView>
