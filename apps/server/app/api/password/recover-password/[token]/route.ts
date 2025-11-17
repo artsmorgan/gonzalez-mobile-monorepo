@@ -1,9 +1,7 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "../../../../../utils/prismaClient";
 const bcrypt = require('bcrypt');
-
-const prisma = new PrismaClient();
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ token: string }> }) {
     try {

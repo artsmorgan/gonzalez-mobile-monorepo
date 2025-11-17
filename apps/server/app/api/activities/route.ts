@@ -5,8 +5,18 @@ import { toZonedTime } from "date-fns-tz";
 
 const prisma = new PrismaClient();
 
+export async function GET(req: NextRequest) {
+    try {
+        return NextResponse.json({ status: true, message: "Método GET" }, { status: 200 });
+    } catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        return NextResponse.json({ message: errorMessage }, { status: 500 });
+    }
+}
+
 export async function POST(req: NextRequest) {
     try {
+        /*
         const { valid, payload, message } = verifyAccessToken(req);
 
         if (!valid) {
@@ -60,6 +70,8 @@ export async function POST(req: NextRequest) {
 
             return NextResponse.json({ status: true, message: "Actividad desmarcada correctamente" }, { status: 200 });
         }
+*/
+        return NextResponse.json({ status: false, message: "Acción no válida" }, { status: 200 });
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         return NextResponse.json({ message: errorMessage }, { status: 500 });

@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
 import { toZonedTime } from "date-fns-tz";
-
-const prisma = new PrismaClient();
+import { prisma } from "../../../../../utils/prismaClient";
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
@@ -13,7 +11,6 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         // Params obtenidos con "?"
         const searchParams = req.nextUrl.searchParams;
         const endingTime = searchParams.get("endingTime");
-        const marcaDiaId = searchParams.get("marcaDiaId");
 
         console.log("endingTime", endingTime);
 
@@ -21,11 +18,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             return NextResponse.json({ status: false, message: "Tiempo de finalización no especificado" }, { status: 200 });
         }
 
-        if (!marcaDiaId) {
-            return NextResponse.json({ status: false, message: "ID de marca del dia no especificado" }, { status: 200 });
-        }
-
-        const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(marcaDiaId) } });
+        const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id } });
         if (!marcaDia) {
             return NextResponse.json({ status: false, message: "Marca del dia no encontrada" }, { status: 200 });
         }

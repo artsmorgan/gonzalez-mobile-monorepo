@@ -1,11 +1,9 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
 import { verifyAccessToken } from "../../../../../utils/verifyToken";
+import { prisma } from "../../../../../utils/prismaClient";
 const dotenv = require('dotenv');
 dotenv.config();
-
-const prisma = new PrismaClient();
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
