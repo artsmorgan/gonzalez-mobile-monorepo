@@ -8,6 +8,7 @@ import SlideMenu from '@/components/SlideMenu';
 import { useAuth } from '@/contexts/AuthContext';
 import Constants from 'expo-constants';
 import { router } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 interface Role {
   id: number;
@@ -17,7 +18,7 @@ interface Role {
 }
 
 export default function RolesScreen() {
-  const { accessToken, refreshAccessToken } = useAuth();
+  const { accessToken, refreshAccessToken, logout } = useAuth();
   const [roles, setRoles] = useState<Role[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -48,14 +49,14 @@ export default function RolesScreen() {
         throw new Error('Server URL not configured');
       }
 
-      let token = accessToken;
+      let token = await AsyncStorage.getItem('access_token');
       
       if (!token) {
         const refreshed = await refreshAccessToken();
         if (!refreshed) {
           throw new Error('No valid authentication token');
         }
-        token = accessToken;
+        token = await AsyncStorage.getItem('access_token');
       }
 
       const response = await fetch(`${apiUrl}/api/roles`, {
@@ -67,11 +68,13 @@ export default function RolesScreen() {
         },
       });
 
-      if (response.status === 401) {
+      if (response.status === 401 || response.status === 403) {
         const refreshed = await refreshAccessToken();
         if (refreshed) {
           return fetchRoles();
         } else {
+          // If refresh fails, logout the user
+          await logout();
           throw new Error('Session expired. Please login again.');
         }
       }
@@ -104,13 +107,10 @@ export default function RolesScreen() {
   };
 
   // Handle profile navigation from slide menu
-  const handleProfilePress = () => {
-    router.push('/(tabs)');
-  };
 
   // Handle home navigation from slide menu
   const handleHomePress = () => {
-    router.push('/(tabs)');
+    router.navigate('/(tabs)');
   };
 
   // Handle closing slide menu
@@ -129,7 +129,7 @@ export default function RolesScreen() {
 
   const handlePermissionsPress = (role: Role) => {
     // Navegar a una pantalla de permisos por funcionalidad para este rol específico
-    router.push({
+    router.navigate({
       pathname: '/role-permissions',
       params: {
         roleId: role.id.toString(),
@@ -188,7 +188,6 @@ export default function RolesScreen() {
         <SlideMenu 
           isVisible={isMenuVisible} 
           onClose={handleMenuClose}
-          onProfilePress={handleProfilePress}
           onHomePress={handleHomePress}
           currentRoute="roles"
         />
@@ -210,7 +209,6 @@ export default function RolesScreen() {
         <SlideMenu 
           isVisible={isMenuVisible} 
           onClose={handleMenuClose}
-          onProfilePress={handleProfilePress}
           onHomePress={handleHomePress}
           currentRoute="roles"
         />
@@ -259,7 +257,6 @@ export default function RolesScreen() {
       <SlideMenu 
         isVisible={isMenuVisible} 
         onClose={handleMenuClose}
-        onProfilePress={handleProfilePress}
         onHomePress={handleHomePress}
         currentRoute="roles"
       />

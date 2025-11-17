@@ -1,5 +1,6 @@
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
+import AppFooter from '@/components/AppFooter';
 import Constants from 'expo-constants';
 import { router } from 'expo-router';
 import React, { useState } from 'react';
@@ -12,7 +13,7 @@ interface PasswordRecoveryProps {
     token: string;
     name: string;
     email: string;
-    username: string;
+    cedula: string;
     telefono: string;
   };
 }
@@ -182,8 +183,8 @@ export default function PasswordRecovery({ userId, userInfo }: PasswordRecoveryP
               {userInfo.name}
             </ThemedText>
             <ThemedText style={styles.userInfoText}>
-              <ThemedText style={styles.userInfoLabel}>Usuario: </ThemedText>
-              {userInfo.username}
+              <ThemedText style={styles.userInfoLabel}>Cédula: </ThemedText>
+              {userInfo.cedula}
             </ThemedText>
             <ThemedText style={styles.userInfoText}>
               <ThemedText style={styles.userInfoLabel}>Email: </ThemedText>
@@ -285,6 +286,7 @@ export default function PasswordRecovery({ userId, userInfo }: PasswordRecoveryP
         </TouchableOpacity>
         </ThemedView>
       </ScrollView>
+      <AppFooter />
     </ThemedView>
   );
 }
@@ -327,15 +329,18 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginBottom: 12,
     textAlign: 'center',
+    color: '#007AFF',
   },
   userInfoText: {
     fontSize: 14,
     marginBottom: 6,
     lineHeight: 20,
+    color: '#6c757d', // gray
   },
   userInfoLabel: {
     fontWeight: '600',
     fontSize: 14,
+    color: '#333333', // dark gray
   },
   inputContainer: {
     width: '100%',

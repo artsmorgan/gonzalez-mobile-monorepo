@@ -8,6 +8,7 @@ import SlideMenu from '@/components/SlideMenu';
 import { useAuth } from '@/contexts/AuthContext';
 import Constants from 'expo-constants';
 import { router } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 interface RuleAction {
   a: string;
@@ -21,7 +22,7 @@ interface Rule {
 }
 
 export default function RulesScreen() {
-  const { accessToken, refreshAccessToken } = useAuth();
+  const { accessToken, refreshAccessToken, logout } = useAuth();
   const [rules, setRules] = useState<Rule[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -53,7 +54,7 @@ export default function RulesScreen() {
         throw new Error('Server URL not configured');
       }
 
-      let token = accessToken;
+      let token = await AsyncStorage.getItem('access_token');
       
       // Try to refresh token if we don't have one
       if (!token) {
@@ -61,7 +62,7 @@ export default function RulesScreen() {
         if (!refreshed) {
           throw new Error('No valid authentication token');
         }
-        token = accessToken;
+        token = await AsyncStorage.getItem('access_token');
       }
 
       const response = await fetch(`${apiUrl}/api/reglas`, {
@@ -73,13 +74,15 @@ export default function RulesScreen() {
         },
       });
 
-      if (response.status === 401) {
+      if (response.status === 401 || response.status === 403) {
         // Token might be expired, try to refresh
         const refreshed = await refreshAccessToken();
         if (refreshed) {
           // Retry the request with the new token
           return fetchRules();
         } else {
+          // If refresh fails, logout the user
+          await logout();
           throw new Error('Session expired. Please login again.');
         }
       }
@@ -107,7 +110,7 @@ export default function RulesScreen() {
   };
 
   const showPermissions = (rule: Rule) => {
-    router.push({
+    router.navigate({
       pathname: '/permissions',
       params: {
         ruleName: rule.nombre,
@@ -122,13 +125,10 @@ export default function RulesScreen() {
   };
 
   // Handle profile navigation from slide menu
-  const handleProfilePress = () => {
-    router.push('/(tabs)');
-  };
 
   // Handle home navigation from slide menu
   const handleHomePress = () => {
-    router.push('/(tabs)');
+    router.navigate('/(tabs)');
   };
 
   // Handle closing slide menu
@@ -161,7 +161,6 @@ export default function RulesScreen() {
         <SlideMenu 
           isVisible={isMenuVisible} 
           onClose={handleMenuClose}
-          onProfilePress={handleProfilePress}
           onHomePress={handleHomePress}
           currentRoute="rules"
         />
@@ -183,7 +182,6 @@ export default function RulesScreen() {
         <SlideMenu 
           isVisible={isMenuVisible} 
           onClose={handleMenuClose}
-          onProfilePress={handleProfilePress}
           onHomePress={handleHomePress}
           currentRoute="rules"
         />
@@ -233,7 +231,6 @@ export default function RulesScreen() {
       <SlideMenu 
         isVisible={isMenuVisible} 
         onClose={handleMenuClose}
-        onProfilePress={handleProfilePress}
         onHomePress={handleHomePress}
       />
     </ThemedView>

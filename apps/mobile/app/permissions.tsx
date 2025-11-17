@@ -9,9 +9,9 @@ import { useAuth } from '@/contexts/AuthContext';
 import Constants from 'expo-constants';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 interface Role {
-  id: number;
   name: string;
   actions: string[];
 }
@@ -41,7 +41,7 @@ const getActionIcon = (action: string, isActive: boolean) => {
 };
 
 export default function PermissionsScreen() {
-  const { accessToken, refreshAccessToken } = useAuth();
+  const { accessToken, refreshAccessToken, logout } = useAuth();
   const params = useLocalSearchParams();
   const [roles, setRoles] = useState<Role[]>([]);
   const [loading, setLoading] = useState(true);
@@ -91,14 +91,15 @@ export default function PermissionsScreen() {
         throw new Error('Server URL not configured');
       }
 
-      let token = accessToken;
+      // Obtener access token de AsyncStorage
+      let token = await AsyncStorage.getItem('access_token');
       
       if (!token) {
         const refreshed = await refreshAccessToken();
         if (!refreshed) {
           throw new Error('No valid authentication token');
         }
-        token = accessToken;
+        token = await AsyncStorage.getItem('access_token');
       }
 
       const response = await fetch(`${apiUrl}/api/reglas/roles?perm=${encodeURIComponent(ruleName)}`, {
@@ -110,12 +111,15 @@ export default function PermissionsScreen() {
         },
       });
 
-      if (response.status === 401) {
+      console.log(response);
+
+      if (response.status === 401 || response.status === 403) {
         const refreshed = await refreshAccessToken();
         if (refreshed) {
           return fetchRoles();
         } else {
-          throw new Error('Session expired. Please login again.');
+          // If refresh fails, logout the user
+          await logout();
         }
       }
 
@@ -147,13 +151,10 @@ export default function PermissionsScreen() {
   };
 
   // Handle profile navigation from slide menu
-  const handleProfilePress = () => {
-    router.push('/(tabs)');
-  };
 
   // Handle home navigation from slide menu
   const handleHomePress = () => {
-    router.push('/(tabs)');
+    router.navigate('/(tabs)');
   };
 
   // Handle closing slide menu
@@ -176,9 +177,22 @@ export default function PermissionsScreen() {
                     Alert.alert('Error', 'URL del servidor no configurada');
                     return;
                 }
+                let token = await AsyncStorage.getItem('access_token');
+                
+                // Try to refresh token if we don't have one
+                if (!token) {
+                    const refreshed = await refreshAccessToken();
+                    if (!refreshed) {
+                        Alert.alert('Error', 'No hay token de autenticación válido');
+                        return;
+                    }
+                    token = await AsyncStorage.getItem('access_token');
+                }
+
                 const response = await fetch(`${apiUrl}/api/reglas/roles`, {
                     method: 'POST',
                     headers: {
+                        'Authorization': `Bearer ${token}`,
                         'Content-Type': 'application/json',
                         'ngrok-skip-browser-warning': '69420'
                     },
@@ -189,6 +203,20 @@ export default function PermissionsScreen() {
                         moduleName: moduleName
                     })
                 });
+
+                if (response.status === 401 || response.status === 403) {
+                    // Token might be expired, try to refresh
+                    const refreshed = await refreshAccessToken();
+                    if (refreshed) {
+                        // Retry the request with the new token
+                        return updateAction(action, isActive, roleName, moduleName);
+                    } else {
+                        // If refresh fails, logout the user
+                        await logout();
+                        Alert.alert('Error', 'Sesión expirada. Por favor inicie sesión nuevamente.');
+                        return;
+                    }
+                }
 
                 if (!response.ok) {
                     Alert.alert('Error', `Error del servidor: ${response.status}`);
@@ -207,7 +235,7 @@ export default function PermissionsScreen() {
       <View style={styles.actionsContainer}>
         {ruleActions.map((action, index) => (
           <TouchableOpacity
-            key={`${item.id}-${action}-${index}`}
+            key={`${item.name}-${action}-${index}`}
             style={[
               styles.actionButton,
               isActionActive(action) && item.actions.includes(action) && styles.activeActionButton
@@ -233,7 +261,6 @@ export default function PermissionsScreen() {
         <SlideMenu 
           isVisible={isMenuVisible} 
           onClose={handleMenuClose}
-          onProfilePress={handleProfilePress}
           onHomePress={handleHomePress}
           currentRoute="permissions"
         />
@@ -255,7 +282,6 @@ export default function PermissionsScreen() {
         <SlideMenu 
           isVisible={isMenuVisible} 
           onClose={handleMenuClose}
-          onProfilePress={handleProfilePress}
           onHomePress={handleHomePress}
           currentRoute="permissions"
         />
@@ -290,7 +316,7 @@ export default function PermissionsScreen() {
         <FlatList
           data={filteredRoles}
           renderItem={renderRoleItem}
-          keyExtractor={(item) => `role-${item.id}`}
+          keyExtractor={(item) => `role-${item.name}`}
           showsVerticalScrollIndicator={true}
           style={styles.rolesList}
           contentContainerStyle={styles.rolesListContent}
@@ -313,7 +339,6 @@ export default function PermissionsScreen() {
       <SlideMenu 
         isVisible={isMenuVisible} 
         onClose={handleMenuClose}
-        onProfilePress={handleProfilePress}
         onHomePress={handleHomePress}
         currentRoute="permissions"
       />

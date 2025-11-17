@@ -12,7 +12,7 @@ export default function AppFooter({ children }: AppFooterProps) {
     <ThemedView style={styles.footer}>
       {children || (
         <ThemedText type="subtitle" style={styles.footerText}>
-          © 2024 Gonzalez App
+          © 2025 Gonzalez App
         </ThemedText>
       )}
     </ThemedView>

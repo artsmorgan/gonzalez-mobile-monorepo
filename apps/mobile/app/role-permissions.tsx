@@ -9,6 +9,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import Constants from 'expo-constants';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 interface Action {
   nombre: string;
@@ -21,7 +22,7 @@ interface Module {
 }
 
 export default function RolePermissionsScreen() {
-  const { accessToken, refreshAccessToken } = useAuth();
+  const { accessToken, refreshAccessToken, logout } = useAuth();
   const params = useLocalSearchParams();
   const [modules, setModules] = useState<Module[]>([]);
   const [loading, setLoading] = useState(true);
@@ -55,9 +56,22 @@ export default function RolePermissionsScreen() {
                 Alert.alert('Error', 'URL del servidor no configurada');
                 return;
             }
+            let token = await AsyncStorage.getItem('access_token');
+            
+            // Try to refresh token if we don't have one
+            if (!token) {
+                const refreshed = await refreshAccessToken();
+                if (!refreshed) {
+                    Alert.alert('Error', 'No hay token de autenticación válido');
+                    return;
+                }
+                token = await AsyncStorage.getItem('access_token');
+            }
+
             const response = await fetch(`${apiUrl}/api/reglas/roles`, {
                 method: 'POST',
                 headers: {
+                    'Authorization': `Bearer ${token}`,
                     'Content-Type': 'application/json',
                     'ngrok-skip-browser-warning': '69420'
                 },
@@ -68,6 +82,20 @@ export default function RolePermissionsScreen() {
                     moduleName: roleName
                 })
             });
+
+            if (response.status === 401 || response.status === 403) {
+                // Token might be expired, try to refresh
+                const refreshed = await refreshAccessToken();
+                if (refreshed) {
+                    // Retry the request with the new token
+                    return updateAction(action, isActive, roleName, moduleName);
+                } else {
+                    // If refresh fails, logout the user
+                    await logout();
+                    Alert.alert('Error', 'Sesión expirada. Por favor inicie sesión nuevamente.');
+                    return;
+                }
+            }
 
             if (!response.ok) {
                 Alert.alert('Error', `Error del servidor: ${response.status}`);
@@ -96,14 +124,14 @@ export default function RolePermissionsScreen() {
         throw new Error('Server URL not configured');
       }
 
-      let token = accessToken;
+      let token = await AsyncStorage.getItem('access_token');
       
       if (!token) {
         const refreshed = await refreshAccessToken();
         if (!refreshed) {
           throw new Error('No valid authentication token');
         }
-        token = accessToken;
+        token = await AsyncStorage.getItem('access_token');
       }
 
       const response = await fetch(`${apiUrl}/api/roles/reglas?roleName=${roleName}`, {
@@ -115,11 +143,13 @@ export default function RolePermissionsScreen() {
         },
       });
 
-      if (response.status === 401) {
+      if (response.status === 401 || response.status === 403) { 
         const refreshed = await refreshAccessToken();
         if (refreshed) {
           return fetchRolePermissions();
         } else {
+          // If refresh fails, logout the user
+          await logout();
           throw new Error('Session expired. Please login again.');
         }
       }
@@ -171,13 +201,10 @@ const getActionIcon = (action: string, isActive: boolean) => {
   };
 
   // Handle profile navigation from slide menu
-  const handleProfilePress = () => {
-    router.push('/(tabs)');
-  };
 
   // Handle home navigation from slide menu
   const handleHomePress = () => {
-    router.push('/(tabs)');
+    router.navigate('/(tabs)');
   };
 
   // Handle closing slide menu
@@ -247,7 +274,6 @@ const getActionIcon = (action: string, isActive: boolean) => {
         <SlideMenu 
           isVisible={isMenuVisible} 
           onClose={handleMenuClose}
-          onProfilePress={handleProfilePress}
           onHomePress={handleHomePress}
           currentRoute="role-permissions"
         />
@@ -272,7 +298,6 @@ const getActionIcon = (action: string, isActive: boolean) => {
         <SlideMenu 
           isVisible={isMenuVisible} 
           onClose={handleMenuClose}
-          onProfilePress={handleProfilePress}
           onHomePress={handleHomePress}
           currentRoute="role-permissions"
         />
@@ -330,7 +355,6 @@ const getActionIcon = (action: string, isActive: boolean) => {
       <SlideMenu 
         isVisible={isMenuVisible} 
         onClose={handleMenuClose}
-        onProfilePress={handleProfilePress}
         onHomePress={handleHomePress}
         currentRoute="role-permissions"
       />
