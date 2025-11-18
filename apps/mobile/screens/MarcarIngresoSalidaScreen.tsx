@@ -890,7 +890,7 @@ export default function MarcarIngresoSalidaScreen() {
       case 'end': return <Ionicons name="exit-outline" size={35} color='#FFFFFF' />;
       case 'confirm': return <Ionicons name="checkmark" size={35} color='#FFFFFF' />;
       case 'cancel': return <Ionicons name="close" size={35} color='#FFFFFF' />;
-      case 'marcar-ingreso-salida': return <Ionicons name="time" size={25} color='#FFFFFF' />;
+      case 'marcar-ingreso-salida': return <Ionicons name="time" size={25} color='#000000' />;
       default: return <Ionicons name="close" size={35} color='#FFFFFF' />;
     }
   };
@@ -1113,6 +1113,93 @@ export default function MarcarIngresoSalidaScreen() {
     }
   }
 
+  const handleCreateTestMarca = () => {
+    if (!employee?.id) {
+      Alert.alert('Error', 'No se encontró el ID del empleado.');
+      return;
+    }
+
+    Alert.alert(
+      'Confirmar creación de marca de prueba',
+      '¿Estás seguro de que deseas crear una marca de prueba? Esta acción es solo para desarrollo.',
+      [
+        {
+          text: 'Cancelar',
+          style: 'cancel',
+        },
+        {
+          text: 'Crear',
+          style: 'default',
+          onPress: () => executeCreateTestMarca(),
+        },
+      ],
+      { cancelable: true }
+    );
+  };
+
+  const executeCreateTestMarca = async () => {
+    if (!employee?.id) {
+      Alert.alert('Error', 'No se encontró el ID del empleado.');
+      return;
+    }
+
+    try {
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) {
+        throw new Error('Server URL not configured');
+      }
+
+      let token = await AsyncStorage.getItem('access_token');
+      if (!token) {
+        const refreshed = await refreshAccessToken();
+        if (!refreshed) {
+          throw new Error('No authentication token found');
+        }
+        token = await AsyncStorage.getItem('access_token');
+      }
+
+      const response = await fetch(`${apiUrl}/api/attendance/${employee.id}/dev-create-marca`, {
+        method: 'POST',
+        body: JSON.stringify({
+          dev: employee.id,
+        }),
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': '69420',
+        },
+      });
+
+      if (response.status === 401 || response.status === 403) {
+        const refreshed = await refreshAccessToken();
+        if (refreshed) {
+          return executeCreateTestMarca();
+        } else {
+          await logout();
+          return;
+        }
+      }
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      
+      if (data.status) {
+        Alert.alert('Éxito', 'Marca de prueba creada correctamente');
+        // Recargar la ventana
+        await fetchAttendanceStatus();
+      } else {
+        throw new Error(data.message || 'Error al crear la marca de prueba');
+      }
+    } catch (error: any) {
+      console.error('Error creating test marca:', error);
+      Alert.alert('Error', error.message || 'No se pudo crear la marca de prueba. Por favor, intenta nuevamente.');
+    }
+  };
+
   if (isLoading) {
     return (
       <ThemedView style={styles.container}>
@@ -1137,6 +1224,19 @@ export default function MarcarIngresoSalidaScreen() {
               Control de asistencia
             </ThemedText>
           </ThemedView>
+          {/* Test Button - Always Visible */}
+          <ThemedView style={styles.testButtonContainer}>
+            <TouchableOpacity
+              style={[
+                styles.testButton
+              ]}
+              onPress={handleCreateTestMarca}
+            >
+              <ThemedText style={styles.testButtonText}>
+                Crear marca (Solo pruebas)
+              </ThemedText>
+            </TouchableOpacity>
+          </ThemedView>
 
           {/* Content Section */}
           {isLoadingLocation ? (
@@ -1155,14 +1255,34 @@ export default function MarcarIngresoSalidaScreen() {
                   setLocationError(null);
                   setIsLoadingLocation(true);
                   try {
-                    await Location.requestForegroundPermissionsAsync();
+                    // Verificar permisos
+                    const { status: permissionStatus } = await Location.requestForegroundPermissionsAsync();
+                    if (permissionStatus !== 'granted') {
+                      setLocationError('Permiso de ubicación denegado. Por favor, activa la ubicación en la configuración de tu dispositivo.');
+                      setIsLoadingLocation(false);
+                      return;
+                    }
+
+                    // Verificar que los servicios de ubicación estén habilitados
+                    const isLocationEnabled = await Location.hasServicesEnabledAsync();
+                    if (!isLocationEnabled) {
+                      setLocationError('Los servicios de ubicación están desactivados. Por favor, activa la ubicación en tu dispositivo.');
+                      setIsLoadingLocation(false);
+                      return;
+                    }
+
+                    // Obtener ubicación
                     const loc = await Location.getCurrentPositionAsync({
                       accuracy: Location.Accuracy.High,
                     });
                     setLocation(loc);
                     setIsLoadingLocation(false);
+                    
+                    // Llamar a fetchAttendanceStatus para cargar los datos inmediatamente
+                    await fetchAttendanceStatus();
                   } catch (err) {
-                    setLocationError('Error al obtener la ubicación.');
+                    console.error('Error obteniendo ubicación GPS:', err);
+                    setLocationError('Error al obtener la ubicación GPS. Por favor, verifica que los servicios de ubicación estén habilitados.');
                     setIsLoadingLocation(false);
                   }
                 }}
@@ -1767,6 +1887,32 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     color: '#FFFFFF',
+  },
+  testButtonContainer: {
+    marginBottom: 20,
+  },
+  testButton: {
+    backgroundColor: '#FF9500',
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 8,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  testButtonDisabled: {
+    opacity: 0.6,
+  },
+  testButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
   },
 });
 

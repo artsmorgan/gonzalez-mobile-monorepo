@@ -1424,17 +1424,17 @@ export default function IncidentsScreen() {
 
   const getActionIcon = (action: string) => {
     switch (action.toLowerCase()) {
-      case 'add': return <Ionicons name="add-sharp" size={24} color='#FFFFFF' />;
+      case 'add': return <Ionicons name="add-sharp" size={24} color='#000000' />;
       case 'edit': return <Ionicons name="pencil" size={20} color='#FFFFFF' />;
       case 'cancel': return <Ionicons name="close-sharp" size={20} color='#FFFFFF' />;
       case 'confirm': return <Ionicons name="checkmark-sharp" size={20} color='#FFFFFF' />;
       case 'camera': return <Ionicons name="camera" size={20} color="#007AFF" />;
-      case 'microphone': return <Ionicons name="mic" size={20} color="#ffffff" />;
+      case 'microphone': return <Ionicons name="mic" size={20} color="#000000" />;
       case 'play': return <Ionicons name="play" size={20} color="#007AFF" />;
       case 'pause': return <Ionicons name="pause" size={20} color="#007AFF" />;
       case 'stop': return <Ionicons name="stop" size={20} color="#FF3B30" />;
-      case 'restart': return <Ionicons name="refresh" size={20} color="#007AFF" />;
-      case 'clear': return <Ionicons name="trash" size={20} color="#fff" />;
+      case 'restart': return <Ionicons name="refresh" size={20} color="#FFFFFF" />;
+      case 'clear': return <Ionicons name="trash" size={20} color="#000000" />;
       case 'remove': return <Ionicons name="remove-circle" size={20} color="#FF3B30" />;
       default: return <Ionicons name="close-sharp" size={20} color='#FFFFFF' />;
     }
@@ -2555,7 +2555,7 @@ export default function IncidentsScreen() {
             style={styles.goBackButton}
             onPress={() => navigation.goBack()}
           >
-            <Ionicons name="arrow-back" size={20} color="#fff" />
+            <Ionicons name="arrow-back" size={20} color="#000000" />
             <ThemedText style={styles.goBackButtonText}>Volver</ThemedText>
           </TouchableOpacity>
         </ThemedView>
@@ -2582,7 +2582,7 @@ export default function IncidentsScreen() {
           {/* Module Title */}
           <ThemedView style={styles.titleContainer}>
             <ThemedText type="title" style={styles.title}>
-              <Ionicons name="warning" size={28} color='#fff' /> Incidentes
+              <Ionicons name="warning" size={28} color='#000000' /> Incidentes
             </ThemedText>
             <ThemedText style={styles.subtitle}>
               Gestiona los incidentes
@@ -2861,7 +2861,7 @@ export default function IncidentsScreen() {
               style={styles.cameraCloseButton}
               onPress={() => setIsCameraVisible(false)}
             >
-              <Ionicons name="close" size={30} color="#fff" />
+              <Ionicons name="close" size={30} color="#000000" />
             </TouchableOpacity>
             
             <TouchableOpacity
@@ -3165,6 +3165,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     fontSize: 16,
     backgroundColor: '#F9F9F9',
+    color: '#000000',
   },
   textArea: {
     height: 100,

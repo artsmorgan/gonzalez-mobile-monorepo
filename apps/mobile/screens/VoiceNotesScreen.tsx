@@ -86,9 +86,25 @@ interface VoiceNote {
 }
 
 // Componente para reproducir audio de notas de voz con cleanup
-function VoiceNoteAudioPlayer({ audioUri, isPlaying, onStatusUpdate }: { audioUri: string; isPlaying: boolean; onStatusUpdate?: (duration: number, position: number, playing: boolean) => void }) {
+function VoiceNoteAudioPlayer({ 
+  audioUri, 
+  isPlaying, 
+  onStatusUpdate,
+  shouldReset
+}: { 
+  audioUri: string; 
+  isPlaying: boolean; 
+  onStatusUpdate?: (duration: number, position: number, playing: boolean) => void;
+  shouldReset?: boolean;
+}) {
   const audioPlayer = useAudioPlayer(audioUri);
   const playerStatus = useAudioPlayerStatus(audioPlayer);
+  const onStatusUpdateRef = useRef(onStatusUpdate);
+
+  // Mantener la referencia más reciente de onStatusUpdate sin causar re-renders
+  useEffect(() => {
+    onStatusUpdateRef.current = onStatusUpdate;
+  }, [onStatusUpdate]);
 
   // Controlar play/pause basado en isPlaying
   useEffect(() => {
@@ -107,6 +123,34 @@ function VoiceNoteAudioPlayer({ audioUri, isPlaying, onStatusUpdate }: { audioUr
       }
     }
   }, [isPlaying, audioPlayer, playerStatus.playing]);
+
+  // Manejar reset
+  useEffect(() => {
+    if (shouldReset && audioPlayer) {
+      try {
+        audioPlayer.seekTo(0);
+        audioPlayer.pause();
+      } catch (error) {
+        const errorMsg = String(error);
+        if (!errorMsg.includes('already released') && !errorMsg.includes('has been rejected')) {
+          console.error('Error resetting audio:', error);
+        }
+      }
+    }
+  }, [shouldReset, audioPlayer]);
+
+  // Notificar cambios de estado con valores correctos
+  // Usar useRef para evitar loop infinito (onStatusUpdate no está en dependencias)
+  useEffect(() => {
+    if (!onStatusUpdateRef.current) return;
+
+    // playerStatus.currentTime y duration ya están en segundos
+    const duration = playerStatus.duration !== undefined ? playerStatus.duration : 0;
+    const position = playerStatus.currentTime !== undefined ? playerStatus.currentTime : 0;
+    const playing = playerStatus.playing || false;
+    
+    onStatusUpdateRef.current(duration, position, playing);
+  }, [playerStatus.duration, playerStatus.currentTime, playerStatus.playing]);
 
   // Cleanup al desmontar el componente
   useEffect(() => {
@@ -132,17 +176,6 @@ function VoiceNoteAudioPlayer({ audioUri, isPlaying, onStatusUpdate }: { audioUr
       }
     };
   }, [audioPlayer, playerStatus.playing]);
-
-  // Notificar cambios de estado
-  useEffect(() => {
-    if (onStatusUpdate && playerStatus.duration !== undefined && playerStatus.currentTime !== undefined) {
-      onStatusUpdate(
-        playerStatus.duration / 1000,
-        playerStatus.currentTime / 1000,
-        playerStatus.playing || false
-      );
-    }
-  }, [playerStatus.duration, playerStatus.currentTime, playerStatus.playing, onStatusUpdate]);
 
   return null; // Este componente no renderiza nada, solo maneja el audio
 }
@@ -199,6 +232,7 @@ export default function VoiceNotesScreen() {
   // Audio players for list items - using Maps to store audio URIs
   const [audioUris, setAudioUris] = useState<Map<string, string>>(new Map());
   const [audioDurations, setAudioDurations] = useState<Map<string, number>>(new Map());
+  const [resetFlags, setResetFlags] = useState<Map<string, boolean>>(new Map());
 
   // Filter states
   const [filterEmpresa, setFilterEmpresa] = useState('');
@@ -1004,9 +1038,26 @@ export default function VoiceNotesScreen() {
       newMap.set(key, false);
       return newMap;
     });
+    // Activar flag de reset
+    setResetFlags(prev => {
+      const newMap = new Map(prev);
+      newMap.set(key, true);
+      return newMap;
+    });
+    // Desactivar flag después de un momento para permitir resetear nuevamente
+    setTimeout(() => {
+      setResetFlags(prev => {
+        const newMap = new Map(prev);
+        newMap.set(key, false);
+        return newMap;
+      });
+    }, 100);
   };
 
   const formatTime = (seconds: number): string => {
+    if (!seconds || isNaN(seconds) || seconds < 0) {
+      return '0:00';
+    }
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
     return `${mins}:${secs.toString().padStart(2, '0')}`;
@@ -1066,29 +1117,29 @@ export default function VoiceNotesScreen() {
   const getActionIcon = (action: string) => {
     switch (action) {
       case 'add':
-        return <Ionicons name="add" size={24} color="#FFF" />;
+        return <Ionicons name="add" size={24} color="#000000" />;
       case 'delete':
-        return <Ionicons name="trash-outline" size={20} color="#FFF" />;
+        return <Ionicons name="trash-outline" size={20} color="#000000" />;
       case 'qr':
-        return <Ionicons name="qr-code" size={20} color="#FFF" />;
+        return <Ionicons name="qr-code" size={20} color="#000000" />;
       case 'clear':
-        return <Ionicons name="trash" size={20} color="#fff" />;
+        return <Ionicons name="trash" size={20} color="#000000" />;
       case 'play':
         return <Ionicons name="play" size={24} color="#007AFF" />;
       case 'pause':
         return <Ionicons name="pause" size={24} color="#007AFF" />;
       case 'microphone':
-        return <Ionicons name="mic" size={24} color="#ffffff" />;
+        return <Ionicons name="mic" size={24} color="#000000" />;
       case 'stop':
         return <Ionicons name="stop" size={24} color="#FF3B30" />;
       case 'restart':
-        return <Ionicons name="refresh" size={24} color="#007AFF" />;
+        return <Ionicons name="refresh" size={24} color="#FFFFFF" />;
       case 'confirm':
-        return <Ionicons name="checkmark" size={24} color="#FFF" />;
+        return <Ionicons name="checkmark" size={24} color="#FFFFFF" />;
       case 'cancel':
-        return <Ionicons name="close" size={24} color="#FFF" />;
+        return <Ionicons name="close" size={24} color="#FFFFFF" />;
       case 'signature':
-        return <Ionicons name="finger-print" size={24} color="#FFF" />;
+        return <Ionicons name="finger-print" size={24} color="#000000" />;
       default:
         return null;
 
@@ -1351,7 +1402,7 @@ export default function VoiceNotesScreen() {
                   onPress={() => setSetPuesto(!setPuesto)}
                 >
                   {setPuesto && (
-                    <Ionicons name="checkmark" size={16} color="#FFF" />
+                    <Ionicons name="checkmark" size={16} color="#000000" />
                   )}
                 </TouchableOpacity>
                 <ThemedText style={styles.checkboxLabel}>Asignar al puesto actual</ThemedText>
@@ -1407,7 +1458,7 @@ export default function VoiceNotesScreen() {
                       {getActionIcon(recordedPlayerStatus.playing ? 'pause' : 'play')}
                     </TouchableOpacity>
                     <ThemedText style={styles.audioDuration}>
-                      {formatTime((recordedPlayerStatus.currentTime || 0) / 1000)} / {formatTime((recordedPlayerStatus.duration || 0) / 1000)}
+                      {formatTime(recordedPlayerStatus.currentTime || 0)} / {formatTime(recordedPlayerStatus.duration || 0)}
                     </ThemedText>
                     <TouchableOpacity
                       style={styles.resetRecordedButton}
@@ -1617,7 +1668,9 @@ export default function VoiceNotesScreen() {
                           <VoiceNoteAudioPlayer
                             audioUri={audioUris.get(key)!}
                             isPlaying={isPlaying}
+                            shouldReset={resetFlags.get(key) || false}
                             onStatusUpdate={(dur, pos, playing) => {
+                              // Actualizar estados con valores en segundos
                               setAudioDurations(prev => {
                                 const newMap = new Map(prev);
                                 newMap.set(key, dur);
@@ -1650,7 +1703,7 @@ export default function VoiceNotesScreen() {
                                 {getActionIcon(isPlaying ? 'pause' : 'play')}
                               </TouchableOpacity>
                               <ThemedText style={styles.audioTime}>
-                                {formatTime(position)} / {formatTime(duration)}
+                                {formatTime(position || 0)} / {formatTime(duration || 0)}
                               </ThemedText>
                               <TouchableOpacity
                                 style={styles.resetAudioButton}
@@ -1807,6 +1860,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     padding: 12,
     fontSize: 16,
+    color: '#000000',
   },
   textArea: {
     height: 100,

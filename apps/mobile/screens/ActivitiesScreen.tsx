@@ -170,7 +170,7 @@ const ActivityItemComponent: React.FC<ActivityItemProps> = ({
               onPress={() => toggleActivity(activity)}
             >
               {activity.is_marcada && (
-                <Ionicons name="checkmark" size={16} color="#FFFFFF" />
+                <Ionicons name="checkmark" size={16} color="#fff" />
               )}
             </TouchableOpacity>
           </ThemedView>
@@ -829,12 +829,12 @@ export default function ActivitiesScreen() {
 
   const getActionIcon = (action: string) => {
     switch (action.toLowerCase()) {
-      case 'activities': return <Ionicons name="list" size={25} color='#FFFFFF' />;
+      case 'activities': return <Ionicons name="list" size={25} color='#000000' />;
       case 'check': return <Ionicons name="checkmark" size={20} color='#34C759' />;
       case 'uncheck': return <Ionicons name="close" size={20} color='#FF3B30' />;
-      case 'confirm': return <Ionicons name="checkmark" size={35} color='#FFFFFF' />;
-      case 'cancel': return <Ionicons name="close" size={35} color='#FFFFFF' />;
-      default: return <Ionicons name="list" size={25} color='#FFFFFF' />;
+      case 'confirm': return <Ionicons name="checkmark" size={35} color='#fff' />;
+      case 'cancel': return <Ionicons name="close" size={35} color='#fff' />;
+      default: return <Ionicons name="list" size={25} color='#000000' />;
     }
   };
 
@@ -1151,7 +1151,7 @@ export default function ActivitiesScreen() {
             style={styles.goBackButton}
             onPress={() => navigation.goBack()}
           >
-            <Ionicons name="arrow-back" size={20} color="#fff" />
+            <Ionicons name="arrow-back" size={20} color="#000000" />
             <ThemedText style={styles.goBackButtonText}>Volver</ThemedText>
           </TouchableOpacity>
         </ThemedView>
@@ -1307,7 +1307,7 @@ export default function ActivitiesScreen() {
               style={styles.cameraCloseButton}
               onPress={() => setIsCameraVisible(false)}
             >
-              <Ionicons name="close" size={30} color="#fff" />
+              <Ionicons name="close" size={30} color="#000000" />
             </TouchableOpacity>
             
             <TouchableOpacity

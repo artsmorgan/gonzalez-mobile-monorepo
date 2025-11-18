@@ -73,7 +73,7 @@ export default function EmployeeProfileScreen() {
 
   const getActionIcon = (action: string) => {
     switch (action.toLowerCase()) {
-      case 'profile': return <Ionicons name="person" size={20} color='#FFFFFF' />;
+      case 'profile': return <Ionicons name="person" size={20} color='#000000' />;
     }
   };
 

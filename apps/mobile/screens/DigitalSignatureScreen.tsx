@@ -384,11 +384,11 @@ export default function DigitalSignatureScreen() {
 
   const getActionIcon = (action: string) => {
     switch (action.toLowerCase()) {
-      case 'digital-signature': return <Ionicons name="finger-print" size={25} color='#FFFFFF' />;
-      case 'timer': return <Ionicons name="hourglass" size={12.5} color='#FFFFFF' />;
-      case 'manual': return <Ionicons name="pencil" size={20} color='#FFFFFF' />;
-      case 'update': return <Ionicons name="pencil" size={20} color='#FFFFFF' />;
-      case 'clear': return <Ionicons name="trash" size={20} color='#FFFFFF' />;
+      case 'digital-signature': return <Ionicons name="finger-print" size={25} color='#000000' />;
+      case 'timer': return <Ionicons name="hourglass" size={12.5} color='#000000' />;
+      case 'manual': return <Ionicons name="pencil" size={20} color='#000000' />;
+      case 'update': return <Ionicons name="pencil" size={20} color='#000000' />;
+      case 'clear': return <Ionicons name="trash" size={20} color='#000000' />;
       case 'save': return <Ionicons name="save" size={20} color='#FFFFFF' />;
       case 'retry': return <Ionicons name="refresh" size={20} color='#FFFFFF' />;
       case 'error': return <Ionicons name="warning" size={17.5} color='#FFCC00' />; // yellow color

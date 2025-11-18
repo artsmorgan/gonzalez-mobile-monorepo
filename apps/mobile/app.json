@@ -3,6 +3,7 @@
     "name": "Gonzalez-Mobile-App",
     "slug": "Gonzalez-Mobile-App",
     "version": "1.0.0",
+    "platforms": ["android", "ios"],
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "gonzalezmobileapp",
@@ -62,7 +63,6 @@
       "eas": {
         "projectId": "0e68d6d2-7653-4d13-a407-3823ff43722a"
       }
-    },
-    "owner": "abrjpo98"
+    }
   }
 }

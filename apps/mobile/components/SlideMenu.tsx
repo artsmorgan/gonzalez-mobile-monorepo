@@ -570,22 +570,22 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
             <TouchableOpacity 
               style={[
                 styles.menuItem, 
-                isActiveRoute('Surveys') && styles.activeMenuItem
+                isActiveRoute('SatisfactionSurveys') && styles.activeMenuItem
               ]} 
               onPress={handleSurveysPress}
             >
               <ThemedText 
                 style={[
                   styles.menuItemText,
-                  isActiveRoute('Surveys') && styles.activeMenuItemText
+                  isActiveRoute('SatisfactionSurveys') && styles.activeMenuItemText
                 ]}
               >
-                {getActionIcon('surveys', isActiveRoute('Surveys'))}
+                {getActionIcon('surveys', isActiveRoute('SatisfactionSurveys'))}
               </ThemedText>
               <ThemedText 
                 style={[
                   styles.menuItemText,
-                  isActiveRoute('Surveys') && styles.activeMenuItemText
+                  isActiveRoute('SatisfactionSurveys') && styles.activeMenuItemText
                 ]}
               >
                 Encuestas de Satisfacción
