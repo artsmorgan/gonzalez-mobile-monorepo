@@ -1720,7 +1720,6 @@ export default function EvaluationsScreen() {
 
 
 
-
               {/* Firma Empleado */}
               <ThemedView style={styles.formGroup}>
                 <ThemedText style={styles.formLabel}>Firma del Funcionario *:</ThemedText>
