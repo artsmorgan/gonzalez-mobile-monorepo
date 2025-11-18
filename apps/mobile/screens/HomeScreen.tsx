@@ -177,21 +177,21 @@ export default function HomeScreen() {
   
   const getActionIcon = (action: string, isActive: boolean) => {
     switch (action.toLowerCase()) {
-      case 'profile': return <Ionicons name="person" size={30} color='#FFFFFF' />;
-      case 'lunch-time': return <Ionicons name="hourglass" size={30} color='#FFFFFF' />;
-      case 'digital-signature': return <Ionicons name="finger-print" size={30} color='#FFFFFF' />;
-      case 'marcar-ingreso-salida': return <Ionicons name="time" size={30} color='#FFFFFF' />;
-      case 'notes': return <Ionicons name="document" size={30} color='#FFFFFF' />;
-      case 'activities': return <Ionicons name="list" size={30} color='#FFFFFF' />;
-      case 'vehicles': return <Ionicons name="car" size={30} color='#FFFFFF' />;
-      case 'visitors': return <Ionicons name="people" size={30} color='#FFFFFF' />;
-      case 'evaluations': return <Ionicons name="clipboard" size={30} color='#FFFFFF' />;
-      case 'incidents': return <Ionicons name="warning" size={30} color='#FFFFFF' />;
-      case 'surveys': return <Ionicons name="document-text" size={30} color='#FFFFFF' />;
-      case 'trainings': return <Ionicons name="school" size={30} color='#FFFFFF' />;
-      case 'voice-notes': return <Ionicons name="mic" size={30} color='#FFFFFF' />;
-      case 'logout': return <Ionicons name="log-out" size={30} color='#FFFFFF' />;
-      case 'scan-qr': return <Ionicons name="scan" size={30} color='#FFFFFF' />;
+      case 'profile': return <Ionicons name="person" size={30} color='#000000' />;
+      case 'lunch-time': return <Ionicons name="hourglass" size={30} color='#000000' />;
+      case 'digital-signature': return <Ionicons name="finger-print" size={30} color='#000000' />;
+      case 'marcar-ingreso-salida': return <Ionicons name="time" size={30} color='#fff' />;
+      case 'notes': return <Ionicons name="document" size={30} color='#000000' />;
+      case 'activities': return <Ionicons name="list" size={30} color='#000000' />;
+      case 'vehicles': return <Ionicons name="car" size={30} color='#000000' />;
+      case 'visitors': return <Ionicons name="people" size={30} color='#000000' />;
+      case 'evaluations': return <Ionicons name="clipboard" size={30} color='#000000' />;
+      case 'incidents': return <Ionicons name="warning" size={30} color='#000000' />;
+      case 'surveys': return <Ionicons name="document-text" size={30} color='#000000' />;
+      case 'trainings': return <Ionicons name="school" size={30} color='#000000' />;
+      case 'voice-notes': return <Ionicons name="mic" size={30} color='#000000' />;
+      case 'logout': return <Ionicons name="log-out" size={30} color='#000000' />;
+      case 'scan-qr': return <Ionicons name="scan" size={30} color='#fff' />;
     }
   };
 
@@ -290,32 +290,6 @@ export default function HomeScreen() {
           <ThemedText type="subtitle" style={styles.sectionTitle}>
             Accesos Directos
           </ThemedText>
-          
-          <View style={styles.buttonsRow}>
-            <TouchableOpacity 
-              style={styles.quickAccessButton} 
-              onPress={handleProfilePress}
-            >
-              {getActionIcon('profile', true)}
-              <ThemedText style={styles.buttonText}>Perfil de Usuario</ThemedText>
-            </TouchableOpacity>
-
-            <TouchableOpacity 
-              style={styles.quickAccessButton} 
-              onPress={handleDigitalSignaturePress}
-            >
-              {getActionIcon('digital-signature', true)}
-              <ThemedText style={styles.buttonText}>Firma Digital</ThemedText>
-            </TouchableOpacity>
-
-            <TouchableOpacity 
-              style={styles.quickAccessButton} 
-              onPress={handleLunchTimePress}
-            >
-              {getActionIcon('lunch-time', true)}
-              <ThemedText style={styles.buttonText}>Hora de Almuerzo</ThemedText>
-            </TouchableOpacity>
-          </View>
 
           <View style={styles.buttonsRow}>
             <TouchableOpacity 
@@ -323,85 +297,11 @@ export default function HomeScreen() {
               onPress={handleMarcarIngresoSalidaPress}
             >
               {getActionIcon('marcar-ingreso-salida', true)}
-              <ThemedText style={styles.buttonText}>Ingreso/Salida</ThemedText>
+              <ThemedText style={styles.buttonText}>Marca</ThemedText>
             </TouchableOpacity>
 
-            <TouchableOpacity 
-              style={styles.quickAccessButton} 
-              onPress={handleNotesPress}
-            >
-              {getActionIcon('notes', true)}
-              <ThemedText style={styles.buttonText}>Bitác. Novedades</ThemedText>
-            </TouchableOpacity>
-
-            <TouchableOpacity 
-              style={styles.quickAccessButton} 
-              onPress={handleActivitiesPress}
-            >
-              {getActionIcon('activities', true)}
-              <ThemedText style={styles.buttonText}>Actividades</ThemedText>
-            </TouchableOpacity>
           </View>
 
-          <View style={styles.buttonsRow}>
-            <TouchableOpacity 
-              style={styles.quickAccessButton} 
-              onPress={handleVehiclesPress}
-            >
-              {getActionIcon('vehicles', true)}
-              <ThemedText style={styles.buttonText}>Reg. Vehículos</ThemedText>
-            </TouchableOpacity>
-            <TouchableOpacity 
-              style={styles.quickAccessButton} 
-              onPress={handleVisitorsPress}
-            >
-              {getActionIcon('visitors', true)}
-              <ThemedText style={styles.buttonText}>Reg. Visitantes</ThemedText>
-            </TouchableOpacity>
-            
-            <TouchableOpacity 
-              style={styles.quickAccessButton} 
-              onPress={handleEvaluationsPress}
-            >
-              {getActionIcon('evaluations', true)}
-              <ThemedText style={styles.buttonText}>Evaluaciones</ThemedText>
-            </TouchableOpacity>
-          </View>
-  
-          <View style={styles.buttonsRow}>
-            <TouchableOpacity 
-              style={styles.quickAccessButton} 
-              onPress={handleIncidentsPress}
-            >
-              {getActionIcon('incidents', true)}
-              <ThemedText style={styles.buttonText}>Incidentes</ThemedText>
-            </TouchableOpacity>
-            
-            <TouchableOpacity
-              style={styles.quickAccessButton}
-              onPress={handleSurveysPress}
-            >
-              {getActionIcon('surveys', true)}
-              <ThemedText style={styles.buttonText}>Encuestas</ThemedText>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.quickAccessButton}
-              onPress={handleTrainingsPress}
-            >
-              {getActionIcon('trainings', true)}
-              <ThemedText style={styles.buttonText}>Capacitaciones</ThemedText>
-            </TouchableOpacity>
-          </View>
-  
-          <View style={styles.buttonsRow}>
-            <TouchableOpacity
-              style={styles.quickAccessButton}
-              onPress={handleVoiceNotesPress}
-            >
-              {getActionIcon('voice-notes', true)}
-              <ThemedText style={styles.buttonText}>Notas de Voz</ThemedText>
-            </TouchableOpacity>
-          </View>
   
           <View style={styles.buttonsRow}>
             <TouchableOpacity 

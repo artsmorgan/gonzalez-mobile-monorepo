@@ -440,14 +440,14 @@ export default function LunchTimeScreen() {
 const getActionIcon = (action: string) => {
   switch (action.toLowerCase()) {
     case 'confirm': return <Ionicons name="checkmark" size={35} color='#FFFFFF' />;
-    case 'lunch-time': return <Ionicons name="hourglass" size={25} color='#FFFFFF' />;
+    case 'lunch-time': return <Ionicons name="hourglass" size={25} color='#000000' />;
     case 'start': return <Ionicons name="caret-forward" size={35} color='#FFFFFF' />;
-    case 'start-internal': return <Ionicons name="caret-forward" size={25} color='#FFFFFF' />;
+    case 'start-internal': return <Ionicons name="caret-forward" size={25} color='#000000' />;
     case 'stop': return <Ionicons name="pause" size={35} color='#FFFFFF' />;
-    case 'stop-internal': return <Ionicons name="pause" size={25} color='#FFFFFF' />;
+    case 'stop-internal': return <Ionicons name="pause" size={25} color='#000000' />;
     case 'reset': return <Ionicons name="refresh" size={35} color='#FFFFFF' />;
-    case 'manual': return <Ionicons name="create-outline" size={20} color='#FFFFFF' />;
-    case 'add': return <Ionicons name="add" size={20} color='#FFFFFF' />;
+    case 'manual': return <Ionicons name="create-outline" size={20} color='#000000' />;
+    case 'add': return <Ionicons name="add" size={20} color='#000000' />;
     case 'remove': return <Ionicons name="trash" size={20} color='#FF3B30' />;
     default: return <Ionicons name="close" size={35} color='#FFFFFF' />;
   }
@@ -1298,7 +1298,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     padding: 12,
     fontSize: 14,
-    color: '#333',
+    color: '#000000',
     textAlignVertical: 'top',
     minHeight: 80,
   },
@@ -1358,7 +1358,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     padding: 12,
     fontSize: 14,
-    color: '#333',
+    color: '#000000',
   },
   inputHint: {
     fontSize: 12,
@@ -1483,7 +1483,7 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     padding: 8,
     fontSize: 12,
-    color: '#333',
+    color: '#000000',
   },
   reasonInputGroup: {
     backgroundColor: '#F8F9FA',
@@ -1502,7 +1502,7 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     padding: 8,
     fontSize: 12,
-    color: '#333',
+    color: '#000000',
     textAlignVertical: 'top',
     minHeight: 50,
   },

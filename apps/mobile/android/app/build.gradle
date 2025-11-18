@@ -63,6 +63,10 @@ react {
     autolinkLibrariesWithApp()
 }
 
+project.ext.react = [
+    REACT_NATIVE_NODE_MODULES_DIR: "../../../../../node_modules" // La raíz del monorepo
+]
+
 /**
  * Set this to true in release builds to optimize the app using [R8](https://developer.android.com/topic/performance/app-optimization/enable-app-optimization).
  */

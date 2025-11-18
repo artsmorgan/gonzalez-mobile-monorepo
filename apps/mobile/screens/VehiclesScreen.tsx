@@ -210,32 +210,9 @@ export default function VehiclesScreen() {
         const data: VehiclesResponse = await response.json();
 
         if (data.status && data.data) {
-          // Preservar base64_image del cache local si el servidor no lo tiene
-          const existingCacheStr = await AsyncStorage.getItem('vehicles_cache');
-          const existingCache = existingCacheStr ? JSON.parse(existingCacheStr) : [];
-          
-          const vehiclesWithBase64 = data.data.map((v: Vehicle) => {
-            // Buscar en el cache local si existe este vehículo con base64_image
-            const cachedVehicle = existingCache.find((cached: Vehicle) => 
-              cached.id === v.id || (v.id === 0 && cached.id_local && cached.id_local !== '')
-            );
-            
-            // Si el servidor no tiene base64_image pero el cache local sí, preservarlo
-            const base64Image = (v.base64_image && v.base64_image.trim() !== '') 
-              ? v.base64_image 
-              : (cachedVehicle?.base64_image && cachedVehicle.base64_image.trim() !== '')
-                ? cachedVehicle.base64_image
-                : '';
-            
-            return {
-              ...v,
-              base64_image: base64Image,
-            };
-          });
-          
-          setVehicles(vehiclesWithBase64);
+          setVehicles(data.data);
           // Actualizar vehicles_cache preservando base64_image
-          await AsyncStorage.setItem('vehicles_cache', JSON.stringify(vehiclesWithBase64));
+          await AsyncStorage.setItem('vehicles_cache', JSON.stringify(data.data));
         } else {
           setError(data.message || 'Error al cargar los vehículos');
           Alert.alert('Error', data.message || 'Error al cargar los vehículos');
@@ -800,10 +777,10 @@ export default function VehiclesScreen() {
 
   const getActionIcon = (action: string) => {
     switch (action.toLowerCase()) {
-      case 'add': return <Ionicons name="add-sharp" size={20} color='#FFFFFF' />;
+      case 'add': return <Ionicons name="add-sharp" size={20} color='#000000' />;
       case 'edit': return <Ionicons name="pencil" size={20} color='#FFFFFF' />;
       case 'delete': return <Ionicons name="trash" size={20} color='#FFFFFF' />;
-      case 'vehicles': return <Ionicons name="car" size={25} color='#FFFFFF' />;
+      case 'vehicles': return <Ionicons name="car" size={25} color='#000000' />;
       case 'cancel': return <Ionicons name="close-sharp" size={20} color='#FFFFFF' />;
       case 'confirm': return <Ionicons name="checkmark-sharp" size={20} color='#FFFFFF' />;
       default: return <Ionicons name="close-sharp" size={20} color='#FFFFFF' />;
@@ -1288,7 +1265,7 @@ export default function VehiclesScreen() {
             style={styles.goBackButton}
             onPress={() => navigation.goBack()}
           >
-            <Ionicons name="arrow-back" size={20} color="#fff" />
+            <Ionicons name="arrow-back" size={20} color="#000000" />
             <ThemedText style={styles.goBackButtonText}>Volver</ThemedText>
           </TouchableOpacity>
         </ThemedView>
@@ -1440,7 +1417,7 @@ export default function VehiclesScreen() {
               style={styles.cameraCloseButton}
               onPress={() => setIsCameraVisible(false)}
             >
-              <Ionicons name="close" size={30} color="#fff" />
+              <Ionicons name="close" size={30} color="#000000" />
             </TouchableOpacity>
             
             <TouchableOpacity
@@ -1812,6 +1789,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     fontSize: 16,
     backgroundColor: '#F9F9F9',
+    color: '#000000',
   },
   pickerContainer: {
     borderWidth: 1,
@@ -1941,6 +1919,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     fontSize: 16,
     backgroundColor: '#F9F9F9',
+    color: '#000000',
   },
   textArea: {
     height: 100,
@@ -1960,6 +1939,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     backgroundColor: '#F9F9F9',
     textAlign: 'center',
+    color: '#000000',
   },
   timeInputHour: {
     width: '40%',

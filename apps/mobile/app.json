@@ -3,6 +3,7 @@
     "name": "Gonzalez-Mobile-App",
     "slug": "Gonzalez-Mobile-App",
     "version": "1.0.0",
+    "platforms": ["android", "ios"],
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "gonzalezmobileapp",
@@ -19,7 +20,8 @@
       "edgeToEdgeEnabled": true,
       "permissions": [
         "android.permission.CAMERA",
-        "android.permission.RECORD_AUDIO"
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
       ],
       "package": "com.abrjpo98.GonzalezMobileApp"
     },
@@ -54,7 +56,11 @@
     },
     "extra": {
       "API_SERVER": "http://167.172.18.171:4005",
-      "APP_MODE": "dev"
+      "APP_MODE": "dev",
+      "router": {},
+      "eas": {
+        "projectId": "0e68d6d2-7653-4d13-a407-3823ff43722a"
+      }
     }
   }
 }

@@ -1173,13 +1173,13 @@ export default function EvaluationsScreen() {
 
   const getActionIcon = (action: string) => {
     switch (action.toLowerCase()) {
-      case 'evaluations': return <Ionicons name="clipboard" size={25} color='#FFFFFF' />;
-      case 'add': return <Ionicons name="add" size={24} color='#FFFFFF' />;
+      case 'evaluations': return <Ionicons name="clipboard" size={25} color='#000000' />;
+      case 'add': return <Ionicons name="add" size={24} color='#000000' />;
       case 'cancel': return <Ionicons name="close" size={24} color='#FFFFFF' />;
       case 'confirm': return <Ionicons name="checkmark" size={24} color='#FFFFFF' />;
-      case 'qr': return <Ionicons name="qr-code" size={24} color='#FFFFFF' />;
-      case 'signature': return <Ionicons name="create" size={24} color='#FFFFFF' />;
-      default: return <Ionicons name="clipboard" size={25} color='#FFFFFF' />;
+      case 'qr': return <Ionicons name="qr-code" size={24} color='#000000' />;
+      case 'signature': return <Ionicons name="create" size={24} color='#000000' />;
+      default: return <Ionicons name="clipboard" size={25} color='#000000' />;
     }
   };
 
@@ -1222,7 +1222,7 @@ export default function EvaluationsScreen() {
             style={styles.goBackButton}
             onPress={() => navigation.goBack()}
           >
-            <Ionicons name="arrow-back" size={20} color="#fff" />
+            <Ionicons name="arrow-back" size={20} color="#000000" />
             <ThemedText style={styles.goBackButtonText}>Volver</ThemedText>
           </TouchableOpacity>
         </ThemedView>
@@ -2105,7 +2105,7 @@ export default function EvaluationsScreen() {
             style={styles.cameraCloseButton}
             onPress={() => setIsCameraVisible(false)}
           >
-            <Ionicons name="close" size={30} color="#fff" />
+            <Ionicons name="close" size={30} color="#000000" />
           </TouchableOpacity>
           <TouchableOpacity
             style={styles.cameraCaptureButton}
@@ -2265,6 +2265,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     fontSize: 16,
     backgroundColor: '#F9F9F9',
+    color: '#000000',
   },
   textArea: {
     height: 100,
@@ -2556,6 +2557,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     fontSize: 16,
     backgroundColor: '#F9F9F9',
+    color: '#000000',
   },
   resetFiltersButton: {
     flexDirection: 'row',

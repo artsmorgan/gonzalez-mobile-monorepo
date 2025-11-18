@@ -1067,14 +1067,14 @@ export default function TrainingsScreen() {
 
   const getActionIcon = (action: string) => {
     switch (action.toLowerCase()) {
-      case 'trainings': return <Ionicons name="school" size={25} color='#FFFFFF' />;
-      case 'add': return <Ionicons name="add" size={24} color='#FFFFFF' />;
+      case 'trainings': return <Ionicons name="school" size={25} color='#000000' />;
+      case 'add': return <Ionicons name="add" size={24} color='#000000' />;
       case 'cancel': return <Ionicons name="close" size={24} color='#FFFFFF' />;
       case 'confirm': return <Ionicons name="checkmark" size={24} color='#FFFFFF' />;
-      case 'signature': return <Ionicons name="finger-print" size={20} color='#FFFFFF' />;
-      case 'qr': return <Ionicons name="qr-code" size={20} color='#FFFFFF' />;
-      case 'clear': return <Ionicons name="trash" size={20} color='#FFFFFF' />;
-      default: return <Ionicons name="school" size={25} color='#FFFFFF' />;
+      case 'signature': return <Ionicons name="finger-print" size={20} color='#000000' />;
+      case 'qr': return <Ionicons name="qr-code" size={20} color='#000000' />;
+      case 'clear': return <Ionicons name="trash" size={20} color='#000000' />;
+      default: return <Ionicons name="school" size={25} color='#000000' />;
     }
   };
 
@@ -1493,7 +1493,7 @@ export default function TrainingsScreen() {
                 style={styles.cameraButton}
                 onPress={openCamera}
               >
-                <Ionicons name="camera" size={20} color="#FFFFFF" />
+                <Ionicons name="camera" size={20} color="#000000" />
                 <ThemedText style={styles.cameraButtonText}>Tomar foto</ThemedText>
               </TouchableOpacity>
               {trainingImageBase64 && (
@@ -1508,7 +1508,7 @@ export default function TrainingsScreen() {
                     style={styles.removeImageButton}
                     onPress={() => setTrainingImageBase64(null)}
                   >
-                    <Ionicons name="trash" size={20} color="#FFFFFF" />
+                    <Ionicons name="trash" size={20} color="#000000" />
                     <ThemedText style={styles.removeImageText}>Eliminar imagen</ThemedText>
                   </TouchableOpacity>
                 </ThemedView>
@@ -1842,7 +1842,7 @@ export default function TrainingsScreen() {
               style={styles.cameraCloseButton}
               onPress={() => setIsCameraVisible(false)}
             >
-              <Ionicons name="close" size={30} color="#fff" />
+              <Ionicons name="close" size={30} color="#000000" />
             </TouchableOpacity>
             
             <TouchableOpacity

@@ -1681,7 +1681,7 @@ export default function VisitorsScreen() {
                 style={styles.removePhotoButton}
                 onPress={() => removePhoto(isEditing)}
               >
-                <Ionicons name="trash-outline" size={20} color="#fff" />
+                <Ionicons name="trash-outline" size={20} color="#FFFFFF" />
               </TouchableOpacity>
             </ThemedView>
           ) : (
@@ -1689,7 +1689,7 @@ export default function VisitorsScreen() {
               style={styles.cameraButton}
               onPress={() => takePhoto(isEditing)}
             >
-              <Ionicons name="camera" size={24} color="#fff" />
+              <Ionicons name="camera" size={24} color="#FFFFFF" />
             </TouchableOpacity>
           )}
         </ThemedView>
@@ -1916,7 +1916,7 @@ export default function VisitorsScreen() {
             style={styles.goBackButton}
             onPress={() => navigation.goBack()}
           >
-            <Ionicons name="arrow-back" size={20} color="#fff" />
+            <Ionicons name="arrow-back" size={20} color="#000000" />
             <ThemedText style={styles.goBackButtonText}>Volver</ThemedText>
           </TouchableOpacity>
         </ThemedView>
@@ -2003,7 +2003,7 @@ export default function VisitorsScreen() {
                 style={styles.createButton}
                 onPress={startCreating}
               >
-                <Ionicons name="add" size={24} color="#fff" />
+                <Ionicons name="add" size={24} color="#FFFFFF" />
               </TouchableOpacity>
             )}
 
@@ -2047,7 +2047,7 @@ export default function VisitorsScreen() {
               style={styles.cameraCancelButton}
               onPress={() => setIsCameraVisible(false)}
             >
-              <Ionicons name="close" size={30} color="#fff" />
+              <Ionicons name="close" size={30} color="#000000" />
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.cameraCaptureButton}
@@ -2204,6 +2204,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     fontSize: 16,
     backgroundColor: '#F9F9F9',
+    color: '#000000',
   },
   resetFiltersButton: {
     flexDirection: 'row',
@@ -2269,6 +2270,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     fontSize: 16,
     backgroundColor: '#F9F9F9',
+    color: '#000000',
   },
   textArea: {
     height: 100,
@@ -2288,6 +2290,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     backgroundColor: '#F9F9F9',
     textAlign: 'center',
+    color: '#000000',
   },
   timeInputHour: {
     width: '40%',

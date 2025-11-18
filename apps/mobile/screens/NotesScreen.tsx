@@ -694,13 +694,13 @@ export default function NotesScreen() {
   
 const getActionIcon = (action: string) => {
   switch (action.toLowerCase()) {
-    case 'add': return <Ionicons name="add-sharp" size={20} color='#FFFFFF' />;
+    case 'add': return <Ionicons name="add-sharp" size={20} color='#000000' />;
     case 'confirm': return <Ionicons name="checkmark-sharp" size={20} color='#FFFFFF' />;
     case 'cancel': return <Ionicons name="close-sharp" size={20} color='#FFFFFF' />;
     case 'edit': return <Ionicons name="pencil" size={20} color='#FFFFFF' />;
     case 'delete': return <Ionicons name="trash" size={20} color='#FFFFFF' />;
-    case 'notes': return <Ionicons name="document" size={25} color='#FFFFFF' />;
-    case 'changes': return <Ionicons name="document" size={25} color='#FFFFFF' />;
+    case 'notes': return <Ionicons name="document" size={25} color='#000000' />;
+    case 'changes': return <Ionicons name="document" size={25} color='#000000' />;
     default: return <Ionicons name="close-sharp" size={20} color='#FFFFFF' />;
   }
 };
@@ -1146,7 +1146,7 @@ const getActionIcon = (action: string) => {
             style={styles.goBackButton}
             onPress={() => navigation.goBack()}
           >
-            <Ionicons name="arrow-back" size={20} color="#fff" />
+            <Ionicons name="arrow-back" size={20} color="#000000" />
             <ThemedText style={styles.goBackButtonText}>Volver</ThemedText>
           </TouchableOpacity>
         </ThemedView>
@@ -1579,6 +1579,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     fontSize: 16,
     backgroundColor: '#F9F9F9',
+    color: '#000000',
   },
   pickerContainer: {
     borderWidth: 1,
@@ -1762,6 +1763,7 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     fontSize: 16,
     backgroundColor: '#fff',
+    color: '#000000',
   },
   textArea: {
     height: 100,

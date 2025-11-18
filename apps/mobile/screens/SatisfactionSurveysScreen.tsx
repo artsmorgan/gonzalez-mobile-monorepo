@@ -1094,8 +1094,8 @@ export default function SatisfactionSurveysScreen() {
 
   const getActionIcon = (action: string) => {
     switch (action.toLowerCase()) {
-      case 'files': return <Ionicons name="document-text" size={24} color='#FFFFFF' />;
-      case 'add': return <Ionicons name="add" size={24} color='#FFFFFF' />;
+      case 'files': return <Ionicons name="document-text" size={24} color='#000000' />;
+      case 'add': return <Ionicons name="add" size={24} color='#000000' />;
       case 'cancel': return <Ionicons name="close" size={24} color='#FFFFFF' />;
       case 'confirm': return <Ionicons name="checkmark" size={24} color='#FFFFFF' />;
       case 'delete': return <Ionicons name="trash" size={24} color='#FFFFFF' />;
@@ -1779,7 +1779,7 @@ export default function SatisfactionSurveysScreen() {
                     ) : null}
                     
                     <TouchableOpacity style={styles.openSignatureButton} onPress={openSignatureModal}>
-                      <Ionicons name="create-outline" size={20} color="#FFFFFF" />
+                      <Ionicons name="create-outline" size={20} color="#000000" />
                       <ThemedText style={styles.openSignatureButtonText}>
                         {personSignature ? 'Modificar firma' : 'Agregar firma'}
                       </ThemedText>
@@ -1815,12 +1815,12 @@ export default function SatisfactionSurveysScreen() {
                       
                       <ThemedView style={styles.modalActions}>
                         <TouchableOpacity style={styles.modalClearButton} onPress={clearSignatureInModal}>
-                          <Ionicons name="trash" size={20} color="#FFFFFF" />
+                          <Ionicons name="trash" size={20} color="#000000" />
                           <ThemedText style={styles.modalClearButtonText}>Limpiar</ThemedText>
                         </TouchableOpacity>
                         
                         <TouchableOpacity style={styles.modalAcceptButton} onPress={acceptSignature}>
-                          <Ionicons name="checkmark" size={20} color="#FFFFFF" />
+                          <Ionicons name="checkmark" size={20} color="#000000" />
                           <ThemedText style={styles.modalAcceptButtonText}>Aceptar</ThemedText>
                         </TouchableOpacity>
                       </ThemedView>
@@ -1873,7 +1873,7 @@ export default function SatisfactionSurveysScreen() {
                             <ActivityIndicator size="small" color="#FFFFFF" />
                           ) : (
                             <>
-                              <Ionicons name="create" size={24} color='#FFFFFF' />
+                              <Ionicons name="create" size={24} color='#000000' />
                               <ThemedText style={styles.signatureButtonText}>Generar Firma</ThemedText>
                             </>
                           )}
@@ -2174,6 +2174,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     fontSize: 16,
     backgroundColor: '#F9F9F9',
+    color: '#000000',
   },
   textArea: {
     height: 100,
@@ -2289,6 +2290,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     fontSize: 16,
     backgroundColor: '#F9F9F9',
+    color: '#000000',
   },
   radioContainerDivision: {
     flexDirection: 'row',
