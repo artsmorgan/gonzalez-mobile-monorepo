@@ -798,7 +798,7 @@ model c_incidente {
 model c_evaluacion {
   id               Int        @id @default(autoincrement())
   corpo_id         Int
-  puesto_id        Int
+  puesto_id         Int
   plaza_id         Int
   tipo             String     @db.LongText
   evaluation       String     @db.LongText
@@ -809,6 +809,28 @@ model c_evaluacion {
   e_estructura_sucursal e_estructura_sucursal @relation(fields: [corpo_id], references: [id], onDelete: NoAction)
   e_estructura_puesto e_estructura_puesto @relation(fields: [puesto_id], references: [id], onDelete: NoAction)
   e_estructura_plazas e_estructura_plazas @relation(fields: [plaza_id], references: [id], onDelete: NoAction)
+}
+
+model c_control_kilometraje {
+  id                    String    @id @default(uuid())
+  empresa_id            String?
+  cliente_id            String?
+  contrato_id           String?
+  corpo_id              String?
+  puesto_id             String?
+  plaza_id              String?
+  chofer_id             String?
+  chofer_nombre         String?
+  total_km              String?
+  ruta                  String?
+  prox_mant_km          String?
+  km_para_mantenimiento String?
+  km_actual             String?
+  estado                String?
+  vehiculo_id           String?
+  registros_viaje       String?   @db.LongText
+  created_at            DateTime  @default(now())
+  created_by            String?
 }
 
 model c_empleado_almuerzo {
