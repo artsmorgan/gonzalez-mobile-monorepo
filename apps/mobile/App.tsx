@@ -44,6 +44,7 @@ import IncidentsScreen from './screens/IncidentsScreen';
 import TrainingsScreen from './screens/TrainingsScreen';
 import VoiceNotesScreen from './screens/VoiceNotesScreen';
 import SatisfactionSurveysScreen from './screens/SatisfactionSurveysScreen';
+import MileageControlScreen from './screens/MileageControlScreen';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Network from 'expo-network';
 import saveManualSignature from './hooks/saveManualSignature';
@@ -84,6 +85,7 @@ export type RootStackParamList = {
   Trainings: undefined;
   VoiceNotes: undefined;
   SatisfactionSurveys: undefined;
+  MileageControl: undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -119,6 +121,7 @@ function RootNavigator() {
       <Stack.Screen name="Trainings" component={TrainingsScreen} />
       <Stack.Screen name="VoiceNotes" component={VoiceNotesScreen} />
       <Stack.Screen name="SatisfactionSurveys" component={SatisfactionSurveysScreen} />
+      <Stack.Screen name="MileageControl" component={MileageControlScreen} />
     </Stack.Navigator>
   );
 }
@@ -477,20 +480,94 @@ function AppContent() {
     // Procesar acciones una por una
     for (const action of actions) {
       try {
-        if (action.type === 'create') {
-          console.log('Creando evaluación:', action.id);
-          const { createEvaluation } = await import('@/hooks/evaluationFunctions');
-          const result = await createEvaluation({
-            requestData: action.requestData,
-            refreshAccessToken,
-            logout,
-          });
+        if (action.action === 'create') {
+          if (action.type === 'mileage_control') {
+            console.log('Creando control de kilometraje:', action.id);
+            const { createMileageControl } = await import('@/hooks/evaluationFunctions');
+            const result = await createMileageControl({
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-          if (result.status) {
-            console.log('Evaluación creada correctamente');
-            // Eliminar acción del array
-            const updatedActions = actions.filter((a: any) => a.id !== action.id || a.type !== 'create');
-            await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Control de kilometraje creado correctamente');
+              // Eliminar acción del array
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'mileage_control'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              
+              // Actualizar cache para marcar como sincronizado
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if (item.id_local === action.id && item.type === 'mileage_control') {
+                    return { ...item, synced: true, id: result.data?.id || item.id };
+                  }
+                  return item;
+                });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else {
+            // Evaluación normal
+            console.log('Creando evaluación:', action.id);
+            const { createEvaluation } = await import('@/hooks/evaluationFunctions');
+            const result = await createEvaluation({
+              requestData: action.requestData || action.payload,
+              refreshAccessToken,
+              logout,
+            });
+
+            if (result.status) {
+              console.log('Evaluación creada correctamente');
+              // Eliminar acción del array
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && (!a.type || a.type !== 'mileage_control')));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            }
+          }
+        } else if (action.action === 'update') {
+          if (action.type === 'mileage_control') {
+            console.log('Actualizando control de kilometraje:', action.id);
+            const { updateMileageControl } = await import('@/hooks/evaluationFunctions');
+            const result = await updateMileageControl({
+              id: action.id,
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
+
+            if (result.status) {
+              console.log('Control de kilometraje actualizado correctamente');
+              // Eliminar acción del array
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'mileage_control'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            }
+          }
+        } else if (action.action === 'delete') {
+          if (action.type === 'mileage_control') {
+            console.log('Eliminando control de kilometraje:', action.id);
+            const { deleteMileageControl } = await import('@/hooks/evaluationFunctions');
+            const result = await deleteMileageControl({
+              id: action.id,
+              refreshAccessToken,
+              logout,
+            });
+
+            if (result.status) {
+              console.log('Control de kilometraje eliminado correctamente');
+              // Eliminar acción del array
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'mileage_control'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              
+              // Eliminar del cache
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.filter((item: any) => !(item.id === action.id || item.id_local === action.id));
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
           }
         }
       } catch (error) {
