@@ -795,24 +795,16 @@ model c_incidente {
   n_clasificacion_incidente n_clasificacion_incidente @relation(fields: [clasificacion], references: [id], onDelete: NoAction)
 }
 
-model c_evaluacion_empleado {
+model c_evaluacion {
   id               Int        @id @default(autoincrement())
-  nombre_empleado  String     @db.VarChar(45)
-  cedula_empleado  String     @db.VarChar(45)
   corpo_id         Int
   puesto_id        Int
   plaza_id         Int
-  empleado_id      Int
-  evaluador_id     Int
-  tipo             String     @db.VarChar(25)
-  fecha_ingreso    DateTime   @db.Date
-  fecha_evaluacion DateTime   @db.Date
-  evaluacion       String     @db.LongText
-  comentarios      String     @db.LongText
-  nombre_evaluador String     @db.VarChar(45)
+  tipo             String     @db.LongText
+  evaluation       String     @db.LongText
   firma_evaluador  String     @db.LongText
-  firma_empleado   String     @db.LongText
   created_at       DateTime   @db.DateTime
+  created_by       Int
   
   e_estructura_sucursal e_estructura_sucursal @relation(fields: [corpo_id], references: [id], onDelete: NoAction)
   e_estructura_puesto e_estructura_puesto @relation(fields: [puesto_id], references: [id], onDelete: NoAction)
@@ -2254,7 +2246,7 @@ model e_estructura_plazas {
   empleadoPlaza_id                                                            Int?
   maestra                                                                     Boolean?
   peso                                                                        Decimal?                               @db.Decimal(10, 2)
-  c_evaluacion_empleado                                                       c_evaluacion_empleado[]
+  c_evaluacion                                                                c_evaluacion[]
   c_cambio_guardia_c_cambio_guardia_plazaAusente_idToe_estructura_plazas      c_cambio_guardia[]                     @relation("c_cambio_guardia_plazaAusente_idToe_estructura_plazas")
   c_cambio_guardia_c_cambio_guardia_plazaReemplaza_idToe_estructura_plazas    c_cambio_guardia[]                     @relation("c_cambio_guardia_plazaReemplaza_idToe_estructura_plazas")
   c_empleado_plaza_c_empleado_plaza_plaza_idToe_estructura_plazas             c_empleado_plaza[]                     @relation("c_empleado_plaza_plaza_idToe_estructura_plazas")
@@ -2311,7 +2303,7 @@ model e_estructura_puesto {
   es_cubrevacaciones                         Boolean?
   e_capacitacion_puesto                      e_capacitacion_puesto[]
   c_encuesta_cliente                         c_encuesta_cliente[]
-  c_evaluacion_empleado                      c_evaluacion_empleado[]
+  c_evaluacion                               c_evaluacion[]
   e_registro_vehiculos                       e_registro_vehiculos[]
   e_registro_personas                        e_registro_personas[]
   c_empleado_plaza                           c_empleado_plaza[]
@@ -2376,7 +2368,7 @@ model e_estructura_sucursal {
   c_encuesta_cliente                         c_encuesta_cliente[]
   e_registro_capacitaciones                  e_registro_capacitaciones[]
   c_incidente                                c_incidente[]
-  c_evaluacion_empleado                      c_evaluacion_empleado[]
+  c_evaluacion                               c_evaluacion[]
   e_registro_vehiculos                       e_registro_vehiculos[]
   e_registro_personas                        e_registro_personas[]
   c_empleado_plaza                           c_empleado_plaza[]

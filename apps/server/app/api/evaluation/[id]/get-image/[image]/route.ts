@@ -15,7 +15,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         return NextResponse.json({ status: false, message: 'ID o imagen faltante' }, { status: 400 });
     }
 
-    const evaluation = await prisma.c_evaluacion_empleado.findUnique({ where: { id } });
+    const evaluation = await prisma.c_evaluacion.findUnique({ where: { id } });
     if (!evaluation) {
         return NextResponse.json({ status: false, message: 'Evaluación no encontrada' }, { status: 404 });
     }

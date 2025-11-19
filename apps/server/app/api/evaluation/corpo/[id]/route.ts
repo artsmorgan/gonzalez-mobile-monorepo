@@ -19,50 +19,43 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         const corpo = await prisma.e_estructura_sucursal.findFirst({ where: { id } });
         if (!corpo) return NextResponse.json({ status: false, message: "Corpo no encontrado" }, { status: 404 });
 
-        const evaluaciones = await prisma.c_evaluacion_empleado.findMany({ where: { corpo_id: corpo.id } });
+        const evaluaciones = await prisma.c_evaluacion.findMany({ where: { corpo_id: corpo.id } });
 
         const evaluaciones_return: {
             id: number,
-            empleado: {
+            corpo: {
                 id: number,
                 nombre: string,
-                cedula: string,
             },
-            evaluador: {
+            puesto: {
                 id: number,
                 nombre: string,
-                cedula: string,
             },
-            fecha_ingreso: string,
-            fecha_evaluacion: string,
-            evaluacion: string,
-            comentarios: string,
-            firma_evaluador: string,
-            firma_empleado: string,
+            plaza: {
+                id: number,
+                nombre: string,
+            },
             tipo: string,
+            evaluation: string,
+            firma_evaluador: string,
+            created_at: string,
             id_local: string
         }[] = [];
 
         for (const evaluacion of evaluaciones) {
-            const empleado = await prisma.c_empleado.findUnique({ where: { id: evaluacion.empleado_id } });
-            if (!empleado) continue;
-            if (empleado.fecha_contratacion == null) continue;
-            if (empleado.estado == "BA") continue;
-            const evaluador = await prisma.c_empleado.findUnique({ where: { id: evaluacion.evaluador_id } });
-            if (!evaluador) continue;
-            if (evaluador.fecha_contratacion == null) continue;
-            if (evaluador.estado == "BA") continue;
+            const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: evaluacion.puesto_id } });
+            if (!puesto) continue;
+            const plaza = await prisma.e_estructura_plazas.findUnique({ where: { id: evaluacion.plaza_id } });
+            if (!plaza) continue;
             evaluaciones_return.push({
                 id: evaluacion.id,
-                empleado: { id: empleado.id, nombre: (empleado.nombre || "") + " " + (empleado.primer_apellido || "") + " " + (empleado.segundo_apellido || ""), cedula: empleado.cedula || "" },
-                evaluador: { id: evaluador.id, nombre: (evaluador.nombre || "") + " " + (evaluador.primer_apellido || "") + " " + (evaluador.segundo_apellido || ""), cedula: evaluador.cedula || "" },
-                fecha_ingreso: evaluacion.fecha_ingreso.toISOString(),
-                fecha_evaluacion: evaluacion.fecha_evaluacion.toISOString(),
-                evaluacion: evaluacion.evaluacion,
-                comentarios: evaluacion.comentarios,
-                firma_evaluador: evaluacion.firma_evaluador,
-                firma_empleado: evaluacion.firma_empleado,
+                corpo: { id: corpo.id, nombre: corpo.nombre },
+                puesto: { id: puesto.id, nombre: puesto.nombre },
+                plaza: { id: plaza.id, nombre: plaza.nombre },
                 tipo: evaluacion.tipo,
+                evaluation: evaluacion.evaluation,
+                firma_evaluador: evaluacion.firma_evaluador,
+                created_at: evaluacion.created_at.toISOString(),
                 id_local: ""
             });
         }
