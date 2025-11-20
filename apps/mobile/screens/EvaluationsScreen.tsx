@@ -160,6 +160,126 @@ export default function EvaluationsScreen() {
                 <Ionicons name="calendar" size={24} color="#FFFFFF" /> Cronograma de Entrega
               </ThemedText>
             </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.navButton, styles.navButtonQuattuordecenary]}
+              onPress={() => navigation.navigate('EnvironmentalManagementPlan' as never)}
+            >
+              <ThemedText style={styles.navButtonText}>
+                <Ionicons name="leaf" size={24} color="#FFFFFF" /> Plan de Gestión Ambiental
+              </ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.navButton, styles.navButtonQuindecenary]}
+              onPress={() => navigation.navigate('CleaningWorkPlan' as never)}
+            >
+              <ThemedText style={styles.navButtonText}>
+                <Ionicons name="water" size={24} color="#FFFFFF" /> Plan de Trabajo - Personal Aseo y Limpieza
+              </ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.navButton, styles.navButtonSexdecenary]}
+              onPress={() => navigation.navigate('SpecialSituationsPlan' as never)}
+            >
+              <ThemedText style={styles.navButtonText}>
+                <Ionicons name="warning" size={24} color="#FFFFFF" /> Plan para la Atención de Situaciones Especiales
+              </ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.navButton, styles.navButtonSeptendecenary]}
+              onPress={() => navigation.navigate('CleaningTasksActivities' as never)}
+            >
+              <ThemedText style={styles.navButtonText}>
+                <Ionicons name="clipboard" size={24} color="#FFFFFF" /> Registro de Tareas o Actividades de Limpieza
+              </ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.navButton, styles.navButtonOctodecenary]}
+              onPress={() => navigation.navigate('RiskMatrix' as never)}
+            >
+              <ThemedText style={styles.navButtonText}>
+                <Ionicons name="shield" size={24} color="#FFFFFF" /> Matriz de Riesgos
+              </ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.navButton, styles.navButtonNovodecenary]}
+              onPress={() => navigation.navigate('OpportunityMatrix' as never)}
+            >
+              <ThemedText style={styles.navButtonText}>
+                <Ionicons name="trending-up" size={24} color="#FFFFFF" /> Matriz de Oportunidades
+              </ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.navButton, styles.navButtonVigintenary]}
+              onPress={() => navigation.navigate('ProcessIndicatorMatrix' as never)}
+            >
+              <ThemedText style={styles.navButtonText}>
+                <Ionicons name="stats-chart" size={24} color="#FFFFFF" /> Matriz de Indicador de Procesos
+              </ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.navButton, styles.navButtonUnvigintenary]}
+              onPress={() => navigation.navigate('MonthlyWorkRole' as never)}
+            >
+              <ThemedText style={styles.navButtonText}>
+                <Ionicons name="calendar" size={24} color="#FFFFFF" /> Rol de Trabajo Mensual
+              </ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.navButton, styles.navButtonDuovigintenary]}
+              onPress={() => navigation.navigate('PermitRequest' as never)}
+            >
+              <ThemedText style={styles.navButtonText}>
+                <Ionicons name="document-text" size={24} color="#FFFFFF" /> Solicitud de Permiso
+              </ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.navButton, styles.navButtonTresvigintenary]}
+              onPress={() => navigation.navigate('AttendanceControl' as never)}
+            >
+              <ThemedText style={styles.navButtonText}>
+                <Ionicons name="people" size={24} color="#FFFFFF" /> Control de Asistencia
+              </ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.navButton, styles.navButtonTresvigintenary]}
+              onPress={() => navigation.navigate('OpeningClosingPosition' as never)}
+            >
+              <ThemedText style={styles.navButtonText}>
+                <Ionicons name="business" size={24} color="#FFFFFF" /> Apertura-Cierre de Puesto
+              </ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.navButton, styles.navButtonTresvigintenary]}
+              onPress={() => navigation.navigate('InductionTourRecord' as never)}
+            >
+              <ThemedText style={styles.navButtonText}>
+                <Ionicons name="document-text" size={24} color="#FFFFFF" /> Registro de Inducción y Recorrido
+              </ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.navButton, styles.navButtonTresvigintenary]}
+              onPress={() => navigation.navigate('SupervisionReport' as never)}
+            >
+              <ThemedText style={styles.navButtonText}>
+                <Ionicons name="clipboard" size={24} color="#FFFFFF" /> Informe de Supervisión
+              </ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.navButton, styles.navButtonTresvigintenary]}
+              onPress={() => navigation.navigate('ElectricBrushGuide' as never)}
+            >
+              <ThemedText style={styles.navButtonText}>
+                <Ionicons name="brush" size={24} color="#FFFFFF" /> Guía de Uso de Cepillo Eléctrico
+              </ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.navButton, styles.navButtonTresvigintenary]}
+              onPress={() => navigation.navigate('GeneralClientsList' as never)}
+            >
+              <ThemedText style={styles.navButtonText}>
+                <Ionicons name="list" size={24} color="#FFFFFF" /> Listado General de Clientes
+              </ThemedText>
+            </TouchableOpacity>
           </ThemedView>
         </ThemedView>
       </ScrollView>
@@ -260,6 +380,36 @@ const styles = StyleSheet.create({
   },
   navButtonTredecenary: {
     backgroundColor: '#3F51B5',
+  },
+  navButtonQuattuordecenary: {
+    backgroundColor: '#4CAF50',
+  },
+  navButtonQuindecenary: {
+    backgroundColor: '#9C27B0',
+  },
+  navButtonSexdecenary: {
+    backgroundColor: '#FF5722',
+  },
+  navButtonSeptendecenary: {
+    backgroundColor: '#795548',
+  },
+  navButtonOctodecenary: {
+    backgroundColor: '#607D8B',
+  },
+  navButtonNovodecenary: {
+    backgroundColor: '#9C27B0',
+  },
+  navButtonVigintenary: {
+    backgroundColor: '#3F51B5',
+  },
+  navButtonUnvigintenary: {
+    backgroundColor: '#00BCD4',
+  },
+  navButtonDuovigintenary: {
+    backgroundColor: '#9C27B0',
+  },
+  navButtonTresvigintenary: {
+    backgroundColor: '#607D8B',
   },
   navButtonText: {
     color: '#FFFFFF',

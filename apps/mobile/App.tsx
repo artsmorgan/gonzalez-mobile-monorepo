@@ -57,6 +57,21 @@ import ActionPlanScreen from './screens/ActionPlanScreen';
 import WorkRoleScreen from './screens/WorkRoleScreen';
 import ContractBasicDataScreen from './screens/ContractBasicDataScreen';
 import DeliveryScheduleScreen from './screens/DeliveryScheduleScreen';
+import EnvironmentalManagementPlanScreen from './screens/EnvironmentalManagementPlanScreen';
+import CleaningWorkPlanScreen from './screens/CleaningWorkPlanScreen';
+import SpecialSituationsPlanScreen from './screens/SpecialSituationsPlanScreen';
+import CleaningTasksActivitiesScreen from './screens/CleaningTasksActivitiesScreen';
+import RiskMatrixScreen from './screens/RiskMatrixScreen';
+import OpportunityMatrixScreen from './screens/OpportunityMatrixScreen';
+import ProcessIndicatorMatrixScreen from './screens/ProcessIndicatorMatrixScreen';
+import MonthlyWorkRoleScreen from './screens/MonthlyWorkRoleScreen';
+import PermitRequestScreen from './screens/PermitRequestScreen';
+import AttendanceControlScreen from './screens/AttendanceControlScreen';
+import OpeningClosingPositionScreen from './screens/OpeningClosingPositionScreen';
+import InductionTourRecordScreen from './screens/InductionTourRecordScreen';
+import SupervisionReportScreen from './screens/SupervisionReportScreen';
+import ElectricBrushGuideScreen from './screens/ElectricBrushGuideScreen';
+import GeneralClientsListScreen from './screens/GeneralClientsListScreen';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Network from 'expo-network';
 import saveManualSignature from './hooks/saveManualSignature';
@@ -110,6 +125,21 @@ export type RootStackParamList = {
   WorkRole: undefined;
   ContractBasicData: undefined;
   DeliverySchedule: undefined;
+  EnvironmentalManagementPlan: undefined;
+  CleaningWorkPlan: undefined;
+  SpecialSituationsPlan: undefined;
+  CleaningTasksActivities: undefined;
+  RiskMatrix: undefined;
+  OpportunityMatrix: undefined;
+  ProcessIndicatorMatrix: undefined;
+  MonthlyWorkRole: undefined;
+  PermitRequest: undefined;
+  AttendanceControl: undefined;
+  OpeningClosingPosition: undefined;
+  InductionTourRecord: undefined;
+  SupervisionReport: undefined;
+  ElectricBrushGuide: undefined;
+  GeneralClientsList: undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -158,6 +188,21 @@ function RootNavigator() {
       <Stack.Screen name="WorkRole" component={WorkRoleScreen} />
       <Stack.Screen name="ContractBasicData" component={ContractBasicDataScreen} />
       <Stack.Screen name="DeliverySchedule" component={DeliveryScheduleScreen} />
+      <Stack.Screen name="EnvironmentalManagementPlan" component={EnvironmentalManagementPlanScreen} />
+      <Stack.Screen name="CleaningWorkPlan" component={CleaningWorkPlanScreen} />
+      <Stack.Screen name="SpecialSituationsPlan" component={SpecialSituationsPlanScreen} />
+      <Stack.Screen name="CleaningTasksActivities" component={CleaningTasksActivitiesScreen} />
+      <Stack.Screen name="RiskMatrix" component={RiskMatrixScreen} />
+      <Stack.Screen name="OpportunityMatrix" component={OpportunityMatrixScreen} />
+      <Stack.Screen name="ProcessIndicatorMatrix" component={ProcessIndicatorMatrixScreen} />
+      <Stack.Screen name="MonthlyWorkRole" component={MonthlyWorkRoleScreen} />
+      <Stack.Screen name="PermitRequest" component={PermitRequestScreen} />
+      <Stack.Screen name="AttendanceControl" component={AttendanceControlScreen} />
+      <Stack.Screen name="OpeningClosingPosition" component={OpeningClosingPositionScreen} />
+      <Stack.Screen name="InductionTourRecord" component={InductionTourRecordScreen} />
+      <Stack.Screen name="SupervisionReport" component={SupervisionReportScreen} />
+      <Stack.Screen name="ElectricBrushGuide" component={ElectricBrushGuideScreen} />
+      <Stack.Screen name="GeneralClientsList" component={GeneralClientsListScreen} />
     </Stack.Navigator>
   );
 }
@@ -833,6 +878,396 @@ function AppContent() {
                         await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
                       }
                     }
+                  } else if (action.type === 'environmental_management_plan') {
+                    console.log('Creando plan de gestión ambiental:', action.id);
+                    const { createEnvironmentalManagementPlan } = await import('@/hooks/evaluationFunctions');
+                    const result = await createEnvironmentalManagementPlan({
+                      requestData: action.payload,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Plan de gestión ambiental creado correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'environmental_management_plan'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                      if (cacheStr) {
+                        const cache = JSON.parse(cacheStr);
+                        const updatedCache = cache.map((item: any) => {
+                          if (item.id_local === action.id && item.type === 'environmental_management_plan') {
+                            return { ...item, synced: true, id: result.data?.id || item.id };
+                          }
+                          return item;
+                        });
+                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                      }
+                    }
+                  } else if (action.type === 'cleaning_work_plan') {
+                    console.log('Creando plan de trabajo - Personal Aseo y limpieza:', action.id);
+                    const { createCleaningWorkPlan } = await import('@/hooks/evaluationFunctions');
+                    const result = await createCleaningWorkPlan({
+                      requestData: action.payload,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Plan de trabajo - Personal Aseo y limpieza creado correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'cleaning_work_plan'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                      if (cacheStr) {
+                        const cache = JSON.parse(cacheStr);
+                        const updatedCache = cache.map((item: any) => {
+                          if (item.id_local === action.id && item.type === 'cleaning_work_plan') {
+                            return { ...item, synced: true, id: result.data?.id || item.id };
+                          }
+                          return item;
+                        });
+                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                      }
+                    }
+                  } else if (action.type === 'special_situations_plan') {
+                    console.log('Creando plan para la atención de situaciones especiales:', action.id);
+                    const { createSpecialSituationsPlan } = await import('@/hooks/evaluationFunctions');
+                    const result = await createSpecialSituationsPlan({
+                      requestData: action.payload,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Plan para la atención de situaciones especiales creado correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'special_situations_plan'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                      if (cacheStr) {
+                        const cache = JSON.parse(cacheStr);
+                        const updatedCache = cache.map((item: any) => {
+                          if (item.id_local === action.id && item.type === 'special_situations_plan') {
+                            return { ...item, synced: true, id: result.data?.id || item.id };
+                          }
+                          return item;
+                        });
+                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                      }
+                    }
+                  } else if (action.type === 'cleaning_tasks_activities') {
+                    console.log('Creando registro de tareas o actividades de limpieza:', action.id);
+                    const { createCleaningTasksActivities } = await import('@/hooks/evaluationFunctions');
+                    const result = await createCleaningTasksActivities({
+                      requestData: action.payload,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Registro de tareas o actividades de limpieza creado correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'cleaning_tasks_activities'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                      if (cacheStr) {
+                        const cache = JSON.parse(cacheStr);
+                        const updatedCache = cache.map((item: any) => {
+                          if (item.id_local === action.id && item.type === 'cleaning_tasks_activities') {
+                            return { ...item, synced: true, id: result.data?.id || item.id };
+                          }
+                          return item;
+                        });
+                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                      }
+                    }
+                  } else if (action.type === 'risk_matrix') {
+                    console.log('Creando matriz de riesgos:', action.id);
+                    const { createRiskMatrix } = await import('@/hooks/evaluationFunctions');
+                    const result = await createRiskMatrix({
+                      requestData: action.payload,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Matriz de riesgos creada correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'risk_matrix'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                      if (cacheStr) {
+                        const cache = JSON.parse(cacheStr);
+                        const updatedCache = cache.map((item: any) => {
+                          if (item.id_local === action.id && item.type === 'risk_matrix') {
+                            return { ...item, synced: true, id: result.data?.id || item.id };
+                          }
+                          return item;
+                        });
+                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                      }
+                    }
+                  } else if (action.type === 'opportunity_matrix') {
+                    console.log('Creando matriz de oportunidades:', action.id);
+                    const { createOpportunityMatrix } = await import('@/hooks/evaluationFunctions');
+                    const result = await createOpportunityMatrix({
+                      requestData: action.payload,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Matriz de oportunidades creada correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'opportunity_matrix'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                      if (cacheStr) {
+                        const cache = JSON.parse(cacheStr);
+                        const updatedCache = cache.map((item: any) => {
+                          if (item.id_local === action.id && item.type === 'opportunity_matrix') {
+                            return { ...item, synced: true, id: result.data?.id || item.id };
+                          }
+                          return item;
+                        });
+                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                      }
+                    }
+                  } else if (action.type === 'process_indicator_matrix') {
+                    console.log('Creando matriz de indicador de procesos:', action.id);
+                    const { createProcessIndicatorMatrix } = await import('@/hooks/evaluationFunctions');
+                    const result = await createProcessIndicatorMatrix({
+                      requestData: action.payload,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Matriz de indicador de procesos creada correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'process_indicator_matrix'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                      if (cacheStr) {
+                        const cache = JSON.parse(cacheStr);
+                        const updatedCache = cache.map((item: any) => {
+                          if (item.id_local === action.id && item.type === 'process_indicator_matrix') {
+                            return { ...item, synced: true, id: result.data?.id || item.id };
+                          }
+                          return item;
+                        });
+                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                      }
+                    }
+                  } else if (action.type === 'monthly_work_role') {
+                    console.log('Creando rol de trabajo mensual:', action.id);
+                    const { createMonthlyWorkRole } = await import('@/hooks/evaluationFunctions');
+                    const result = await createMonthlyWorkRole({
+                      requestData: action.payload,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Rol de trabajo mensual creado correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'monthly_work_role'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                      if (cacheStr) {
+                        const cache = JSON.parse(cacheStr);
+                        const updatedCache = cache.map((item: any) => {
+                          if (item.id_local === action.id && item.type === 'monthly_work_role') {
+                            return { ...item, synced: true, id: result.data?.id || item.id };
+                          }
+                          return item;
+                        });
+                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                      }
+                    }
+                  } else if (action.type === 'permit_request') {
+                    console.log('Creando solicitud de permiso:', action.id);
+                    const { createPermitRequest } = await import('@/hooks/evaluationFunctions');
+                    const result = await createPermitRequest({
+                      requestData: action.payload,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Solicitud de permiso creada correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'permit_request'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                      if (cacheStr) {
+                        const cache = JSON.parse(cacheStr);
+                        const updatedCache = cache.map((item: any) => {
+                          if (item.id_local === action.id && item.type === 'permit_request') {
+                            return { ...item, synced: true, id: result.data?.id || item.id };
+                          }
+                          return item;
+                        });
+                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                      }
+                    }
+                  } else if (action.type === 'attendance_control') {
+                    console.log('Creando control de asistencia:', action.id);
+                    const { createAttendanceControl } = await import('@/hooks/evaluationFunctions');
+                    const result = await createAttendanceControl({
+                      requestData: action.payload,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Control de asistencia creado correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'attendance_control'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                      if (cacheStr) {
+                        const cache = JSON.parse(cacheStr);
+                        const updatedCache = cache.map((item: any) => {
+                          if (item.id_local === action.id && item.type === 'attendance_control') {
+                            return { ...item, synced: true, id: result.data?.id || item.id };
+                          }
+                          return item;
+                        });
+                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                      }
+                    }
+                  } else if (action.type === 'opening_closing_position') {
+                    console.log('Creando apertura-cierre de puesto:', action.id);
+                    const { createOpeningClosingPosition } = await import('@/hooks/evaluationFunctions');
+                    const result = await createOpeningClosingPosition({
+                      requestData: action.payload,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Apertura-Cierre de Puesto creado correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'opening_closing_position'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                      if (cacheStr) {
+                        const cache = JSON.parse(cacheStr);
+                        const updatedCache = cache.map((item: any) => {
+                          if (item.id_local === action.id && item.type === 'opening_closing_position') {
+                            return { ...item, synced: true, id: result.data?.id || item.id };
+                          }
+                          return item;
+                        });
+                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                      }
+                    }
+                  } else if (action.type === 'induction_tour_record') {
+                    console.log('Creando registro de inducción y recorrido:', action.id);
+                    const { createInductionTourRecord } = await import('@/hooks/evaluationFunctions');
+                    const result = await createInductionTourRecord({
+                      requestData: action.payload,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Registro de inducción y recorrido creado correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'induction_tour_record'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                      if (cacheStr) {
+                        const cache = JSON.parse(cacheStr);
+                        const updatedCache = cache.map((item: any) => {
+                          if (item.id_local === action.id && item.type === 'induction_tour_record') {
+                            return { ...item, synced: true, id: result.data?.id || item.id };
+                          }
+                          return item;
+                        });
+                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                      }
+                    }
+                  } else if (action.type === 'supervision_report') {
+                    console.log('Creando informe de supervisión:', action.id);
+                    const { createSupervisionReport } = await import('@/hooks/evaluationFunctions');
+                    const result = await createSupervisionReport({
+                      requestData: action.payload,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Informe de supervisión creado correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'supervision_report'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                      if (cacheStr) {
+                        const cache = JSON.parse(cacheStr);
+                        const updatedCache = cache.map((item: any) => {
+                          if (item.id_local === action.id && item.type === 'supervision_report') {
+                            return { ...item, synced: true, id: result.data?.id || item.id };
+                          }
+                          return item;
+                        });
+                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                      }
+                    }
+                  } else if (action.type === 'electric_brush_guide') {
+                    console.log('Creando guía de uso de cepillo eléctrico:', action.id);
+                    const { createElectricBrushGuide } = await import('@/hooks/evaluationFunctions');
+                    const result = await createElectricBrushGuide({
+                      requestData: action.payload,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Guía de uso de cepillo eléctrico creada correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'electric_brush_guide'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                      if (cacheStr) {
+                        const cache = JSON.parse(cacheStr);
+                        const updatedCache = cache.map((item: any) => {
+                          if (item.id_local === action.id && item.type === 'electric_brush_guide') {
+                            return { ...item, synced: true, id: result.data?.id || item.id };
+                          }
+                          return item;
+                        });
+                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                      }
+                    }
+                  } else if (action.type === 'general_clients_list') {
+                    console.log('Creando listado general de clientes:', action.id);
+                    const { createGeneralClientsList } = await import('@/hooks/evaluationFunctions');
+                    const result = await createGeneralClientsList({
+                      requestData: action.payload,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Listado general de clientes creado correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'general_clients_list'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                      if (cacheStr) {
+                        const cache = JSON.parse(cacheStr);
+                        const updatedCache = cache.map((item: any) => {
+                          if (item.id_local === action.id && item.type === 'general_clients_list') {
+                            return { ...item, synced: true, id: result.data?.id || item.id };
+                          }
+                          return item;
+                        });
+                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                      }
+                    }
                   } else if (action.type === 'routes_and_tours') {
                 console.log('Creando ruta o gira:', action.id);
             const { createRouteAndTour } = await import('@/hooks/evaluationFunctions');
@@ -863,19 +1298,19 @@ function AppContent() {
             }
           } else {
             // Evaluación normal
-            console.log('Creando evaluación:', action.id);
-            const { createEvaluation } = await import('@/hooks/evaluationFunctions');
-            const result = await createEvaluation({
+          console.log('Creando evaluación:', action.id);
+          const { createEvaluation } = await import('@/hooks/evaluationFunctions');
+          const result = await createEvaluation({
               requestData: action.requestData || action.payload,
-              refreshAccessToken,
-              logout,
-            });
+            refreshAccessToken,
+            logout,
+          });
 
-            if (result.status) {
-              console.log('Evaluación creada correctamente');
-              // Eliminar acción del array
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && (!a.type || (a.type !== 'mileage_control' && a.type !== 'uniform_request' && a.type !== 'routes_and_tours' && a.type !== 'employee_satisfaction' && a.type !== 'vehicle_maintenance' && a.type !== 'non_conforming_product' && a.type !== 'complaints_master' && a.type !== 'cleaners_control' && a.type !== 'physical_minute_agenda' && a.type !== 'action_plan' && a.type !== 'work_role' && a.type !== 'contract_basic_data' && a.type !== 'delivery_schedule'))));
-              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+          if (result.status) {
+            console.log('Evaluación creada correctamente');
+            // Eliminar acción del array
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && (!a.type || (a.type !== 'mileage_control' && a.type !== 'uniform_request' && a.type !== 'routes_and_tours' && a.type !== 'employee_satisfaction' && a.type !== 'vehicle_maintenance' && a.type !== 'non_conforming_product' && a.type !== 'complaints_master' && a.type !== 'cleaners_control' && a.type !== 'physical_minute_agenda' && a.type !== 'action_plan' && a.type !== 'work_role' && a.type !== 'contract_basic_data' && a.type !== 'delivery_schedule' && a.type !== 'environmental_management_plan' && a.type !== 'cleaning_work_plan' && a.type !== 'special_situations_plan' && a.type !== 'cleaning_tasks_activities' && a.type !== 'risk_matrix' && a.type !== 'opportunity_matrix' && a.type !== 'process_indicator_matrix' && a.type !== 'monthly_work_role' && a.type !== 'permit_request' && a.type !== 'attendance_control' && a.type !== 'opening_closing_position' && a.type !== 'induction_tour_record' && a.type !== 'supervision_report' && a.type !== 'electric_brush_guide'))));
+            await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
             }
           }
         } else if (action.action === 'update') {
@@ -1074,6 +1509,231 @@ function AppContent() {
                     if (result.status) {
                       console.log('Cronograma de entrega actualizado correctamente');
                       const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'delivery_schedule'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+                    }
+                  } else if (action.type === 'environmental_management_plan') {
+                    console.log('Actualizando plan de gestión ambiental:', action.id);
+                    const { updateEnvironmentalManagementPlan } = await import('@/hooks/evaluationFunctions');
+                    const result = await updateEnvironmentalManagementPlan({
+                      id: action.id,
+                      requestData: action.payload,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Plan de gestión ambiental actualizado correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'environmental_management_plan'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+                    }
+                  } else if (action.type === 'cleaning_work_plan') {
+                    console.log('Actualizando plan de trabajo - Personal Aseo y limpieza:', action.id);
+                    const { updateCleaningWorkPlan } = await import('@/hooks/evaluationFunctions');
+                    const result = await updateCleaningWorkPlan({
+                      id: action.id,
+                      requestData: action.payload,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Plan de trabajo - Personal Aseo y limpieza actualizado correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'cleaning_work_plan'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+                    }
+                  } else if (action.type === 'special_situations_plan') {
+                    console.log('Actualizando plan para la atención de situaciones especiales:', action.id);
+                    const { updateSpecialSituationsPlan } = await import('@/hooks/evaluationFunctions');
+                    const result = await updateSpecialSituationsPlan({
+                      id: action.id,
+                      requestData: action.payload,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Plan para la atención de situaciones especiales actualizado correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'special_situations_plan'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+                    }
+                  } else if (action.type === 'cleaning_tasks_activities') {
+                    console.log('Actualizando registro de tareas o actividades de limpieza:', action.id);
+                    const { updateCleaningTasksActivities } = await import('@/hooks/evaluationFunctions');
+                    const result = await updateCleaningTasksActivities({
+                      id: action.id,
+                      requestData: action.payload,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Registro de tareas o actividades de limpieza actualizado correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'cleaning_tasks_activities'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+                    }
+                  } else if (action.type === 'risk_matrix') {
+                    console.log('Actualizando matriz de riesgos:', action.id);
+                    const { updateRiskMatrix } = await import('@/hooks/evaluationFunctions');
+                    const result = await updateRiskMatrix({
+                      id: action.id,
+                      requestData: action.payload,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Matriz de riesgos actualizada correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'risk_matrix'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+                    }
+                  } else if (action.type === 'opportunity_matrix') {
+                    console.log('Actualizando matriz de oportunidades:', action.id);
+                    const { updateOpportunityMatrix } = await import('@/hooks/evaluationFunctions');
+                    const result = await updateOpportunityMatrix({
+                      id: action.id,
+                      requestData: action.payload,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Matriz de oportunidades actualizada correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'opportunity_matrix'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+                    }
+                  } else if (action.type === 'process_indicator_matrix') {
+                    console.log('Actualizando matriz de indicador de procesos:', action.id);
+                    const { updateProcessIndicatorMatrix } = await import('@/hooks/evaluationFunctions');
+                    const result = await updateProcessIndicatorMatrix({
+                      id: action.id,
+                      requestData: action.payload,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Matriz de indicador de procesos actualizada correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'process_indicator_matrix'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+                    }
+                  } else if (action.type === 'monthly_work_role') {
+                    console.log('Actualizando rol de trabajo mensual:', action.id);
+                    const { updateMonthlyWorkRole } = await import('@/hooks/evaluationFunctions');
+                    const result = await updateMonthlyWorkRole({
+                      id: action.id,
+                      requestData: action.payload,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Rol de trabajo mensual actualizado correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'monthly_work_role'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+                    }
+                  } else if (action.type === 'permit_request') {
+                    console.log('Actualizando solicitud de permiso:', action.id);
+                    const { updatePermitRequest } = await import('@/hooks/evaluationFunctions');
+                    const result = await updatePermitRequest({
+                      id: action.id,
+                      requestData: action.payload,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Solicitud de permiso actualizada correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'permit_request'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+                    }
+                  } else if (action.type === 'attendance_control') {
+                    console.log('Actualizando control de asistencia:', action.id);
+                    const { updateAttendanceControl } = await import('@/hooks/evaluationFunctions');
+                    const result = await updateAttendanceControl({
+                      id: action.id,
+                      requestData: action.payload,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Control de asistencia actualizado correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'attendance_control'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+                    }
+                  } else if (action.type === 'opening_closing_position') {
+                    console.log('Actualizando apertura-cierre de puesto:', action.id);
+                    const { updateOpeningClosingPosition } = await import('@/hooks/evaluationFunctions');
+                    const result = await updateOpeningClosingPosition({
+                      id: action.id,
+                      requestData: action.payload,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Apertura-Cierre de Puesto actualizado correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'opening_closing_position'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+                    }
+                  } else if (action.type === 'induction_tour_record') {
+                    console.log('Actualizando registro de inducción y recorrido:', action.id);
+                    const { updateInductionTourRecord } = await import('@/hooks/evaluationFunctions');
+                    const result = await updateInductionTourRecord({
+                      id: action.id,
+                      requestData: action.payload,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Registro de inducción y recorrido actualizado correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'induction_tour_record'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+                    }
+                  } else if (action.type === 'supervision_report') {
+                    console.log('Actualizando informe de supervisión:', action.id);
+                    const { updateSupervisionReport } = await import('@/hooks/evaluationFunctions');
+                    const result = await updateSupervisionReport({
+                      id: action.id,
+                      requestData: action.payload,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Informe de supervisión actualizado correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'supervision_report'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+                    }
+                  } else if (action.type === 'electric_brush_guide') {
+                    console.log('Actualizando guía de uso de cepillo eléctrico:', action.id);
+                    const { updateElectricBrushGuide } = await import('@/hooks/evaluationFunctions');
+                    const result = await updateElectricBrushGuide({
+                      id: action.id,
+                      requestData: action.payload,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Guía de uso de cepillo eléctrico actualizada correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'electric_brush_guide'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+                    }
+                  } else if (action.type === 'general_clients_list') {
+                    console.log('Actualizando listado general de clientes:', action.id);
+                    const { updateGeneralClientsList } = await import('@/hooks/evaluationFunctions');
+                    const result = await updateGeneralClientsList({
+                      id: action.id,
+                      requestData: action.payload,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Listado general de clientes actualizado correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'general_clients_list'));
                       await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
                     }
                   } else if (action.type === 'routes_and_tours') {
@@ -1347,6 +2007,321 @@ function AppContent() {
                       if (cacheStr) {
                         const cache = JSON.parse(cacheStr);
                         const updatedCache = cache.filter((item: any) => !(item.id === action.id || item.id_local === action.id));
+                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                      }
+                    }
+                  } else if (action.type === 'environmental_management_plan') {
+                    console.log('Eliminando plan de gestión ambiental:', action.id);
+                    const { deleteEnvironmentalManagementPlan } = await import('@/hooks/evaluationFunctions');
+                    const result = await deleteEnvironmentalManagementPlan({
+                      id: action.id,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Plan de gestión ambiental eliminado correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'environmental_management_plan'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                      if (cacheStr) {
+                        const cache = JSON.parse(cacheStr);
+                        const updatedCache = cache.filter((item: any) => !(item.id === action.id || item.id_local === action.id));
+                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                      }
+                    }
+                  } else if (action.type === 'cleaning_work_plan') {
+                    console.log('Eliminando plan de trabajo - Personal Aseo y limpieza:', action.id);
+                    const { deleteCleaningWorkPlan } = await import('@/hooks/evaluationFunctions');
+                    const result = await deleteCleaningWorkPlan({
+                      id: action.id,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Plan de trabajo - Personal Aseo y limpieza eliminado correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'cleaning_work_plan'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                      if (cacheStr) {
+                        const cache = JSON.parse(cacheStr);
+                        const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'cleaning_work_plan'));
+                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                      }
+                    }
+                  } else if (action.type === 'special_situations_plan') {
+                    console.log('Eliminando plan para la atención de situaciones especiales:', action.id);
+                    const { deleteSpecialSituationsPlan } = await import('@/hooks/evaluationFunctions');
+                    const result = await deleteSpecialSituationsPlan({
+                      id: action.id,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Plan para la atención de situaciones especiales eliminado correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'special_situations_plan'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                      if (cacheStr) {
+                        const cache = JSON.parse(cacheStr);
+                        const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'special_situations_plan'));
+                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                      }
+                    }
+                  } else if (action.type === 'cleaning_tasks_activities') {
+                    console.log('Eliminando registro de tareas o actividades de limpieza:', action.id);
+                    const { deleteCleaningTasksActivities } = await import('@/hooks/evaluationFunctions');
+                    const result = await deleteCleaningTasksActivities({
+                      id: action.id,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Registro de tareas o actividades de limpieza eliminado correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'cleaning_tasks_activities'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                      if (cacheStr) {
+                        const cache = JSON.parse(cacheStr);
+                        const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'cleaning_tasks_activities'));
+                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                      }
+                    }
+                  } else if (action.type === 'risk_matrix') {
+                    console.log('Eliminando matriz de riesgos:', action.id);
+                    const { deleteRiskMatrix } = await import('@/hooks/evaluationFunctions');
+                    const result = await deleteRiskMatrix({
+                      id: action.id,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Matriz de riesgos eliminada correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'risk_matrix'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                      if (cacheStr) {
+                        const cache = JSON.parse(cacheStr);
+                        const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'risk_matrix'));
+                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                      }
+                    }
+                  } else if (action.type === 'opportunity_matrix') {
+                    console.log('Eliminando matriz de oportunidades:', action.id);
+                    const { deleteOpportunityMatrix } = await import('@/hooks/evaluationFunctions');
+                    const result = await deleteOpportunityMatrix({
+                      id: action.id,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Matriz de oportunidades eliminada correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'opportunity_matrix'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                      if (cacheStr) {
+                        const cache = JSON.parse(cacheStr);
+                        const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'opportunity_matrix'));
+                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                      }
+                    }
+                  } else if (action.type === 'process_indicator_matrix') {
+                    console.log('Eliminando matriz de indicador de procesos:', action.id);
+                    const { deleteProcessIndicatorMatrix } = await import('@/hooks/evaluationFunctions');
+                    const result = await deleteProcessIndicatorMatrix({
+                      id: action.id,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Matriz de indicador de procesos eliminada correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'process_indicator_matrix'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                      if (cacheStr) {
+                        const cache = JSON.parse(cacheStr);
+                        const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'process_indicator_matrix'));
+                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                      }
+                    }
+                  } else if (action.type === 'monthly_work_role') {
+                    console.log('Eliminando rol de trabajo mensual:', action.id);
+                    const { deleteMonthlyWorkRole } = await import('@/hooks/evaluationFunctions');
+                    const result = await deleteMonthlyWorkRole({
+                      id: action.id,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Rol de trabajo mensual eliminado correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'monthly_work_role'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                      if (cacheStr) {
+                        const cache = JSON.parse(cacheStr);
+                        const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'monthly_work_role'));
+                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                      }
+                    }
+                  } else if (action.type === 'permit_request') {
+                    console.log('Eliminando solicitud de permiso:', action.id);
+                    const { deletePermitRequest } = await import('@/hooks/evaluationFunctions');
+                    const result = await deletePermitRequest({
+                      id: action.id,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Solicitud de permiso eliminada correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'permit_request'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                      if (cacheStr) {
+                        const cache = JSON.parse(cacheStr);
+                        const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'permit_request'));
+                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                      }
+                    }
+                  } else if (action.type === 'attendance_control') {
+                    console.log('Eliminando control de asistencia:', action.id);
+                    const { deleteAttendanceControl } = await import('@/hooks/evaluationFunctions');
+                    const result = await deleteAttendanceControl({
+                      id: action.id,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Control de asistencia eliminado correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'attendance_control'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                      if (cacheStr) {
+                        const cache = JSON.parse(cacheStr);
+                        const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'attendance_control'));
+                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                      }
+                    }
+                  } else if (action.type === 'opening_closing_position') {
+                    console.log('Eliminando apertura-cierre de puesto:', action.id);
+                    const { deleteOpeningClosingPosition } = await import('@/hooks/evaluationFunctions');
+                    const result = await deleteOpeningClosingPosition({
+                      id: action.id,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Apertura-Cierre de Puesto eliminado correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'opening_closing_position'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                      if (cacheStr) {
+                        const cache = JSON.parse(cacheStr);
+                        const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'opening_closing_position'));
+                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                      }
+                    }
+                  } else if (action.type === 'induction_tour_record') {
+                    console.log('Eliminando registro de inducción y recorrido:', action.id);
+                    const { deleteInductionTourRecord } = await import('@/hooks/evaluationFunctions');
+                    const result = await deleteInductionTourRecord({
+                      id: action.id,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Registro de inducción y recorrido eliminado correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'induction_tour_record'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                      if (cacheStr) {
+                        const cache = JSON.parse(cacheStr);
+                        const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'induction_tour_record'));
+                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                      }
+                    }
+                  } else if (action.type === 'supervision_report') {
+                    console.log('Eliminando informe de supervisión:', action.id);
+                    const { deleteSupervisionReport } = await import('@/hooks/evaluationFunctions');
+                    const result = await deleteSupervisionReport({
+                      id: action.id,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Informe de supervisión eliminado correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'supervision_report'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                      if (cacheStr) {
+                        const cache = JSON.parse(cacheStr);
+                        const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'supervision_report'));
+                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                      }
+                    }
+                  } else if (action.type === 'electric_brush_guide') {
+                    console.log('Eliminando guía de uso de cepillo eléctrico:', action.id);
+                    const { deleteElectricBrushGuide } = await import('@/hooks/evaluationFunctions');
+                    const result = await deleteElectricBrushGuide({
+                      id: action.id,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Guía de uso de cepillo eléctrico eliminada correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'electric_brush_guide'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                      if (cacheStr) {
+                        const cache = JSON.parse(cacheStr);
+                        const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'electric_brush_guide'));
+                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                      }
+                    }
+                  } else if (action.type === 'general_clients_list') {
+                    console.log('Eliminando listado general de clientes:', action.id);
+                    const { deleteGeneralClientsList } = await import('@/hooks/evaluationFunctions');
+                    const result = await deleteGeneralClientsList({
+                      id: action.id,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Listado general de clientes eliminado correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'general_clients_list'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                      if (cacheStr) {
+                        const cache = JSON.parse(cacheStr);
+                        const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'general_clients_list'));
                         await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
                       }
                     }
@@ -1775,45 +2750,45 @@ function AppContent() {
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <NavigationContainer
-        ref={navigationRef}
-        linking={linking}
-        theme={colorScheme === 'dark' ? DarkTheme : DefaultTheme}
-        onReady={() => {
-          routeNameRef.current = navigationRef.current?.getCurrentRoute()?.name;
-          console.log('Pantalla inicial:', routeNameRef.current);
-        }}
-        onStateChange={() => {
-          const state = navigationRef.current?.getRootState();
-          const routes = state?.routes ?? [];
-          if (!routes.length) return;
+    <NavigationContainer
+      ref={navigationRef}
+      linking={linking}
+      theme={colorScheme === 'dark' ? DarkTheme : DefaultTheme}
+      onReady={() => {
+        routeNameRef.current = navigationRef.current?.getCurrentRoute()?.name;
+        console.log('Pantalla inicial:', routeNameRef.current);
+      }}
+      onStateChange={() => {
+        const state = navigationRef.current?.getRootState();
+        const routes = state?.routes ?? [];
+        if (!routes.length) return;
 
-          const filteredRoutes: typeof routes = [];
-          const seen = new Set<string>();
+        const filteredRoutes: typeof routes = [];
+        const seen = new Set<string>();
 
-          for (let i = routes.length - 1; i >= 0; i--) {
-            const route = routes[i];
-            if (!seen.has(route.name)) {
-              filteredRoutes.unshift(route);
-              seen.add(route.name);
-            }
+        for (let i = routes.length - 1; i >= 0; i--) {
+          const route = routes[i];
+          if (!seen.has(route.name)) {
+            filteredRoutes.unshift(route);
+            seen.add(route.name);
           }
+        }
 
-          if (filteredRoutes.length !== routes.length) {
-            navigationRef.current?.dispatch(
-              CommonActions.reset({
-                index: filteredRoutes.length - 1,
-                routes: filteredRoutes,
-              })
-            );
-          }
+        if (filteredRoutes.length !== routes.length) {
+          navigationRef.current?.dispatch(
+            CommonActions.reset({
+              index: filteredRoutes.length - 1,
+              routes: filteredRoutes,
+            })
+          );
+        }
 
-          routeNameRef.current = navigationRef.current?.getCurrentRoute()?.name;
-        }}
-      >
-        <RootNavigator />
-        <StatusBar style="auto" />
-      </NavigationContainer>
+        routeNameRef.current = navigationRef.current?.getCurrentRoute()?.name;
+      }}
+    >
+      <RootNavigator />
+      <StatusBar style="auto" />
+    </NavigationContainer>
     </GestureHandlerRootView>
   );
 }
