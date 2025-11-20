@@ -1,0 +1,75 @@
+import { NextRequest, NextResponse } from "next/server";
+import { verifyAccessToken } from "../../../../utils/verifyToken";
+import { prisma } from "../../../../utils/prismaClient";
+
+export async function PUT(
+    req: NextRequest,
+    { params }: { params: { id: string } }
+) {
+    try {
+        const { valid, payload, message } = verifyAccessToken(req);
+
+        if (!valid) {
+            return NextResponse.json(
+                { status: false, message: message },
+                { status: 401 }
+            );
+        }
+
+        const { id } = params;
+        const {
+            procesos
+        } = await req.json();
+
+        const updated_record = await prisma.c_matriz_indicador_procesos.update({
+            where: { id },
+            data: {
+                procesos: procesos !== undefined ? procesos : undefined,
+            }
+        });
+
+        return NextResponse.json({
+            status: true,
+            message: "Matriz de indicador de procesos actualizada correctamente",
+            data: updated_record
+        }, { status: 200 });
+
+    } catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        console.error(errorMessage);
+        return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
+    }
+}
+
+export async function DELETE(
+    req: NextRequest,
+    { params }: { params: { id: string } }
+) {
+    try {
+        const { valid, payload, message } = verifyAccessToken(req);
+
+        if (!valid) {
+            return NextResponse.json(
+                { status: false, message: message },
+                { status: 401 }
+            );
+        }
+
+        const { id } = params;
+
+        await prisma.c_matriz_indicador_procesos.delete({
+            where: { id }
+        });
+
+        return NextResponse.json({
+            status: true,
+            message: "Matriz de indicador de procesos eliminada correctamente"
+        }, { status: 200 });
+
+    } catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        console.error(errorMessage);
+        return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
+    }
+}
+

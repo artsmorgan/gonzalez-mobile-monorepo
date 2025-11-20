@@ -1079,6 +1079,324 @@ model c_cronograma_entrega_materiales_equipos {
   created_by       String?
 }
 
+model c_plan_gestion_ambiental {
+  id                String    @id @default(uuid())
+  empresa_id       String?
+  cliente_id       String?
+  contrato_id      String?
+  corpo_id         String?
+  puesto_id       String?
+  plaza_id         String?
+  ubicacion        String?
+  objetivo         String?   @db.LongText
+  metodologia      String?   @db.LongText
+  rol_horario      String?   @db.LongText
+  uniformes        String?   @db.LongText
+  equipos          String?   @db.LongText
+  accesorios_varios String?  @db.LongText
+  tiempo_respuesta String?  @db.LongText
+  distribucion_labores String? @db.LongText
+  frecuencia_limpieza String? @db.LongText
+  supervision      String?   @db.LongText
+  estrategia       String?   @db.LongText
+  responsable      String?   @db.LongText
+  formularios      String?   @db.LongText
+  plan_capacitacion String?  @db.LongText
+  created_at       DateTime  @default(now())
+  created_by       String?
+}
+
+model c_plan_trabajo_aseo_limpieza {
+  id                                  String    @id @default(uuid())
+  empresa_id                         String?
+  cliente_id                         String?
+  contrato_id                        String?
+  corpo_id                           String?
+  puesto_id                         String?
+  plaza_id                           String?
+  objetivo                           String?   @db.LongText
+  metodologia_trabajo_ambitos_accion String?   @db.LongText
+  rol_horario_trabajo                String?   @db.LongText
+  uniformes                          String?   @db.LongText
+  equipos                            String?   @db.LongText
+  accesorios_varios                  String?   @db.LongText
+  tiempo_respuesta_disposicion_imprevistos String? @db.LongText
+  distribucion_diaria_labores_personal String? @db.LongText
+  frecuencia_minima_limpieza_areas   String?   @db.LongText
+  supervision_metodo_rol_visitas     String?   @db.LongText
+  estrategia_adecuado_continuo_servicio String? @db.LongText
+  responsable_general_contrato       String?   @db.LongText
+  formularios_registro_control_puestos_equipos String? @db.LongText
+  plan_capacitacion                  String?   @db.LongText
+  created_at                         DateTime  @default(now())
+  created_by                         String?
+}
+
+model c_plan_atencion_situaciones_especiales {
+  id                String    @id @default(uuid())
+  empresa_id       String?
+  cliente_id       String?
+  contrato_id      String?
+  corpo_id         String?
+  puesto_id       String?
+  plaza_id         String?
+  edificio         String?
+  supervisor       String?
+  situaciones      String?   @db.LongText
+  created_at       DateTime  @default(now())
+  created_by       String?
+}
+
+model c_registro_tareas_actividades_limpieza {
+  id                                  String    @id @default(uuid())
+  empresa_id                         String?
+  cliente_id                         String?
+  contrato_id                        String?
+  corpo_id                           String?
+  puesto_id                         String?
+  plaza_id                           String?
+  miscelaneo                         String?
+  area_piso                          String?
+  turno_inicio                       String?
+  turno_fin                          String?
+  mes                                String?
+  supervisor                         String?
+  sucursal                           String?
+  area                               String?
+  cliente                            String?
+  actividades_ejecucion_diaria       String?   @db.LongText
+  actividades_ejecucion_semanal      String?   @db.LongText
+  actividades_quincenales            String?   @db.LongText
+  actividades_mensual                String?   @db.LongText
+  actividades_bimensual              String?   @db.LongText
+  actividades_trimestral             String?   @db.LongText
+  actividades_cuatrimestral         String?   @db.LongText
+  actividades_semestral              String?   @db.LongText
+  actividades_anual                  String?   @db.LongText
+  otras_actividades                  String?   @db.LongText
+  programa_eventos_especiales        String?   @db.LongText
+  firma_miscelaneo                   String?   @db.LongText
+  firma_supervisor                   String?   @db.LongText
+  created_at                         DateTime  @default(now())
+  created_by                         String?
+}
+
+model c_matriz_riesgos {
+  id                String    @id @default(uuid())
+  empresa_id       String?
+  cliente_id       String?
+  contrato_id      String?
+  corpo_id         String?
+  puesto_id       String?
+  plaza_id         String?
+  riesgos          String?   @db.LongText
+  created_at       DateTime  @default(now())
+  created_by       String?
+}
+
+model c_matriz_oportunidades {
+  id                String    @id @default(uuid())
+  empresa_id       String?
+  cliente_id       String?
+  contrato_id      String?
+  corpo_id         String?
+  puesto_id       String?
+  plaza_id         String?
+  oportunidades    String?   @db.LongText
+  created_at       DateTime  @default(now())
+  created_by       String?
+}
+
+model c_matriz_indicador_procesos {
+  id                String    @id @default(uuid())
+  empresa_id       String?
+  cliente_id       String?
+  contrato_id      String?
+  corpo_id         String?
+  puesto_id       String?
+  plaza_id         String?
+  procesos         String?   @db.LongText
+  created_at       DateTime  @default(now())
+  created_by       String?
+}
+
+model c_rol_trabajo_mensual {
+  id                String    @id @default(uuid())
+  empresa_id       String?
+  cliente_id       String?
+  contrato_id      String?
+  corpo_id         String?
+  puesto_id       String?
+  plaza_id         String?
+  mes_ano          String?
+  cliente          String?
+  empleados        String?   @db.LongText
+  created_at       DateTime  @default(now())
+  created_by       String?
+}
+
+model c_solicitud_permiso {
+  id                String    @id @default(uuid())
+  empresa_id       String?
+  cliente_id       String?
+  contrato_id      String?
+  corpo_id         String?
+  puesto_id       String?
+  plaza_id         String?
+  persona_solicita String?
+  codigo           String?
+  contrato         String?
+  horario          String?
+  fecha_solicitud  String?
+  motivo_permiso   String?   @db.LongText
+  permiso_sustituido_por String?
+  codigo_sustituto String?
+  firma_gerente    String?   @db.LongText
+  firma_encargado_monitoreo String? @db.LongText
+  permiso_coordinado_por String?
+  created_at       DateTime  @default(now())
+  created_by       String?
+}
+
+model c_control_asistencia {
+  id                String    @id @default(uuid())
+  empresa_id       String?
+  cliente_id       String?
+  contrato_id      String?
+  corpo_id         String?
+  puesto_id       String?
+  plaza_id         String?
+  cliente          String?
+  fecha            String?
+  turno            String?
+  area_piso        String?
+  total_presentes  String?
+  fijos            String?
+  colaboradores    String?   @db.LongText
+  created_at       DateTime  @default(now())
+  created_by       String?
+}
+
+model c_apertura_cierre_puesto {
+  id                String    @id @default(uuid())
+  empresa_id       String?
+  cliente_id       String?
+  contrato_id      String?
+  corpo_id         String?
+  puesto_id       String?
+  plaza_id         String?
+  cliente          String?
+  numero_corpo     String?
+  numero_puesto    String?
+  fecha_realizado  String?
+  nombre_corpo     String?
+  nombre_puesto    String?
+  tipo             String?
+  actividades      String?   @db.LongText
+  inventario       String?   @db.LongText
+  fotos            String?   @db.LongText
+  otras_observaciones String? @db.LongText
+  nombre_representante_cliente String?
+  firma_cliente    String?   @db.LongText
+  created_at       DateTime  @default(now())
+  created_by       String?
+}
+
+model c_registro_induccion_recorrido {
+  id                String    @id @default(uuid())
+  empresa_id       String?
+  cliente_id       String?
+  contrato_id      String?
+  corpo_id         String?
+  puesto_id       String?
+  plaza_id         String?
+  fecha            String?
+  renglon_edificio String?
+  supervisor_cliente String?
+  supervisor_corporacion String?
+  temas_desarrollados String? @db.LongText
+  aspectos_especificos String? @db.LongText
+  participantes    String?   @db.LongText
+  firma_supervisor String?   @db.LongText
+  created_at       DateTime  @default(now())
+  created_by       String?
+}
+
+model c_informe_supervision {
+  id                String    @id @default(uuid())
+  empresa_id       String?
+  cliente_id       String?
+  contrato_id      String?
+  corpo_id         String?
+  puesto_id       String?
+  plaza_id         String?
+  fecha            String?
+  piso             String?
+  area             String?
+  aseador          String?
+  supervisor       String?
+  limpieza_general String?   @db.LongText
+  cuarto_aseo      String?   @db.LongText
+  servicios_sanitarios String? @db.LongText
+  uniforme_presentacion String? @db.LongText
+  estado_equipos   String?   @db.LongText
+  calificacion_general String? @db.LongText
+  firma_aseador    String?   @db.LongText
+  firma_supervisor String?   @db.LongText
+  created_at       DateTime  @default(now())
+  created_by       String?
+}
+
+model c_guia_uso_cepillo_electrico {
+  id                String    @id @default(uuid())
+  empresa_id       String?
+  cliente_id       String?
+  contrato_id      String?
+  corpo_id         String?
+  puesto_id       String?
+  plaza_id         String?
+  miscelaneo       String?
+  capacitador      String?
+  cedula           String?
+  fecha            String?
+  firma_miscelaneo String?   @db.LongText
+  firma_capacitador String?   @db.LongText
+  created_at       DateTime  @default(now())
+  created_by       String?
+}
+
+model c_listado_general_clientes {
+  id                String    @id @default(uuid())
+  empresa_id       String?
+  cliente_id       String?
+  contrato_id      String?
+  corpo_id         String?
+  puesto_id       String?
+  plaza_id         String?
+  numero_cliente   String?
+  fecha_inicio     String?
+  fecha_finalizacion String?
+  extension_prorroga String?
+  nombre_cliente   String?
+  area_sede        String?
+  numero_corpo     String?
+  numero_licitacion String?
+  cantidad_miscelaneos String?
+  tipo_requerimiento_insumos String?
+  tipo_requerimiento_utencilios String?
+  tipo_requerimiento_equipos String?
+  ubicacion        String?
+  fecha_reunion_apertura String?
+  necesidades      String?   @db.LongText
+  gustos_preferencias String? @db.LongText
+  supervisor_asignado String?
+  condiciones_licitaciones String? @db.LongText
+  plan_trabajo     String?   @db.LongText
+  encuestas         String?   @db.LongText
+  created_at       DateTime  @default(now())
+  created_by       String?
+}
+
 model c_rutas_giras {
   id                           String    @id @default(uuid())
   empresa_id                   String?
