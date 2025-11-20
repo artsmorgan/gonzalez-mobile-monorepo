@@ -104,16 +104,16 @@ export default function MileageControlScreen() {
     tripRecords: [],
   });
 
-  // Form refs
-  const choferIdRef = useRef('');
-  const choferNombreRef = useRef('');
-  const totalKmRef = useRef('');
-  const rutaRef = useRef('');
-  const proxMantKmRef = useRef('');
-  const kmParaMantenimientoRef = useRef('');
-  const kmActualRef = useRef('');
-  const estadoRef = useRef('Todo en orden');
-  const vehiculoIdRef = useRef('');
+  // Form states
+  const [choferId, setChoferId] = useState('');
+  const [choferNombre, setChoferNombre] = useState('');
+  const [totalKm, setTotalKm] = useState('');
+  const [ruta, setRuta] = useState('');
+  const [proxMantKm, setProxMantKm] = useState('');
+  const [kmParaMantenimiento, setKmParaMantenimiento] = useState('');
+  const [kmActual, setKmActual] = useState('');
+  const [estado, setEstado] = useState('Todo en orden');
+  const [vehiculoId, setVehiculoId] = useState('');
 
   // Date picker states
   const [showDatePickers, setShowDatePickers] = useState<{ [key: string]: boolean }>({});
@@ -268,15 +268,15 @@ export default function MileageControlScreen() {
       vehiculo_id: '',
       tripRecords: [],
     });
-    choferIdRef.current = '';
-    choferNombreRef.current = '';
-    totalKmRef.current = '';
-    rutaRef.current = '';
-    proxMantKmRef.current = '';
-    kmParaMantenimientoRef.current = '';
-    kmActualRef.current = '';
-    estadoRef.current = 'Todo en orden';
-    vehiculoIdRef.current = '';
+    setChoferId('');
+    setChoferNombre('');
+    setTotalKm('');
+    setRuta('');
+    setProxMantKm('');
+    setKmParaMantenimiento('');
+    setKmActual('');
+    setEstado('Todo en orden');
+    setVehiculoId('');
   };
 
   const cancelCreating = () => {
@@ -312,15 +312,15 @@ export default function MileageControlScreen() {
       vehiculo_id: control.vehiculo_id || '',
       tripRecords: control.registros_viaje || [],
     });
-    choferIdRef.current = control.chofer_id || '';
-    choferNombreRef.current = control.chofer_nombre || '';
-    totalKmRef.current = control.total_km || '';
-    rutaRef.current = control.ruta || '';
-    proxMantKmRef.current = control.prox_mant_km || '';
-    kmParaMantenimientoRef.current = control.km_para_mantenimiento || '';
-    kmActualRef.current = control.km_actual || '';
-    estadoRef.current = control.estado || 'Todo en orden';
-    vehiculoIdRef.current = control.vehiculo_id || '';
+    setChoferId(control.chofer_id || '');
+    setChoferNombre(control.chofer_nombre || '');
+    setTotalKm(control.total_km || '');
+    setRuta(control.ruta || '');
+    setProxMantKm(control.prox_mant_km || '');
+    setKmParaMantenimiento(control.km_para_mantenimiento || '');
+    setKmActual(control.km_actual || '');
+    setEstado(control.estado || 'Todo en orden');
+    setVehiculoId(control.vehiculo_id || '');
   };
 
   const cancelEditing = () => {
@@ -418,19 +418,19 @@ export default function MileageControlScreen() {
   };
 
   const saveMileageControl = async () => {
-    if (!choferIdRef.current.trim()) {
+    if (!choferId.trim()) {
       Alert.alert('Error', 'El ID del chofer es requerido');
       return;
     }
-    if (!choferNombreRef.current.trim()) {
+    if (!choferNombre.trim()) {
       Alert.alert('Error', 'El nombre del chofer es requerido');
       return;
     }
-    if (!vehiculoIdRef.current.trim()) {
+    if (!vehiculoId.trim()) {
       Alert.alert('Error', 'La identificación del vehículo es requerida');
       return;
     }
-    if (!kmActualRef.current.trim()) {
+    if (!kmActual.trim()) {
       Alert.alert('Error', 'El kilometraje actual es requerido');
       return;
     }
@@ -454,15 +454,15 @@ export default function MileageControlScreen() {
             try {
               const requestData = {
                 marca_id: currentMarcaData.id,
-                chofer_id: choferIdRef.current.trim(),
-                chofer_nombre: choferNombreRef.current.trim(),
-                total_km: totalKmRef.current.trim() || null,
-                ruta: rutaRef.current.trim() || null,
-                prox_mant_km: proxMantKmRef.current.trim() || null,
-                km_para_mantenimiento: kmParaMantenimientoRef.current.trim() || null,
-                km_actual: kmActualRef.current.trim(),
-                estado: estadoRef.current,
-                vehiculo_id: vehiculoIdRef.current.trim(),
+                chofer_id: choferId.trim(),
+                chofer_nombre: choferNombre.trim(),
+                total_km: totalKm.trim() || null,
+                ruta: ruta.trim() || null,
+                prox_mant_km: proxMantKm.trim() || null,
+                km_para_mantenimiento: kmParaMantenimiento.trim() || null,
+                km_actual: kmActual.trim(),
+                estado: estado,
+                vehiculo_id: vehiculoId.trim(),
                 registros_viaje: newControl.tripRecords,
               };
 
@@ -502,15 +502,15 @@ export default function MileageControlScreen() {
                 const newControlCache: MileageControl = {
                   id: '',
                   id_local: localId,
-                  chofer_id: choferIdRef.current.trim(),
-                  chofer_nombre: choferNombreRef.current.trim(),
-                  total_km: totalKmRef.current.trim() || null,
-                  ruta: rutaRef.current.trim() || null,
-                  prox_mant_km: proxMantKmRef.current.trim() || null,
-                  km_para_mantenimiento: kmParaMantenimientoRef.current.trim() || null,
-                  km_actual: kmActualRef.current.trim(),
-                  estado: estadoRef.current,
-                  vehiculo_id: vehiculoIdRef.current.trim(),
+                  chofer_id: choferId.trim(),
+                  chofer_nombre: choferNombre.trim(),
+                  total_km: totalKm.trim() || null,
+                  ruta: ruta.trim() || null,
+                  prox_mant_km: proxMantKm.trim() || null,
+                  km_para_mantenimiento: kmParaMantenimiento.trim() || null,
+                  km_actual: kmActual.trim(),
+                  estado: estado,
+                  vehiculo_id: vehiculoId.trim(),
                   registros_viaje: newControl.tripRecords,
                   created_at: new Date().toISOString(),
                   synced: false,
@@ -536,19 +536,19 @@ export default function MileageControlScreen() {
   const updateMileageControlHandler = async () => {
     if (!editingControl) return;
 
-    if (!choferIdRef.current.trim()) {
+    if (!choferId.trim()) {
       Alert.alert('Error', 'El ID del chofer es requerido');
       return;
     }
-    if (!choferNombreRef.current.trim()) {
+    if (!choferNombre.trim()) {
       Alert.alert('Error', 'El nombre del chofer es requerido');
       return;
     }
-    if (!vehiculoIdRef.current.trim()) {
+    if (!vehiculoId.trim()) {
       Alert.alert('Error', 'La identificación del vehículo es requerida');
       return;
     }
-    if (!kmActualRef.current.trim()) {
+    if (!kmActual.trim()) {
       Alert.alert('Error', 'El kilometraje actual es requerido');
       return;
     }
@@ -563,15 +563,15 @@ export default function MileageControlScreen() {
           onPress: async () => {
             try {
               const requestData = {
-                chofer_id: choferIdRef.current.trim(),
-                chofer_nombre: choferNombreRef.current.trim(),
-                total_km: totalKmRef.current.trim() || null,
-                ruta: rutaRef.current.trim() || null,
-                prox_mant_km: proxMantKmRef.current.trim() || null,
-                km_para_mantenimiento: kmParaMantenimientoRef.current.trim() || null,
-                km_actual: kmActualRef.current.trim(),
-                estado: estadoRef.current,
-                vehiculo_id: vehiculoIdRef.current.trim(),
+                chofer_id: choferId.trim(),
+                chofer_nombre: choferNombre.trim(),
+                total_km: totalKm.trim() || null,
+                ruta: ruta.trim() || null,
+                prox_mant_km: proxMantKm.trim() || null,
+                km_para_mantenimiento: kmParaMantenimiento.trim() || null,
+                km_actual: kmActual.trim(),
+                estado: estado,
+                vehiculo_id: vehiculoId.trim(),
                 registros_viaje: editingControl.tripRecords,
               };
 
@@ -751,16 +751,16 @@ export default function MileageControlScreen() {
               style={[styles.formInput, styles.choferIdInput]}
               placeholder="ID (Ej: C031)"
               placeholderTextColor="#999"
-              value={choferIdRef.current}
-              onChangeText={(text) => { choferIdRef.current = text; }}
+              value={choferId}
+              onChangeText={setChoferId}
             />
             <ThemedText style={styles.choferSeparator}>|</ThemedText>
             <TextInput
               style={[styles.formInput, styles.choferNombreInput]}
               placeholder="Nombre completo"
               placeholderTextColor="#999"
-              value={choferNombreRef.current}
-              onChangeText={(text) => { choferNombreRef.current = text; }}
+              value={choferNombre}
+              onChangeText={setChoferNombre}
             />
           </ThemedView>
         </ThemedView>
@@ -773,8 +773,8 @@ export default function MileageControlScreen() {
             placeholder="0"
             placeholderTextColor="#999"
             keyboardType="numeric"
-            value={totalKmRef.current}
-            onChangeText={(text) => { totalKmRef.current = text; }}
+            value={totalKm}
+            onChangeText={setTotalKm}
           />
         </ThemedView>
 
@@ -785,8 +785,8 @@ export default function MileageControlScreen() {
             style={styles.formInput}
             placeholder="Ej: ZONA SUR"
             placeholderTextColor="#999"
-            value={rutaRef.current}
-            onChangeText={(text) => { rutaRef.current = text; }}
+            value={ruta}
+            onChangeText={setRuta}
           />
         </ThemedView>
 
@@ -798,8 +798,8 @@ export default function MileageControlScreen() {
             placeholder="0"
             placeholderTextColor="#999"
             keyboardType="numeric"
-            value={proxMantKmRef.current}
-            onChangeText={(text) => { proxMantKmRef.current = text; }}
+            value={proxMantKm}
+            onChangeText={setProxMantKm}
           />
         </ThemedView>
 
@@ -811,8 +811,8 @@ export default function MileageControlScreen() {
             placeholder="0"
             placeholderTextColor="#999"
             keyboardType="numeric"
-            value={kmParaMantenimientoRef.current}
-            onChangeText={(text) => { kmParaMantenimientoRef.current = text; }}
+            value={kmParaMantenimiento}
+            onChangeText={setKmParaMantenimiento}
           />
         </ThemedView>
 
@@ -824,8 +824,8 @@ export default function MileageControlScreen() {
             placeholder="0"
             placeholderTextColor="#999"
             keyboardType="numeric"
-            value={kmActualRef.current}
-            onChangeText={(text) => { kmActualRef.current = text; }}
+            value={kmActual}
+            onChangeText={setKmActual}
           />
         </ThemedView>
 
@@ -834,8 +834,8 @@ export default function MileageControlScreen() {
           <ThemedText style={styles.formLabel}>Estado:</ThemedText>
           <ThemedView style={styles.pickerContainer}>
             <Picker
-              selectedValue={estadoRef.current}
-              onValueChange={(value: string) => { estadoRef.current = value; }}
+              selectedValue={estado}
+              onValueChange={setEstado}
               style={styles.picker}
             >
               <Picker.Item label="Todo en orden" value="Todo en orden" />
@@ -852,8 +852,8 @@ export default function MileageControlScreen() {
             style={styles.formInput}
             placeholder="Ej: CL 368587"
             placeholderTextColor="#999"
-            value={vehiculoIdRef.current}
-            onChangeText={(text) => { vehiculoIdRef.current = text; }}
+            value={vehiculoId}
+            onChangeText={setVehiculoId}
           />
         </ThemedView>
 
