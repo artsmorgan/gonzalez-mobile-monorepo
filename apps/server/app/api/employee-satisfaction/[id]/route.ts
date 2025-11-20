@@ -4,7 +4,7 @@ import { prisma } from "../../../../utils/prismaClient";
 
 export async function PUT(
     req: NextRequest,
-    { params }: { params: { id: string } }
+    context: { params: Promise<{ id: string }> }
 ) {
     try {
         const { valid, payload, message } = verifyAccessToken(req);
@@ -16,7 +16,8 @@ export async function PUT(
             );
         }
 
-        const { id } = params;
+        const resolvedParams = await context.params;
+        const { id } = resolvedParams;
         const {
             nombre_empleado,
             cliente_sede,
@@ -80,7 +81,7 @@ export async function PUT(
 
 export async function DELETE(
     req: NextRequest,
-    { params }: { params: { id: string } }
+    context: { params: Promise<{ id: string }> }
 ) {
     try {
         const { valid, payload, message } = verifyAccessToken(req);
@@ -92,7 +93,8 @@ export async function DELETE(
             );
         }
 
-        const { id } = params;
+        const resolvedParams = await context.params;
+        const { id } = resolvedParams;
 
         const existingRecord = await prisma.c_satisfaccion_personal.findUnique({
             where: { id }
