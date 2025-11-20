@@ -4,7 +4,7 @@ import { prisma } from "../../../../../utils/prismaClient";
 
 export async function GET(
     req: NextRequest,
-    { params }: { params: { corpo_id: string } }
+    context: { params: Promise<{ corpo_id: string }> }
 ) {
     try {
         const { valid, payload, message } = verifyAccessToken(req);
@@ -16,7 +16,8 @@ export async function GET(
             );
         }
 
-        const { corpo_id } = params;
+        const resolvedParams = await context.params;
+        const { corpo_id } = resolvedParams;
 
         const records = await prisma.c_agenda_minuta_fisica.findMany({
             where: {
