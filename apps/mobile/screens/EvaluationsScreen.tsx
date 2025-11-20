@@ -64,6 +64,102 @@ export default function EvaluationsScreen() {
                 <Ionicons name="speedometer" size={24} color="#FFFFFF" /> Control de Kilometraje
               </ThemedText>
             </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.navButton, styles.navButtonSecondary]}
+              onPress={() => navigation.navigate('UniformRequest' as never)}
+            >
+              <ThemedText style={styles.navButtonText}>
+                <Ionicons name="shirt" size={24} color="#FFFFFF" /> Solicitud Uniforme
+              </ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.navButton, styles.navButtonTertiary]}
+              onPress={() => navigation.navigate('RoutesAndTours' as never)}
+            >
+              <ThemedText style={styles.navButtonText}>
+                <Ionicons name="map" size={24} color="#FFFFFF" /> Rutas y Giras
+              </ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.navButton, styles.navButtonQuaternary]}
+              onPress={() => navigation.navigate('EmployeeSatisfaction' as never)}
+            >
+              <ThemedText style={styles.navButtonText}>
+                <Ionicons name="happy" size={24} color="#FFFFFF" /> Satisfacción del Personal
+              </ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.navButton, styles.navButtonQuinary]}
+              onPress={() => navigation.navigate('VehicleMaintenance' as never)}
+            >
+              <ThemedText style={styles.navButtonText}>
+                <Ionicons name="car" size={24} color="#FFFFFF" /> Planificación y Control de Mantenimiento
+              </ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.navButton, styles.navButtonSenary]}
+              onPress={() => navigation.navigate('NonConformingProduct' as never)}
+            >
+              <ThemedText style={styles.navButtonText}>
+                <Ionicons name="warning" size={24} color="#FFFFFF" /> Producto No Conforme y Matriz
+              </ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.navButton, styles.navButtonSeptenary]}
+              onPress={() => navigation.navigate('ComplaintsMaster' as never)}
+            >
+              <ThemedText style={styles.navButtonText}>
+                <Ionicons name="chatbubbles" size={24} color="#FFFFFF" /> Maestro de Quejas
+              </ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.navButton, styles.navButtonOctonary]}
+              onPress={() => navigation.navigate('CleanersControl' as never)}
+            >
+              <ThemedText style={styles.navButtonText}>
+                <Ionicons name="brush" size={24} color="#FFFFFF" /> Control de Aseadores
+              </ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.navButton, styles.navButtonNonary]}
+              onPress={() => navigation.navigate('PhysicalMinuteAgenda' as never)}
+            >
+              <ThemedText style={styles.navButtonText}>
+                <Ionicons name="document-text" size={24} color="#FFFFFF" /> Agenda Minuta Física
+              </ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.navButton, styles.navButtonDecimal]}
+              onPress={() => navigation.navigate('ActionPlan' as never)}
+            >
+              <ThemedText style={styles.navButtonText}>
+                <Ionicons name="list" size={24} color="#FFFFFF" /> Plan de Acción
+              </ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.navButton, styles.navButtonUndecimal]}
+              onPress={() => navigation.navigate('WorkRole' as never)}
+            >
+              <ThemedText style={styles.navButtonText}>
+                <Ionicons name="calendar" size={24} color="#FFFFFF" /> Rol de Trabajo
+              </ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.navButton, styles.navButtonDuodenary]}
+              onPress={() => navigation.navigate('ContractBasicData' as never)}
+            >
+              <ThemedText style={styles.navButtonText}>
+                <Ionicons name="document-text" size={24} color="#FFFFFF" /> Datos Básicos de Contrato
+              </ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.navButton, styles.navButtonTredecenary]}
+              onPress={() => navigation.navigate('DeliverySchedule' as never)}
+            >
+              <ThemedText style={styles.navButtonText}>
+                <Ionicons name="calendar" size={24} color="#FFFFFF" /> Cronograma de Entrega
+              </ThemedText>
+            </TouchableOpacity>
           </ThemedView>
         </ThemedView>
       </ScrollView>
@@ -127,6 +223,43 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'center',
     gap: 8,
+    marginBottom: 12,
+  },
+  navButtonSecondary: {
+    backgroundColor: '#5856D6',
+  },
+  navButtonTertiary: {
+    backgroundColor: '#30D158',
+  },
+  navButtonQuaternary: {
+    backgroundColor: '#FF3B30',
+  },
+  navButtonQuinary: {
+    backgroundColor: '#007AFF',
+  },
+  navButtonSenary: {
+    backgroundColor: '#9C27B0',
+  },
+  navButtonSeptenary: {
+    backgroundColor: '#E91E63',
+  },
+  navButtonOctonary: {
+    backgroundColor: '#00BCD4',
+  },
+  navButtonNonary: {
+    backgroundColor: '#795548',
+  },
+  navButtonDecimal: {
+    backgroundColor: '#9C27B0',
+  },
+  navButtonUndecimal: {
+    backgroundColor: '#FF6F00',
+  },
+  navButtonDuodenary: {
+    backgroundColor: '#607D8B',
+  },
+  navButtonTredecenary: {
+    backgroundColor: '#3F51B5',
   },
   navButtonText: {
     color: '#FFFFFF',

@@ -833,6 +833,277 @@ model c_control_kilometraje {
   created_by            String?
 }
 
+model c_solicitud_uniforme {
+  id                         String    @id @default(uuid())
+  empresa_id                 String?
+  cliente_id                 String?
+  contrato_id                String?
+  corpo_id                   String?
+  puesto_id                  String?
+  plaza_id                   String?
+  codigo                     String?
+  nombre_completo            String?
+  cliente_area               String?
+  ultima_fecha_uniformes     String?
+  talla_scrub_naranja        String?
+  talla_pantalon             String?
+  talla_zapatos              String?
+  estado                     String?
+  persona_designada_entrega  String?
+  no_procede_hasta           String?
+  estatus_designado_entrega  String?
+  created_at                 DateTime  @default(now())
+  created_by                 String?
+}
+
+model c_satisfaccion_personal {
+  id                              String    @id @default(uuid())
+  empresa_id                      String?
+  cliente_id                      String?
+  contrato_id                     String?
+  corpo_id                        String?
+  puesto_id                       String?
+  plaza_id                        String?
+  nombre_empleado                 String?
+  cliente_sede                    String?
+  tiempo_laborado                 String?
+  recibe_uniformes_tiempo         String?
+  llevo_induccion                  String?
+  calificacion_induccion           String?
+  recibe_visitas_supervision       String?
+  recibe_atencion_oficina          String?
+  problemas_pago_resueltos         String?
+  equipo_proteccion                String?
+  que_mejorar                      String?
+  considera_empresa_debe_mejorar   String?
+  conoce_reportar_accidente       String?
+  le_gustaria_capacitado           String?
+  created_at                       DateTime  @default(now())
+  created_by                       String?
+}
+
+model c_planificacion_mantenimiento_vehiculo {
+  id                String    @id @default(uuid())
+  empresa_id       String?
+  cliente_id       String?
+  contrato_id      String?
+  corpo_id         String?
+  puesto_id       String?
+  plaza_id         String?
+  nombre_vehiculo  String?
+  matricula_vehiculo String?
+  mantenimientos   String?   @db.LongText
+  created_at       DateTime  @default(now())
+  created_by       String?
+}
+
+model c_producto_no_conforme_matriz {
+  id                String    @id @default(uuid())
+  empresa_id       String?
+  cliente_id       String?
+  contrato_id      String?
+  corpo_id         String?
+  puesto_id       String?
+  plaza_id         String?
+  cliente          String?
+  numero_corpo     String?
+  responsable_cuenta String?
+  macroactividad   String?
+  actividad        String?
+  tipo_servicio_no_conforme String?
+  tipo_registro    String?
+  responsable_registro String?
+  acciones_seguir  String?   @db.LongText
+  responsable_corregir String? @db.LongText
+  responsable_aprobar String? @db.LongText
+  created_at       DateTime  @default(now())
+  created_by       String?
+}
+
+model c_maestro_quejas {
+  id                String    @id @default(uuid())
+  empresa_id       String?
+  cliente_id       String?
+  contrato_id      String?
+  corpo_id         String?
+  puesto_id       String?
+  plaza_id         String?
+  sociedad         String?
+  nombre_realiza_queja String?
+  cliente          String?
+  empresa_presenta_queja String?
+  persona_presenta_queja String?
+  medio_recepcion_queja String?
+  tipo_queja       String?
+  ubicacion        String?
+  nivel_queja      String?
+  fecha_queja      String?
+  motivo_queja     String?
+  descripcion_queja String?  @db.LongText
+  fecha_inicio     String?
+  fecha_revision   String?
+  resolucion_queja String?  @db.LongText
+  mes_queja        String?
+  ano_queja        String?
+  estado           String?
+  accion_correctiva_preventiva String?
+  anexo_evidencia  String?  @db.LongText
+  created_at       DateTime  @default(now())
+  created_by       String?
+}
+
+model c_control_aseadores {
+  id                String    @id @default(uuid())
+  empresa_id       String?
+  cliente_id       String?
+  contrato_id      String?
+  corpo_id         String?
+  puesto_id       String?
+  plaza_id         String?
+  nombre_aseador   String?
+  oficina_despacho String?
+  provincia        String?
+  canton           String?
+  distrito         String?
+  direccion        String?
+  metraje          String?
+  horario          String?
+  horas_dia        String?
+  horas_semana     String?
+  dias             String?
+  cantidad_personal String?
+  detalle_supervision String? @db.LongText
+  fecha_inicio     String?
+  lista_equipos_insumos String? @db.LongText
+  costo_mensual    String?
+  costo_anual      String?
+  codigo           String?
+  plaza            String?
+  observaciones    String?  @db.LongText
+  created_at       DateTime  @default(now())
+  created_by       String?
+}
+
+model c_agenda_minuta_fisica {
+  id                String    @id @default(uuid())
+  empresa_id       String?
+  cliente_id       String?
+  contrato_id      String?
+  corpo_id         String?
+  puesto_id       String?
+  plaza_id         String?
+  fecha            String?
+  puesto           String?
+  hora_inicio      String?
+  hora_fin         String?
+  elaborado_por    String?
+  minuta_numero    String?
+  presentes        String?   @db.LongText
+  observaciones    String?   @db.LongText
+  temas_tratados   String?   @db.LongText
+  notas            String?   @db.LongText
+  created_at       DateTime  @default(now())
+  created_by       String?
+}
+
+model c_plan_accion {
+  id                String    @id @default(uuid())
+  empresa_id       String?
+  cliente_id       String?
+  contrato_id      String?
+  corpo_id         String?
+  puesto_id       String?
+  plaza_id         String?
+  nombre_lugar     String?
+  fecha_inicio_operaciones String?
+  tareas           String?   @db.LongText
+  created_at       DateTime  @default(now())
+  created_by       String?
+}
+
+model c_rol_trabajo {
+  id                String    @id @default(uuid())
+  empresa_id       String?
+  cliente_id       String?
+  contrato_id      String?
+  corpo_id         String?
+  puesto_id       String?
+  plaza_id         String?
+  area             String?
+  metraje          String?
+  horario          String?
+  personal         String?
+  horarios         String?   @db.LongText
+  created_at       DateTime  @default(now())
+  created_by       String?
+}
+
+model c_datos_basicos_contrato {
+  id                String    @id @default(uuid())
+  empresa_id       String?
+  cliente_id       String?
+  contrato_id      String?
+  corpo_id         String?
+  puesto_id       String?
+  plaza_id         String?
+  fecha_inicio_contrato String?
+  cliente_contrato String?
+  ejecutivo_gerente_asistente String?
+  personal         String?   @db.LongText
+  lugar_servicio    String?
+  roles_horarios    String?   @db.LongText
+  desglose_salarios String?  @db.LongText
+  tipo_uniforme     String?   @db.LongText
+  tipo_arma         String?   @db.LongText
+  capacitaciones    String?   @db.LongText
+  otros_datos       String?   @db.LongText
+  created_at       DateTime  @default(now())
+  created_by       String?
+}
+
+model c_cronograma_entrega_materiales_equipos {
+  id                String    @id @default(uuid())
+  empresa_id       String?
+  cliente_id       String?
+  contrato_id      String?
+  corpo_id         String?
+  puesto_id       String?
+  plaza_id         String?
+  contrato         String?
+  region           String?
+  puesto           String?
+  fecha_apertura_entrega String?
+  responsable_apertura_entrega String?
+  equipos_solicitados String? @db.LongText
+  created_at       DateTime  @default(now())
+  created_by       String?
+}
+
+model c_rutas_giras {
+  id                           String    @id @default(uuid())
+  empresa_id                   String?
+  cliente_id                   String?
+  contrato_id                  String?
+  corpo_id                     String?
+  puesto_id                    String?
+  plaza_id                     String?
+  sociedad                     String?
+  cliente                      String?
+  zona                         String?
+  cantidad_personal            String?
+  gira_ruta                    String?
+  dia_entrega                  String?
+  estatus                      String?
+  cumplimiento_supervision     String?
+  cumplimiento_entrega_insumos String?
+  persona_refuerzo             String?
+  notas_cambios                String?
+  estado                       String?
+  nombre_persona_refuerzo      String?
+  created_at                   DateTime  @default(now())
+  created_by                   String?
+}
+
 model c_empleado_almuerzo {
   id         Int        @id @default(autoincrement())
   empleadoId Int
