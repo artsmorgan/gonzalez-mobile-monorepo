@@ -19,6 +19,7 @@ export async function PUT(
         const resolvedParams = await context.params;
         const { id } = resolvedParams;
         const {
+            ubicacion,
             objetivo,
             metodologia_trabajo_ambitos_accion,
             rol_horario_trabajo,
@@ -38,6 +39,7 @@ export async function PUT(
         const updated_record = await prisma.c_plan_trabajo_aseo_limpieza.update({
             where: { id },
             data: {
+                ubicacion: ubicacion !== undefined ? ubicacion : undefined,
                 objetivo: objetivo !== undefined ? objetivo : undefined,
                 metodologia_trabajo_ambitos_accion: metodologia_trabajo_ambitos_accion !== undefined ? metodologia_trabajo_ambitos_accion : undefined,
                 rol_horario_trabajo: rol_horario_trabajo !== undefined ? rol_horario_trabajo : undefined,

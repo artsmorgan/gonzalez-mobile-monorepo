@@ -280,6 +280,78 @@ export default function EvaluationsScreen() {
                 <Ionicons name="list" size={24} color="#FFFFFF" /> Listado General de Clientes
               </ThemedText>
             </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.navButton, styles.navButtonTresvigintenary]}
+              onPress={() => navigation.navigate('ImprovementActionsControl' as never)}
+            >
+              <ThemedText style={styles.navButtonText}>
+                <Ionicons name="checkmark-circle" size={24} color="#FFFFFF" /> Control de Acciones de Mejora
+              </ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.navButton, styles.navButtonTresvigintenary]}
+              onPress={() => navigation.navigate('QualityPolicy' as never)}
+            >
+              <ThemedText style={styles.navButtonText}>
+                <Ionicons name="document-text" size={24} color="#FFFFFF" /> Política de Calidad
+              </ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.navButton, styles.navButtonTresvigintenary]}
+              onPress={() => navigation.navigate('BusinessQualityObjectives' as never)}
+            >
+              <ThemedText style={styles.navButtonText}>
+                <Ionicons name="flag" size={24} color="#FFFFFF" /> Objetivos Empresariales de Calidad
+              </ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.navButton, styles.navButtonTresvigintenary]}
+              onPress={() => navigation.navigate('StakeholderAnalysisMatrix' as never)}
+            >
+              <ThemedText style={styles.navButtonText}>
+                <Ionicons name="people" size={24} color="#FFFFFF" /> Matriz de Análisis de Partes Interesadas
+              </ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.navButton, styles.navButtonTresvigintenary]}
+              onPress={() => navigation.navigate('CommunicationPlan' as never)}
+            >
+              <ThemedText style={styles.navButtonText}>
+                <Ionicons name="chatbubbles" size={24} color="#FFFFFF" /> Plan de Comunicación
+              </ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.navButton, styles.navButtonTresvigintenary]}
+              onPress={() => navigation.navigate('KnowledgeManagementMatrix' as never)}
+            >
+              <ThemedText style={styles.navButtonText}>
+                <Ionicons name="library" size={24} color="#FFFFFF" /> Matriz de Gestión del Conocimiento
+              </ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.navButton, styles.navButtonTresvigintenary]}
+              onPress={() => navigation.navigate('ChangePlanning' as never)}
+            >
+              <ThemedText style={styles.navButtonText}>
+                <Ionicons name="clipboard" size={24} color="#FFFFFF" /> Planificación de Cambios del SGC
+              </ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.navButton, styles.navButtonTresvigintenary]}
+              onPress={() => navigation.navigate('ManagementPlanningControl' as never)}
+            >
+              <ThemedText style={styles.navButtonText}>
+                <Ionicons name="document-text" size={24} color="#FFFFFF" /> Planificación y Control Gerencial
+              </ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.navButton, styles.navButtonTresvigintenary]}
+              onPress={() => navigation.navigate('CommunicationPlanRequirements' as never)}
+            >
+              <ThemedText style={styles.navButtonText}>
+                <Ionicons name="mail-outline" size={24} color="#FFFFFF" /> Requisitos Registro Evidencias Plan de Comunicación
+              </ThemedText>
+            </TouchableOpacity>
           </ThemedView>
         </ThemedView>
       </ScrollView>
