@@ -15,7 +15,8 @@ export async function POST(req: NextRequest) {
         }
 
         const { 
-            marca_id, 
+            marca_id,
+            ubicacion,
             objetivo,
             metodologia_trabajo_ambitos_accion,
             rol_horario_trabajo,
@@ -54,6 +55,7 @@ export async function POST(req: NextRequest) {
                 corpo_id: marcaDia.corpo_id?.toString() || null,
                 puesto_id: marcaDia.puesto_id?.toString() || null,
                 plaza_id: marcaDia.plaza_id?.toString() || null,
+                ubicacion: ubicacion || null,
                 objetivo: objetivo || null,
                 metodologia_trabajo_ambitos_accion: metodologia_trabajo_ambitos_accion || null,
                 rol_horario_trabajo: rol_horario_trabajo || null,
@@ -84,6 +86,7 @@ export async function POST(req: NextRequest) {
                 corpo_id: new_record.corpo_id,
                 puesto_id: new_record.puesto_id,
                 plaza_id: new_record.plaza_id,
+                ubicacion: new_record.ubicacion,
                 objetivo: new_record.objetivo,
                 metodologia_trabajo_ambitos_accion: new_record.metodologia_trabajo_ambitos_accion,
                 rol_horario_trabajo: new_record.rol_horario_trabajo,

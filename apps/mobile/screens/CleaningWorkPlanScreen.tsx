@@ -67,6 +67,7 @@ const TIPO_ELEMENTO_OPTIONS = [
 interface CleaningWorkPlan {
   id: string;
   id_local: string;
+  ubicacion: string | null;
   objetivo: string | null;
   metodologia_trabajo_ambitos_accion: string | null;
   rol_horario_trabajo: string | null;
@@ -88,6 +89,7 @@ interface CleaningWorkPlan {
 interface EditingCleaningWorkPlan {
   id: string | null;
   id_local: string;
+  ubicacion: string;
   objetivo: SeccionElement[];
   metodologia_trabajo_ambitos_accion: SeccionElement[];
   rol_horario_trabajo: SeccionElement[];
@@ -653,6 +655,7 @@ export default function CleaningWorkPlanScreen() {
   // Editing state
   const [editingRecord, setEditingRecord] = useState<EditingCleaningWorkPlan | null>(null);
   const [isCreating, setIsCreating] = useState(false);
+  const [ubicacion, setUbicacion] = useState<string>('');
 
   // Form states
   const [secciones, setSecciones] = useState<{ [key: string]: SeccionElement[] }>(() => {
@@ -762,6 +765,7 @@ export default function CleaningWorkPlanScreen() {
       initial[sec.key] = [];
     });
     setSecciones(initial);
+    setUbicacion('');
   };
 
   const startCreating = () => {
@@ -785,6 +789,7 @@ export default function CleaningWorkPlanScreen() {
     setEditingRecord({
       id: record.id,
       id_local: record.id_local,
+      ubicacion: record.ubicacion || '',
       objetivo: parsedSecciones.objetivo,
       metodologia_trabajo_ambitos_accion: parsedSecciones.metodologia_trabajo_ambitos_accion,
       rol_horario_trabajo: parsedSecciones.rol_horario_trabajo,
@@ -802,6 +807,7 @@ export default function CleaningWorkPlanScreen() {
     });
 
     setSecciones(parsedSecciones);
+    setUbicacion(record.ubicacion || '');
   };
 
   const cancelEditing = () => {
@@ -830,6 +836,7 @@ export default function CleaningWorkPlanScreen() {
             try {
               const requestData = {
                 marca_id: currentMarcaData.id,
+                ubicacion: ubicacion || null,
                 objetivo: secciones.objetivo.length > 0 ? JSON.stringify(secciones.objetivo) : null,
                 metodologia_trabajo_ambitos_accion: secciones.metodologia_trabajo_ambitos_accion.length > 0 ? JSON.stringify(secciones.metodologia_trabajo_ambitos_accion) : null,
                 rol_horario_trabajo: secciones.rol_horario_trabajo.length > 0 ? JSON.stringify(secciones.rol_horario_trabajo) : null,
@@ -882,6 +889,7 @@ export default function CleaningWorkPlanScreen() {
                 const newRecordCache: CleaningWorkPlan = {
                   id: '',
                   id_local: localId,
+                  ubicacion: ubicacion || null,
                   objetivo: secciones.objetivo.length > 0 ? JSON.stringify(secciones.objetivo) : null,
                   metodologia_trabajo_ambitos_accion: secciones.metodologia_trabajo_ambitos_accion.length > 0 ? JSON.stringify(secciones.metodologia_trabajo_ambitos_accion) : null,
                   rol_horario_trabajo: secciones.rol_horario_trabajo.length > 0 ? JSON.stringify(secciones.rol_horario_trabajo) : null,
@@ -936,6 +944,7 @@ export default function CleaningWorkPlanScreen() {
           onPress: async () => {
             try {
               const requestData = {
+                ubicacion: ubicacion || null,
                 objetivo: secciones.objetivo.length > 0 ? JSON.stringify(secciones.objetivo) : null,
                 metodologia_trabajo_ambitos_accion: secciones.metodologia_trabajo_ambitos_accion.length > 0 ? JSON.stringify(secciones.metodologia_trabajo_ambitos_accion) : null,
                 rol_horario_trabajo: secciones.rol_horario_trabajo.length > 0 ? JSON.stringify(secciones.rol_horario_trabajo) : null,
@@ -988,6 +997,7 @@ export default function CleaningWorkPlanScreen() {
                     if ((item.id === recordId || item.id_local === recordId) && item.type === 'cleaning_work_plan') {
                       return {
                         ...item,
+                        ubicacion: requestData.ubicacion,
                         objetivo: requestData.objetivo,
                         metodologia_trabajo_ambitos_accion: requestData.metodologia_trabajo_ambitos_accion,
                         rol_horario_trabajo: requestData.rol_horario_trabajo,
@@ -1212,6 +1222,18 @@ export default function CleaningWorkPlanScreen() {
 
           {isCreating || editingRecord ? (
             <ThemedView style={styles.formContainer}>
+              {/* Campo Ubicación */}
+              <ThemedView style={styles.inputContainer}>
+                <ThemedText style={styles.inputLabel}>Ubicación</ThemedText>
+                <TextInput
+                  style={styles.textInput}
+                  placeholder="Ingrese la ubicación"
+                  placeholderTextColor="#999"
+                  value={ubicacion}
+                  onChangeText={setUbicacion}
+                />
+              </ThemedView>
+
               {/* Secciones principales */}
               {SECCIONES_PRINCIPALES.map((seccion) => (
                 <ThemedView key={seccion.key} style={styles.seccionPrincipalContainer}>
@@ -1453,6 +1475,26 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '600',
+  },
+  inputContainer: {
+    marginBottom: 20,
+    width: '100%',
+  },
+  inputLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#000000',
+    marginBottom: 8,
+  },
+  textInput: {
+    width: '100%',
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#DDD',
+    borderRadius: 8,
+    backgroundColor: '#FFFFFF',
+    fontSize: 16,
+    color: '#000000',
   },
   formContainer: {
     width: '100%',

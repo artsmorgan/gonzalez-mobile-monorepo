@@ -1114,6 +1114,7 @@ model c_plan_trabajo_aseo_limpieza {
   corpo_id                           String?
   puesto_id                         String?
   plaza_id                           String?
+  ubicacion                          String?
   objetivo                           String?   @db.LongText
   metodologia_trabajo_ambitos_accion String?   @db.LongText
   rol_horario_trabajo                String?   @db.LongText
@@ -1393,6 +1394,141 @@ model c_listado_general_clientes {
   condiciones_licitaciones String? @db.LongText
   plan_trabajo     String?   @db.LongText
   encuestas         String?   @db.LongText
+  created_at       DateTime  @default(now())
+  created_by       String?
+}
+
+model c_control_acciones_mejora {
+  id                String    @id @default(uuid())
+  empresa_id       String?
+  cliente_id       String?
+  contrato_id      String?
+  corpo_id         String?
+  puesto_id       String?
+  plaza_id         String?
+  numero_accion    String?
+  causa_origen     String?   @db.LongText
+  fecha_deteccion_incidencia String?
+  mes_deteccion    String?
+  tipo_accion      String?
+  proceso_relacionado String? @db.LongText
+  encargado_proceso String?
+  origen_accion    String?
+  fecha_elaboracion_plan String?
+  tiempo_plan_vs_deteccion String?
+  plan_elaborado_a_tiempo String?
+  detalle_nc_opr_dm String?  @db.LongText
+  analisis_causas  String?   @db.LongText
+  accion_inmediata String?   @db.LongText
+  accion_mejora    String?   @db.LongText
+  fecha_aprobacion String?
+  responsable_ejecucion String?
+  fecha_programada_ejecucion String?
+  fecha_real_ejecucion String?
+  mes_ejecucion    String?
+  modif_fecha_ejecucion_motivo String? @db.LongText
+  aplica_seguimiento String?
+  seguimiento_meses String?  @db.LongText
+  evidencias       String?   @db.LongText
+  estado_accion    String?
+  a_tiempo         String?
+  no_conformidades_similares String?
+  reincidencia     String?
+  actualiza_matriz_riesgos String?
+  efectividad      String?
+  no_efectiva      String?
+  cambiar_al_8d    String?
+  cerrada          String?
+  dueño_proceso    String?
+  created_at       DateTime  @default(now())
+  created_by       String?
+}
+
+model c_politica_calidad {
+  id                String    @id @default(uuid())
+  empresa_id       String?
+  cliente_id       String?
+  contrato_id      String?
+  corpo_id         String?
+  puesto_id       String?
+  plaza_id         String?
+  politica_contenido String? @db.LongText
+  nombre_aprobado  String?
+  firma_aprobado   String?   @db.LongText
+  created_at       DateTime  @default(now())
+  created_by       String?
+}
+
+model c_objetivos_empresariales_calidad {
+  id                String    @id @default(uuid())
+  empresa_id       String?
+  cliente_id       String?
+  contrato_id      String?
+  corpo_id         String?
+  puesto_id       String?
+  plaza_id         String?
+  ambitos          String?   @db.LongText
+  nombre_aprobado  String?
+  firma_aprobado   String?   @db.LongText
+  created_at       DateTime  @default(now())
+  created_by       String?
+}
+
+model c_matriz_analisis_partes_interesadas {
+  id                String    @id @default(uuid())
+  empresa_id       String?
+  cliente_id       String?
+  contrato_id      String?
+  corpo_id         String?
+  puesto_id       String?
+  plaza_id         String?
+  partes_interesadas String? @db.LongText
+  created_at       DateTime  @default(now())
+  created_by       String?
+}
+
+model c_plan_comunicacion {
+  id                String    @id @default(uuid())
+  empresa_id       String?
+  cliente_id       String?
+  contrato_id      String?
+  corpo_id         String?
+  puesto_id       String?
+  plaza_id         String?
+  comunicaciones   String?   @db.LongText
+  responsable_aprobacion String?
+  puesto_aprobacion String?
+  fecha_aprobacion String?
+  created_at       DateTime  @default(now())
+  created_by       String?
+}
+
+model c_matriz_gestion_conocimiento {
+  id                String    @id @default(uuid())
+  empresa_id       String?
+  cliente_id       String?
+  contrato_id      String?
+  corpo_id         String?
+  puesto_id       String?
+  plaza_id         String?
+  registros        String?   @db.LongText
+  created_at       DateTime  @default(now())
+  created_by       String?
+}
+
+model c_planificacion_cambios_sgc {
+  id                String    @id @default(uuid())
+  empresa_id       String?
+  cliente_id       String?
+  contrato_id      String?
+  corpo_id         String?
+  puesto_id       String?
+  plaza_id         String?
+  datos_cambio     String?   @db.LongText
+  actividades      String?   @db.LongText
+  aprobado_por     String?
+  firma_representante String? @db.LongText
+  fecha_aprobacion String?
   created_at       DateTime  @default(now())
   created_by       String?
 }

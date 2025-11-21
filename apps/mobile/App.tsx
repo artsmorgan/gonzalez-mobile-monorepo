@@ -72,6 +72,15 @@ import InductionTourRecordScreen from './screens/InductionTourRecordScreen';
 import SupervisionReportScreen from './screens/SupervisionReportScreen';
 import ElectricBrushGuideScreen from './screens/ElectricBrushGuideScreen';
 import GeneralClientsListScreen from './screens/GeneralClientsListScreen';
+import ImprovementActionsControlScreen from './screens/ImprovementActionsControlScreen';
+import QualityPolicyScreen from './screens/QualityPolicyScreen';
+import BusinessQualityObjectivesScreen from './screens/BusinessQualityObjectivesScreen';
+import StakeholderAnalysisMatrixScreen from './screens/StakeholderAnalysisMatrixScreen';
+import CommunicationPlanScreen from './screens/CommunicationPlanScreen';
+import KnowledgeManagementMatrixScreen from './screens/KnowledgeManagementMatrixScreen';
+import ChangePlanningScreen from './screens/ChangePlanningScreen';
+import ManagementPlanningControlScreen from './screens/ManagementPlanningControlScreen';
+import CommunicationPlanRequirementsScreen from './screens/CommunicationPlanRequirementsScreen';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Network from 'expo-network';
 import saveManualSignature from './hooks/saveManualSignature';
@@ -140,6 +149,15 @@ export type RootStackParamList = {
   SupervisionReport: undefined;
   ElectricBrushGuide: undefined;
   GeneralClientsList: undefined;
+  ImprovementActionsControl: undefined;
+  QualityPolicy: undefined;
+  BusinessQualityObjectives: undefined;
+  StakeholderAnalysisMatrix: undefined;
+  CommunicationPlan: undefined;
+  KnowledgeManagementMatrix: undefined;
+  ChangePlanning: undefined;
+  ManagementPlanningControl: undefined;
+  CommunicationPlanRequirements: undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -203,6 +221,15 @@ function RootNavigator() {
       <Stack.Screen name="SupervisionReport" component={SupervisionReportScreen} />
       <Stack.Screen name="ElectricBrushGuide" component={ElectricBrushGuideScreen} />
       <Stack.Screen name="GeneralClientsList" component={GeneralClientsListScreen} />
+      <Stack.Screen name="ImprovementActionsControl" component={ImprovementActionsControlScreen} />
+      <Stack.Screen name="QualityPolicy" component={QualityPolicyScreen} />
+      <Stack.Screen name="BusinessQualityObjectives" component={BusinessQualityObjectivesScreen} />
+      <Stack.Screen name="StakeholderAnalysisMatrix" component={StakeholderAnalysisMatrixScreen} />
+      <Stack.Screen name="CommunicationPlan" component={CommunicationPlanScreen} />
+      <Stack.Screen name="KnowledgeManagementMatrix" component={KnowledgeManagementMatrixScreen} />
+      <Stack.Screen name="ChangePlanning" component={ChangePlanningScreen} />
+      <Stack.Screen name="ManagementPlanningControl" component={ManagementPlanningControlScreen} />
+      <Stack.Screen name="CommunicationPlanRequirements" component={CommunicationPlanRequirementsScreen} />
     </Stack.Navigator>
   );
 }
@@ -1268,6 +1295,188 @@ function AppContent() {
                         await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
                       }
                     }
+                  } else if (action.type === 'improvement_actions_control') {
+                    console.log('Creando control de acciones de mejora:', action.id);
+                    const { createImprovementActionsControl } = await import('@/hooks/evaluationFunctions');
+                    const result = await createImprovementActionsControl({
+                      requestData: action.payload,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Control de acciones de mejora creado correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'improvement_actions_control'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                      if (cacheStr) {
+                        const cache = JSON.parse(cacheStr);
+                        const updatedCache = cache.map((item: any) => {
+                          if (item.id_local === action.id && item.type === 'improvement_actions_control') {
+                            return { ...item, synced: true, id: result.data?.id || item.id };
+                          }
+                          return item;
+                        });
+                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                      }
+                    }
+                  } else if (action.type === 'quality_policy') {
+                    console.log('Creando política de calidad:', action.id);
+                    const { createQualityPolicy } = await import('@/hooks/evaluationFunctions');
+                    const result = await createQualityPolicy({
+                      requestData: action.payload,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Política de calidad creada correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'quality_policy'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                      if (cacheStr) {
+                        const cache = JSON.parse(cacheStr);
+                        const updatedCache = cache.map((item: any) => {
+                          if (item.id_local === action.id && item.type === 'quality_policy') {
+                            return { ...item, synced: true, id: result.data?.id || item.id };
+                          }
+                          return item;
+                        });
+                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                      }
+                    }
+                  } else if (action.type === 'business_quality_objectives') {
+                    console.log('Creando objetivos empresariales de calidad:', action.id);
+                    const { createBusinessQualityObjectives } = await import('@/hooks/evaluationFunctions');
+                    const result = await createBusinessQualityObjectives({
+                      requestData: action.payload,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Objetivos empresariales de calidad creados correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'business_quality_objectives'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                      if (cacheStr) {
+                        const cache = JSON.parse(cacheStr);
+                        const updatedCache = cache.map((item: any) => {
+                          if (item.id_local === action.id && item.type === 'business_quality_objectives') {
+                            return { ...item, synced: true, id: result.data?.id || item.id };
+                          }
+                          return item;
+                        });
+                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                      }
+                    }
+                  } else if (action.type === 'stakeholder_analysis_matrix') {
+                    console.log('Creando matriz de análisis de partes interesadas:', action.id);
+                    const { createStakeholderAnalysisMatrix } = await import('@/hooks/evaluationFunctions');
+                    const result = await createStakeholderAnalysisMatrix({
+                      requestData: action.payload,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Matriz de análisis de partes interesadas creada correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'stakeholder_analysis_matrix'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                      if (cacheStr) {
+                        const cache = JSON.parse(cacheStr);
+                        const updatedCache = cache.map((item: any) => {
+                          if (item.id_local === action.id && item.type === 'stakeholder_analysis_matrix') {
+                            return { ...item, synced: true, id: result.data?.id || item.id };
+                          }
+                          return item;
+                        });
+                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                      }
+                    }
+                  } else if (action.type === 'communication_plan') {
+                    console.log('Creando plan de comunicación:', action.id);
+                    const { createCommunicationPlan } = await import('@/hooks/evaluationFunctions');
+                    const result = await createCommunicationPlan({
+                      requestData: action.payload,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Plan de comunicación creado correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'communication_plan'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                      if (cacheStr) {
+                        const cache = JSON.parse(cacheStr);
+                        const updatedCache = cache.map((item: any) => {
+                          if (item.id_local === action.id && item.type === 'communication_plan') {
+                            return { ...item, synced: true, id: result.data?.id || item.id };
+                          }
+                          return item;
+                        });
+                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                      }
+                    }
+                  } else if (action.type === 'knowledge_management_matrix') {
+                    console.log('Creando matriz de gestión del conocimiento:', action.id);
+                    const { createKnowledgeManagementMatrix } = await import('@/hooks/evaluationFunctions');
+                    const result = await createKnowledgeManagementMatrix({
+                      requestData: action.payload,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Matriz de gestión del conocimiento creada correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'knowledge_management_matrix'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                      if (cacheStr) {
+                        const cache = JSON.parse(cacheStr);
+                        const updatedCache = cache.map((item: any) => {
+                          if (item.id_local === action.id && item.type === 'knowledge_management_matrix') {
+                            return { ...item, synced: true, id: result.data?.id || item.id };
+                          }
+                          return item;
+                        });
+                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                      }
+                    }
+                  } else if (action.type === 'change_planning') {
+                    console.log('Creando planificación de cambios del SGC:', action.id);
+                    const { createChangePlanning } = await import('@/hooks/evaluationFunctions');
+                    const result = await createChangePlanning({
+                      requestData: action.payload,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Planificación de cambios del SGC creada correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'change_planning'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                      if (cacheStr) {
+                        const cache = JSON.parse(cacheStr);
+                        const updatedCache = cache.map((item: any) => {
+                          if (item.id_local === action.id && item.type === 'change_planning') {
+                            return { ...item, synced: true, id: result.data?.id || item.id };
+                          }
+                          return item;
+                        });
+                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                      }
+                    }
                   } else if (action.type === 'routes_and_tours') {
                 console.log('Creando ruta o gira:', action.id);
             const { createRouteAndTour } = await import('@/hooks/evaluationFunctions');
@@ -1734,6 +1943,111 @@ function AppContent() {
                     if (result.status) {
                       console.log('Listado general de clientes actualizado correctamente');
                       const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'general_clients_list'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+                    }
+                  } else if (action.type === 'improvement_actions_control') {
+                    console.log('Actualizando control de acciones de mejora:', action.id);
+                    const { updateImprovementActionsControl } = await import('@/hooks/evaluationFunctions');
+                    const result = await updateImprovementActionsControl({
+                      id: action.id,
+                      requestData: action.payload,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Control de acciones de mejora actualizado correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'improvement_actions_control'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+                    }
+                  } else if (action.type === 'quality_policy') {
+                    console.log('Actualizando política de calidad:', action.id);
+                    const { updateQualityPolicy } = await import('@/hooks/evaluationFunctions');
+                    const result = await updateQualityPolicy({
+                      id: action.id,
+                      requestData: action.payload,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Política de calidad actualizada correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'quality_policy'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+                    }
+                  } else if (action.type === 'business_quality_objectives') {
+                    console.log('Actualizando objetivos empresariales de calidad:', action.id);
+                    const { updateBusinessQualityObjectives } = await import('@/hooks/evaluationFunctions');
+                    const result = await updateBusinessQualityObjectives({
+                      id: action.id,
+                      requestData: action.payload,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Objetivos empresariales de calidad actualizados correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'business_quality_objectives'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+                    }
+                  } else if (action.type === 'stakeholder_analysis_matrix') {
+                    console.log('Actualizando matriz de análisis de partes interesadas:', action.id);
+                    const { updateStakeholderAnalysisMatrix } = await import('@/hooks/evaluationFunctions');
+                    const result = await updateStakeholderAnalysisMatrix({
+                      id: action.id,
+                      requestData: action.payload,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Matriz de análisis de partes interesadas actualizada correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'stakeholder_analysis_matrix'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+                    }
+                  } else if (action.type === 'communication_plan') {
+                    console.log('Actualizando plan de comunicación:', action.id);
+                    const { updateCommunicationPlan } = await import('@/hooks/evaluationFunctions');
+                    const result = await updateCommunicationPlan({
+                      id: action.id,
+                      requestData: action.payload,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Plan de comunicación actualizado correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'communication_plan'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+                    }
+                  } else if (action.type === 'knowledge_management_matrix') {
+                    console.log('Actualizando matriz de gestión del conocimiento:', action.id);
+                    const { updateKnowledgeManagementMatrix } = await import('@/hooks/evaluationFunctions');
+                    const result = await updateKnowledgeManagementMatrix({
+                      id: action.id,
+                      requestData: action.payload,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Matriz de gestión del conocimiento actualizada correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'knowledge_management_matrix'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+                    }
+                  } else if (action.type === 'change_planning') {
+                    console.log('Actualizando planificación de cambios del SGC:', action.id);
+                    const { updateChangePlanning } = await import('@/hooks/evaluationFunctions');
+                    const result = await updateChangePlanning({
+                      id: action.id,
+                      requestData: action.payload,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Planificación de cambios del SGC actualizada correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'change_planning'));
                       await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
                     }
                   } else if (action.type === 'routes_and_tours') {
@@ -2322,6 +2636,153 @@ function AppContent() {
                       if (cacheStr) {
                         const cache = JSON.parse(cacheStr);
                         const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'general_clients_list'));
+                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                      }
+                    }
+                  } else if (action.type === 'improvement_actions_control') {
+                    console.log('Eliminando control de acciones de mejora:', action.id);
+                    const { deleteImprovementActionsControl } = await import('@/hooks/evaluationFunctions');
+                    const result = await deleteImprovementActionsControl({
+                      id: action.id,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Control de acciones de mejora eliminado correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'improvement_actions_control'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                      if (cacheStr) {
+                        const cache = JSON.parse(cacheStr);
+                        const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'improvement_actions_control'));
+                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                      }
+                    }
+                  } else if (action.type === 'quality_policy') {
+                    console.log('Eliminando política de calidad:', action.id);
+                    const { deleteQualityPolicy } = await import('@/hooks/evaluationFunctions');
+                    const result = await deleteQualityPolicy({
+                      id: action.id,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Política de calidad eliminada correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'quality_policy'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                      if (cacheStr) {
+                        const cache = JSON.parse(cacheStr);
+                        const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'quality_policy'));
+                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                      }
+                    }
+                  } else if (action.type === 'business_quality_objectives') {
+                    console.log('Eliminando objetivos empresariales de calidad:', action.id);
+                    const { deleteBusinessQualityObjectives } = await import('@/hooks/evaluationFunctions');
+                    const result = await deleteBusinessQualityObjectives({
+                      id: action.id,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Objetivos empresariales de calidad eliminados correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'business_quality_objectives'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                      if (cacheStr) {
+                        const cache = JSON.parse(cacheStr);
+                        const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'business_quality_objectives'));
+                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                      }
+                    }
+                  } else if (action.type === 'stakeholder_analysis_matrix') {
+                    console.log('Eliminando matriz de análisis de partes interesadas:', action.id);
+                    const { deleteStakeholderAnalysisMatrix } = await import('@/hooks/evaluationFunctions');
+                    const result = await deleteStakeholderAnalysisMatrix({
+                      id: action.id,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Matriz de análisis de partes interesadas eliminada correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'stakeholder_analysis_matrix'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                      if (cacheStr) {
+                        const cache = JSON.parse(cacheStr);
+                        const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'stakeholder_analysis_matrix'));
+                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                      }
+                    }
+                  } else if (action.type === 'communication_plan') {
+                    console.log('Eliminando plan de comunicación:', action.id);
+                    const { deleteCommunicationPlan } = await import('@/hooks/evaluationFunctions');
+                    const result = await deleteCommunicationPlan({
+                      id: action.id,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Plan de comunicación eliminado correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'communication_plan'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                      if (cacheStr) {
+                        const cache = JSON.parse(cacheStr);
+                        const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'communication_plan'));
+                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                      }
+                    }
+                  } else if (action.type === 'knowledge_management_matrix') {
+                    console.log('Eliminando matriz de gestión del conocimiento:', action.id);
+                    const { deleteKnowledgeManagementMatrix } = await import('@/hooks/evaluationFunctions');
+                    const result = await deleteKnowledgeManagementMatrix({
+                      id: action.id,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Matriz de gestión del conocimiento eliminada correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'knowledge_management_matrix'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                      if (cacheStr) {
+                        const cache = JSON.parse(cacheStr);
+                        const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'knowledge_management_matrix'));
+                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                      }
+                    }
+                  } else if (action.type === 'change_planning') {
+                    console.log('Eliminando planificación de cambios del SGC:', action.id);
+                    const { deleteChangePlanning } = await import('@/hooks/evaluationFunctions');
+                    const result = await deleteChangePlanning({
+                      id: action.id,
+                      refreshAccessToken,
+                      logout,
+                    });
+
+                    if (result.status) {
+                      console.log('Planificación de cambios del SGC eliminada correctamente');
+                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'change_planning'));
+                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                      if (cacheStr) {
+                        const cache = JSON.parse(cacheStr);
+                        const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'change_planning'));
                         await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
                       }
                     }

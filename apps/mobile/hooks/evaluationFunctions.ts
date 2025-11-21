@@ -7689,3 +7689,1869 @@ export const listGeneralClientsListByCorpo = async ({
   }
 };
 
+interface CreateImprovementActionsControlParams {
+  requestData: {
+    marca_id: number;
+    numero_accion?: string | null;
+    causa_origen?: string | null;
+    fecha_deteccion_incidencia?: string | null;
+    mes_deteccion?: string | null;
+    tipo_accion?: string | null;
+    proceso_relacionado?: string | null;
+    encargado_proceso?: string | null;
+    origen_accion?: string | null;
+    fecha_elaboracion_plan?: string | null;
+    tiempo_plan_vs_deteccion?: string | null;
+    plan_elaborado_a_tiempo?: string | null;
+    detalle_nc_opr_dm?: string | null;
+    analisis_causas?: string | null;
+    accion_inmediata?: string | null;
+    accion_mejora?: string | null;
+    fecha_aprobacion?: string | null;
+    responsable_ejecucion?: string | null;
+    fecha_programada_ejecucion?: string | null;
+    fecha_real_ejecucion?: string | null;
+    mes_ejecucion?: string | null;
+    modif_fecha_ejecucion_motivo?: string | null;
+    aplica_seguimiento?: string | null;
+    seguimiento_meses?: string | null;
+    evidencias?: string | null;
+    estado_accion?: string | null;
+    a_tiempo?: string | null;
+    no_conformidades_similares?: string | null;
+    reincidencia?: string | null;
+    actualiza_matriz_riesgos?: string | null;
+    efectividad?: string | null;
+    no_efectiva?: string | null;
+    cambiar_al_8d?: string | null;
+    cerrada?: string | null;
+    dueño_proceso?: string | null;
+  };
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+interface UpdateImprovementActionsControlParams {
+  id: string;
+  requestData: {
+    numero_accion?: string | null;
+    causa_origen?: string | null;
+    fecha_deteccion_incidencia?: string | null;
+    mes_deteccion?: string | null;
+    tipo_accion?: string | null;
+    proceso_relacionado?: string | null;
+    encargado_proceso?: string | null;
+    origen_accion?: string | null;
+    fecha_elaboracion_plan?: string | null;
+    tiempo_plan_vs_deteccion?: string | null;
+    plan_elaborado_a_tiempo?: string | null;
+    detalle_nc_opr_dm?: string | null;
+    analisis_causas?: string | null;
+    accion_inmediata?: string | null;
+    accion_mejora?: string | null;
+    fecha_aprobacion?: string | null;
+    responsable_ejecucion?: string | null;
+    fecha_programada_ejecucion?: string | null;
+    fecha_real_ejecucion?: string | null;
+    mes_ejecucion?: string | null;
+    modif_fecha_ejecucion_motivo?: string | null;
+    aplica_seguimiento?: string | null;
+    seguimiento_meses?: string | null;
+    evidencias?: string | null;
+    estado_accion?: string | null;
+    a_tiempo?: string | null;
+    no_conformidades_similares?: string | null;
+    reincidencia?: string | null;
+    actualiza_matriz_riesgos?: string | null;
+    efectividad?: string | null;
+    no_efectiva?: string | null;
+    cambiar_al_8d?: string | null;
+    cerrada?: string | null;
+    dueño_proceso?: string | null;
+  };
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+interface DeleteImprovementActionsControlParams {
+  id: string;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+interface ListImprovementActionsControlByCorpoParams {
+  corpo_id: string;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+export const createImprovementActionsControl = async ({
+  requestData,
+  refreshAccessToken,
+  logout,
+}: CreateImprovementActionsControlParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        throw new Error('No authentication token found');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/improvement-actions-control`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+      body: JSON.stringify(requestData),
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        return createImprovementActionsControl({ requestData, refreshAccessToken, logout });
+      } else {
+        await logout();
+        throw new Error('Sesión expirada');
+      }
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error creating improvement actions control:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al crear el control de acciones de mejora',
+    };
+  }
+};
+
+export const updateImprovementActionsControl = async ({
+  id,
+  requestData,
+  refreshAccessToken,
+  logout,
+}: UpdateImprovementActionsControlParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        throw new Error('No authentication token found');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/improvement-actions-control/${id}`, {
+      method: 'PUT',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+      body: JSON.stringify(requestData),
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        return updateImprovementActionsControl({ id, requestData, refreshAccessToken, logout });
+      } else {
+        await logout();
+        throw new Error('Sesión expirada');
+      }
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error updating improvement actions control:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al actualizar el control de acciones de mejora',
+    };
+  }
+};
+
+export const deleteImprovementActionsControl = async ({
+  id,
+  refreshAccessToken,
+  logout,
+}: DeleteImprovementActionsControlParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        throw new Error('No authentication token found');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/improvement-actions-control/${id}`, {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        return deleteImprovementActionsControl({ id, refreshAccessToken, logout });
+      } else {
+        await logout();
+        throw new Error('Sesión expirada');
+      }
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error deleting improvement actions control:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al eliminar el control de acciones de mejora',
+    };
+  }
+};
+
+export const listImprovementActionsControlByCorpo = async ({
+  corpo_id,
+  refreshAccessToken,
+  logout,
+}: ListImprovementActionsControlByCorpoParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        throw new Error('No authentication token found');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/improvement-actions-control/corpo/${corpo_id}`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        return listImprovementActionsControlByCorpo({ corpo_id, refreshAccessToken, logout });
+      } else {
+        await logout();
+        throw new Error('Sesión expirada');
+      }
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error listing improvement actions control:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al listar los controles de acciones de mejora',
+      data: [],
+    };
+  }
+};
+
+interface CreateQualityPolicyParams {
+  requestData: {
+    marca_id: number;
+    politica_contenido?: string | null;
+    nombre_aprobado?: string | null;
+    firma_aprobado?: string | null;
+  };
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+interface UpdateQualityPolicyParams {
+  id: string;
+  requestData: {
+    politica_contenido?: string | null;
+    nombre_aprobado?: string | null;
+    firma_aprobado?: string | null;
+  };
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+interface DeleteQualityPolicyParams {
+  id: string;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+interface ListQualityPolicyByCorpoParams {
+  corpo_id: string;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+export const createQualityPolicy = async ({
+  requestData,
+  refreshAccessToken,
+  logout,
+}: CreateQualityPolicyParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        throw new Error('No authentication token found');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/quality-policy`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+      body: JSON.stringify(requestData),
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        return createQualityPolicy({ requestData, refreshAccessToken, logout });
+      } else {
+        await logout();
+        throw new Error('Sesión expirada');
+      }
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error creating quality policy:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al crear la política de calidad',
+    };
+  }
+};
+
+export const updateQualityPolicy = async ({
+  id,
+  requestData,
+  refreshAccessToken,
+  logout,
+}: UpdateQualityPolicyParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        throw new Error('No authentication token found');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/quality-policy/${id}`, {
+      method: 'PUT',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+      body: JSON.stringify(requestData),
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        return updateQualityPolicy({ id, requestData, refreshAccessToken, logout });
+      } else {
+        await logout();
+        throw new Error('Sesión expirada');
+      }
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error updating quality policy:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al actualizar la política de calidad',
+    };
+  }
+};
+
+export const deleteQualityPolicy = async ({
+  id,
+  refreshAccessToken,
+  logout,
+}: DeleteQualityPolicyParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        throw new Error('No authentication token found');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/quality-policy/${id}`, {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        return deleteQualityPolicy({ id, refreshAccessToken, logout });
+      } else {
+        await logout();
+        throw new Error('Sesión expirada');
+      }
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error deleting quality policy:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al eliminar la política de calidad',
+    };
+  }
+};
+
+export const listQualityPolicyByCorpo = async ({
+  corpo_id,
+  refreshAccessToken,
+  logout,
+}: ListQualityPolicyByCorpoParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        throw new Error('No authentication token found');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/quality-policy/corpo/${corpo_id}`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        return listQualityPolicyByCorpo({ corpo_id, refreshAccessToken, logout });
+      } else {
+        await logout();
+        throw new Error('Sesión expirada');
+      }
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error listing quality policy:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al listar las políticas de calidad',
+      data: [],
+    };
+  }
+};
+
+interface CreateBusinessQualityObjectivesParams {
+  requestData: {
+    marca_id: number;
+    ambitos?: string | null;
+    nombre_aprobado?: string | null;
+    firma_aprobado?: string | null;
+  };
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+interface UpdateBusinessQualityObjectivesParams {
+  id: string;
+  requestData: {
+    ambitos?: string | null;
+    nombre_aprobado?: string | null;
+    firma_aprobado?: string | null;
+  };
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+interface DeleteBusinessQualityObjectivesParams {
+  id: string;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+interface ListBusinessQualityObjectivesByCorpoParams {
+  corpo_id: string;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+export const createBusinessQualityObjectives = async ({
+  requestData,
+  refreshAccessToken,
+  logout,
+}: CreateBusinessQualityObjectivesParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        throw new Error('No authentication token found');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/business-quality-objectives`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+      body: JSON.stringify(requestData),
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        return createBusinessQualityObjectives({ requestData, refreshAccessToken, logout });
+      } else {
+        await logout();
+        throw new Error('Sesión expirada');
+      }
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error creating business quality objectives:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al crear los objetivos empresariales de calidad',
+    };
+  }
+};
+
+export const updateBusinessQualityObjectives = async ({
+  id,
+  requestData,
+  refreshAccessToken,
+  logout,
+}: UpdateBusinessQualityObjectivesParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        throw new Error('No authentication token found');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/business-quality-objectives/${id}`, {
+      method: 'PUT',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+      body: JSON.stringify(requestData),
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        return updateBusinessQualityObjectives({ id, requestData, refreshAccessToken, logout });
+      } else {
+        await logout();
+        throw new Error('Sesión expirada');
+      }
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error updating business quality objectives:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al actualizar los objetivos empresariales de calidad',
+    };
+  }
+};
+
+export const deleteBusinessQualityObjectives = async ({
+  id,
+  refreshAccessToken,
+  logout,
+}: DeleteBusinessQualityObjectivesParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        throw new Error('No authentication token found');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/business-quality-objectives/${id}`, {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        return deleteBusinessQualityObjectives({ id, refreshAccessToken, logout });
+      } else {
+        await logout();
+        throw new Error('Sesión expirada');
+      }
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error deleting business quality objectives:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al eliminar los objetivos empresariales de calidad',
+    };
+  }
+};
+
+export const listBusinessQualityObjectivesByCorpo = async ({
+  corpo_id,
+  refreshAccessToken,
+  logout,
+}: ListBusinessQualityObjectivesByCorpoParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        throw new Error('No authentication token found');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/business-quality-objectives/corpo/${corpo_id}`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        return listBusinessQualityObjectivesByCorpo({ corpo_id, refreshAccessToken, logout });
+      } else {
+        await logout();
+        throw new Error('Sesión expirada');
+      }
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error listing business quality objectives:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al listar los objetivos empresariales de calidad',
+      data: [],
+    };
+  }
+};
+
+interface CreateStakeholderAnalysisMatrixParams {
+  requestData: {
+    marca_id: number;
+    partes_interesadas?: string | null;
+  };
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+interface UpdateStakeholderAnalysisMatrixParams {
+  id: string;
+  requestData: {
+    partes_interesadas?: string | null;
+  };
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+interface DeleteStakeholderAnalysisMatrixParams {
+  id: string;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+interface ListStakeholderAnalysisMatrixByCorpoParams {
+  corpo_id: string;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+export const createStakeholderAnalysisMatrix = async ({
+  requestData,
+  refreshAccessToken,
+  logout,
+}: CreateStakeholderAnalysisMatrixParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        throw new Error('No authentication token found');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/stakeholder-analysis-matrix`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+      body: JSON.stringify(requestData),
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        return createStakeholderAnalysisMatrix({ requestData, refreshAccessToken, logout });
+      } else {
+        await logout();
+        throw new Error('Sesión expirada');
+      }
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error creating stakeholder analysis matrix:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al crear la matriz de análisis de partes interesadas',
+    };
+  }
+};
+
+export const updateStakeholderAnalysisMatrix = async ({
+  id,
+  requestData,
+  refreshAccessToken,
+  logout,
+}: UpdateStakeholderAnalysisMatrixParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        throw new Error('No authentication token found');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/stakeholder-analysis-matrix/${id}`, {
+      method: 'PUT',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+      body: JSON.stringify(requestData),
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        return updateStakeholderAnalysisMatrix({ id, requestData, refreshAccessToken, logout });
+      } else {
+        await logout();
+        throw new Error('Sesión expirada');
+      }
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error updating stakeholder analysis matrix:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al actualizar la matriz de análisis de partes interesadas',
+    };
+  }
+};
+
+export const deleteStakeholderAnalysisMatrix = async ({
+  id,
+  refreshAccessToken,
+  logout,
+}: DeleteStakeholderAnalysisMatrixParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        throw new Error('No authentication token found');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/stakeholder-analysis-matrix/${id}`, {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        return deleteStakeholderAnalysisMatrix({ id, refreshAccessToken, logout });
+      } else {
+        await logout();
+        throw new Error('Sesión expirada');
+      }
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error deleting stakeholder analysis matrix:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al eliminar la matriz de análisis de partes interesadas',
+    };
+  }
+};
+
+export const listStakeholderAnalysisMatrixByCorpo = async ({
+  corpo_id,
+  refreshAccessToken,
+  logout,
+}: ListStakeholderAnalysisMatrixByCorpoParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        throw new Error('No authentication token found');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/stakeholder-analysis-matrix/corpo/${corpo_id}`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        return listStakeholderAnalysisMatrixByCorpo({ corpo_id, refreshAccessToken, logout });
+      } else {
+        await logout();
+        throw new Error('Sesión expirada');
+      }
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error listing stakeholder analysis matrix:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al listar la matriz de análisis de partes interesadas',
+      data: [],
+    };
+  }
+};
+
+interface CreateCommunicationPlanParams {
+  requestData: {
+    marca_id: number;
+    comunicaciones?: string | null;
+    responsable_aprobacion?: string | null;
+    puesto_aprobacion?: string | null;
+    fecha_aprobacion?: string | null;
+  };
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+interface UpdateCommunicationPlanParams {
+  id: string;
+  requestData: {
+    comunicaciones?: string | null;
+    responsable_aprobacion?: string | null;
+    puesto_aprobacion?: string | null;
+    fecha_aprobacion?: string | null;
+  };
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+interface DeleteCommunicationPlanParams {
+  id: string;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+interface ListCommunicationPlanByCorpoParams {
+  corpo_id: string;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+export const createCommunicationPlan = async ({
+  requestData,
+  refreshAccessToken,
+  logout,
+}: CreateCommunicationPlanParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        throw new Error('No authentication token found');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/communication-plan`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+      body: JSON.stringify(requestData),
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        return createCommunicationPlan({ requestData, refreshAccessToken, logout });
+      } else {
+        await logout();
+        throw new Error('Sesión expirada');
+      }
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error creating communication plan:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al crear el plan de comunicación',
+    };
+  }
+};
+
+export const updateCommunicationPlan = async ({
+  id,
+  requestData,
+  refreshAccessToken,
+  logout,
+}: UpdateCommunicationPlanParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        throw new Error('No authentication token found');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/communication-plan/${id}`, {
+      method: 'PUT',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+      body: JSON.stringify(requestData),
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        return updateCommunicationPlan({ id, requestData, refreshAccessToken, logout });
+      } else {
+        await logout();
+        throw new Error('Sesión expirada');
+      }
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error updating communication plan:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al actualizar el plan de comunicación',
+    };
+  }
+};
+
+export const deleteCommunicationPlan = async ({
+  id,
+  refreshAccessToken,
+  logout,
+}: DeleteCommunicationPlanParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        throw new Error('No authentication token found');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/communication-plan/${id}`, {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        return deleteCommunicationPlan({ id, refreshAccessToken, logout });
+      } else {
+        await logout();
+        throw new Error('Sesión expirada');
+      }
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error deleting communication plan:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al eliminar el plan de comunicación',
+    };
+  }
+};
+
+export const listCommunicationPlanByCorpo = async ({
+  corpo_id,
+  refreshAccessToken,
+  logout,
+}: ListCommunicationPlanByCorpoParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        throw new Error('No authentication token found');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/communication-plan/corpo/${corpo_id}`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        return listCommunicationPlanByCorpo({ corpo_id, refreshAccessToken, logout });
+      } else {
+        await logout();
+        throw new Error('Sesión expirada');
+      }
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error listing communication plan:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al listar el plan de comunicación',
+      data: [],
+    };
+  }
+};
+
+interface CreateKnowledgeManagementMatrixParams {
+  requestData: {
+    marca_id: number;
+    registros?: string | null;
+  };
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+interface UpdateKnowledgeManagementMatrixParams {
+  id: string;
+  requestData: {
+    registros?: string | null;
+  };
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+interface DeleteKnowledgeManagementMatrixParams {
+  id: string;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+interface ListKnowledgeManagementMatrixByCorpoParams {
+  corpo_id: string;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+export const createKnowledgeManagementMatrix = async ({
+  requestData,
+  refreshAccessToken,
+  logout,
+}: CreateKnowledgeManagementMatrixParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        throw new Error('No authentication token found');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/knowledge-management-matrix`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+      body: JSON.stringify(requestData),
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        return createKnowledgeManagementMatrix({ requestData, refreshAccessToken, logout });
+      } else {
+        await logout();
+        throw new Error('Sesión expirada');
+      }
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error creating knowledge management matrix:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al crear la matriz de gestión del conocimiento',
+    };
+  }
+};
+
+export const updateKnowledgeManagementMatrix = async ({
+  id,
+  requestData,
+  refreshAccessToken,
+  logout,
+}: UpdateKnowledgeManagementMatrixParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        throw new Error('No authentication token found');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/knowledge-management-matrix/${id}`, {
+      method: 'PUT',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+      body: JSON.stringify(requestData),
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        return updateKnowledgeManagementMatrix({ id, requestData, refreshAccessToken, logout });
+      } else {
+        await logout();
+        throw new Error('Sesión expirada');
+      }
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error updating knowledge management matrix:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al actualizar la matriz de gestión del conocimiento',
+    };
+  }
+};
+
+export const deleteKnowledgeManagementMatrix = async ({
+  id,
+  refreshAccessToken,
+  logout,
+}: DeleteKnowledgeManagementMatrixParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        throw new Error('No authentication token found');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/knowledge-management-matrix/${id}`, {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        return deleteKnowledgeManagementMatrix({ id, refreshAccessToken, logout });
+      } else {
+        await logout();
+        throw new Error('Sesión expirada');
+      }
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error deleting knowledge management matrix:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al eliminar la matriz de gestión del conocimiento',
+    };
+  }
+};
+
+export const listKnowledgeManagementMatrixByCorpo = async ({
+  corpo_id,
+  refreshAccessToken,
+  logout,
+}: ListKnowledgeManagementMatrixByCorpoParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        throw new Error('No authentication token found');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/knowledge-management-matrix/corpo/${corpo_id}`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        return listKnowledgeManagementMatrixByCorpo({ corpo_id, refreshAccessToken, logout });
+      } else {
+        await logout();
+        throw new Error('Sesión expirada');
+      }
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error listing knowledge management matrix:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al listar la matriz de gestión del conocimiento',
+      data: [],
+    };
+  }
+};
+
+interface CreateChangePlanningParams {
+  requestData: {
+    marca_id: number;
+    datos_cambio?: string | null;
+    actividades?: string | null;
+    aprobado_por?: string | null;
+    firma_representante?: string | null;
+    fecha_aprobacion?: string | null;
+  };
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+interface UpdateChangePlanningParams {
+  id: string;
+  requestData: {
+    datos_cambio?: string | null;
+    actividades?: string | null;
+    aprobado_por?: string | null;
+    firma_representante?: string | null;
+    fecha_aprobacion?: string | null;
+  };
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+interface DeleteChangePlanningParams {
+  id: string;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+interface ListChangePlanningByCorpoParams {
+  corpo_id: string;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+export const createChangePlanning = async ({
+  requestData,
+  refreshAccessToken,
+  logout,
+}: CreateChangePlanningParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        throw new Error('No authentication token found');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/change-planning`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+      body: JSON.stringify(requestData),
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        return createChangePlanning({ requestData, refreshAccessToken, logout });
+      } else {
+        await logout();
+        throw new Error('Sesión expirada');
+      }
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error creating change planning:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al crear la planificación de cambios del SGC',
+    };
+  }
+};
+
+export const updateChangePlanning = async ({
+  id,
+  requestData,
+  refreshAccessToken,
+  logout,
+}: UpdateChangePlanningParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        throw new Error('No authentication token found');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/change-planning/${id}`, {
+      method: 'PUT',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+      body: JSON.stringify(requestData),
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        return updateChangePlanning({ id, requestData, refreshAccessToken, logout });
+      } else {
+        await logout();
+        throw new Error('Sesión expirada');
+      }
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error updating change planning:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al actualizar la planificación de cambios del SGC',
+    };
+  }
+};
+
+export const deleteChangePlanning = async ({
+  id,
+  refreshAccessToken,
+  logout,
+}: DeleteChangePlanningParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        throw new Error('No authentication token found');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/change-planning/${id}`, {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        return deleteChangePlanning({ id, refreshAccessToken, logout });
+      } else {
+        await logout();
+        throw new Error('Sesión expirada');
+      }
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error deleting change planning:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al eliminar la planificación de cambios del SGC',
+    };
+  }
+};
+
+export const listChangePlanningByCorpo = async ({
+  corpo_id,
+  refreshAccessToken,
+  logout,
+}: ListChangePlanningByCorpoParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        throw new Error('No authentication token found');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/change-planning/corpo/${corpo_id}`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        return listChangePlanningByCorpo({ corpo_id, refreshAccessToken, logout });
+      } else {
+        await logout();
+        throw new Error('Sesión expirada');
+      }
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error listing change planning:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al listar la planificación de cambios del SGC',
+      data: [],
+    };
+  }
+};
+
