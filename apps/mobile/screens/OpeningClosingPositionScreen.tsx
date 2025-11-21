@@ -1640,7 +1640,6 @@ export default function OpeningClosingPositionScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#161719',
   },
   scrollView: {
     flex: 1,
