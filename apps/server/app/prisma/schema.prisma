@@ -745,6 +745,23 @@ model c_empleado {
   @@index([tipoPagoCasa_id], map: "IDX_C84A3999FCBB0AEC")
 }
 
+model c_notifications {
+  id                      Int      @id @default(autoincrement())
+  title                   String   @db.LongText
+  description             String   @db.LongText
+  created_at              DateTime @default(now())
+  c_plaza_notification    c_plaza_notification[]
+}
+
+model c_plaza_notification {
+  id                  Int                 @id @default(autoincrement())
+  plazaId             Int
+  notificationId      Int
+  watched             Boolean             @default(false)
+  e_estructura_plazas e_estructura_plazas @relation(fields: [plazaId], references: [id], onDelete: Cascade)
+  c_notifications     c_notifications     @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+}
+
 model c_notas_voz {
   id                Int      @id @default(autoincrement())
   empresa_id        Int
@@ -2993,6 +3010,7 @@ model e_estructura_plazas {
   empleadoPlaza_id                                                            Int?
   maestra                                                                     Boolean?
   peso                                                                        Decimal?                               @db.Decimal(10, 2)
+  c_plaza_notification                                                        c_plaza_notification[]
   c_evaluacion                                                                c_evaluacion[]
   c_cambio_guardia_c_cambio_guardia_plazaAusente_idToe_estructura_plazas      c_cambio_guardia[]                     @relation("c_cambio_guardia_plazaAusente_idToe_estructura_plazas")
   c_cambio_guardia_c_cambio_guardia_plazaReemplaza_idToe_estructura_plazas    c_cambio_guardia[]                     @relation("c_cambio_guardia_plazaReemplaza_idToe_estructura_plazas")
