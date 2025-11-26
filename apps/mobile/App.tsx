@@ -259,7 +259,7 @@ function AppContent() {
     // Verificar conexión inicial
     if (FORCE_OFFLINE) {
       setIsConnected(false);
-      return;
+      return; 
     }
 
     const checkInitialConnection = async () => {
