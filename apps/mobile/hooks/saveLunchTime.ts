@@ -28,7 +28,6 @@ export default async function saveLunchTime({
         if (requestData.empleadoId == 0 && employeeId) {
             requestData.empleadoId = employeeId;
         }
-        console.log(requestData);
         const response = await fetch(`${apiUrl}/api/lunch-time`, {
             method: 'POST',
             headers: {
@@ -62,6 +61,6 @@ export default async function saveLunchTime({
         return data;
     } catch (error) {
         console.error('Error saving lunch time:', error);
-        return false;
+        return { status: false, message: 'Error al guardar el tiempo de almuerzo' };
     }
 }

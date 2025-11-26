@@ -15,6 +15,9 @@ import { Ionicons } from '@expo/vector-icons';
 import saveLunchTime from '../hooks/saveLunchTime';
 import { toZonedTime } from 'date-fns-tz';
 import * as Network from 'expo-network';
+import getHoraAccion from '../hooks/getHoraAccion';
+import { eventBus } from '@/hooks/eventBus';
+import updateServerTime, { setDisconnectedTime } from '@/hooks/updateServerTime';
 
 type LunchTimeScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'LunchTime'>;
 
@@ -121,6 +124,18 @@ export default function LunchTimeScreen() {
     }
   }, [employee]);
 
+  const getUpdatedHoraAccion = async () => {
+    const is_connected = await getConnectionStatus();
+    if (is_connected) {
+      await updateServerTime();
+    }
+    else {
+      await setDisconnectedTime();
+    }
+    const horaAccion = await getHoraAccion();
+    return horaAccion;
+  }
+
   // Timer effect
   useEffect(() => {
     if (isTimerActive && timeRemaining > 0) {
@@ -156,7 +171,7 @@ export default function LunchTimeScreen() {
       }
 
       if (nextAppState === 'active') {
-        await restoreCurrentState();
+        await restoreCurrentState()
       }
     });
 
@@ -168,11 +183,11 @@ export default function LunchTimeScreen() {
   const saveCurrentState = async () => {
     // Segundos restantes del temporizador
     const remainingSeconds = timeRemainingRef.current * 1000; // En milisegundos
-
+    const horaAccion = await getUpdatedHoraAccion();
     const current_state = {
       running: timerActiveRef.current,
       remainingSeconds: remainingSeconds, // En milisegundos
-      currentTimestamp: new Date().getTime(), // En milisegundos
+      currentTimestamp: horaAccion, // En milisegundos
       startTime: startTimeRef.current,
       inactivities: inactivitiesRef.current,
       currentInactivityStart: currentInactivityStartRef.current,
@@ -187,6 +202,7 @@ export default function LunchTimeScreen() {
   }
 
   const restoreCurrentState = async () => {
+    console.log('Restoring current state...');
     const temp_state = await AsyncStorage.getItem('temp_state');
 
     if (temp_state) {
@@ -201,15 +217,21 @@ export default function LunchTimeScreen() {
             endTime: new Date(inactivity.endTime)
           })));
         }
+
+        console.log('temp_state_obj', temp_state_obj);
         
         if (temp_state_obj.running) {
           setIsTimerActive(true);
-          const remaining_time = (temp_state_obj.remainingSeconds / 1000) - ((new Date().getTime() - temp_state_obj.currentTimestamp) / 1000);
+          const horaAccion = await getUpdatedHoraAccion();
+          const remaining_time = (temp_state_obj.remainingSeconds / 1000) - ((horaAccion - temp_state_obj.currentTimestamp) / 1000);
           setStartTime(temp_state_obj.startTime ? new Date(temp_state_obj.startTime) : null);
           setCurrentInactivityStart(temp_state_obj.currentInactivityStart ? new Date(temp_state_obj.currentInactivityStart) : null);
           if (remaining_time <= 0) {
+            console.log('remaining_time <= 0 - Ejecutando handleTimerComplete');
             setIsTimerActive(false);
             setTimeRemaining(0);
+            // Ejecutar la lógica de guardado cuando el tiempo se agotó mientras la app estaba minimizada
+            await handleTimerComplete();
           } else {
             setEndTimeMode('current');
             setTimeRemaining(parseInt(remaining_time.toFixed(0)));
@@ -226,6 +248,7 @@ export default function LunchTimeScreen() {
       } catch (error) {
         console.error('Error parsing temp_state:', error);
       }
+      await AsyncStorage.removeItem('temp_state');
     }
     console.log('✅ Restored current state');
   }
@@ -235,7 +258,8 @@ export default function LunchTimeScreen() {
     console.log('endTimeMode', endTimeModeRef.current);
     let endTimeUse = null;
     if (endTimeModeRef.current == 'current') {
-      endTimeUse = new Date();
+      const horaAccion = await getUpdatedHoraAccion();
+      endTimeUse = horaAccion;
     }
     else{ 
       endTimeUse = endTimeRef.current;
@@ -254,36 +278,87 @@ export default function LunchTimeScreen() {
     await sendLunchTimeRecord(requestData);
   }
 
-  const sendLunchTimeRecord = async (requestData: any) => {
+  const getConnectionStatus = async (): Promise<boolean> => {
+    const networkState = await Network.getNetworkStateAsync();
+    return networkState.isConnected && networkState.isInternetReachable ? true : false;
+  };
 
-    const responseData = await saveLunchTime({
-      requestData,
-      employeeId: employee?.id,
-      refreshAccessToken,
-      logout
-    });
-    if (!responseData.status) {
-      Alert.alert('Error', responseData.message);
-      return;
+  const generateRandomId = () => {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let result = '';
+    for (let i = 0; i < 10; i++) {
+      result += chars.charAt(Math.floor(Math.random() * chars.length));
     }
+    return result;
+  };
 
-    const msg = requestData.es_manual ? 'Registro de tiempo de almuerzo guardado correctamente' : 'Tu descanso ha terminado. ¡Es hora de volver al trabajo!';
-    
-    Alert.alert(
-      '🎉 ¡Tiempo de Almuerzo Completado!',
-      msg,
-      [
-        {
-          text: 'OK',
-          onPress: async () => {
-            // Reset timer after alert is dismissed
-            if (timerConfig) {
-              handleReset();
-            }
+  const sendLunchTimeRecord = async (requestData: any) => {
+    // Verificar conectividad
+    const isConnected = await getConnectionStatus();
+
+    if (isConnected) {
+      // Con internet: llamar a la función API
+      const responseData = await saveLunchTime({
+        requestData,
+        employeeId: employee?.id,
+        refreshAccessToken,
+        logout
+      });
+      
+      if (!responseData.status) {
+        Alert.alert('Error', responseData.message);
+        return;
+      }
+
+      const msg = requestData.es_manual ? 'Registro de tiempo de almuerzo guardado correctamente' : 'Tu descanso ha terminado. ¡Es hora de volver al trabajo!';
+      
+      Alert.alert(
+        '🎉 ¡Tiempo de Almuerzo Completado!',
+        msg,
+        [
+          {
+            text: 'OK',
+            onPress: async () => {
+              // Reset timer after alert is dismissed
+              if (timerConfig) {
+                handleReset();
+              }
+            },
           },
-        },
-      ]
-    );
+        ]
+      );
+    } else {
+      // Sin internet: modo offline
+      const localId = generateRandomId();
+      
+      // Crear entrada en lunchtime_actions
+      const actionsStr = await AsyncStorage.getItem('lunchtime_actions');
+      const actions = actionsStr ? JSON.parse(actionsStr) : [];
+      actions.push({
+        requestData: requestData,
+        id: localId,
+        type: 'create',
+      });
+      await AsyncStorage.setItem('lunchtime_actions', JSON.stringify(actions));
+
+      const msg = requestData.es_manual ? 'Registro de tiempo de almuerzo guardado localmente. Se sincronizará cuando haya conexión.' : 'Tu descanso ha terminado. El registro se sincronizará cuando haya conexión.';
+      
+      Alert.alert(
+        'Modo Offline',
+        msg,
+        [
+          {
+            text: 'OK',
+            onPress: async () => {
+              // Reset timer after alert is dismissed
+              if (timerConfig) {
+                handleReset();
+              }
+            },
+          },
+        ]
+      );
+    }
   }
 
   const fetchTimerConfig = async () => {
@@ -304,10 +379,9 @@ export default function LunchTimeScreen() {
         throw new Error('No current marca id found');
       }
 
-      const networkState = await Network.getNetworkStateAsync();  
-
       let lunch_time_config_obj = null;
-      if (networkState.isConnected && networkState.isInternetReachable) {
+      const is_connected = await getConnectionStatus();
+      if (is_connected) {
         const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
         if (!apiUrl) {
           throw new Error('Server URL not configured');
@@ -363,10 +437,11 @@ export default function LunchTimeScreen() {
     }
   };
 
-  const handleStart = () => {
+  const handleStart = async () => {
     if (timerConfig && timeRemaining > 0) {
+      const horaAccion = await getUpdatedHoraAccion();
       if (startTimeRef.current == null) {
-        setStartTime(new Date());
+        setStartTime(new Date(horaAccion));
       }
       setIsTimerActive(true);
       setEndTimeMode('current');
@@ -376,7 +451,7 @@ export default function LunchTimeScreen() {
       if (currentInactivityStart) {
         const newInactivity: InactivityData = {
           startTime: currentInactivityStart,
-          endTime: new Date(),
+          endTime: new Date(horaAccion),
           reason: inactivityReason.trim() || 'Sin razón determinada'
         };
         setInactivities(prev => [...prev, newInactivity]);
@@ -386,10 +461,11 @@ export default function LunchTimeScreen() {
     }
   };
 
-  const handleStop = () => {
+  const handleStop = async () => {
     setIsTimerActive(false);
     // Iniciar tracking de inactividad
-    setCurrentInactivityStart(new Date());
+    const horaAccion = await getUpdatedHoraAccion();
+    setCurrentInactivityStart(new Date(horaAccion));
   };
 
   const handleReset = async () => {
@@ -451,6 +527,12 @@ const getActionIcon = (action: string) => {
     case 'remove': return <Ionicons name="trash" size={20} color='#FF3B30' />;
     default: return <Ionicons name="close" size={35} color='#FFFFFF' />;
   }
+};
+
+const renderInactivityTime = (inactivity: InactivityData) => {
+  const initial_time = inactivity.startTime.toISOString().split('T')[1].split('.')[0];
+  const final_time = inactivity.endTime.toISOString().split('T')[1].split('.')[0];
+  return `${initial_time} - ${final_time}`;
 };
 
 const validateTimeConflicts = (startTime: Date, inactivities: InactivityData[], availableMinutes: number): string[] => {
@@ -783,7 +865,7 @@ const handleManualSubmit = async () => {
                   {inactivities.map((inactivity, index) => (
                     <ThemedView key={index} style={styles.inactivityItem}>
                       <ThemedText style={styles.inactivityTime}>
-                        {inactivity.startTime.toLocaleTimeString('es-ES', { hour12: false, hour: '2-digit', minute: '2-digit' })} - {inactivity.endTime.toLocaleTimeString('es-ES', { hour12: false, hour: '2-digit', minute: '2-digit' })}
+                        {renderInactivityTime(inactivity)}
                       </ThemedText>
                       <ThemedText style={styles.inactivityReason}>
                         {inactivity.reason}

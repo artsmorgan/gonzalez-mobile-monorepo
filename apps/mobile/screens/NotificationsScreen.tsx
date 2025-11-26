@@ -114,6 +114,7 @@ export default function NotificationsScreen() {
                     
                     // Emitir evento para actualizar el contador en AppHeader
                     eventBus.emit('notificationsUpdated');
+                    eventBus.emit('notificationsUpdatedCounter');
                   }
                   Alert.alert('Éxito', 'Notificación marcada como leída');
                 } else {
@@ -150,6 +151,7 @@ export default function NotificationsScreen() {
                   
                   // Emitir evento para actualizar el contador en AppHeader
                   eventBus.emit('notificationsUpdated');
+                  eventBus.emit('notificationsUpdatedCounter');
                 }
 
                 Alert.alert('Modo Offline', 'Notificación marcada como leída localmente. Se sincronizará cuando haya conexión.');
@@ -209,6 +211,7 @@ export default function NotificationsScreen() {
                     
                     // Emitir evento para actualizar el contador en AppHeader
                     eventBus.emit('notificationsUpdated');
+                    eventBus.emit('notificationsUpdatedCounter');
                   }
                   Alert.alert('Éxito', 'Todas las notificaciones han sido marcadas como leídas');
                 } else {
@@ -239,6 +242,7 @@ export default function NotificationsScreen() {
                   
                   // Emitir evento para actualizar el contador en AppHeader
                   eventBus.emit('notificationsUpdated');
+                  eventBus.emit('notificationsUpdatedCounter');
                 }
 
                 Alert.alert('Modo Offline', 'Todas las notificaciones han sido marcadas como leídas localmente. Se sincronizarán cuando haya conexión.');
