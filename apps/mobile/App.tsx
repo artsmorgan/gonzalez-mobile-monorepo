@@ -1,8 +1,8 @@
 import 'react-native-gesture-handler';
 import 'react-native-reanimated';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import React, { useEffect, useRef } from 'react';
-import { NavigationContainer, DarkTheme, DefaultTheme, CommonActions } from '@react-navigation/native';
+import React, { useCallback, useEffect, useRef } from 'react';
+import { NavigationContainer, DarkTheme, DefaultTheme, CommonActions, useFocusEffect } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { useFonts } from 'expo-font';
 import { StatusBar } from 'expo-status-bar';
@@ -21,7 +21,7 @@ import { createSurvey as createSurveyAPI } from './hooks/surveysFunctions';
 import { createTraining } from './hooks/trainingFunctions';
 import { createVoiceNote, deleteVoiceNote } from './hooks/voiceNotesFunctions';
 import { eventBus } from './hooks/eventBus';
-// Import screens
+
 import HomeScreen from './screens/HomeScreen';
 import LoginScreen from './screens/LoginScreen';
 import ForgotPasswordScreen from './screens/ForgotPasswordScreen';
@@ -88,6 +88,8 @@ import * as Network from 'expo-network';
 import saveManualSignature from './hooks/saveManualSignature';
 import saveMarca from './hooks/saveMarca';
 import saveAbsentReason from './hooks/saveAbsentReason';
+import getHoraAccion from './hooks/getHoraAccion';
+import updateServerTime, { setDisconnectedTime } from './hooks/updateServerTime';
 
 export type RootStackParamList = {
   Home: undefined;
@@ -249,9 +251,9 @@ function AppContent() {
   const routeNameRef = useRef<string | undefined>(undefined);
   // 🆕 Variable de estado para conexión a internet
   const [isConnected, setIsConnected] = React.useState<boolean | null>(null);
-
+ 
   const FORCE_OFFLINE = false;
-
+  
   // 🆕 useEffect para escuchar el estado de conexión en tiempo real
   useEffect(() => {
     // Verificar conexión inicial
@@ -274,7 +276,7 @@ function AppContent() {
 
     return () => subscription.remove();
   }, []);
-
+ 
   // 🆕 Mostrar alerta si se pierde la conexión
   useEffect(() => {
     const checkCaches = async () => {
@@ -288,6 +290,7 @@ function AppContent() {
           checkManualSignatureCache(),
           checkMarcaCache(),
           checkAbsentReasonCache(),
+          checkLunchTimeActionsCache(), 
           checkVehiclesActionsCache(),
           checkNotificationsActionsCache(),
           checkVisitorsActionsCache(),
@@ -508,6 +511,42 @@ function AppContent() {
         }
       } catch (error) {
         console.error('Error procesando acción de notificación:', error);
+      }
+    }
+  }
+
+  const checkLunchTimeActionsCache = async () => {
+    if (!employee) return;
+    
+    const actionsStr = await AsyncStorage.getItem('lunchtime_actions');
+    if (!actionsStr) return;
+
+    const actions = JSON.parse(actionsStr);
+    if (!actions || actions.length === 0) return;
+
+    console.log('Sincronizando acciones de lunch time:', actions.length);
+
+    // Procesar acciones una por una
+    for (const action of actions) {
+      try {
+        if (action.type === 'create') {
+          console.log('Guardando lunch time:', action.id);
+          const result = await saveLunchTime({
+            requestData: action.requestData,
+            employeeId: employee.id,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result.status) {
+            console.log('Lunch time guardado correctamente');
+            // Eliminar acción del array
+            const updatedActions = actions.filter((a: any) => a.id !== action.id || a.type !== 'create');
+            await AsyncStorage.setItem('lunchtime_actions', JSON.stringify(updatedActions));
+          }
+        }
+      } catch (error) {
+        console.error('Error procesando acción de lunch time:', error);
       }
     }
   }
@@ -3088,6 +3127,17 @@ function AppContent() {
     handleDeepLink();
   }, []);
 
+  const getUpdatedHoraAccion = async () => {
+    if (isConnected) {
+      await updateServerTime();
+    }
+    else {
+      await setDisconnectedTime();
+    }
+    const horaAccion = await getHoraAccion();
+    return horaAccion;
+  }
+
   // ✅ Aquí agregas la función que se ejecutará cada 30 segundos
   useEffect(() => {
     // Define la función de consulta (puedes personalizarla)
@@ -3111,10 +3161,20 @@ function AppContent() {
         }
       }
       console.log(3);
-      if (current != 'LunchTime' && !exist_lunch_time) {
-        console.log(4);
-        await checkLunchTime(temp_state, employee?.id, refreshAccessToken, logout);
+      if (current == 'LunchTime') {
+        return;
       }
+      console.log(4);
+      if (exist_lunch_time) {
+        return;
+      }
+      console.log(5);
+      const horaAccion = await getUpdatedHoraAccion();
+      if (new Date(temp_state.currentTimestamp + temp_state.remainingSeconds).getTime() > horaAccion) {
+        return;
+      }
+      console.log(6);
+      await checkLunchTime(temp_state, employee?.id, refreshAccessToken, logout);
     };
 
     // Ejecuta una vez al inicio
@@ -3126,124 +3186,85 @@ function AppContent() {
     // Limpieza al desmontar el componente
     return () => clearInterval(interval);
   }, []);
+
+  
+  const check_conection_time = async () => {
+    console.log('Checking connection time...');
+    if (isConnected) {
+      Promise.all([
+        updateServerTime(),
+        get_notifications()
+      ]);
+    }
+    else {
+      setDisconnectedTime();
+    }
+  }
+
+  const get_notifications = async () => {
+    const token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      return;
+    }
+    const current_marca = await AsyncStorage.getItem('current_marca');
+    if (!current_marca) {
+      return;
+    }
+    const current_marca_obj = JSON.parse(current_marca);
+    if (!current_marca_obj.plaza.id) {
+      return;
+    }
+    
+    // Obtener notificaciones actuales en AsyncStorage antes de eliminarlas
+    const currentNotificationsStr = await AsyncStorage.getItem('notifications');
+    let currentUnwatchedCount = 0;
+    if (currentNotificationsStr) {
+      const currentNotifications = JSON.parse(currentNotificationsStr);
+      currentUnwatchedCount = currentNotifications.filter((n: any) => !n.watched).length;
+    }
+    
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+    const response = await fetch(`${apiUrl}/api/notification/plaza/${current_marca_obj.plaza.id}`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+    });
+    const data = await response.json();
+    if (data.status) {
+      
+      await AsyncStorage.setItem('notifications', JSON.stringify(data.notifications));
+      
+      // Contar notificaciones no leídas en la respuesta del servidor
+      const newUnwatchedCount = data.notifications.filter((n: any) => !n.watched).length;
+      
+      // Si hay más notificaciones no leídas en el servidor, recargar la ventana
+      if (newUnwatchedCount > currentUnwatchedCount) {
+        console.log('Nuevas notificaciones detectadas, recargando...');
+        eventBus.emit('notificationsUpdated');
+      }
+      
+      // Emitir evento para actualizar el contador en AppHeader
+      eventBus.emit('notificationsUpdatedCounter');
+    }
+    else {
+      Alert.alert('Error', data.message);
+    }
+  }
+
   
   // ✅ Aquí agregas la función que se ejecutará cada 30 segundos
   useEffect(() => {
-    // Define la función de consulta (puedes personalizarla)
-    const get_server_time = async () => {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-      if (!apiUrl) {
-        throw new Error('Server URL not configured');
-      }
-      const response = await fetch(`${apiUrl}/api/server-time`, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': '69420',
-        },
-      });
-      const data = await response.json();
-
-      if (data.status) {
-        await AsyncStorage.setItem('server_time', data.current_time.toString());
-        await AsyncStorage.removeItem('disconnected_info');
-      }
-    };
-
-    const get_notifications = async () => {
-      const token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        return;
-      }
-      const current_marca = await AsyncStorage.getItem('current_marca');
-      if (!current_marca) {
-        return;
-      }
-      const current_marca_obj = JSON.parse(current_marca);
-      if (!current_marca_obj.plaza.id) {
-        return;
-      }
-      
-      // Obtener notificaciones actuales en AsyncStorage antes de eliminarlas
-      const currentNotificationsStr = await AsyncStorage.getItem('notifications');
-      let currentUnwatchedCount = 0;
-      if (currentNotificationsStr) {
-        const currentNotifications = JSON.parse(currentNotificationsStr);
-        currentUnwatchedCount = currentNotifications.filter((n: any) => !n.watched).length;
-      }
-      
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-      if (!apiUrl) {
-        throw new Error('Server URL not configured');
-      }
-      const response = await fetch(`${apiUrl}/api/notification/plaza/${current_marca_obj.plaza.id}`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': '69420',
-        },
-      });
-      const data = await response.json();
-      if (data.status) {
-        // Contar notificaciones no leídas en la respuesta del servidor
-        const newUnwatchedCount = data.notifications.filter((n: any) => !n.watched).length;
-        
-        // Si hay más notificaciones no leídas en el servidor, recargar la ventana
-        if (newUnwatchedCount > currentUnwatchedCount) {
-          console.log('Nuevas notificaciones detectadas, recargando...');
-          eventBus.emit('notificationsUpdated');
-        }
-        
-        await AsyncStorage.setItem('notifications', JSON.stringify(data.notifications));
-        
-        // Emitir evento para actualizar el contador en AppHeader
-        eventBus.emit('notificationsUpdated');
-      }
-      else {
-        Alert.alert('Error', data.message);
-      }
-    }
-
-    const set_disconnected_time = async () => {
-      const disconnected_info = await AsyncStorage.getItem('disconnected_info');
-      let disconnected_info_obj = { time: new Date().getTime(), count: 0 };
-      if (disconnected_info) {
-        disconnected_info_obj = JSON.parse(disconnected_info);
-        const new_date = new Date().getTime();
-        let diff_time = 0;
-        if (new_date >= disconnected_info_obj.time) {
-          diff_time = new_date - disconnected_info_obj.time;
-        }
-        else {
-          diff_time = disconnected_info_obj.time - new_date;
-        }
-        
-        disconnected_info_obj.count += diff_time;
-        disconnected_info_obj.time = new_date;
-      }
-      await AsyncStorage.setItem('disconnected_info', JSON.stringify(disconnected_info_obj));
-    };
-
     // Ejecuta una vez al inicio
-
-    const check_conection_time = async () => {
-      console.log('Checking connection time...');
-      if (isConnected) {
-        Promise.all([
-          get_server_time(),
-          get_notifications()
-        ]);
-      }
-      else {
-        set_disconnected_time();
-      }
-    }
-
     check_conection_time();
 
     // Ejecuta cada 60 segundos (60,000 ms)
-    const interval = setInterval(check_conection_time, 60000);
+    const interval = setInterval(check_conection_time, 30000);
 
     // Limpieza al desmontar el componente
     return () => clearInterval(interval);
@@ -3285,29 +3306,68 @@ function AppContent() {
       es_manual: false
     };
 
-    const responseData = await saveLunchTime({
-      requestData,
-      employeeId,
-      refreshAccessToken,
-      logout
-    });
-    if (!responseData.status) {
-      Alert.alert('Error', responseData.message);
-      return;
-    }
-        
-    Alert.alert(
-      '🎉 ¡Tiempo de Almuerzo Completado!',
-      'Tu descanso ha terminado. ¡Es hora de volver al trabajo!',
-      [
-        {
-          text: 'OK',
-          onPress: async () => {
-            await AsyncStorage.removeItem('temp_state');
+    console.log('requestData', requestData);
+
+    if (isConnected) {
+      // Con internet: llamar a la función API
+      const responseData = await saveLunchTime({
+        requestData,
+        employeeId,
+        refreshAccessToken,
+        logout
+      });
+      
+      if (!responseData.status) {
+        Alert.alert('Error', responseData.message);
+        return;
+      }
+      
+      await AsyncStorage.removeItem('temp_state');
+          
+      Alert.alert(
+        '🎉 ¡Tiempo de Almuerzo Completado!',
+        'Tu descanso ha terminado. ¡Es hora de volver al trabajo!',
+        [
+          {
+            text: 'OK',
+            onPress: async () => {
+              
+            },
           },
-        },
-      ]
-    );
+        ]
+      );
+    } else {
+      // Sin internet: modo offline
+      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+      let localId = '';
+      for (let i = 0; i < 10; i++) {
+        localId += chars.charAt(Math.floor(Math.random() * chars.length));
+      }
+      
+      // Crear entrada en lunchtime_actions
+      const actionsStr = await AsyncStorage.getItem('lunchtime_actions');
+      const actions = actionsStr ? JSON.parse(actionsStr) : [];
+      actions.push({
+        requestData: requestData,
+        id: localId,
+        type: 'create',
+      });
+      await AsyncStorage.setItem('lunchtime_actions', JSON.stringify(actions));
+
+      await AsyncStorage.removeItem('temp_state');
+      Alert.alert(
+        'Modo Offline',
+        'Tu descanso ha terminado. El registro se sincronizará cuando haya conexión.',
+        [
+          {
+            text: 'OK',
+            onPress: async () => {
+              
+            },
+          },
+        ]
+      );
+    }
   }
 
   console.log('Estado de conexión:', isConnected);

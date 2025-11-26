@@ -31,9 +31,9 @@ export default function AppHeader({ onMenuPress, title }: AppHeaderProps) {
       updateUnreadCount();
     };
 
-    eventBus.on('notificationsUpdated', handler);
+    eventBus.on('notificationsUpdatedCounter', handler);
     return () => {
-      eventBus.off('notificationsUpdated', handler);
+      eventBus.off('notificationsUpdatedCounter', handler);
     };
   }, []);
 
@@ -143,6 +143,7 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 10,
     fontWeight: 'bold',
+    top: -2,
   },
   menuButton: {
     
