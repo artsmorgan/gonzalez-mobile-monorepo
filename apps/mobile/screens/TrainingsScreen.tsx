@@ -1298,7 +1298,7 @@ export default function TrainingsScreen() {
         )}
 
         {/* Create Button */}
-        {!isCreating && roleName && roleName !== 'OPERATIVO' && (
+        {!isCreating && (
           <TouchableOpacity
             style={styles.createButton}
             onPress={startCreating}

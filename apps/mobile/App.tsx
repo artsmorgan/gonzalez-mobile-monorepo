@@ -16,6 +16,7 @@ import saveLunchTime from './hooks/saveLunchTime';
 import { useAuth } from './contexts/AuthContext';
 import { createVehicle, updateVehicle, deleteVehicle } from './hooks/vehiclesFunctions';
 import { createNote, updateNote } from './hooks/notesFunctions';
+import { markNotificationsAsRead } from './hooks/notificationsFunctions';
 import { createSurvey as createSurveyAPI } from './hooks/surveysFunctions';
 import { createTraining } from './hooks/trainingFunctions';
 import { createVoiceNote, deleteVoiceNote } from './hooks/voiceNotesFunctions';
@@ -40,6 +41,7 @@ import VehiclesScreen from './screens/VehiclesScreen';
 import VisitorsScreen from './screens/VisitorsScreen';
 import EvaluationsScreen from './screens/EvaluationsScreen';
 import IncidentsScreen from './screens/IncidentsScreen';
+import NotificationsScreen from './screens/NotificationsScreen';
 // import SurveysScreen from './screens/SurveysScreen'; // TODO: Create this screen
 import TrainingsScreen from './screens/TrainingsScreen';
 import VoiceNotesScreen from './screens/VoiceNotesScreen';
@@ -117,6 +119,7 @@ export type RootStackParamList = {
   Visitors: undefined;
   Evaluations: undefined;
   Incidents: undefined;
+  Notifications: undefined;
   Surveys: undefined;
   Trainings: undefined;
   VoiceNotes: undefined;
@@ -189,6 +192,7 @@ function RootNavigator() {
       <Stack.Screen name="Visitors" component={VisitorsScreen} />
       <Stack.Screen name="Evaluations" component={EvaluationsScreen} />
       <Stack.Screen name="Incidents" component={IncidentsScreen} />
+      <Stack.Screen name="Notifications" component={NotificationsScreen} />
       {/* <Stack.Screen name="Surveys" component={SurveysScreen} /> */}
       <Stack.Screen name="Trainings" component={TrainingsScreen} />
       <Stack.Screen name="VoiceNotes" component={VoiceNotesScreen} />
@@ -285,6 +289,7 @@ function AppContent() {
           checkMarcaCache(),
           checkAbsentReasonCache(),
           checkVehiclesActionsCache(),
+          checkNotificationsActionsCache(),
           checkVisitorsActionsCache(),
           checkNotesActionsCache(),
           checkActivitiesActionsCache(),
@@ -292,7 +297,7 @@ function AppContent() {
           checkSurveysActionsCache(),
           checkTrainingsActionsCache(),
           checkIncidentsActionsCache(),
-          checkVoiceNotesActionsCache()
+          checkVoiceNotesActionsCache(),
         ]);
         eventBus.emit('connectionRestored');
       }
@@ -463,6 +468,46 @@ function AppContent() {
         }
       } catch (error) {
         console.error('Error procesando acción de vehículo:', error);
+      }
+    }
+  }
+
+  const checkNotificationsActionsCache = async () => {
+    if (!employee) return;
+    
+    const actionsStr = await AsyncStorage.getItem('notifications_actions');
+    if (!actionsStr) return;
+
+    const actions = JSON.parse(actionsStr);
+    if (!actions || actions.length === 0) return;
+
+    console.log('Sincronizando acciones de notificaciones:', actions.length);
+
+    // Procesar acciones una por una
+    for (const action of actions) {
+      try {
+        if (action.type === 'markAsRead') {
+          console.log('Marcando notificaciones como leídas:', action.notificationIds);
+          const result = await markNotificationsAsRead({
+            notificationIds: action.notificationIds,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result.status) {
+            console.log('Notificaciones marcadas como leídas correctamente');
+            // Eliminar esta acción específica del array
+            const updatedActions = actions.filter((a: any) => 
+              !(a.type === 'markAsRead' && JSON.stringify(a.notificationIds) === JSON.stringify(action.notificationIds))
+            );
+            await AsyncStorage.setItem('notifications_actions', JSON.stringify(updatedActions));
+            
+            // Emitir evento para actualizar la UI
+            eventBus.emit('notificationsUpdated');
+          }
+        }
+      } catch (error) {
+        console.error('Error procesando acción de notificación:', error);
       }
     }
   }
@@ -3105,6 +3150,61 @@ function AppContent() {
       }
     };
 
+    const get_notifications = async () => {
+      const token = await AsyncStorage.getItem('access_token');
+      if (!token) {
+        return;
+      }
+      const current_marca = await AsyncStorage.getItem('current_marca');
+      if (!current_marca) {
+        return;
+      }
+      const current_marca_obj = JSON.parse(current_marca);
+      if (!current_marca_obj.plaza.id) {
+        return;
+      }
+      
+      // Obtener notificaciones actuales en AsyncStorage antes de eliminarlas
+      const currentNotificationsStr = await AsyncStorage.getItem('notifications');
+      let currentUnwatchedCount = 0;
+      if (currentNotificationsStr) {
+        const currentNotifications = JSON.parse(currentNotificationsStr);
+        currentUnwatchedCount = currentNotifications.filter((n: any) => !n.watched).length;
+      }
+      
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) {
+        throw new Error('Server URL not configured');
+      }
+      const response = await fetch(`${apiUrl}/api/notification/plaza/${current_marca_obj.plaza.id}`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': '69420',
+        },
+      });
+      const data = await response.json();
+      if (data.status) {
+        // Contar notificaciones no leídas en la respuesta del servidor
+        const newUnwatchedCount = data.notifications.filter((n: any) => !n.watched).length;
+        
+        // Si hay más notificaciones no leídas en el servidor, recargar la ventana
+        if (newUnwatchedCount > currentUnwatchedCount) {
+          console.log('Nuevas notificaciones detectadas, recargando...');
+          eventBus.emit('notificationsUpdated');
+        }
+        
+        await AsyncStorage.setItem('notifications', JSON.stringify(data.notifications));
+        
+        // Emitir evento para actualizar el contador en AppHeader
+        eventBus.emit('notificationsUpdated');
+      }
+      else {
+        Alert.alert('Error', data.message);
+      }
+    }
+
     const set_disconnected_time = async () => {
       const disconnected_info = await AsyncStorage.getItem('disconnected_info');
       let disconnected_info_obj = { time: new Date().getTime(), count: 0 };
@@ -3130,7 +3230,10 @@ function AppContent() {
     const check_conection_time = async () => {
       console.log('Checking connection time...');
       if (isConnected) {
-        get_server_time();
+        Promise.all([
+          get_server_time(),
+          get_notifications()
+        ]);
       }
       else {
         set_disconnected_time();

@@ -25,7 +25,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         }
 
         const plaza_notifications = await prisma.c_plaza_notification.findMany({ where: { plazaId: id } });
-        const notifications_return: { id: number, title: string, description: string, watched: boolean, created_at: string, id_local: string }[] = [];
+        const notifications_return: { id: number, title: string, description: string, watched: boolean, created_at: string }[] = [];
         for (const plaza_notification of plaza_notifications) {
             const notificationData = await prisma.c_notifications.findUnique({ where: { id: plaza_notification.notificationId } });
             if (!notificationData) continue;
@@ -34,8 +34,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                 title: notificationData.title,
                 description: notificationData.description,
                 watched: plaza_notification.watched,
-                created_at: notificationData.created_at.toISOString(),
-                id_local: "",
+                created_at: notificationData.created_at.toISOString()
             });
         }
 
