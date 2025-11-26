@@ -24,7 +24,8 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             return NextResponse.json({ status: false, message: "Plaza no encontrada" }, { status: 200 });
         }
 
-        const plaza_notifications = await prisma.c_plaza_notification.findMany({ where: { plazaId: id } });
+        // limit to 50 notifications at a time
+        const plaza_notifications = await prisma.c_plaza_notification.findMany({ where: { plazaId: id }, take: 100 });
         const notifications_return: { id: number, title: string, description: string, watched: boolean, created_at: string }[] = [];
         for (const plaza_notification of plaza_notifications) {
             const notificationData = await prisma.c_notifications.findUnique({ where: { id: plaza_notification.notificationId } });

@@ -17,7 +17,7 @@ export async function POST(req: NextRequest) {
 
         const { empleadoId, inicio, fin, pausas, es_manual } = await req.json();
 
-        const newLunchTime = await prisma.c_empleado_almuerzo.create({ data: { empleadoId, inicio, fin, pausas, es_manual } });
+        const newLunchTime = await prisma.c_empleado_almuerzo.create({ data: { empleadoId, inicio, fin: new Date(fin), pausas, es_manual } });
         return NextResponse.json({ status: true, message: "Almuerzo registrado correctamente" }, { status: 200 });
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";

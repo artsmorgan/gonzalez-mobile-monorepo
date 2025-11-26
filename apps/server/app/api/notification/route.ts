@@ -18,7 +18,8 @@ export async function POST(req: NextRequest) {
         }
 
         // Updatemany where id in notifications
-        await prisma.c_plaza_notification.updateMany({ where: { id: { in: notifications.map((notification: { id: number }) => notification.id) } }, data: { watched: true } });
+        // "notifications" is an array of numbers
+        await prisma.c_plaza_notification.updateMany({ where: { id: { in: notifications.map((notification: number) => notification) } }, data: { watched: true } });
 
         return NextResponse.json({ status: true, message: "Notificaciones actualizadas correctamente" }, { status: 200 });
     }
