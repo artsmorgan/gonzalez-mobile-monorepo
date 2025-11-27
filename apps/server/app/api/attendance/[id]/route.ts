@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessToken } from "../../../../utils/verifyToken";
 import { prisma } from "../../../../utils/prismaClient";
+import { sendNotificationByRole } from "../../../../utils/sendNotification";
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
@@ -24,6 +25,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             return NextResponse.json({ status: false, message: "No se encontró la marca" }, { status: 200 });
         }
 
+        let earlyLeaving = false;
+        let fecha_salida_string = "";
         switch (type) {
             case "entrada":
                 if (marcaDia.hora_entrada_digitada != null) {
@@ -100,11 +103,63 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
                     marcaDia.hora_salida_anticipada = now;
                     marcaDia.salida_anticipada_id = salidaAnticipada.id;
+                    earlyLeaving = true;
+                    fecha_salida_string = now.toISOString().split('T')[0];
                 }
                 break;
         }
 
-        await prisma.c_marca_dia.update({ where: { id: marcaDia.id }, data: marcaDia });
+        const updated = await prisma.c_marca_dia.update({ where: { id: marcaDia.id }, data: marcaDia });
+
+        if (!updated) {
+            return NextResponse.json({ status: false, message: "No se pudo actualizar la marca del dia" }, { status: 200 });
+        }
+
+        if (earlyLeaving) {
+            const empleado = await prisma.c_empleado.findUnique({ where: { id: marcaDia.empleadoFijo_id ?? 0 } });
+            if (!empleado) {
+                return NextResponse.json({ status: false, message: "No se encontró el empleado" }, { status: 200 });
+            }
+
+            const title = "Salida anticipada";
+            const description = `El empleado ${empleado.nombre} ${empleado.primer_apellido} ha salido anticipadamente a las ${fecha_salida_string}. Motivo: ${reason}`;
+            await sendNotificationByRole(marcaDia.id, title, description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+        }
+
+        if (type == "entrada") {
+            const empleado = await prisma.c_empleado.findUnique({ where: { id: marcaDia.empleadoFijo_id ?? 0 } });
+            const current_corpo = await prisma.e_estructura_sucursal.findUnique({ where: { id: marcaDia.corpo_id } });
+            const current_puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: marcaDia.puesto_id } });
+            if (empleado && current_corpo && current_puesto) {
+                const lastTwoMarks = await prisma.c_marca_dia.findMany({ where: { empleadoFijo_id: marcaDia.empleadoFijo_id }, orderBy: { id: "desc" }, take: 2 });
+                if (lastTwoMarks.length <= 2) {
+                    const secondLastMark = lastTwoMarks[1];
+                    if (secondLastMark.hora_salida_digitada == null) {
+                        const previous_corpo = await prisma.e_estructura_sucursal.findUnique({ where: { id: secondLastMark.corpo_id } });
+                        const previous_puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: secondLastMark.puesto_id } });
+                        if (previous_corpo && previous_puesto) {
+                            const title = "Cambio de puesto sin confirmación de salida";
+                            const description = `El empleado ${empleado.nombre} ${empleado.primer_apellido} ha ingresado a su puesto de ${current_puesto.nombre} en ${current_corpo.nombre} sin confirmar la salida de su puesto ${previous_puesto.nombre} en ${previous_corpo.nombre}`;
+                            await sendNotificationByRole(secondLastMark.id, title, description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+                        }
+                    }
+                }
+
+                if (marcaDia.hora_inicio && marcaDia.fecha && marcaDia.hora_entrada_digitada) {
+                    const momentoEntrada = marcaDia.fecha.getTime() + marcaDia.hora_inicio.getTime();
+                    let title_tardia = "Ingreso de trabajo confirmado";
+                    let desc_tardia = "";
+                    if (momentoEntrada < marcaDia.hora_entrada_digitada.getTime()) {
+                        const hora_entrada_digitada_string = marcaDia.hora_entrada_digitada.toISOString().split('T');
+                        title_tardia = " con una tardía";
+                        desc_tardia = " con una tardía al marcar ingreso en " + hora_entrada_digitada_string[0] + " a las " + hora_entrada_digitada_string[1].split('.')[0];
+                    }
+                    const title = "Ingreso de trabajo confirmado";
+                    const description = `El empleado ${empleado.nombre} ${empleado.primer_apellido} ha ingresado a su puesto de ${current_puesto.nombre}${desc_tardia}`;
+                    await sendNotificationByRole(marcaDia.id, title, description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+                }
+            }
+        }
 
         return NextResponse.json({ status: true, message: type == "entrada" ? "Ingreso de trabajo confirmado" : "Salida de trabajo confirmada" }, { status: 200 });
     } catch (error: unknown) {

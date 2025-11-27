@@ -5,13 +5,18 @@ const prisma = new PrismaClient();
 
 export async function getActivities(marcaDia: any) {
     try {
+        const actividades_puesto_plaza = await prisma.e_actividad_puesto_plaza.findMany({
+            where: {
+                OR: [
+                    { plaza_id: marcaDia.plaza_id },
+                    { plaza_id: null, puesto_id: marcaDia.puesto_id }
+                ]
+            }
+        });
+
         const actividades_bd = await prisma.e_actividad_corpo.findMany({
             where: {
-                puesto_id: marcaDia.puesto_id, // ← el valor que buscas
-                OR: [
-                    { plaza_id: marcaDia.plaza_id }, // ← coincide con el valor
-                    { plaza_id: null }        // ← o es nulo
-                ]
+                id: { in: actividades_puesto_plaza.map((item) => item.actividadCorpo_id) }
             }
         });
 
@@ -25,7 +30,7 @@ export async function getActivities(marcaDia: any) {
             let id_no_marcado = null;
 
             if (!is_today) {
-                const actividad_marcada = await prisma.e_actividad_corpo_marcada.findFirst({ where: { actividadCorpo_id: actividad.id, marcada: false } });
+                const actividad_marcada = await prisma.e_actividad_corpo_plaza.findFirst({ where: { actividadCorpo_id: actividad.id, marcada: false } });
                 if (actividad_marcada) {
                     pendiente = true;
                     id_no_marcado = actividad_marcada.id;
@@ -41,15 +46,15 @@ export async function getActivities(marcaDia: any) {
 
                 let marcada = null;
                 if (pendiente) {
-                    marcada = await prisma.e_actividad_corpo_marcada.findFirst({ where: { id: id_no_marcado as number } });
+                    marcada = await prisma.e_actividad_corpo_plaza.findFirst({ where: { id: id_no_marcado as number } });
                 }
                 else {
-                    marcada = await prisma.e_actividad_corpo_marcada.findFirst({ where: { actividadCorpo_id: actividad.id, created_at: { gte: fecha_inicio, lte: fecha_fin } } });
+                    marcada = await prisma.e_actividad_corpo_plaza.findFirst({ where: { actividadCorpo_id: actividad.id, plaza_id: marcaDia.plaza_id, created_at: { gte: fecha_inicio, lte: fecha_fin } } });
                     if (!marcada) {
-                        marcada = await prisma.e_actividad_corpo_marcada.create({
+                        marcada = await prisma.e_actividad_corpo_plaza.create({
                             data: {
                                 actividadCorpo_id: actividad.id,
-                                empleado_id: marcaDia.empleadoFijo_id,
+                                plaza_id: marcaDia.plaza_id,
                                 bitacora: "-",
                                 marcada: false,
                                 created_at: fecha_fin,
@@ -79,12 +84,11 @@ export async function getActivities(marcaDia: any) {
                                 }
 
                                 let revision_equipo: { id: number, marcada: boolean, es_correcto: boolean, motivo_incorrecto: string, imagen_adjunta: string | null } | null = null;
-                                let corpo_revision_equipo = await prisma.e_actividad_corpo_revision_equipo.findFirst({ where: { actividadCorpoMarcada_id: marcada.id, articulo_id: articulo.id } });
+                                let corpo_revision_equipo = await prisma.e_actividad_corpo_revision_equipo.findFirst({ where: { actividadCorpoPlaza_id: marcada.id, articulo_id: articulo.id } });
                                 if (!corpo_revision_equipo) {
                                     corpo_revision_equipo = await prisma.e_actividad_corpo_revision_equipo.create({
                                         data: {
-                                            actividadCorpoMarcada_id: marcada.id,
-                                            empleado_id: marcaDia.empleadoFijo_id,
+                                            actividadCorpoPlaza_id: marcada.id,
                                             articulo_id: articulo.id,
                                             es_correcto: false,
                                             motivo_incorrecto: "",
