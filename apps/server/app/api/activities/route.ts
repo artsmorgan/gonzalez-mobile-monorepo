@@ -16,7 +16,6 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
     try {
-        /*
         const { valid, payload, message } = verifyAccessToken(req);
 
         if (!valid) {
@@ -26,11 +25,19 @@ export async function POST(req: NextRequest) {
             );
         }
 
-        const { actividad_id, marca_id, empleado_id, estado, bitacora } = await req.json();
+        const { marca_id, nombre_actividad, fecha_inicio, frecuencia, es_revision_equipo, descripcion_actividad, reglas, puestos_plazas } = await req.json();
 
-        const actividad = await prisma.e_actividad_corpo.findUnique({ where: { id: actividad_id } });
-        if (!actividad) {
-            return NextResponse.json({ status: false, message: "Actividad no encontrada" }, { status: 200 });
+        if (!marca_id || !nombre_actividad || !fecha_inicio || !frecuencia || !es_revision_equipo || !descripcion_actividad || !reglas) {
+            console.log("marca_id", marca_id);
+            console.log("nombre_actividad", nombre_actividad);
+            console.log("fecha_inicio", fecha_inicio);
+            console.log("frecuencia", frecuencia);
+            console.log("es_revision_equipo", es_revision_equipo);
+            console.log("descripcion_actividad", descripcion_actividad);
+            console.log("reglas", reglas);
+            console.log("puestos_plazas", puestos_plazas);
+            console.log("--------------------------------");
+            return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 200 });
         }
 
         const marca = await prisma.c_marca_dia.findUnique({ where: { id: marca_id } });
@@ -38,40 +45,74 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
         }
 
-        if (!marca.hora_inicio || !marca.hora_fin) {
-            return NextResponse.json({ status: false, message: "Hora de inicio o fin no establecida" }, { status: 200 });
+        const empresa = await prisma.e_estructura_empresa.findUnique({ where: { id: marca.empresa_id } });
+        if (!empresa) {
+            return NextResponse.json({ status: false, message: "Empresa no encontrada" }, { status: 200 });
         }
 
-        const empleado = await prisma.c_empleado.findUnique({ where: { id: empleado_id } });
-        if (!empleado) {
-            return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 200 });
+        const cliente = await prisma.e_estructura_cliente.findUnique({ where: { id: marca.cliente_id } });
+        if (!cliente) {
+            return NextResponse.json({ status: false, message: "Cliente no encontrada" }, { status: 200 });
         }
 
-        const fecha_inicio = new Date(marca.fecha);
-        fecha_inicio.setHours(marca.hora_inicio.getHours(), marca.hora_inicio.getMinutes(), marca.hora_inicio.getSeconds(), marca.hora_inicio.getMilliseconds());
-        const fecha_fin = toZonedTime(new Date(), "America/Costa_Rica");
+        const contrato = await prisma.e_estructura_contrato.findUnique({ where: { id: marca.contrato_id } });
+        if (!contrato) {
+            return NextResponse.json({ status: false, message: "Contrato no encontrada" }, { status: 200 });
+        }
 
-        if (estado === "marcar") {
-            const marcada = await prisma.e_actividad_corpo_marcada.findFirst({ where: { actividadCorpo_id: actividad_id, created_at: { gte: fecha_inicio, lte: fecha_fin } } });
-            if (marcada) {
-                return NextResponse.json({ status: false, message: "Actividad ya marcada" }, { status: 200 });
+        const corpo = await prisma.e_estructura_sucursal.findUnique({ where: { id: marca.corpo_id } });
+        if (!corpo) {
+            return NextResponse.json({ status: false, message: "Corpo no encontrada" }, { status: 200 });
+        }
+
+        const actividad_corpo = await prisma.e_actividad_corpo.create({
+            data: {
+                empresa_id: empresa.id,
+                cliente_id: cliente.id,
+                contrato_id: contrato.id,
+                corpo_id: corpo.id,
+                puesto_id: null,
+                plaza_id: null,
+                nombre_actividad: nombre_actividad,
+                fecha_inicio: fecha_inicio,
+                frecuencia: frecuencia,
+                es_revision_equipo: es_revision_equipo,
+                descripcion_actividad: descripcion_actividad,
+                reglas: reglas,
             }
+        });
 
-            await prisma.e_actividad_corpo_marcada.create({ data: { actividadCorpo_id: actividad_id, empleado_id: empleado_id, bitacora: bitacora, created_at: toZonedTime(new Date(), "America/Costa_Rica"), updated_at: toZonedTime(new Date(), "America/Costa_Rica"), e_actividad_corpo: { connect: { id: actividad_id } } } });
-
-            return NextResponse.json({ status: true, message: "Actividad marcada correctamente" }, { status: 200 });
-        }
-        else {
-            const marcada = await prisma.e_actividad_corpo_marcada.findFirst({ where: { actividadCorpo_id: actividad_id, created_at: { gte: fecha_inicio, lte: fecha_fin } } });
-            if (!marcada) {
-                return NextResponse.json({ status: false, message: "Actividad no marcada" }, { status: 200 });
+        if (actividad_corpo) {
+            for (const puesto of puestos_plazas) {
+                const ps = await prisma.e_estructura_puesto.findUnique({ where: { id: puesto.puesto_id } });
+                if (ps) {
+                    if (puesto.plazas.length > 0) {
+                        for (const plaza of puesto.plazas) {
+                            const pl = await prisma.e_estructura_plazas.findUnique({ where: { id: plaza.plaza_id } });
+                            if (pl) {
+                                await prisma.e_actividad_puesto_plaza.create({
+                                    data: {
+                                        actividadCorpo_id: actividad_corpo.id,
+                                        puesto_id: ps.id,
+                                        plaza_id: pl.id,
+                                    }
+                                });
+                            }
+                        }
+                    }
+                    else {
+                        await prisma.e_actividad_puesto_plaza.create({
+                            data: {
+                                actividadCorpo_id: actividad_corpo.id,
+                                puesto_id: ps.id,
+                            }
+                        });
+                    }
+                }
             }
-            await prisma.e_actividad_corpo_marcada.delete({ where: { id: marcada.id } });
-
-            return NextResponse.json({ status: true, message: "Actividad desmarcada correctamente" }, { status: 200 });
         }
-*/
-        return NextResponse.json({ status: false, message: "Acción no válida" }, { status: 200 });
+
+        return NextResponse.json({ status: true, message: "Actividad creada correctamente" }, { status: 200 });
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         return NextResponse.json({ message: errorMessage }, { status: 500 });

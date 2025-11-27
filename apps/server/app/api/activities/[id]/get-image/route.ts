@@ -16,7 +16,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         return NextResponse.json({ status: false, message: 'ID faltante' }, { status: 400 });
     }
 
-    const activity = await prisma.e_actividad_corpo_marcada.findUnique({ where: { id } });
+    const activity = await prisma.e_actividad_corpo_plaza.findUnique({ where: { id } });
     if (!activity || !activity.file_name) {
         return NextResponse.json({ status: false, message: 'Actividad no encontrada' }, { status: 404 });
     }

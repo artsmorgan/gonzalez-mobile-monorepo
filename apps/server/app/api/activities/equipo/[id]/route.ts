@@ -35,7 +35,6 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         await prisma.e_actividad_corpo_revision_equipo.update({
             where: { id },
             data: {
-                empleado_id: e,
                 es_correcto: es_correcto,
                 marcada: true,
                 motivo_incorrecto: motivo_incorrecto,
@@ -91,7 +90,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             });
         }
 
-        const actividad_marcada = await prisma.e_actividad_corpo_marcada.findUnique({ where: { id: revision_equipo.actividadCorpoMarcada_id } });
+        const actividad_marcada = await prisma.e_actividad_corpo_plaza.findUnique({ where: { id: revision_equipo.actividadCorpoPlaza_id } });
         if (!actividad_marcada) {
             return NextResponse.json({ status: false, message: "Actividad marcada no encontrada" }, { status: 200 });
         }
@@ -101,16 +100,15 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             return NextResponse.json({ status: false, message: "Actividad no encontrada" }, { status: 200 });
         }
 
-        const actividades_pending = await prisma.e_actividad_corpo_marcada.findMany({ where: { actividadCorpo_id: actividad.id, marcada: false } });
+        const actividades_pending = await prisma.e_actividad_corpo_plaza.findMany({ where: { actividadCorpo_id: actividad.id, marcada: false } });
         if (actividades_pending && actividades_pending.length > 0) {
-            const all_revision_equipo_pending = await prisma.e_actividad_corpo_revision_equipo.findMany({ where: { actividadCorpoMarcada_id: { in: actividades_pending.map((item) => item.id) }, articulo_id: revision_equipo.articulo_id, marcada: false } });
+            const all_revision_equipo_pending = await prisma.e_actividad_corpo_revision_equipo.findMany({ where: { actividadCorpoPlaza_id: { in: actividades_pending.map((item) => item.id) }, articulo_id: revision_equipo.articulo_id, marcada: false } });
             if (all_revision_equipo_pending && all_revision_equipo_pending.length > 0) {
                 await prisma.e_actividad_corpo_revision_equipo.updateMany({
                     where: {
                         id: { in: all_revision_equipo_pending.map((item) => item.id) }
                     },
                     data: {
-                        empleado_id: e,
                         es_correcto: es_correcto,
                         marcada: true,
                         motivo_incorrecto: motivo_incorrecto,
@@ -120,9 +118,9 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             }
 
             for (const actividad_pending of actividades_pending) {
-                const all_revision_equipo_pending = await prisma.e_actividad_corpo_revision_equipo.findMany({ where: { actividadCorpoMarcada_id: actividad_pending.id, marcada: false } });
+                const all_revision_equipo_pending = await prisma.e_actividad_corpo_revision_equipo.findMany({ where: { actividadCorpoPlaza_id: actividad_pending.id, marcada: false } });
                 if (all_revision_equipo_pending && all_revision_equipo_pending.length === 0) {
-                    await prisma.e_actividad_corpo_marcada.update({ where: { id: actividad_pending.id }, data: { marcada: true, updated_at: toZonedTime(new Date(), "America/Costa_Rica") } });
+                    await prisma.e_actividad_corpo_plaza.update({ where: { id: actividad_pending.id }, data: { marcada: true, updated_at: toZonedTime(new Date(), "America/Costa_Rica") } });
                 }
             }
         }

@@ -634,8 +634,6 @@ model c_empleado {
   last_checked_update                                                       DateTime?                                   @db.DateTime(0)
   firma_manual                                                              String?                                     @db.LongText
   ingresado                                                                 Boolean                                     @default(false)
-  c_encuesta_cliente                                                        c_encuesta_cliente[]
-  e_capacitacion_empleado                                                   e_capacitacion_empleado[]
   a_recovery_password_token                                                 a_recovery_password_token[]
   b_pago_excluido                                                           b_pago_excluido[]
   c_adendas                                                                 c_adendas[]
@@ -671,6 +669,7 @@ model c_empleado {
   c_empleado_registro_laboral                                               c_empleado_registro_laboral[]
   c_empleado_sindicato                                                      c_empleado_sindicato[]
   c_empleado_tramite_portacion_arma                                         c_empleado_tramite_portacion_arma[]
+  c_encuesta_cliente                                                        c_encuesta_cliente[]
   c_extra_limite_semanal                                                    c_extra_limite_semanal[]
   c_fecha_excepcional                                                       c_fecha_excepcional[]
   c_induccion                                                               c_induccion[]
@@ -687,10 +686,8 @@ model c_empleado {
   d_empleado_cartas_recomendacion                                           d_empleado_cartas_recomendacion[]
   d_empleado_hoja_delincuencia                                              d_empleado_hoja_delincuencia[]
   d_empleado_otras_anotaciones                                              d_empleado_otras_anotaciones[]
-  e_registro_vehiculos                                                      e_registro_vehiculos[]
-  e_registro_personas                                                       e_registro_personas[]
-  e_actividad_corpo_revision_equipo                                         e_actividad_corpo_revision_equipo[]
   e_antecedente_penal                                                       e_antecedente_penal[]
+  e_capacitacion_empleado                                                   e_capacitacion_empleado[]
   e_cuenta_banco_empleado                                                   e_cuenta_banco_empleado[]
   e_cursos                                                                  e_cursos[]
   e_dato_legal                                                              e_dato_legal?
@@ -708,6 +705,8 @@ model c_empleado {
   e_referencia_personal                                                     e_referencia_personal[]
   e_registro_enfermedades                                                   e_registro_enfermedades?
   e_registro_habilidades                                                    e_registro_habilidades?
+  e_registro_personas                                                       e_registro_personas[]
+  e_registro_vehiculos                                                      e_registro_vehiculos[]
   e_requerimiento_cumplido                                                  e_requerimiento_cumplido[]
   e_trabajo                                                                 e_trabajo[]
   m_comodin_ausente                                                         m_comodin_ausente[]
@@ -746,11 +745,11 @@ model c_empleado {
 }
 
 model c_notifications {
-  id                      Int      @id @default(autoincrement())
-  title                   String   @db.LongText
-  description             String   @db.LongText
-  created_at              DateTime @default(now())
-  c_plaza_notification    c_plaza_notification[]
+  id                   Int                    @id @default(autoincrement())
+  title                String                 @db.LongText
+  description          String                 @db.LongText
+  created_at           DateTime               @default(now())
+  c_plaza_notification c_plaza_notification[]
 }
 
 model c_plaza_notification {
@@ -758,78 +757,92 @@ model c_plaza_notification {
   plazaId             Int
   notificationId      Int
   watched             Boolean             @default(false)
-  e_estructura_plazas e_estructura_plazas @relation(fields: [plazaId], references: [id], onDelete: Cascade)
   c_notifications     c_notifications     @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  e_estructura_plazas e_estructura_plazas @relation(fields: [plazaId], references: [id], onDelete: Cascade)
+
+  @@index([notificationId], map: "c_plaza_notification_notificationId_fkey")
+  @@index([plazaId], map: "c_plaza_notification_plazaId_fkey")
 }
 
 model c_notas_voz {
-  id                Int      @id @default(autoincrement())
-  empresa_id        Int
-  cliente_id        Int
-  corpo_id          Int
-  puesto_id         Int?
-  titulo            String   @db.LongText
-  descripcion       String   @db.LongText
-  path              String   @db.LongText
-  transcripcion     String   @db.LongText
-  firma_responsable String   @db.LongText
-  created_by        Int
-  created_at        DateTime @db.DateTime(0)
-  
-  e_estructura_empresa e_estructura_empresa @relation(fields: [empresa_id], references: [id], onDelete: NoAction)
-  e_estructura_cliente e_estructura_cliente @relation(fields: [cliente_id], references: [id], onDelete: NoAction)
+  id                    Int                   @id @default(autoincrement())
+  empresa_id            Int
+  cliente_id            Int
+  corpo_id              Int
+  puesto_id             Int?
+  titulo                String                @db.LongText
+  descripcion           String                @db.LongText
+  path                  String                @db.LongText
+  transcripcion         String                @db.LongText
+  firma_responsable     String                @db.LongText
+  created_by            Int
+  created_at            DateTime              @db.DateTime(0)
+  e_estructura_cliente  e_estructura_cliente  @relation(fields: [cliente_id], references: [id], onDelete: NoAction)
   e_estructura_sucursal e_estructura_sucursal @relation(fields: [corpo_id], references: [id], onDelete: NoAction)
+  e_estructura_empresa  e_estructura_empresa  @relation(fields: [empresa_id], references: [id], onDelete: NoAction)
+
+  @@index([cliente_id], map: "c_notas_voz_cliente_id_fkey")
+  @@index([corpo_id], map: "c_notas_voz_corpo_id_fkey")
+  @@index([empresa_id], map: "c_notas_voz_empresa_id_fkey")
 }
 
 model c_incidente {
-  id                          Int       @id @default(autoincrement())
-  empresa_id                  Int
-  cliente_id                  Int
+  id                          Int                       @id @default(autoincrement())
   corpo_id                    Int
-  ejecutivo_cuenta            Int 
-  fecha_incidente             DateTime  @db.Date
-  fecha_reporte               DateTime  @db.Date
-  nombre_responsable          String    @db.VarChar(45)
-  clasificacion               Int      
-  descripcion                 String    @db.LongText
-  involucrados                String    @db.LongText
-  fecha_libro_novedades       String    @db.LongText
-  nombre_responsable_atencion String    @db.VarChar(45)
-  file_image                  String?   @db.LongText
-  file_audio                  String?   @db.LongText
-  solucion                    String?   @db.LongText
-  fecha_solucion              DateTime? @db.Date
-  fecha_real_solucion         DateTime? @db.Date
-  costo_asociado              String?   @db.LongText
-  consecutivo_informe         String?   @db.LongText
-  link_informe                String?   @db.LongText
+  ejecutivo_cuenta            Int
+  fecha_incidente             DateTime                  @db.Date
+  fecha_reporte               DateTime                  @db.Date
+  nombre_responsable          String                    @db.VarChar(45)
+  clasificacion               Int
+  descripcion                 String                    @db.LongText
+  involucrados                String                    @db.LongText
+  fecha_libro_novedades       String                    @db.LongText
+  nombre_responsable_atencion String                    @db.VarChar(45)
+  solucion                    String?                   @db.LongText
+  fecha_solucion              DateTime?                 @db.Date
+  fecha_real_solucion         DateTime?                 @db.Date
+  costo_asociado              String?                   @db.LongText
+  consecutivo_informe         String?                   @db.LongText
+  link_informe                String?                   @db.LongText
+  cliente_id                  Int
+  empresa_id                  Int
   estado                      Boolean
+  file_audio                  String?                   @db.LongText
+  file_image                  String?                   @db.LongText
+  n_clasificacion_incidente   n_clasificacion_incidente @relation(fields: [clasificacion], references: [id], onDelete: NoAction)
+  e_estructura_cliente        e_estructura_cliente      @relation(fields: [cliente_id], references: [id], onDelete: NoAction)
+  e_estructura_sucursal       e_estructura_sucursal     @relation(fields: [corpo_id], references: [id], onDelete: NoAction)
+  n_ejecutivo_cuenta          n_ejecutivo_cuenta        @relation(fields: [ejecutivo_cuenta], references: [id], onDelete: NoAction)
+  e_estructura_empresa        e_estructura_empresa      @relation(fields: [empresa_id], references: [id], onDelete: NoAction)
 
-  e_estructura_empresa e_estructura_empresa @relation(fields: [empresa_id], references: [id], onDelete: NoAction)
-  e_estructura_cliente e_estructura_cliente @relation(fields: [cliente_id], references: [id], onDelete: NoAction)
-  e_estructura_sucursal e_estructura_sucursal @relation(fields: [corpo_id], references: [id], onDelete: NoAction)
-  n_ejecutivo_cuenta n_ejecutivo_cuenta @relation(fields: [ejecutivo_cuenta], references: [id], onDelete: NoAction)
-  n_clasificacion_incidente n_clasificacion_incidente @relation(fields: [clasificacion], references: [id], onDelete: NoAction)
+  @@index([clasificacion], map: "c_incidente_clasificacion_fkey")
+  @@index([cliente_id], map: "c_incidente_cliente_id_fkey")
+  @@index([corpo_id], map: "c_incidente_corpo_id_fkey")
+  @@index([ejecutivo_cuenta], map: "c_incidente_ejecutivo_cuenta_fkey")
+  @@index([empresa_id], map: "c_incidente_empresa_id_fkey")
 }
 
 model c_evaluacion {
-  id               Int        @id @default(autoincrement())
-  corpo_id         Int
-  puesto_id         Int
-  plaza_id         Int
-  tipo             String     @db.LongText
-  evaluation       String     @db.LongText
-  firma_evaluador  String     @db.LongText
-  created_at       DateTime   @db.DateTime
-  created_by       Int
-  
+  id                    Int                   @id @default(autoincrement())
+  corpo_id              Int
+  puesto_id             Int
+  plaza_id              Int
+  tipo                  String                @db.LongText
+  evaluation            String                @db.LongText
+  firma_evaluador       String                @db.LongText
+  created_at            DateTime              @db.DateTime(0)
+  created_by            Int
   e_estructura_sucursal e_estructura_sucursal @relation(fields: [corpo_id], references: [id], onDelete: NoAction)
-  e_estructura_puesto e_estructura_puesto @relation(fields: [puesto_id], references: [id], onDelete: NoAction)
-  e_estructura_plazas e_estructura_plazas @relation(fields: [plaza_id], references: [id], onDelete: NoAction)
+  e_estructura_plazas   e_estructura_plazas   @relation(fields: [plaza_id], references: [id], onDelete: NoAction)
+  e_estructura_puesto   e_estructura_puesto   @relation(fields: [puesto_id], references: [id], onDelete: NoAction)
+
+  @@index([corpo_id], map: "c_evaluacion_corpo_id_fkey")
+  @@index([plaza_id], map: "c_evaluacion_plaza_id_fkey")
+  @@index([puesto_id], map: "c_evaluacion_puesto_id_fkey")
 }
 
 model c_control_kilometraje {
-  id                    String    @id @default(uuid())
+  id                    String   @id @default(uuid())
   empresa_id            String?
   cliente_id            String?
   contrato_id           String?
@@ -845,713 +858,713 @@ model c_control_kilometraje {
   km_actual             String?
   estado                String?
   vehiculo_id           String?
-  registros_viaje       String?   @db.LongText
-  created_at            DateTime  @default(now())
+  registros_viaje       String?  @db.LongText
+  created_at            DateTime @default(now())
   created_by            String?
 }
 
 model c_solicitud_uniforme {
-  id                         String    @id @default(uuid())
-  empresa_id                 String?
-  cliente_id                 String?
-  contrato_id                String?
-  corpo_id                   String?
-  puesto_id                  String?
-  plaza_id                   String?
-  codigo                     String?
-  nombre_completo            String?
-  cliente_area               String?
-  ultima_fecha_uniformes     String?
-  talla_scrub_naranja        String?
-  talla_pantalon             String?
-  talla_zapatos              String?
-  estado                     String?
-  persona_designada_entrega  String?
-  no_procede_hasta           String?
-  estatus_designado_entrega  String?
-  created_at                 DateTime  @default(now())
-  created_by                 String?
+  id                        String   @id @default(uuid())
+  empresa_id                String?
+  cliente_id                String?
+  contrato_id               String?
+  corpo_id                  String?
+  puesto_id                 String?
+  plaza_id                  String?
+  codigo                    String?
+  nombre_completo           String?
+  cliente_area              String?
+  ultima_fecha_uniformes    String?
+  talla_scrub_naranja       String?
+  talla_pantalon            String?
+  talla_zapatos             String?
+  estado                    String?
+  persona_designada_entrega String?
+  no_procede_hasta          String?
+  estatus_designado_entrega String?
+  created_at                DateTime @default(now())
+  created_by                String?
 }
 
 model c_satisfaccion_personal {
-  id                              String    @id @default(uuid())
-  empresa_id                      String?
-  cliente_id                      String?
-  contrato_id                     String?
-  corpo_id                        String?
-  puesto_id                       String?
-  plaza_id                        String?
-  nombre_empleado                 String?
-  cliente_sede                    String?
-  tiempo_laborado                 String?
-  recibe_uniformes_tiempo         String?
-  llevo_induccion                  String?
-  calificacion_induccion           String?
-  recibe_visitas_supervision       String?
-  recibe_atencion_oficina          String?
-  problemas_pago_resueltos         String?
-  equipo_proteccion                String?
-  que_mejorar                      String?
-  considera_empresa_debe_mejorar   String?
-  conoce_reportar_accidente       String?
-  le_gustaria_capacitado           String?
-  created_at                       DateTime  @default(now())
-  created_by                       String?
+  id                             String   @id @default(uuid())
+  empresa_id                     String?
+  cliente_id                     String?
+  contrato_id                    String?
+  corpo_id                       String?
+  puesto_id                      String?
+  plaza_id                       String?
+  nombre_empleado                String?
+  cliente_sede                   String?
+  tiempo_laborado                String?
+  recibe_uniformes_tiempo        String?
+  llevo_induccion                String?
+  calificacion_induccion         String?
+  recibe_visitas_supervision     String?
+  recibe_atencion_oficina        String?
+  problemas_pago_resueltos       String?
+  equipo_proteccion              String?
+  que_mejorar                    String?
+  considera_empresa_debe_mejorar String?
+  conoce_reportar_accidente      String?
+  le_gustaria_capacitado         String?
+  created_at                     DateTime @default(now())
+  created_by                     String?
 }
 
 model c_planificacion_mantenimiento_vehiculo {
-  id                String    @id @default(uuid())
-  empresa_id       String?
-  cliente_id       String?
-  contrato_id      String?
-  corpo_id         String?
-  puesto_id       String?
-  plaza_id         String?
-  nombre_vehiculo  String?
+  id                 String   @id @default(uuid())
+  empresa_id         String?
+  cliente_id         String?
+  contrato_id        String?
+  corpo_id           String?
+  puesto_id          String?
+  plaza_id           String?
+  nombre_vehiculo    String?
   matricula_vehiculo String?
-  mantenimientos   String?   @db.LongText
-  created_at       DateTime  @default(now())
-  created_by       String?
+  mantenimientos     String?  @db.LongText
+  created_at         DateTime @default(now())
+  created_by         String?
 }
 
 model c_producto_no_conforme_matriz {
-  id                String    @id @default(uuid())
-  empresa_id       String?
-  cliente_id       String?
-  contrato_id      String?
-  corpo_id         String?
-  puesto_id       String?
-  plaza_id         String?
-  cliente          String?
-  numero_corpo     String?
-  responsable_cuenta String?
-  macroactividad   String?
-  actividad        String?
+  id                        String   @id @default(uuid())
+  empresa_id                String?
+  cliente_id                String?
+  contrato_id               String?
+  corpo_id                  String?
+  puesto_id                 String?
+  plaza_id                  String?
+  cliente                   String?
+  numero_corpo              String?
+  responsable_cuenta        String?
+  macroactividad            String?
+  actividad                 String?
   tipo_servicio_no_conforme String?
-  tipo_registro    String?
-  responsable_registro String?
-  acciones_seguir  String?   @db.LongText
-  responsable_corregir String? @db.LongText
-  responsable_aprobar String? @db.LongText
-  created_at       DateTime  @default(now())
-  created_by       String?
+  tipo_registro             String?
+  responsable_registro      String?
+  acciones_seguir           String?  @db.LongText
+  responsable_corregir      String?  @db.LongText
+  responsable_aprobar       String?  @db.LongText
+  created_at                DateTime @default(now())
+  created_by                String?
 }
 
 model c_maestro_quejas {
-  id                String    @id @default(uuid())
-  empresa_id       String?
-  cliente_id       String?
-  contrato_id      String?
-  corpo_id         String?
-  puesto_id       String?
-  plaza_id         String?
-  sociedad         String?
-  nombre_realiza_queja String?
-  cliente          String?
-  empresa_presenta_queja String?
-  persona_presenta_queja String?
-  medio_recepcion_queja String?
-  tipo_queja       String?
-  ubicacion        String?
-  nivel_queja      String?
-  fecha_queja      String?
-  motivo_queja     String?
-  descripcion_queja String?  @db.LongText
-  fecha_inicio     String?
-  fecha_revision   String?
-  resolucion_queja String?  @db.LongText
-  mes_queja        String?
-  ano_queja        String?
-  estado           String?
+  id                           String   @id @default(uuid())
+  empresa_id                   String?
+  cliente_id                   String?
+  contrato_id                  String?
+  corpo_id                     String?
+  puesto_id                    String?
+  plaza_id                     String?
+  sociedad                     String?
+  nombre_realiza_queja         String?
+  cliente                      String?
+  empresa_presenta_queja       String?
+  persona_presenta_queja       String?
+  medio_recepcion_queja        String?
+  tipo_queja                   String?
+  ubicacion                    String?
+  nivel_queja                  String?
+  fecha_queja                  String?
+  motivo_queja                 String?
+  descripcion_queja            String?  @db.LongText
+  fecha_inicio                 String?
+  fecha_revision               String?
+  resolucion_queja             String?  @db.LongText
+  mes_queja                    String?
+  ano_queja                    String?
+  estado                       String?
   accion_correctiva_preventiva String?
-  anexo_evidencia  String?  @db.LongText
-  created_at       DateTime  @default(now())
-  created_by       String?
+  anexo_evidencia              String?  @db.LongText
+  created_at                   DateTime @default(now())
+  created_by                   String?
 }
 
 model c_control_aseadores {
-  id                String    @id @default(uuid())
-  empresa_id       String?
-  cliente_id       String?
-  contrato_id      String?
-  corpo_id         String?
-  puesto_id       String?
-  plaza_id         String?
-  nombre_aseador   String?
-  oficina_despacho String?
-  provincia        String?
-  canton           String?
-  distrito         String?
-  direccion        String?
-  metraje          String?
-  horario          String?
-  horas_dia        String?
-  horas_semana     String?
-  dias             String?
-  cantidad_personal String?
-  detalle_supervision String? @db.LongText
-  fecha_inicio     String?
-  lista_equipos_insumos String? @db.LongText
-  costo_mensual    String?
-  costo_anual      String?
-  codigo           String?
-  plaza            String?
-  observaciones    String?  @db.LongText
-  created_at       DateTime  @default(now())
-  created_by       String?
+  id                    String   @id @default(uuid())
+  empresa_id            String?
+  cliente_id            String?
+  contrato_id           String?
+  corpo_id              String?
+  puesto_id             String?
+  plaza_id              String?
+  nombre_aseador        String?
+  oficina_despacho      String?
+  provincia             String?
+  canton                String?
+  distrito              String?
+  direccion             String?
+  metraje               String?
+  horario               String?
+  horas_dia             String?
+  horas_semana          String?
+  dias                  String?
+  cantidad_personal     String?
+  detalle_supervision   String?  @db.LongText
+  fecha_inicio          String?
+  lista_equipos_insumos String?  @db.LongText
+  costo_mensual         String?
+  costo_anual           String?
+  codigo                String?
+  plaza                 String?
+  observaciones         String?  @db.LongText
+  created_at            DateTime @default(now())
+  created_by            String?
 }
 
 model c_agenda_minuta_fisica {
-  id                String    @id @default(uuid())
-  empresa_id       String?
-  cliente_id       String?
-  contrato_id      String?
-  corpo_id         String?
-  puesto_id       String?
-  plaza_id         String?
-  fecha            String?
-  puesto           String?
-  hora_inicio      String?
-  hora_fin         String?
-  elaborado_por    String?
-  minuta_numero    String?
-  presentes        String?   @db.LongText
-  observaciones    String?   @db.LongText
-  temas_tratados   String?   @db.LongText
-  notas            String?   @db.LongText
-  created_at       DateTime  @default(now())
-  created_by       String?
+  id             String   @id @default(uuid())
+  empresa_id     String?
+  cliente_id     String?
+  contrato_id    String?
+  corpo_id       String?
+  puesto_id      String?
+  plaza_id       String?
+  fecha          String?
+  puesto         String?
+  hora_inicio    String?
+  hora_fin       String?
+  elaborado_por  String?
+  minuta_numero  String?
+  presentes      String?  @db.LongText
+  observaciones  String?  @db.LongText
+  temas_tratados String?  @db.LongText
+  notas          String?  @db.LongText
+  created_at     DateTime @default(now())
+  created_by     String?
 }
 
 model c_plan_accion {
-  id                String    @id @default(uuid())
-  empresa_id       String?
-  cliente_id       String?
-  contrato_id      String?
-  corpo_id         String?
-  puesto_id       String?
-  plaza_id         String?
-  nombre_lugar     String?
+  id                       String   @id @default(uuid())
+  empresa_id               String?
+  cliente_id               String?
+  contrato_id              String?
+  corpo_id                 String?
+  puesto_id                String?
+  plaza_id                 String?
+  nombre_lugar             String?
   fecha_inicio_operaciones String?
-  tareas           String?   @db.LongText
-  created_at       DateTime  @default(now())
-  created_by       String?
+  tareas                   String?  @db.LongText
+  created_at               DateTime @default(now())
+  created_by               String?
 }
 
 model c_rol_trabajo {
-  id                String    @id @default(uuid())
-  empresa_id       String?
-  cliente_id       String?
-  contrato_id      String?
-  corpo_id         String?
-  puesto_id       String?
-  plaza_id         String?
-  area             String?
-  metraje          String?
-  horario          String?
-  personal         String?
-  horarios         String?   @db.LongText
-  created_at       DateTime  @default(now())
-  created_by       String?
+  id          String   @id @default(uuid())
+  empresa_id  String?
+  cliente_id  String?
+  contrato_id String?
+  corpo_id    String?
+  puesto_id   String?
+  plaza_id    String?
+  area        String?
+  metraje     String?
+  horario     String?
+  personal    String?
+  horarios    String?  @db.LongText
+  created_at  DateTime @default(now())
+  created_by  String?
 }
 
 model c_datos_basicos_contrato {
-  id                String    @id @default(uuid())
-  empresa_id       String?
-  cliente_id       String?
-  contrato_id      String?
-  corpo_id         String?
-  puesto_id       String?
-  plaza_id         String?
-  fecha_inicio_contrato String?
-  cliente_contrato String?
+  id                          String   @id @default(uuid())
+  empresa_id                  String?
+  cliente_id                  String?
+  contrato_id                 String?
+  corpo_id                    String?
+  puesto_id                   String?
+  plaza_id                    String?
+  fecha_inicio_contrato       String?
+  cliente_contrato            String?
   ejecutivo_gerente_asistente String?
-  personal         String?   @db.LongText
-  lugar_servicio    String?
-  roles_horarios    String?   @db.LongText
-  desglose_salarios String?  @db.LongText
-  tipo_uniforme     String?   @db.LongText
-  tipo_arma         String?   @db.LongText
-  capacitaciones    String?   @db.LongText
-  otros_datos       String?   @db.LongText
-  created_at       DateTime  @default(now())
-  created_by       String?
+  personal                    String?  @db.LongText
+  lugar_servicio              String?
+  roles_horarios              String?  @db.LongText
+  desglose_salarios           String?  @db.LongText
+  tipo_uniforme               String?  @db.LongText
+  tipo_arma                   String?  @db.LongText
+  capacitaciones              String?  @db.LongText
+  otros_datos                 String?  @db.LongText
+  created_at                  DateTime @default(now())
+  created_by                  String?
 }
 
 model c_cronograma_entrega_materiales_equipos {
-  id                String    @id @default(uuid())
-  empresa_id       String?
-  cliente_id       String?
-  contrato_id      String?
-  corpo_id         String?
-  puesto_id       String?
-  plaza_id         String?
-  contrato         String?
-  region           String?
-  puesto           String?
-  fecha_apertura_entrega String?
+  id                           String   @id @default(uuid())
+  empresa_id                   String?
+  cliente_id                   String?
+  contrato_id                  String?
+  corpo_id                     String?
+  puesto_id                    String?
+  plaza_id                     String?
+  contrato                     String?
+  region                       String?
+  puesto                       String?
+  fecha_apertura_entrega       String?
   responsable_apertura_entrega String?
-  equipos_solicitados String? @db.LongText
-  created_at       DateTime  @default(now())
-  created_by       String?
+  equipos_solicitados          String?  @db.LongText
+  created_at                   DateTime @default(now())
+  created_by                   String?
 }
 
 model c_plan_gestion_ambiental {
-  id                String    @id @default(uuid())
-  empresa_id       String?
-  cliente_id       String?
-  contrato_id      String?
-  corpo_id         String?
-  puesto_id       String?
-  plaza_id         String?
-  ubicacion        String?
-  objetivo         String?   @db.LongText
-  metodologia      String?   @db.LongText
-  rol_horario      String?   @db.LongText
-  uniformes        String?   @db.LongText
-  equipos          String?   @db.LongText
-  accesorios_varios String?  @db.LongText
-  tiempo_respuesta String?  @db.LongText
-  distribucion_labores String? @db.LongText
-  frecuencia_limpieza String? @db.LongText
-  supervision      String?   @db.LongText
-  estrategia       String?   @db.LongText
-  responsable      String?   @db.LongText
-  formularios      String?   @db.LongText
-  plan_capacitacion String?  @db.LongText
-  created_at       DateTime  @default(now())
-  created_by       String?
+  id                   String   @id @default(uuid())
+  empresa_id           String?
+  cliente_id           String?
+  contrato_id          String?
+  corpo_id             String?
+  puesto_id            String?
+  plaza_id             String?
+  ubicacion            String?
+  objetivo             String?  @db.LongText
+  metodologia          String?  @db.LongText
+  rol_horario          String?  @db.LongText
+  uniformes            String?  @db.LongText
+  equipos              String?  @db.LongText
+  accesorios_varios    String?  @db.LongText
+  tiempo_respuesta     String?  @db.LongText
+  distribucion_labores String?  @db.LongText
+  frecuencia_limpieza  String?  @db.LongText
+  supervision          String?  @db.LongText
+  estrategia           String?  @db.LongText
+  responsable          String?  @db.LongText
+  formularios          String?  @db.LongText
+  plan_capacitacion    String?  @db.LongText
+  created_at           DateTime @default(now())
+  created_by           String?
 }
 
 model c_plan_trabajo_aseo_limpieza {
-  id                                  String    @id @default(uuid())
-  empresa_id                         String?
-  cliente_id                         String?
-  contrato_id                        String?
-  corpo_id                           String?
-  puesto_id                         String?
-  plaza_id                           String?
-  ubicacion                          String?
-  objetivo                           String?   @db.LongText
-  metodologia_trabajo_ambitos_accion String?   @db.LongText
-  rol_horario_trabajo                String?   @db.LongText
-  uniformes                          String?   @db.LongText
-  equipos                            String?   @db.LongText
-  accesorios_varios                  String?   @db.LongText
-  tiempo_respuesta_disposicion_imprevistos String? @db.LongText
-  distribucion_diaria_labores_personal String? @db.LongText
-  frecuencia_minima_limpieza_areas   String?   @db.LongText
-  supervision_metodo_rol_visitas     String?   @db.LongText
-  estrategia_adecuado_continuo_servicio String? @db.LongText
-  responsable_general_contrato       String?   @db.LongText
-  formularios_registro_control_puestos_equipos String? @db.LongText
-  plan_capacitacion                  String?   @db.LongText
-  created_at                         DateTime  @default(now())
-  created_by                         String?
+  id                                           String   @id @default(uuid())
+  empresa_id                                   String?
+  cliente_id                                   String?
+  contrato_id                                  String?
+  corpo_id                                     String?
+  puesto_id                                    String?
+  plaza_id                                     String?
+  objetivo                                     String?  @db.LongText
+  metodologia_trabajo_ambitos_accion           String?  @db.LongText
+  rol_horario_trabajo                          String?  @db.LongText
+  uniformes                                    String?  @db.LongText
+  equipos                                      String?  @db.LongText
+  accesorios_varios                            String?  @db.LongText
+  tiempo_respuesta_disposicion_imprevistos     String?  @db.LongText
+  distribucion_diaria_labores_personal         String?  @db.LongText
+  frecuencia_minima_limpieza_areas             String?  @db.LongText
+  supervision_metodo_rol_visitas               String?  @db.LongText
+  estrategia_adecuado_continuo_servicio        String?  @db.LongText
+  responsable_general_contrato                 String?  @db.LongText
+  formularios_registro_control_puestos_equipos String?  @db.LongText
+  plan_capacitacion                            String?  @db.LongText
+  created_at                                   DateTime @default(now())
+  created_by                                   String?
+  ubicacion                                    String?
 }
 
 model c_plan_atencion_situaciones_especiales {
-  id                String    @id @default(uuid())
-  empresa_id       String?
-  cliente_id       String?
-  contrato_id      String?
-  corpo_id         String?
-  puesto_id       String?
-  plaza_id         String?
-  edificio         String?
-  supervisor       String?
-  situaciones      String?   @db.LongText
-  created_at       DateTime  @default(now())
-  created_by       String?
+  id          String   @id @default(uuid())
+  empresa_id  String?
+  cliente_id  String?
+  contrato_id String?
+  corpo_id    String?
+  puesto_id   String?
+  plaza_id    String?
+  edificio    String?
+  supervisor  String?
+  situaciones String?  @db.LongText
+  created_at  DateTime @default(now())
+  created_by  String?
 }
 
 model c_registro_tareas_actividades_limpieza {
-  id                                  String    @id @default(uuid())
-  empresa_id                         String?
-  cliente_id                         String?
-  contrato_id                        String?
-  corpo_id                           String?
-  puesto_id                         String?
-  plaza_id                           String?
-  miscelaneo                         String?
-  area_piso                          String?
-  turno_inicio                       String?
-  turno_fin                          String?
-  mes                                String?
-  supervisor                         String?
-  sucursal                           String?
-  area                               String?
-  cliente                            String?
-  actividades_ejecucion_diaria       String?   @db.LongText
-  actividades_ejecucion_semanal      String?   @db.LongText
-  actividades_quincenales            String?   @db.LongText
-  actividades_mensual                String?   @db.LongText
-  actividades_bimensual              String?   @db.LongText
-  actividades_trimestral             String?   @db.LongText
-  actividades_cuatrimestral         String?   @db.LongText
-  actividades_semestral              String?   @db.LongText
-  actividades_anual                  String?   @db.LongText
-  otras_actividades                  String?   @db.LongText
-  programa_eventos_especiales        String?   @db.LongText
-  firma_miscelaneo                   String?   @db.LongText
-  firma_supervisor                   String?   @db.LongText
-  created_at                         DateTime  @default(now())
-  created_by                         String?
+  id                            String   @id @default(uuid())
+  empresa_id                    String?
+  cliente_id                    String?
+  contrato_id                   String?
+  corpo_id                      String?
+  puesto_id                     String?
+  plaza_id                      String?
+  miscelaneo                    String?
+  area_piso                     String?
+  turno_inicio                  String?
+  turno_fin                     String?
+  mes                           String?
+  supervisor                    String?
+  sucursal                      String?
+  area                          String?
+  cliente                       String?
+  actividades_ejecucion_diaria  String?  @db.LongText
+  actividades_ejecucion_semanal String?  @db.LongText
+  actividades_quincenales       String?  @db.LongText
+  actividades_mensual           String?  @db.LongText
+  actividades_bimensual         String?  @db.LongText
+  actividades_trimestral        String?  @db.LongText
+  actividades_cuatrimestral     String?  @db.LongText
+  actividades_semestral         String?  @db.LongText
+  actividades_anual             String?  @db.LongText
+  otras_actividades             String?  @db.LongText
+  programa_eventos_especiales   String?  @db.LongText
+  firma_miscelaneo              String?  @db.LongText
+  firma_supervisor              String?  @db.LongText
+  created_at                    DateTime @default(now())
+  created_by                    String?
 }
 
 model c_matriz_riesgos {
-  id                String    @id @default(uuid())
-  empresa_id       String?
-  cliente_id       String?
-  contrato_id      String?
-  corpo_id         String?
-  puesto_id       String?
-  plaza_id         String?
-  riesgos          String?   @db.LongText
-  created_at       DateTime  @default(now())
-  created_by       String?
+  id          String   @id @default(uuid())
+  empresa_id  String?
+  cliente_id  String?
+  contrato_id String?
+  corpo_id    String?
+  puesto_id   String?
+  plaza_id    String?
+  riesgos     String?  @db.LongText
+  created_at  DateTime @default(now())
+  created_by  String?
 }
 
 model c_matriz_oportunidades {
-  id                String    @id @default(uuid())
-  empresa_id       String?
-  cliente_id       String?
-  contrato_id      String?
-  corpo_id         String?
-  puesto_id       String?
-  plaza_id         String?
-  oportunidades    String?   @db.LongText
-  created_at       DateTime  @default(now())
-  created_by       String?
+  id            String   @id @default(uuid())
+  empresa_id    String?
+  cliente_id    String?
+  contrato_id   String?
+  corpo_id      String?
+  puesto_id     String?
+  plaza_id      String?
+  oportunidades String?  @db.LongText
+  created_at    DateTime @default(now())
+  created_by    String?
 }
 
 model c_matriz_indicador_procesos {
-  id                String    @id @default(uuid())
-  empresa_id       String?
-  cliente_id       String?
-  contrato_id      String?
-  corpo_id         String?
-  puesto_id       String?
-  plaza_id         String?
-  procesos         String?   @db.LongText
-  created_at       DateTime  @default(now())
-  created_by       String?
+  id          String   @id @default(uuid())
+  empresa_id  String?
+  cliente_id  String?
+  contrato_id String?
+  corpo_id    String?
+  puesto_id   String?
+  plaza_id    String?
+  procesos    String?  @db.LongText
+  created_at  DateTime @default(now())
+  created_by  String?
 }
 
 model c_rol_trabajo_mensual {
-  id                String    @id @default(uuid())
-  empresa_id       String?
-  cliente_id       String?
-  contrato_id      String?
-  corpo_id         String?
-  puesto_id       String?
-  plaza_id         String?
-  mes_ano          String?
-  cliente          String?
-  empleados        String?   @db.LongText
-  created_at       DateTime  @default(now())
-  created_by       String?
+  id          String   @id @default(uuid())
+  empresa_id  String?
+  cliente_id  String?
+  contrato_id String?
+  corpo_id    String?
+  puesto_id   String?
+  plaza_id    String?
+  mes_ano     String?
+  cliente     String?
+  empleados   String?  @db.LongText
+  created_at  DateTime @default(now())
+  created_by  String?
 }
 
 model c_solicitud_permiso {
-  id                String    @id @default(uuid())
-  empresa_id       String?
-  cliente_id       String?
-  contrato_id      String?
-  corpo_id         String?
-  puesto_id       String?
-  plaza_id         String?
-  persona_solicita String?
-  codigo           String?
-  contrato         String?
-  horario          String?
-  fecha_solicitud  String?
-  motivo_permiso   String?   @db.LongText
-  permiso_sustituido_por String?
-  codigo_sustituto String?
-  firma_gerente    String?   @db.LongText
-  firma_encargado_monitoreo String? @db.LongText
-  permiso_coordinado_por String?
-  created_at       DateTime  @default(now())
-  created_by       String?
+  id                        String   @id @default(uuid())
+  empresa_id                String?
+  cliente_id                String?
+  contrato_id               String?
+  corpo_id                  String?
+  puesto_id                 String?
+  plaza_id                  String?
+  persona_solicita          String?
+  codigo                    String?
+  contrato                  String?
+  horario                   String?
+  fecha_solicitud           String?
+  motivo_permiso            String?  @db.LongText
+  permiso_sustituido_por    String?
+  codigo_sustituto          String?
+  firma_gerente             String?  @db.LongText
+  firma_encargado_monitoreo String?  @db.LongText
+  permiso_coordinado_por    String?
+  created_at                DateTime @default(now())
+  created_by                String?
 }
 
 model c_control_asistencia {
-  id                String    @id @default(uuid())
-  empresa_id       String?
-  cliente_id       String?
-  contrato_id      String?
-  corpo_id         String?
+  id              String   @id @default(uuid())
+  empresa_id      String?
+  cliente_id      String?
+  contrato_id     String?
+  corpo_id        String?
   puesto_id       String?
-  plaza_id         String?
-  cliente          String?
-  fecha            String?
-  turno            String?
-  area_piso        String?
-  total_presentes  String?
-  fijos            String?
-  colaboradores    String?   @db.LongText
-  created_at       DateTime  @default(now())
-  created_by       String?
+  plaza_id        String?
+  cliente         String?
+  fecha           String?
+  turno           String?
+  area_piso       String?
+  total_presentes String?
+  fijos           String?
+  colaboradores   String?  @db.LongText
+  created_at      DateTime @default(now())
+  created_by      String?
 }
 
 model c_apertura_cierre_puesto {
-  id                String    @id @default(uuid())
-  empresa_id       String?
-  cliente_id       String?
-  contrato_id      String?
-  corpo_id         String?
-  puesto_id       String?
-  plaza_id         String?
-  cliente          String?
-  numero_corpo     String?
-  numero_puesto    String?
-  fecha_realizado  String?
-  nombre_corpo     String?
-  nombre_puesto    String?
-  tipo             String?
-  actividades      String?   @db.LongText
-  inventario       String?   @db.LongText
-  fotos            String?   @db.LongText
-  otras_observaciones String? @db.LongText
+  id                           String   @id @default(uuid())
+  empresa_id                   String?
+  cliente_id                   String?
+  contrato_id                  String?
+  corpo_id                     String?
+  puesto_id                    String?
+  plaza_id                     String?
+  cliente                      String?
+  numero_corpo                 String?
+  numero_puesto                String?
+  fecha_realizado              String?
+  nombre_corpo                 String?
+  nombre_puesto                String?
+  tipo                         String?
+  actividades                  String?  @db.LongText
+  inventario                   String?  @db.LongText
+  fotos                        String?  @db.LongText
+  otras_observaciones          String?  @db.LongText
   nombre_representante_cliente String?
-  firma_cliente    String?   @db.LongText
-  created_at       DateTime  @default(now())
-  created_by       String?
+  firma_cliente                String?  @db.LongText
+  created_at                   DateTime @default(now())
+  created_by                   String?
 }
 
 model c_registro_induccion_recorrido {
-  id                String    @id @default(uuid())
-  empresa_id       String?
-  cliente_id       String?
-  contrato_id      String?
-  corpo_id         String?
-  puesto_id       String?
-  plaza_id         String?
-  fecha            String?
-  renglon_edificio String?
-  supervisor_cliente String?
+  id                     String   @id @default(uuid())
+  empresa_id             String?
+  cliente_id             String?
+  contrato_id            String?
+  corpo_id               String?
+  puesto_id              String?
+  plaza_id               String?
+  fecha                  String?
+  renglon_edificio       String?
+  supervisor_cliente     String?
   supervisor_corporacion String?
-  temas_desarrollados String? @db.LongText
-  aspectos_especificos String? @db.LongText
-  participantes    String?   @db.LongText
-  firma_supervisor String?   @db.LongText
-  created_at       DateTime  @default(now())
-  created_by       String?
+  temas_desarrollados    String?  @db.LongText
+  aspectos_especificos   String?  @db.LongText
+  participantes          String?  @db.LongText
+  firma_supervisor       String?  @db.LongText
+  created_at             DateTime @default(now())
+  created_by             String?
 }
 
 model c_informe_supervision {
-  id                String    @id @default(uuid())
-  empresa_id       String?
-  cliente_id       String?
-  contrato_id      String?
-  corpo_id         String?
-  puesto_id       String?
-  plaza_id         String?
-  fecha            String?
-  piso             String?
-  area             String?
-  aseador          String?
-  supervisor       String?
-  limpieza_general String?   @db.LongText
-  cuarto_aseo      String?   @db.LongText
-  servicios_sanitarios String? @db.LongText
-  uniforme_presentacion String? @db.LongText
-  estado_equipos   String?   @db.LongText
-  calificacion_general String? @db.LongText
-  firma_aseador    String?   @db.LongText
-  firma_supervisor String?   @db.LongText
-  created_at       DateTime  @default(now())
-  created_by       String?
+  id                    String   @id @default(uuid())
+  empresa_id            String?
+  cliente_id            String?
+  contrato_id           String?
+  corpo_id              String?
+  puesto_id             String?
+  plaza_id              String?
+  fecha                 String?
+  piso                  String?
+  area                  String?
+  aseador               String?
+  supervisor            String?
+  limpieza_general      String?  @db.LongText
+  cuarto_aseo           String?  @db.LongText
+  servicios_sanitarios  String?  @db.LongText
+  uniforme_presentacion String?  @db.LongText
+  estado_equipos        String?  @db.LongText
+  calificacion_general  String?  @db.LongText
+  firma_aseador         String?  @db.LongText
+  firma_supervisor      String?  @db.LongText
+  created_at            DateTime @default(now())
+  created_by            String?
 }
 
 model c_guia_uso_cepillo_electrico {
-  id                String    @id @default(uuid())
-  empresa_id       String?
-  cliente_id       String?
-  contrato_id      String?
-  corpo_id         String?
-  puesto_id       String?
-  plaza_id         String?
-  miscelaneo       String?
-  capacitador      String?
-  cedula           String?
-  fecha            String?
-  firma_miscelaneo String?   @db.LongText
-  firma_capacitador String?   @db.LongText
-  created_at       DateTime  @default(now())
-  created_by       String?
+  id                String   @id @default(uuid())
+  empresa_id        String?
+  cliente_id        String?
+  contrato_id       String?
+  corpo_id          String?
+  puesto_id         String?
+  plaza_id          String?
+  miscelaneo        String?
+  capacitador       String?
+  cedula            String?
+  fecha             String?
+  firma_miscelaneo  String?  @db.LongText
+  firma_capacitador String?  @db.LongText
+  created_at        DateTime @default(now())
+  created_by        String?
 }
 
 model c_listado_general_clientes {
-  id                String    @id @default(uuid())
-  empresa_id       String?
-  cliente_id       String?
-  contrato_id      String?
-  corpo_id         String?
-  puesto_id       String?
-  plaza_id         String?
-  numero_cliente   String?
-  fecha_inicio     String?
-  fecha_finalizacion String?
-  extension_prorroga String?
-  nombre_cliente   String?
-  area_sede        String?
-  numero_corpo     String?
-  numero_licitacion String?
-  cantidad_miscelaneos String?
-  tipo_requerimiento_insumos String?
+  id                            String   @id @default(uuid())
+  empresa_id                    String?
+  cliente_id                    String?
+  contrato_id                   String?
+  corpo_id                      String?
+  puesto_id                     String?
+  plaza_id                      String?
+  numero_cliente                String?
+  fecha_inicio                  String?
+  fecha_finalizacion            String?
+  extension_prorroga            String?
+  nombre_cliente                String?
+  area_sede                     String?
+  numero_corpo                  String?
+  numero_licitacion             String?
+  cantidad_miscelaneos          String?
+  tipo_requerimiento_insumos    String?
   tipo_requerimiento_utencilios String?
-  tipo_requerimiento_equipos String?
-  ubicacion        String?
-  fecha_reunion_apertura String?
-  necesidades      String?   @db.LongText
-  gustos_preferencias String? @db.LongText
-  supervisor_asignado String?
-  condiciones_licitaciones String? @db.LongText
-  plan_trabajo     String?   @db.LongText
-  encuestas         String?   @db.LongText
-  created_at       DateTime  @default(now())
-  created_by       String?
+  tipo_requerimiento_equipos    String?
+  ubicacion                     String?
+  fecha_reunion_apertura        String?
+  necesidades                   String?  @db.LongText
+  gustos_preferencias           String?  @db.LongText
+  supervisor_asignado           String?
+  condiciones_licitaciones      String?  @db.LongText
+  plan_trabajo                  String?  @db.LongText
+  encuestas                     String?  @db.LongText
+  created_at                    DateTime @default(now())
+  created_by                    String?
 }
 
 model c_control_acciones_mejora {
-  id                String    @id @default(uuid())
-  empresa_id       String?
-  cliente_id       String?
-  contrato_id      String?
-  corpo_id         String?
-  puesto_id       String?
-  plaza_id         String?
-  numero_accion    String?
-  causa_origen     String?   @db.LongText
-  fecha_deteccion_incidencia String?
-  mes_deteccion    String?
-  tipo_accion      String?
-  proceso_relacionado String? @db.LongText
-  encargado_proceso String?
-  origen_accion    String?
-  fecha_elaboracion_plan String?
-  tiempo_plan_vs_deteccion String?
-  plan_elaborado_a_tiempo String?
-  detalle_nc_opr_dm String?  @db.LongText
-  analisis_causas  String?   @db.LongText
-  accion_inmediata String?   @db.LongText
-  accion_mejora    String?   @db.LongText
-  fecha_aprobacion String?
-  responsable_ejecucion String?
-  fecha_programada_ejecucion String?
-  fecha_real_ejecucion String?
-  mes_ejecucion    String?
-  modif_fecha_ejecucion_motivo String? @db.LongText
-  aplica_seguimiento String?
-  seguimiento_meses String?  @db.LongText
-  evidencias       String?   @db.LongText
-  estado_accion    String?
-  a_tiempo         String?
-  no_conformidades_similares String?
-  reincidencia     String?
-  actualiza_matriz_riesgos String?
-  efectividad      String?
-  no_efectiva      String?
-  cambiar_al_8d    String?
-  cerrada          String?
-  dueño_proceso    String?
-  created_at       DateTime  @default(now())
-  created_by       String?
+  id                           String   @id @default(uuid())
+  empresa_id                   String?
+  cliente_id                   String?
+  contrato_id                  String?
+  corpo_id                     String?
+  puesto_id                    String?
+  plaza_id                     String?
+  numero_accion                String?
+  causa_origen                 String?  @db.LongText
+  fecha_deteccion_incidencia   String?
+  mes_deteccion                String?
+  tipo_accion                  String?
+  proceso_relacionado          String?  @db.LongText
+  encargado_proceso            String?
+  origen_accion                String?
+  fecha_elaboracion_plan       String?
+  tiempo_plan_vs_deteccion     String?
+  plan_elaborado_a_tiempo      String?
+  detalle_nc_opr_dm            String?  @db.LongText
+  analisis_causas              String?  @db.LongText
+  accion_inmediata             String?  @db.LongText
+  accion_mejora                String?  @db.LongText
+  fecha_aprobacion             String?
+  responsable_ejecucion        String?
+  fecha_programada_ejecucion   String?
+  fecha_real_ejecucion         String?
+  mes_ejecucion                String?
+  modif_fecha_ejecucion_motivo String?  @db.LongText
+  aplica_seguimiento           String?
+  seguimiento_meses            String?  @db.LongText
+  evidencias                   String?  @db.LongText
+  estado_accion                String?
+  a_tiempo                     String?
+  no_conformidades_similares   String?
+  reincidencia                 String?
+  actualiza_matriz_riesgos     String?
+  efectividad                  String?
+  no_efectiva                  String?
+  cambiar_al_8d                String?
+  cerrada                      String?
+  dueño_proceso               String?
+  created_at                   DateTime @default(now())
+  created_by                   String?
 }
 
 model c_politica_calidad {
-  id                String    @id @default(uuid())
-  empresa_id       String?
-  cliente_id       String?
-  contrato_id      String?
-  corpo_id         String?
-  puesto_id       String?
-  plaza_id         String?
-  politica_contenido String? @db.LongText
-  nombre_aprobado  String?
-  firma_aprobado   String?   @db.LongText
-  created_at       DateTime  @default(now())
-  created_by       String?
+  id                 String   @id @default(uuid())
+  empresa_id         String?
+  cliente_id         String?
+  contrato_id        String?
+  corpo_id           String?
+  puesto_id          String?
+  plaza_id           String?
+  politica_contenido String?  @db.LongText
+  nombre_aprobado    String?
+  firma_aprobado     String?  @db.LongText
+  created_at         DateTime @default(now())
+  created_by         String?
 }
 
 model c_objetivos_empresariales_calidad {
-  id                String    @id @default(uuid())
-  empresa_id       String?
-  cliente_id       String?
-  contrato_id      String?
-  corpo_id         String?
+  id              String   @id @default(uuid())
+  empresa_id      String?
+  cliente_id      String?
+  contrato_id     String?
+  corpo_id        String?
   puesto_id       String?
-  plaza_id         String?
-  ambitos          String?   @db.LongText
-  nombre_aprobado  String?
-  firma_aprobado   String?   @db.LongText
-  created_at       DateTime  @default(now())
-  created_by       String?
+  plaza_id        String?
+  ambitos         String?  @db.LongText
+  nombre_aprobado String?
+  firma_aprobado  String?  @db.LongText
+  created_at      DateTime @default(now())
+  created_by      String?
 }
 
 model c_matriz_analisis_partes_interesadas {
-  id                String    @id @default(uuid())
-  empresa_id       String?
-  cliente_id       String?
-  contrato_id      String?
-  corpo_id         String?
-  puesto_id       String?
-  plaza_id         String?
-  partes_interesadas String? @db.LongText
-  created_at       DateTime  @default(now())
-  created_by       String?
+  id                 String   @id @default(uuid())
+  empresa_id         String?
+  cliente_id         String?
+  contrato_id        String?
+  corpo_id           String?
+  puesto_id          String?
+  plaza_id           String?
+  partes_interesadas String?  @db.LongText
+  created_at         DateTime @default(now())
+  created_by         String?
 }
 
 model c_plan_comunicacion {
-  id                String    @id @default(uuid())
-  empresa_id       String?
-  cliente_id       String?
-  contrato_id      String?
-  corpo_id         String?
-  puesto_id       String?
-  plaza_id         String?
-  comunicaciones   String?   @db.LongText
+  id                     String   @id @default(uuid())
+  empresa_id             String?
+  cliente_id             String?
+  contrato_id            String?
+  corpo_id               String?
+  puesto_id              String?
+  plaza_id               String?
+  comunicaciones         String?  @db.LongText
   responsable_aprobacion String?
-  puesto_aprobacion String?
-  fecha_aprobacion String?
-  created_at       DateTime  @default(now())
-  created_by       String?
+  puesto_aprobacion      String?
+  fecha_aprobacion       String?
+  created_at             DateTime @default(now())
+  created_by             String?
 }
 
 model c_matriz_gestion_conocimiento {
-  id                String    @id @default(uuid())
-  empresa_id       String?
-  cliente_id       String?
-  contrato_id      String?
-  corpo_id         String?
-  puesto_id       String?
-  plaza_id         String?
-  registros        String?   @db.LongText
-  created_at       DateTime  @default(now())
-  created_by       String?
+  id          String   @id @default(uuid())
+  empresa_id  String?
+  cliente_id  String?
+  contrato_id String?
+  corpo_id    String?
+  puesto_id   String?
+  plaza_id    String?
+  registros   String?  @db.LongText
+  created_at  DateTime @default(now())
+  created_by  String?
 }
 
 model c_planificacion_cambios_sgc {
-  id                String    @id @default(uuid())
-  empresa_id       String?
-  cliente_id       String?
-  contrato_id      String?
-  corpo_id         String?
-  puesto_id       String?
-  plaza_id         String?
-  datos_cambio     String?   @db.LongText
-  actividades      String?   @db.LongText
-  aprobado_por     String?
-  firma_representante String? @db.LongText
-  fecha_aprobacion String?
-  created_at       DateTime  @default(now())
-  created_by       String?
+  id                  String   @id @default(uuid())
+  empresa_id          String?
+  cliente_id          String?
+  contrato_id         String?
+  corpo_id            String?
+  puesto_id           String?
+  plaza_id            String?
+  datos_cambio        String?  @db.LongText
+  actividades         String?  @db.LongText
+  aprobado_por        String?
+  firma_representante String?  @db.LongText
+  fecha_aprobacion    String?
+  created_at          DateTime @default(now())
+  created_by          String?
 }
 
 model c_rutas_giras {
-  id                           String    @id @default(uuid())
+  id                           String   @id @default(uuid())
   empresa_id                   String?
   cliente_id                   String?
   contrato_id                  String?
@@ -1571,7 +1584,7 @@ model c_rutas_giras {
   notas_cambios                String?
   estado                       String?
   nombre_persona_refuerzo      String?
-  created_at                   DateTime  @default(now())
+  created_at                   DateTime @default(now())
   created_by                   String?
 }
 
@@ -1588,33 +1601,39 @@ model c_empleado_almuerzo {
 }
 
 model c_encuesta_cliente {
-  id                 Int      @id @default(autoincrement())
-  empresa_id         Int
-  cliente_id         Int
-  corpo_id           Int
-  puesto_id          Int
-  division_id        Int
-  empresa_evaluado   String   @db.VarChar(55)
-  nombre_evaluado    String   @db.VarChar(45)
-  cedula_evaluado    String   @db.VarChar(25)
-  telefono_evaluado  String   @db.VarChar(25)
-  email_evaluado     String   @db.VarChar(50)
-  responsable_id     Int
-  nombre_responsable String   @db.VarChar(45)
-  cedula_responsable String   @db.VarChar(25)
-  firma_responsable  String   @db.LongText
-  firma_evaluado     String   @db.LongText
-  fecha              DateTime @db.Date
-  evaluaciones       String   @db.LongText
-  observaciones      String   @db.LongText
-  created_at         DateTime @db.DateTime(0)
-  
-  e_estructura_empresa e_estructura_empresa @relation(fields: [empresa_id], references: [id], onDelete: NoAction)
-  e_estructura_cliente e_estructura_cliente @relation(fields: [cliente_id], references: [id], onDelete: NoAction)
+  id                    Int                   @id @default(autoincrement())
+  empresa_id            Int
+  cliente_id            Int
+  corpo_id              Int
+  puesto_id             Int
+  division_id           Int
+  responsable_id        Int
+  fecha                 DateTime              @db.Date
+  evaluaciones          String                @db.LongText
+  created_at            DateTime              @db.DateTime(0)
+  firma_responsable     String                @db.LongText
+  nombre_evaluado       String                @db.VarChar(45)
+  cedula_evaluado       String                @db.VarChar(25)
+  cedula_responsable    String                @db.VarChar(25)
+  nombre_responsable    String                @db.VarChar(45)
+  email_evaluado        String                @db.VarChar(50)
+  firma_evaluado        String                @db.LongText
+  telefono_evaluado     String                @db.VarChar(25)
+  empresa_evaluado      String                @db.VarChar(55)
+  observaciones         String                @db.LongText
+  e_estructura_cliente  e_estructura_cliente  @relation(fields: [cliente_id], references: [id], onDelete: NoAction)
   e_estructura_sucursal e_estructura_sucursal @relation(fields: [corpo_id], references: [id], onDelete: NoAction)
-  e_estructura_puesto e_estructura_puesto @relation(fields: [puesto_id], references: [id], onDelete: NoAction)
-  n_division n_division @relation(fields: [division_id], references: [id], onDelete: NoAction)
-  c_empleado c_empleado @relation(fields: [responsable_id], references: [id], onDelete: NoAction)
+  n_division            n_division            @relation(fields: [division_id], references: [id], onDelete: NoAction)
+  e_estructura_empresa  e_estructura_empresa  @relation(fields: [empresa_id], references: [id], onDelete: NoAction)
+  e_estructura_puesto   e_estructura_puesto   @relation(fields: [puesto_id], references: [id], onDelete: NoAction)
+  c_empleado            c_empleado            @relation(fields: [responsable_id], references: [id], onDelete: NoAction)
+
+  @@index([cliente_id], map: "c_encuesta_cliente_cliente_id_fkey")
+  @@index([corpo_id], map: "c_encuesta_cliente_corpo_id_fkey")
+  @@index([division_id], map: "c_encuesta_cliente_division_id_fkey")
+  @@index([empresa_id], map: "c_encuesta_cliente_empresa_id_fkey")
+  @@index([puesto_id], map: "c_encuesta_cliente_puesto_id_fkey")
+  @@index([responsable_id], map: "c_encuesta_cliente_responsable_id_fkey")
 }
 
 model refresh_token {
@@ -2726,19 +2745,19 @@ model e_estructura_cliente {
   usuario_actualizacion        String?                        @db.VarChar(255)
   fecha_inactivacion           DateTime?                      @db.DateTime(0)
   usuario_inactivacion         String?                        @db.VarChar(255)
-  c_notas_voz                  c_notas_voz[]
-  e_registro_capacitaciones    e_registro_capacitaciones[]
-  c_encuesta_cliente           c_encuesta_cliente[]
-  c_incidente                  c_incidente[]
   a_recibo_pago                a_recibo_pago[]
   c_empleado_plaza             c_empleado_plaza[]
-  e_registro_vehiculos         e_registro_vehiculos[]
-  e_registro_personas          e_registro_personas[]
+  c_encuesta_cliente           c_encuesta_cliente[]
+  c_incidente                  c_incidente[]
+  c_notas_voz                  c_notas_voz[]
   e_actividad_corpo            e_actividad_corpo[]
   e_empleado_lista_negra       e_empleado_lista_negra[]
   e_estructura_empresa         e_estructura_empresa?          @relation(fields: [empresa_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "FK_AE021871521E1991")
   e_estructura_cliente_usuario e_estructura_cliente_usuario[]
   e_estructura_contrato        e_estructura_contrato[]
+  e_registro_capacitaciones    e_registro_capacitaciones[]
+  e_registro_personas          e_registro_personas[]
+  e_registro_vehiculos         e_registro_vehiculos[]
 
   @@index([empresa_id], map: "IDX_AE021871521E1991")
 }
@@ -2902,16 +2921,16 @@ model e_estructura_empresa {
   correo                      String?                       @db.VarChar(64)
   telefono                    String?                       @db.VarChar(32)
   plan_banco_bac              String?                       @db.VarChar(255)
-  c_notas_voz                 c_notas_voz[]
-  c_encuesta_cliente          c_encuesta_cliente[]
-  e_registro_capacitaciones   e_registro_capacitaciones[]
-  c_incidente                 c_incidente[]
   b_consecutivo_empresa_banco b_consecutivo_empresa_banco[]
   c_empleado_plaza            c_empleado_plaza[]
+  c_encuesta_cliente          c_encuesta_cliente[]
   c_incapacidad_ins           c_incapacidad_ins[]
+  c_incidente                 c_incidente[]
+  c_notas_voz                 c_notas_voz[]
   e_actividad_corpo           e_actividad_corpo[]
   e_estructura_cliente        e_estructura_cliente[]
   e_estructura_contrato       e_estructura_contrato[]
+  e_registro_capacitaciones   e_registro_capacitaciones[]
   n_empresa_banco             n_empresa_banco[]
   n_empresa_poliza            n_empresa_poliza[]
   pg_planilla_extra           pg_planilla_extra[]
@@ -3010,20 +3029,21 @@ model e_estructura_plazas {
   empleadoPlaza_id                                                            Int?
   maestra                                                                     Boolean?
   peso                                                                        Decimal?                               @db.Decimal(10, 2)
-  c_plaza_notification                                                        c_plaza_notification[]
-  c_evaluacion                                                                c_evaluacion[]
   c_cambio_guardia_c_cambio_guardia_plazaAusente_idToe_estructura_plazas      c_cambio_guardia[]                     @relation("c_cambio_guardia_plazaAusente_idToe_estructura_plazas")
   c_cambio_guardia_c_cambio_guardia_plazaReemplaza_idToe_estructura_plazas    c_cambio_guardia[]                     @relation("c_cambio_guardia_plazaReemplaza_idToe_estructura_plazas")
   c_empleado_plaza_c_empleado_plaza_plaza_idToe_estructura_plazas             c_empleado_plaza[]                     @relation("c_empleado_plaza_plaza_idToe_estructura_plazas")
+  c_evaluacion                                                                c_evaluacion[]
   c_horario_dia                                                               c_horario_dia[]
   c_induccion_dia                                                             c_induccion_dia[]
   c_inducciones_c_inducciones_plazaDestino_idToe_estructura_plazas            c_inducciones[]                        @relation("c_inducciones_plazaDestino_idToe_estructura_plazas")
   c_inducciones_c_inducciones_plazaOrigen_idToe_estructura_plazas             c_inducciones[]                        @relation("c_inducciones_plazaOrigen_idToe_estructura_plazas")
   c_intercambio_linea_c_intercambio_linea_plazaInicio_idToe_estructura_plazas c_intercambio_linea[]                  @relation("c_intercambio_linea_plazaInicio_idToe_estructura_plazas")
   c_intercambio_linea_c_intercambio_linea_plazaFin_idToe_estructura_plazas    c_intercambio_linea[]                  @relation("c_intercambio_linea_plazaFin_idToe_estructura_plazas")
+  c_plaza_notification                                                        c_plaza_notification[]
   c_solicitud_empleo                                                          c_solicitud_empleo[]
   c_traslado_temp                                                             c_traslado_temp[]
   e_actividad_corpo                                                           e_actividad_corpo[]
+  e_actividad_corpo_plaza                                                     e_actividad_corpo_plaza[]
   e_estructura_bonificaciones_plaza                                           e_estructura_bonificaciones_plaza[]
   e_estructura_dia_excepcion_plaza                                            e_estructura_dia_excepcion_plaza[]
   e_estructura_horario_plaza_historial                                        e_estructura_horario_plaza_historial[]
@@ -3066,15 +3086,13 @@ model e_estructura_puesto {
   fecha_inactivacion                         DateTime?                                    @db.DateTime(0)
   usuario_inactivacion                       String?                                      @db.VarChar(255)
   es_cubrevacaciones                         Boolean?
-  e_capacitacion_puesto                      e_capacitacion_puesto[]
+  c_empleado_plaza                           c_empleado_plaza[]
   c_encuesta_cliente                         c_encuesta_cliente[]
   c_evaluacion                               c_evaluacion[]
-  e_registro_vehiculos                       e_registro_vehiculos[]
-  e_registro_personas                        e_registro_personas[]
-  c_empleado_plaza                           c_empleado_plaza[]
   c_induccion                                c_induccion[]
   c_puesto_notas                             c_puesto_notas[]
   e_actividad_corpo                          e_actividad_corpo[]
+  e_capacitacion_puesto                      e_capacitacion_puesto[]
   e_estructura_articulo_corpo_puesto_entrega e_estructura_articulo_corpo_puesto_entrega[]
   e_estructura_articulo_corpo_puesto_plan    e_estructura_articulo_corpo_puesto_plan[]
   e_estructura_dia_excepcion_puesto          e_estructura_dia_excepcion_puesto[]
@@ -3084,6 +3102,8 @@ model e_estructura_puesto {
   e_estructura_combo_articulo_cp             e_estructura_combo_articulo_cp?              @relation(fields: [comboArticulosCP_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "FK_5C9F9D207A17505D")
   e_estructura_horariopuesto                 e_estructura_horariopuesto?                  @relation(fields: [horarioPuesto_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "FK_5C9F9D209FF23C2C")
   n_horas_extras                             n_horas_extras?                              @relation(fields: [tipoHoraExtra_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "FK_5C9F9D20EB6A1B22")
+  e_registro_personas                        e_registro_personas[]
+  e_registro_vehiculos                       e_registro_vehiculos[]
   m_reposicion_de_horas                      m_reposicion_de_horas[]
 
   @@index([sucursal_id], map: "IDX_5C9F9D20279A5D5E")
@@ -3129,15 +3149,12 @@ model e_estructura_sucursal {
   usuario_actualizacion                      String?                                      @db.VarChar(255)
   fecha_inactivacion                         DateTime?                                    @db.DateTime(0)
   usuario_inactivacion                       String?                                      @db.VarChar(255)
-  c_notas_voz                                c_notas_voz[]
-  c_encuesta_cliente                         c_encuesta_cliente[]
-  e_registro_capacitaciones                  e_registro_capacitaciones[]
-  c_incidente                                c_incidente[]
-  c_evaluacion                               c_evaluacion[]
-  e_registro_vehiculos                       e_registro_vehiculos[]
-  e_registro_personas                        e_registro_personas[]
   c_empleado_plaza                           c_empleado_plaza[]
+  c_encuesta_cliente                         c_encuesta_cliente[]
+  c_evaluacion                               c_evaluacion[]
   c_extra_tarifa_corpo                       c_extra_tarifa_corpo[]
+  c_incidente                                c_incidente[]
+  c_notas_voz                                c_notas_voz[]
   e_actividad_corpo                          e_actividad_corpo[]
   e_empleado_lista_negra                     e_empleado_lista_negra[]
   e_estructura_articulo_corpo_puesto_entrega e_estructura_articulo_corpo_puesto_entrega[]
@@ -3150,6 +3167,9 @@ model e_estructura_sucursal {
   n_canton                                   n_canton?                                    @relation(fields: [canton_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "FK_85C0E6388D070D0B")
   n_region                                   n_region?                                    @relation(fields: [region_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "FK_85C0E63898260155")
   n_distrito                                 n_distrito?                                  @relation(fields: [distrito_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "FK_85C0E638E557397E")
+  e_registro_capacitaciones                  e_registro_capacitaciones[]
+  e_registro_personas                        e_registro_personas[]
+  e_registro_vehiculos                       e_registro_vehiculos[]
   m_refuerzo                                 m_refuerzo[]
   m_rol_monitoreo_sucursal                   m_rol_monitoreo_sucursal[]
   pg_planilla_empleado                       pg_planilla_empleado[]
@@ -3164,26 +3184,27 @@ model e_estructura_sucursal {
 }
 
 model e_actividad_corpo {
-  id                        Int                         @id @default(autoincrement())
-  empresa_id                Int
-  cliente_id                Int
-  contrato_id               Int
-  corpo_id                  Int
-  puesto_id                 Int
-  plaza_id                  Int?
-  nombre_actividad          String                      @db.VarChar(255)
-  fecha_inicio              DateTime                    @db.Date
-  frecuencia                String                      @db.LongText
-  es_revision_equipo        Boolean
-  descripcion_actividad     String                      @db.LongText
-  reglas                    String                      @db.LongText
-  e_estructura_cliente      e_estructura_cliente        @relation(fields: [cliente_id], references: [id], onDelete: Cascade)
-  e_estructura_contrato     e_estructura_contrato       @relation(fields: [contrato_id], references: [id], onDelete: Cascade)
-  e_estructura_sucursal     e_estructura_sucursal       @relation(fields: [corpo_id], references: [id], onDelete: Cascade)
-  e_estructura_empresa      e_estructura_empresa        @relation(fields: [empresa_id], references: [id], onDelete: Cascade)
-  e_estructura_plazas       e_estructura_plazas?        @relation(fields: [plaza_id], references: [id], onDelete: Cascade)
-  e_estructura_puesto       e_estructura_puesto         @relation(fields: [puesto_id], references: [id], onDelete: Cascade)
-  e_actividad_corpo_marcada e_actividad_corpo_marcada[]
+  id                      Int                       @id @default(autoincrement())
+  empresa_id              Int
+  cliente_id              Int
+  contrato_id             Int
+  corpo_id                Int
+  puesto_id               Int?
+  plaza_id                Int?
+  nombre_actividad        String                    @db.VarChar(255)
+  fecha_inicio            DateTime                  @db.Date
+  frecuencia              String                    @db.LongText
+  es_revision_equipo      Boolean
+  descripcion_actividad   String                    @db.LongText
+  reglas                  String                    @db.LongText
+  e_estructura_cliente    e_estructura_cliente      @relation(fields: [cliente_id], references: [id], onDelete: Cascade)
+  e_estructura_contrato   e_estructura_contrato     @relation(fields: [contrato_id], references: [id], onDelete: Cascade)
+  e_estructura_sucursal   e_estructura_sucursal     @relation(fields: [corpo_id], references: [id], onDelete: Cascade)
+  e_estructura_empresa    e_estructura_empresa      @relation(fields: [empresa_id], references: [id], onDelete: Cascade)
+  e_estructura_plazas     e_estructura_plazas?      @relation(fields: [plaza_id], references: [id], onDelete: Cascade)
+  e_estructura_puesto     e_estructura_puesto?       @relation(fields: [puesto_id], references: [id], onDelete: Cascade)
+  e_actividad_corpo_plaza e_actividad_corpo_plaza[]
+  e_actividad_puesto_plaza e_actividad_puesto_plaza[]
 
   @@index([cliente_id], map: "e_actividad_corpo_cliente_id_fkey")
   @@index([contrato_id], map: "e_actividad_corpo_contrato_id_fkey")
@@ -3193,39 +3214,46 @@ model e_actividad_corpo {
   @@index([puesto_id], map: "e_actividad_corpo_puesto_id_fkey")
 }
 
-model e_actividad_corpo_marcada {
-  id                Int               @id @default(autoincrement())
+model e_actividad_puesto_plaza {
+  id                Int  @id @default(autoincrement())
   actividadCorpo_id Int
-  empleado_id       Int
-  bitacora          String            @db.LongText
-  file_name         String?           @db.LongText
-  created_at        DateTime
-  updated_at        DateTime
-  marcada           Boolean           @default(false)
-  e_actividad_corpo_revision_equipo e_actividad_corpo_revision_equipo[]
+  puesto_id         Int
+  plaza_id          Int?
   e_actividad_corpo e_actividad_corpo @relation(fields: [actividadCorpo_id], references: [id], onDelete: Cascade)
+}
 
-  @@index([actividadCorpo_id], map: "e_actividad_corpo_marcada_actividadCorpo_id_fkey")
+model e_actividad_corpo_plaza {
+  id                  Int                 @id @default(autoincrement())
+  actividadCorpo_id   Int
+  plaza_id            Int
+  bitacora            String              @db.LongText
+  file_name           String?             @db.LongText
+  created_at          DateTime
+  updated_at          DateTime
+  marcada             Boolean             @default(false)
+  e_actividad_corpo_revision_equipo       e_actividad_corpo_revision_equipo[]
+  e_actividad_corpo   e_actividad_corpo   @relation(fields: [actividadCorpo_id], references: [id], onDelete: Cascade)
+  e_estructura_plazas e_estructura_plazas @relation(fields: [plaza_id], references: [id], onDelete: Cascade)
+
+  @@index([actividadCorpo_id], map: "e_actividad_corpo_plaza_actividadCorpo_id_fkey")
+  @@index([plaza_id], map: "e_actividad_corpo_plaza_plaza_id_fkey")
 }
 
 model e_actividad_corpo_revision_equipo {
-  id                      Int                     @id @default(autoincrement())
-  actividadCorpoMarcada_id Int
-  empleado_id             Int
-  articulo_id             Int
-  es_correcto             Boolean
-  motivo_incorrecto       String                  @db.LongText
-  file_name               String?                 @db.LongText
-  created_at              DateTime
-  updated_at              DateTime
-  marcada                 Boolean                 @default(false)
-  e_actividad_corpo_marcada e_actividad_corpo_marcada @relation(fields: [actividadCorpoMarcada_id], references: [id], onDelete: Cascade)
-  n_articulo_corpo_puesto n_articulo_corpo_puesto @relation(fields: [articulo_id], references: [id], onDelete: Cascade)
-  c_empleado              c_empleado              @relation(fields: [empleado_id], references: [id], onDelete: Cascade)
+  id                       Int                     @id @default(autoincrement())
+  articulo_id              Int
+  es_correcto              Boolean
+  motivo_incorrecto        String                  @db.LongText
+  created_at               DateTime
+  updated_at               DateTime
+  marcada                  Boolean                 @default(false)
+  actividadCorpoPlaza_id Int
+  file_name                String?                 @db.LongText
+  e_actividad_corpo_plaza e_actividad_corpo_plaza @relation(fields: [actividadCorpoPlaza_id], references: [id], onDelete: Cascade)
+  n_articulo_corpo_puesto  n_articulo_corpo_puesto @relation(fields: [articulo_id], references: [id], onDelete: Cascade)
 
   @@index([articulo_id], map: "e_actividad_corpo_revision_equipo_articulo_id_fkey")
-  @@index([actividadCorpoMarcada_id], map: "e_actividad_corpo_revision_equipo_actividad_corpo_marcada_fkey")
-  @@index([empleado_id], map: "e_actividad_corpo_revision_equipo_empleado_id_fkey")
+  @@index([actividadCorpoPlaza_id], map: "e_actividad_corpo_revision_equipo_actividad_corpo_plaza_fkey")
 }
 
 model e_familia {
@@ -3398,43 +3426,52 @@ model e_referencia_personal {
 }
 
 model e_registro_capacitaciones {
-  id                      Int      @id @default(autoincrement())
+  id                      Int                       @id @default(autoincrement())
   empresa_id              Int
   cliente_id              Int
   corpo_id                Int
-  titulo                  String   @db.LongText
-  descripcion             String   @db.LongText
-  tipo                    String   @db.VarChar(15)
-  resultado               String?  @db.VarChar(15)
-  observaciones           String   @db.LongText
+  titulo                  String                    @db.LongText
+  descripcion             String                    @db.LongText
+  resultado               String?                   @db.VarChar(15)
+  observaciones           String                    @db.LongText
+  nombre_responsable      String                    @db.LongText
+  firma_responsable       String                    @db.LongText
+  cedula_responsable      String                    @db.VarChar(25)
   responsable_id          Int
-  nombre_responsable      String   @db.LongText
-  cedula_responsable      String   @db.VarChar(25)
-  firma_responsable       String   @db.LongText
-  file                    String?  @db.LongText
-  fecha                   DateTime @db.Date
+  fecha                   DateTime                  @db.Date
+  file                    String?                   @db.LongText
+  tipo                    String                    @db.VarChar(15)
   e_capacitacion_empleado e_capacitacion_empleado[]
   e_capacitacion_puesto   e_capacitacion_puesto[]
-  
-  e_estructura_empresa e_estructura_empresa @relation(fields: [empresa_id], references: [id], onDelete: NoAction)
-  e_estructura_cliente e_estructura_cliente @relation(fields: [cliente_id], references: [id], onDelete: NoAction)
-  e_estructura_sucursal e_estructura_sucursal @relation(fields: [corpo_id], references: [id], onDelete: NoAction)
+  e_estructura_cliente    e_estructura_cliente      @relation(fields: [cliente_id], references: [id], onDelete: NoAction)
+  e_estructura_sucursal   e_estructura_sucursal     @relation(fields: [corpo_id], references: [id], onDelete: NoAction)
+  e_estructura_empresa    e_estructura_empresa      @relation(fields: [empresa_id], references: [id], onDelete: NoAction)
+
+  @@index([cliente_id], map: "e_registro_capacitaciones_cliente_id_fkey")
+  @@index([corpo_id], map: "e_registro_capacitaciones_corpo_id_fkey")
+  @@index([empresa_id], map: "e_registro_capacitaciones_empresa_id_fkey")
 }
 
 model e_capacitacion_empleado {
-  id              Int @id @default(autoincrement())
-  capacitacion_id Int
-  empleado_id     Int
+  id                        Int                       @id @default(autoincrement())
+  capacitacion_id           Int
+  empleado_id               Int
   e_registro_capacitaciones e_registro_capacitaciones @relation(fields: [capacitacion_id], references: [id], onDelete: NoAction)
-  c_empleado c_empleado @relation(fields: [empleado_id], references: [id], onDelete: NoAction)
+  c_empleado                c_empleado                @relation(fields: [empleado_id], references: [id], onDelete: NoAction)
+
+  @@index([capacitacion_id], map: "e_capacitacion_empleado_capacitacion_id_fkey")
+  @@index([empleado_id], map: "e_capacitacion_empleado_empleado_id_fkey")
 }
 
 model e_capacitacion_puesto {
-  id              Int @id @default(autoincrement())
-  capacitacion_id Int
-  puesto_id       Int
+  id                        Int                       @id @default(autoincrement())
+  capacitacion_id           Int
+  puesto_id                 Int
   e_registro_capacitaciones e_registro_capacitaciones @relation(fields: [capacitacion_id], references: [id], onDelete: NoAction)
-  e_estructura_puesto e_estructura_puesto @relation(fields: [puesto_id], references: [id], onDelete: NoAction)
+  e_estructura_puesto       e_estructura_puesto       @relation(fields: [puesto_id], references: [id], onDelete: NoAction)
+
+  @@index([capacitacion_id], map: "e_capacitacion_puesto_capacitacion_id_fkey")
+  @@index([puesto_id], map: "e_capacitacion_puesto_puesto_id_fkey")
 }
 
 model e_registro_enfermedades {
@@ -3498,64 +3535,74 @@ model e_registro_habilidades {
 }
 
 model e_registro_vehiculos {
-  id             Int       @id @default(autoincrement())
-  cliente_id     Int
-  corpo_id       Int
-  puesto_id      Int
-  tipo           String    @db.VarChar(20)
-  placa          String    @db.VarChar(30)
-  nombre         String    @db.VarChar(75)
-  cedula         String    @db.VarChar(30)
-  hora_entrada   DateTime  @db.DateTime
-  hora_salida    DateTime? @db.DateTime
-  razon_visita   String    @db.LongText
-  responsable_id Int 
-  file_name      String?   @db.LongText
-  created_at     DateTime  @db.DateTime
-  updated_at     DateTime  @db.DateTime
-
-  e_estructura_cliente e_estructura_cliente @relation(fields: [cliente_id], references: [id], onDelete: Cascade, map: "FK_BB503B25953BE730")
-  e_estructura_sucursal e_estructura_sucursal @relation(fields: [corpo_id], references: [id], onDelete: Cascade, map: "FK_BB503B25954BE730")
-  e_estructura_puesto e_estructura_puesto @relation(fields: [puesto_id], references: [id], onDelete: Cascade, map: "FK_BB503B25955BE730")
-  c_empleado     c_empleado @relation(fields: [responsable_id], references: [id], onDelete: Cascade, map: "FK_BB503B25952BE730")
-}
-
-model e_registro_personas {
-  id                    Int       @id @default(autoincrement())
+  id                    Int                   @id @default(autoincrement())
   cliente_id            Int
   corpo_id              Int
   puesto_id             Int
-  nombre                String    @db.VarChar(75)
-  cedula                String    @db.VarChar(30)
-  hora_entrada          DateTime  @db.DateTime
-  hora_salida           DateTime? @db.DateTime
-  razon_visita          String    @db.VarChar(75)
-  responsable_id        Int 
-  es_funcionario        Boolean
-  observaciones         String?   @db.VarChar(255)
-  tipo_accion           String?   @db.VarChar(15)
-  pers_autoriza_salida  String?   @db.VarChar(255)
-  foto_cedula           String?   @db.LongText
-  created_at            DateTime  @db.DateTime
-  updated_at            DateTime  @db.DateTime
-  e_activo_visitante    e_activo_visitante[]
+  tipo                  String                @db.VarChar(20)
+  placa                 String                @db.VarChar(30)
+  nombre                String                @db.VarChar(75)
+  cedula                String                @db.VarChar(30)
+  hora_entrada          DateTime              @db.DateTime(0)
+  hora_salida           DateTime?             @db.DateTime(0)
+  razon_visita          String                @db.LongText
+  responsable_id        Int
+  created_at            DateTime              @db.DateTime(0)
+  updated_at            DateTime              @db.DateTime(0)
+  file_name             String?               @db.LongText
+  c_empleado            c_empleado            @relation(fields: [responsable_id], references: [id], onDelete: Cascade, map: "FK_BB503B25952BE730")
+  e_estructura_cliente  e_estructura_cliente  @relation(fields: [cliente_id], references: [id], onDelete: Cascade, map: "FK_BB503B25953BE730")
+  e_estructura_sucursal e_estructura_sucursal @relation(fields: [corpo_id], references: [id], onDelete: Cascade, map: "FK_BB503B25954BE730")
+  e_estructura_puesto   e_estructura_puesto   @relation(fields: [puesto_id], references: [id], onDelete: Cascade, map: "FK_BB503B25955BE730")
 
-  e_estructura_cliente e_estructura_cliente @relation(fields: [cliente_id], references: [id], onDelete: Cascade, map: "FK_BB603B25953BE730")
+  @@index([responsable_id], map: "FK_BB503B25952BE730")
+  @@index([cliente_id], map: "FK_BB503B25953BE730")
+  @@index([corpo_id], map: "FK_BB503B25954BE730")
+  @@index([puesto_id], map: "FK_BB503B25955BE730")
+}
+
+model e_registro_personas {
+  id                    Int                   @id @default(autoincrement())
+  cliente_id            Int
+  corpo_id              Int
+  puesto_id             Int
+  nombre                String                @db.VarChar(75)
+  cedula                String                @db.VarChar(30)
+  hora_entrada          DateTime              @db.DateTime(0)
+  hora_salida           DateTime?             @db.DateTime(0)
+  razon_visita          String                @db.VarChar(75)
+  responsable_id        Int
+  es_funcionario        Boolean
+  observaciones         String?               @db.VarChar(255)
+  tipo_accion           String?               @db.VarChar(15)
+  created_at            DateTime              @db.DateTime(0)
+  updated_at            DateTime              @db.DateTime(0)
+  foto_cedula           String?               @db.LongText
+  pers_autoriza_salida  String?               @db.VarChar(255)
+  e_activo_visitante    e_activo_visitante[]
+  c_empleado            c_empleado            @relation(fields: [responsable_id], references: [id], onDelete: Cascade, map: "FK_BB503B25992BE730")
+  e_estructura_cliente  e_estructura_cliente  @relation(fields: [cliente_id], references: [id], onDelete: Cascade, map: "FK_BB603B25953BE730")
   e_estructura_sucursal e_estructura_sucursal @relation(fields: [corpo_id], references: [id], onDelete: Cascade, map: "FK_BB703B25954BE730")
-  e_estructura_puesto e_estructura_puesto @relation(fields: [puesto_id], references: [id], onDelete: Cascade, map: "FK_BB803B25955BE730")
-  c_empleado     c_empleado @relation(fields: [responsable_id], references: [id], onDelete: Cascade, map: "FK_BB503B25992BE730")
+  e_estructura_puesto   e_estructura_puesto   @relation(fields: [puesto_id], references: [id], onDelete: Cascade, map: "FK_BB803B25955BE730")
+
+  @@index([responsable_id], map: "FK_BB503B25992BE730")
+  @@index([cliente_id], map: "FK_BB603B25953BE730")
+  @@index([corpo_id], map: "FK_BB703B25954BE730")
+  @@index([puesto_id], map: "FK_BB803B25955BE730")
 }
 
 model e_activo_visitante {
-  id            Int     @id @default(autoincrement())
-  visitante_id  Int
-  tipo_id       Int
-  detalles      String  @db.LongText
-  numero_serie  String  @db.VarChar(50)
-  numero_activo String? @db.VarChar(50)
-
-  e_registro_personas e_registro_personas @relation(fields: [visitante_id], references: [id], onDelete: Cascade, map: "FK_BB503B25992BE739")
+  id                    Int                   @id @default(autoincrement())
+  visitante_id          Int
+  tipo_id               Int
+  detalles              String                @db.LongText
+  numero_serie          String                @db.VarChar(50)
+  numero_activo         String?               @db.VarChar(50)
+  e_registro_personas   e_registro_personas   @relation(fields: [visitante_id], references: [id], onDelete: Cascade, map: "FK_BB503B25992BE739")
   n_tipo_activo_visitas n_tipo_activo_visitas @relation(fields: [tipo_id], references: [id], onDelete: NoAction, map: "FK_BB503B25993BE739")
+
+  @@index([visitante_id], map: "FK_BB503B25992BE739")
+  @@index([tipo_id], map: "FK_BB503B25993BE739")
 }
 
 model e_requerimiento_cumplido {
@@ -3763,17 +3810,16 @@ model n_novedades_categoria {
 }
 
 model n_tipo_activo_visitas {
-  id                                         Int                                          @id @default(autoincrement())
-  nombre                                     String                                       @unique(map: "UNIQ_92DE8E473A989126") @db.VarChar(255)
-  e_activo_visitante                         e_activo_visitante[]
+  id                 Int                  @id @default(autoincrement())
+  nombre             String               @unique(map: "UNIQ_92DE8E473A989126") @db.VarChar(255)
+  e_activo_visitante e_activo_visitante[]
 }
 
 model n_clasificacion_incidente {
-  id                                         Int                                          @id @default(autoincrement())
-  nombre                                     String                                       @unique(map: "UNIQ_92DE8E473A988126") @db.VarChar(255)
-  c_incidente                                c_incidente[]
+  id          Int           @id @default(autoincrement())
+  nombre      String        @unique(map: "UNIQ_92DE8E473A988126") @db.VarChar(255)
+  c_incidente c_incidente[]
 }
-
 
 model n_articulo_corpo_puesto {
   id                                         Int                                          @id @default(autoincrement())
@@ -3892,8 +3938,8 @@ model n_distrito {
 model n_division {
   id                            Int                             @id @default(autoincrement())
   nombre                        String                          @unique(map: "UNIQ_F47A4A6F3A909126") @db.VarChar(255)
-  c_encuesta_cliente            c_encuesta_cliente[]
   c_empleado_plaza              c_empleado_plaza[]
+  c_encuesta_cliente            c_encuesta_cliente[]
   c_solicitud_empleo            c_solicitud_empleo[]
   e_estructura_contrato         e_estructura_contrato[]
   n_empresa_poliza              n_empresa_poliza[]
@@ -3937,9 +3983,9 @@ model n_ejecutivo_cuenta {
   nombre                String                  @db.VarChar(64)
   c_empleado            c_empleado[]
   c_empleado_plaza      c_empleado_plaza[]
+  c_incidente           c_incidente[]
   e_estructura_sucursal e_estructura_sucursal[]
   security_fos_user     security_fos_user[]
-  c_incidente           c_incidente[]
 }
 
 model n_empresa_banco {

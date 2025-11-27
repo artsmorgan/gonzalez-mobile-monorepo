@@ -27,7 +27,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 200 });
         }
 
-        const actividad_marcada = await prisma.e_actividad_corpo_marcada.findUnique({ where: { id } });
+        const actividad_marcada = await prisma.e_actividad_corpo_plaza.findUnique({ where: { id } });
         if (!actividad_marcada) {
             return NextResponse.json({ status: false, message: "Marca de la actividad no encontrada" }, { status: 200 });
         }
@@ -38,7 +38,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         }
 
         if (estado === "marcar") {
-            const marcado_exitoso = await prisma.e_actividad_corpo_marcada.updateMany({ where: { actividadCorpo_id: actividad.id, marcada: false }, data: { empleado_id: e, marcada: true, bitacora: bitacora, updated_at: toZonedTime(new Date(), "America/Costa_Rica") } });
+            const marcado_exitoso = await prisma.e_actividad_corpo_plaza.updateMany({ where: { actividadCorpo_id: actividad.id, marcada: false }, data: { marcada: true, bitacora: bitacora, updated_at: toZonedTime(new Date(), "America/Costa_Rica") } });
 
             // Guardar imagen si existe
             if (file) {
@@ -81,7 +81,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                 fs.writeFileSync(filePath, Buffer.from(base64Data, "base64"));
 
                 // Guardar el nombre del archivo en la BD
-                await prisma.e_actividad_corpo_marcada.update({
+                await prisma.e_actividad_corpo_plaza.update({
                     where: { id: actividad_marcada.id },
                     data: { file_name: file_name },
                 });
@@ -90,7 +90,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             return NextResponse.json({ status: true, message: "Actividad marcada correctamente" }, { status: 200 });
         }
         else {
-            await prisma.e_actividad_corpo_marcada.update({ where: { id }, data: { empleado_id: e, marcada: false, updated_at: toZonedTime(new Date(), "America/Costa_Rica") } });
+            await prisma.e_actividad_corpo_plaza.update({ where: { id }, data: { marcada: false, updated_at: toZonedTime(new Date(), "America/Costa_Rica") } });
 
             return NextResponse.json({ status: true, message: "Actividad desmarcada correctamente" }, { status: 200 });
         }

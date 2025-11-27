@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessToken } from "../../../../../utils/verifyToken";
 import { toZonedTime } from "date-fns-tz";
 import { prisma } from "../../../../../utils/prismaClient";
-
+import { sendNotificationByRole } from "../../../../../utils/sendNotification";
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
@@ -26,9 +26,23 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             return NextResponse.json({ status: false, message: "No se encontró la marca del dia" }, { status: 200 });
         }
 
+        const empleado = await prisma.c_empleado.findUnique({ where: { id: marcaDia.empleadoFijo_id ?? 0 } });
+        if (!empleado) {
+            return NextResponse.json({ status: false, message: "No se encontró el empleado" }, { status: 200 });
+        }
+
         marcaDia.motivo_ausente = reason;
 
-        await prisma.c_marca_dia.update({ where: { id: marcaDia.id }, data: marcaDia });
+        const updated = await prisma.c_marca_dia.update({ where: { id: marcaDia.id }, data: marcaDia });
+
+        if (!updated) {
+            return NextResponse.json({ status: false, message: "No se pudo actualizar el motivo de ausencia" }, { status: 200 });
+        }
+        else {
+            const title = "Motivo de ausencia confirmado";
+            const description = `El empleado ${empleado.nombre} ${empleado.primer_apellido} ha confirmado el motivo de ausencia: ${reason}`;
+            await sendNotificationByRole(marcaDia.id, title, description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+        }
 
         return NextResponse.json({ status: true, message: "Motivo de ausencia confirmado" }, { status: 200 });
     } catch (error: unknown) {

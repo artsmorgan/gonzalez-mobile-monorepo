@@ -696,6 +696,952 @@ CREATE TABLE `c_empleado` (
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- CreateTable
+CREATE TABLE `c_notifications` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `title` LONGTEXT NOT NULL,
+    `description` LONGTEXT NOT NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_plaza_notification` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `plazaId` INTEGER NOT NULL,
+    `notificationId` INTEGER NOT NULL,
+    `watched` BOOLEAN NOT NULL DEFAULT false,
+
+    INDEX `c_plaza_notification_notificationId_fkey`(`notificationId`),
+    INDEX `c_plaza_notification_plazaId_fkey`(`plazaId`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_notas_voz` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `empresa_id` INTEGER NOT NULL,
+    `cliente_id` INTEGER NOT NULL,
+    `corpo_id` INTEGER NOT NULL,
+    `puesto_id` INTEGER NULL,
+    `titulo` LONGTEXT NOT NULL,
+    `descripcion` LONGTEXT NOT NULL,
+    `path` LONGTEXT NOT NULL,
+    `transcripcion` LONGTEXT NOT NULL,
+    `firma_responsable` LONGTEXT NOT NULL,
+    `created_by` INTEGER NOT NULL,
+    `created_at` DATETIME(0) NOT NULL,
+
+    INDEX `c_notas_voz_cliente_id_fkey`(`cliente_id`),
+    INDEX `c_notas_voz_corpo_id_fkey`(`corpo_id`),
+    INDEX `c_notas_voz_empresa_id_fkey`(`empresa_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_incidente` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `corpo_id` INTEGER NOT NULL,
+    `ejecutivo_cuenta` INTEGER NOT NULL,
+    `fecha_incidente` DATE NOT NULL,
+    `fecha_reporte` DATE NOT NULL,
+    `nombre_responsable` VARCHAR(45) NOT NULL,
+    `clasificacion` INTEGER NOT NULL,
+    `descripcion` LONGTEXT NOT NULL,
+    `involucrados` LONGTEXT NOT NULL,
+    `fecha_libro_novedades` LONGTEXT NOT NULL,
+    `nombre_responsable_atencion` VARCHAR(45) NOT NULL,
+    `solucion` LONGTEXT NULL,
+    `fecha_solucion` DATE NULL,
+    `fecha_real_solucion` DATE NULL,
+    `costo_asociado` LONGTEXT NULL,
+    `consecutivo_informe` LONGTEXT NULL,
+    `link_informe` LONGTEXT NULL,
+    `cliente_id` INTEGER NOT NULL,
+    `empresa_id` INTEGER NOT NULL,
+    `estado` BOOLEAN NOT NULL,
+    `file_audio` LONGTEXT NULL,
+    `file_image` LONGTEXT NULL,
+
+    INDEX `c_incidente_clasificacion_fkey`(`clasificacion`),
+    INDEX `c_incidente_cliente_id_fkey`(`cliente_id`),
+    INDEX `c_incidente_corpo_id_fkey`(`corpo_id`),
+    INDEX `c_incidente_ejecutivo_cuenta_fkey`(`ejecutivo_cuenta`),
+    INDEX `c_incidente_empresa_id_fkey`(`empresa_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_evaluacion` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `corpo_id` INTEGER NOT NULL,
+    `puesto_id` INTEGER NOT NULL,
+    `plaza_id` INTEGER NOT NULL,
+    `tipo` LONGTEXT NOT NULL,
+    `evaluation` LONGTEXT NOT NULL,
+    `firma_evaluador` LONGTEXT NOT NULL,
+    `created_at` DATETIME(0) NOT NULL,
+    `created_by` INTEGER NOT NULL,
+
+    INDEX `c_evaluacion_corpo_id_fkey`(`corpo_id`),
+    INDEX `c_evaluacion_plaza_id_fkey`(`plaza_id`),
+    INDEX `c_evaluacion_puesto_id_fkey`(`puesto_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_control_kilometraje` (
+    `id` VARCHAR(191) NOT NULL,
+    `empresa_id` VARCHAR(191) NULL,
+    `cliente_id` VARCHAR(191) NULL,
+    `contrato_id` VARCHAR(191) NULL,
+    `corpo_id` VARCHAR(191) NULL,
+    `puesto_id` VARCHAR(191) NULL,
+    `plaza_id` VARCHAR(191) NULL,
+    `chofer_id` VARCHAR(191) NULL,
+    `chofer_nombre` VARCHAR(191) NULL,
+    `total_km` VARCHAR(191) NULL,
+    `ruta` VARCHAR(191) NULL,
+    `prox_mant_km` VARCHAR(191) NULL,
+    `km_para_mantenimiento` VARCHAR(191) NULL,
+    `km_actual` VARCHAR(191) NULL,
+    `estado` VARCHAR(191) NULL,
+    `vehiculo_id` VARCHAR(191) NULL,
+    `registros_viaje` LONGTEXT NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `created_by` VARCHAR(191) NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_solicitud_uniforme` (
+    `id` VARCHAR(191) NOT NULL,
+    `empresa_id` VARCHAR(191) NULL,
+    `cliente_id` VARCHAR(191) NULL,
+    `contrato_id` VARCHAR(191) NULL,
+    `corpo_id` VARCHAR(191) NULL,
+    `puesto_id` VARCHAR(191) NULL,
+    `plaza_id` VARCHAR(191) NULL,
+    `codigo` VARCHAR(191) NULL,
+    `nombre_completo` VARCHAR(191) NULL,
+    `cliente_area` VARCHAR(191) NULL,
+    `ultima_fecha_uniformes` VARCHAR(191) NULL,
+    `talla_scrub_naranja` VARCHAR(191) NULL,
+    `talla_pantalon` VARCHAR(191) NULL,
+    `talla_zapatos` VARCHAR(191) NULL,
+    `estado` VARCHAR(191) NULL,
+    `persona_designada_entrega` VARCHAR(191) NULL,
+    `no_procede_hasta` VARCHAR(191) NULL,
+    `estatus_designado_entrega` VARCHAR(191) NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `created_by` VARCHAR(191) NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_satisfaccion_personal` (
+    `id` VARCHAR(191) NOT NULL,
+    `empresa_id` VARCHAR(191) NULL,
+    `cliente_id` VARCHAR(191) NULL,
+    `contrato_id` VARCHAR(191) NULL,
+    `corpo_id` VARCHAR(191) NULL,
+    `puesto_id` VARCHAR(191) NULL,
+    `plaza_id` VARCHAR(191) NULL,
+    `nombre_empleado` VARCHAR(191) NULL,
+    `cliente_sede` VARCHAR(191) NULL,
+    `tiempo_laborado` VARCHAR(191) NULL,
+    `recibe_uniformes_tiempo` VARCHAR(191) NULL,
+    `llevo_induccion` VARCHAR(191) NULL,
+    `calificacion_induccion` VARCHAR(191) NULL,
+    `recibe_visitas_supervision` VARCHAR(191) NULL,
+    `recibe_atencion_oficina` VARCHAR(191) NULL,
+    `problemas_pago_resueltos` VARCHAR(191) NULL,
+    `equipo_proteccion` VARCHAR(191) NULL,
+    `que_mejorar` VARCHAR(191) NULL,
+    `considera_empresa_debe_mejorar` VARCHAR(191) NULL,
+    `conoce_reportar_accidente` VARCHAR(191) NULL,
+    `le_gustaria_capacitado` VARCHAR(191) NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `created_by` VARCHAR(191) NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_planificacion_mantenimiento_vehiculo` (
+    `id` VARCHAR(191) NOT NULL,
+    `empresa_id` VARCHAR(191) NULL,
+    `cliente_id` VARCHAR(191) NULL,
+    `contrato_id` VARCHAR(191) NULL,
+    `corpo_id` VARCHAR(191) NULL,
+    `puesto_id` VARCHAR(191) NULL,
+    `plaza_id` VARCHAR(191) NULL,
+    `nombre_vehiculo` VARCHAR(191) NULL,
+    `matricula_vehiculo` VARCHAR(191) NULL,
+    `mantenimientos` LONGTEXT NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `created_by` VARCHAR(191) NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_producto_no_conforme_matriz` (
+    `id` VARCHAR(191) NOT NULL,
+    `empresa_id` VARCHAR(191) NULL,
+    `cliente_id` VARCHAR(191) NULL,
+    `contrato_id` VARCHAR(191) NULL,
+    `corpo_id` VARCHAR(191) NULL,
+    `puesto_id` VARCHAR(191) NULL,
+    `plaza_id` VARCHAR(191) NULL,
+    `cliente` VARCHAR(191) NULL,
+    `numero_corpo` VARCHAR(191) NULL,
+    `responsable_cuenta` VARCHAR(191) NULL,
+    `macroactividad` VARCHAR(191) NULL,
+    `actividad` VARCHAR(191) NULL,
+    `tipo_servicio_no_conforme` VARCHAR(191) NULL,
+    `tipo_registro` VARCHAR(191) NULL,
+    `responsable_registro` VARCHAR(191) NULL,
+    `acciones_seguir` LONGTEXT NULL,
+    `responsable_corregir` LONGTEXT NULL,
+    `responsable_aprobar` LONGTEXT NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `created_by` VARCHAR(191) NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_maestro_quejas` (
+    `id` VARCHAR(191) NOT NULL,
+    `empresa_id` VARCHAR(191) NULL,
+    `cliente_id` VARCHAR(191) NULL,
+    `contrato_id` VARCHAR(191) NULL,
+    `corpo_id` VARCHAR(191) NULL,
+    `puesto_id` VARCHAR(191) NULL,
+    `plaza_id` VARCHAR(191) NULL,
+    `sociedad` VARCHAR(191) NULL,
+    `nombre_realiza_queja` VARCHAR(191) NULL,
+    `cliente` VARCHAR(191) NULL,
+    `empresa_presenta_queja` VARCHAR(191) NULL,
+    `persona_presenta_queja` VARCHAR(191) NULL,
+    `medio_recepcion_queja` VARCHAR(191) NULL,
+    `tipo_queja` VARCHAR(191) NULL,
+    `ubicacion` VARCHAR(191) NULL,
+    `nivel_queja` VARCHAR(191) NULL,
+    `fecha_queja` VARCHAR(191) NULL,
+    `motivo_queja` VARCHAR(191) NULL,
+    `descripcion_queja` LONGTEXT NULL,
+    `fecha_inicio` VARCHAR(191) NULL,
+    `fecha_revision` VARCHAR(191) NULL,
+    `resolucion_queja` LONGTEXT NULL,
+    `mes_queja` VARCHAR(191) NULL,
+    `ano_queja` VARCHAR(191) NULL,
+    `estado` VARCHAR(191) NULL,
+    `accion_correctiva_preventiva` VARCHAR(191) NULL,
+    `anexo_evidencia` LONGTEXT NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `created_by` VARCHAR(191) NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_control_aseadores` (
+    `id` VARCHAR(191) NOT NULL,
+    `empresa_id` VARCHAR(191) NULL,
+    `cliente_id` VARCHAR(191) NULL,
+    `contrato_id` VARCHAR(191) NULL,
+    `corpo_id` VARCHAR(191) NULL,
+    `puesto_id` VARCHAR(191) NULL,
+    `plaza_id` VARCHAR(191) NULL,
+    `nombre_aseador` VARCHAR(191) NULL,
+    `oficina_despacho` VARCHAR(191) NULL,
+    `provincia` VARCHAR(191) NULL,
+    `canton` VARCHAR(191) NULL,
+    `distrito` VARCHAR(191) NULL,
+    `direccion` VARCHAR(191) NULL,
+    `metraje` VARCHAR(191) NULL,
+    `horario` VARCHAR(191) NULL,
+    `horas_dia` VARCHAR(191) NULL,
+    `horas_semana` VARCHAR(191) NULL,
+    `dias` VARCHAR(191) NULL,
+    `cantidad_personal` VARCHAR(191) NULL,
+    `detalle_supervision` LONGTEXT NULL,
+    `fecha_inicio` VARCHAR(191) NULL,
+    `lista_equipos_insumos` LONGTEXT NULL,
+    `costo_mensual` VARCHAR(191) NULL,
+    `costo_anual` VARCHAR(191) NULL,
+    `codigo` VARCHAR(191) NULL,
+    `plaza` VARCHAR(191) NULL,
+    `observaciones` LONGTEXT NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `created_by` VARCHAR(191) NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_agenda_minuta_fisica` (
+    `id` VARCHAR(191) NOT NULL,
+    `empresa_id` VARCHAR(191) NULL,
+    `cliente_id` VARCHAR(191) NULL,
+    `contrato_id` VARCHAR(191) NULL,
+    `corpo_id` VARCHAR(191) NULL,
+    `puesto_id` VARCHAR(191) NULL,
+    `plaza_id` VARCHAR(191) NULL,
+    `fecha` VARCHAR(191) NULL,
+    `puesto` VARCHAR(191) NULL,
+    `hora_inicio` VARCHAR(191) NULL,
+    `hora_fin` VARCHAR(191) NULL,
+    `elaborado_por` VARCHAR(191) NULL,
+    `minuta_numero` VARCHAR(191) NULL,
+    `presentes` LONGTEXT NULL,
+    `observaciones` LONGTEXT NULL,
+    `temas_tratados` LONGTEXT NULL,
+    `notas` LONGTEXT NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `created_by` VARCHAR(191) NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_plan_accion` (
+    `id` VARCHAR(191) NOT NULL,
+    `empresa_id` VARCHAR(191) NULL,
+    `cliente_id` VARCHAR(191) NULL,
+    `contrato_id` VARCHAR(191) NULL,
+    `corpo_id` VARCHAR(191) NULL,
+    `puesto_id` VARCHAR(191) NULL,
+    `plaza_id` VARCHAR(191) NULL,
+    `nombre_lugar` VARCHAR(191) NULL,
+    `fecha_inicio_operaciones` VARCHAR(191) NULL,
+    `tareas` LONGTEXT NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `created_by` VARCHAR(191) NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_rol_trabajo` (
+    `id` VARCHAR(191) NOT NULL,
+    `empresa_id` VARCHAR(191) NULL,
+    `cliente_id` VARCHAR(191) NULL,
+    `contrato_id` VARCHAR(191) NULL,
+    `corpo_id` VARCHAR(191) NULL,
+    `puesto_id` VARCHAR(191) NULL,
+    `plaza_id` VARCHAR(191) NULL,
+    `area` VARCHAR(191) NULL,
+    `metraje` VARCHAR(191) NULL,
+    `horario` VARCHAR(191) NULL,
+    `personal` VARCHAR(191) NULL,
+    `horarios` LONGTEXT NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `created_by` VARCHAR(191) NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_datos_basicos_contrato` (
+    `id` VARCHAR(191) NOT NULL,
+    `empresa_id` VARCHAR(191) NULL,
+    `cliente_id` VARCHAR(191) NULL,
+    `contrato_id` VARCHAR(191) NULL,
+    `corpo_id` VARCHAR(191) NULL,
+    `puesto_id` VARCHAR(191) NULL,
+    `plaza_id` VARCHAR(191) NULL,
+    `fecha_inicio_contrato` VARCHAR(191) NULL,
+    `cliente_contrato` VARCHAR(191) NULL,
+    `ejecutivo_gerente_asistente` VARCHAR(191) NULL,
+    `personal` LONGTEXT NULL,
+    `lugar_servicio` VARCHAR(191) NULL,
+    `roles_horarios` LONGTEXT NULL,
+    `desglose_salarios` LONGTEXT NULL,
+    `tipo_uniforme` LONGTEXT NULL,
+    `tipo_arma` LONGTEXT NULL,
+    `capacitaciones` LONGTEXT NULL,
+    `otros_datos` LONGTEXT NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `created_by` VARCHAR(191) NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_cronograma_entrega_materiales_equipos` (
+    `id` VARCHAR(191) NOT NULL,
+    `empresa_id` VARCHAR(191) NULL,
+    `cliente_id` VARCHAR(191) NULL,
+    `contrato_id` VARCHAR(191) NULL,
+    `corpo_id` VARCHAR(191) NULL,
+    `puesto_id` VARCHAR(191) NULL,
+    `plaza_id` VARCHAR(191) NULL,
+    `contrato` VARCHAR(191) NULL,
+    `region` VARCHAR(191) NULL,
+    `puesto` VARCHAR(191) NULL,
+    `fecha_apertura_entrega` VARCHAR(191) NULL,
+    `responsable_apertura_entrega` VARCHAR(191) NULL,
+    `equipos_solicitados` LONGTEXT NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `created_by` VARCHAR(191) NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_plan_gestion_ambiental` (
+    `id` VARCHAR(191) NOT NULL,
+    `empresa_id` VARCHAR(191) NULL,
+    `cliente_id` VARCHAR(191) NULL,
+    `contrato_id` VARCHAR(191) NULL,
+    `corpo_id` VARCHAR(191) NULL,
+    `puesto_id` VARCHAR(191) NULL,
+    `plaza_id` VARCHAR(191) NULL,
+    `ubicacion` VARCHAR(191) NULL,
+    `objetivo` LONGTEXT NULL,
+    `metodologia` LONGTEXT NULL,
+    `rol_horario` LONGTEXT NULL,
+    `uniformes` LONGTEXT NULL,
+    `equipos` LONGTEXT NULL,
+    `accesorios_varios` LONGTEXT NULL,
+    `tiempo_respuesta` LONGTEXT NULL,
+    `distribucion_labores` LONGTEXT NULL,
+    `frecuencia_limpieza` LONGTEXT NULL,
+    `supervision` LONGTEXT NULL,
+    `estrategia` LONGTEXT NULL,
+    `responsable` LONGTEXT NULL,
+    `formularios` LONGTEXT NULL,
+    `plan_capacitacion` LONGTEXT NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `created_by` VARCHAR(191) NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_plan_trabajo_aseo_limpieza` (
+    `id` VARCHAR(191) NOT NULL,
+    `empresa_id` VARCHAR(191) NULL,
+    `cliente_id` VARCHAR(191) NULL,
+    `contrato_id` VARCHAR(191) NULL,
+    `corpo_id` VARCHAR(191) NULL,
+    `puesto_id` VARCHAR(191) NULL,
+    `plaza_id` VARCHAR(191) NULL,
+    `objetivo` LONGTEXT NULL,
+    `metodologia_trabajo_ambitos_accion` LONGTEXT NULL,
+    `rol_horario_trabajo` LONGTEXT NULL,
+    `uniformes` LONGTEXT NULL,
+    `equipos` LONGTEXT NULL,
+    `accesorios_varios` LONGTEXT NULL,
+    `tiempo_respuesta_disposicion_imprevistos` LONGTEXT NULL,
+    `distribucion_diaria_labores_personal` LONGTEXT NULL,
+    `frecuencia_minima_limpieza_areas` LONGTEXT NULL,
+    `supervision_metodo_rol_visitas` LONGTEXT NULL,
+    `estrategia_adecuado_continuo_servicio` LONGTEXT NULL,
+    `responsable_general_contrato` LONGTEXT NULL,
+    `formularios_registro_control_puestos_equipos` LONGTEXT NULL,
+    `plan_capacitacion` LONGTEXT NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `created_by` VARCHAR(191) NULL,
+    `ubicacion` VARCHAR(191) NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_plan_atencion_situaciones_especiales` (
+    `id` VARCHAR(191) NOT NULL,
+    `empresa_id` VARCHAR(191) NULL,
+    `cliente_id` VARCHAR(191) NULL,
+    `contrato_id` VARCHAR(191) NULL,
+    `corpo_id` VARCHAR(191) NULL,
+    `puesto_id` VARCHAR(191) NULL,
+    `plaza_id` VARCHAR(191) NULL,
+    `edificio` VARCHAR(191) NULL,
+    `supervisor` VARCHAR(191) NULL,
+    `situaciones` LONGTEXT NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `created_by` VARCHAR(191) NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_registro_tareas_actividades_limpieza` (
+    `id` VARCHAR(191) NOT NULL,
+    `empresa_id` VARCHAR(191) NULL,
+    `cliente_id` VARCHAR(191) NULL,
+    `contrato_id` VARCHAR(191) NULL,
+    `corpo_id` VARCHAR(191) NULL,
+    `puesto_id` VARCHAR(191) NULL,
+    `plaza_id` VARCHAR(191) NULL,
+    `miscelaneo` VARCHAR(191) NULL,
+    `area_piso` VARCHAR(191) NULL,
+    `turno_inicio` VARCHAR(191) NULL,
+    `turno_fin` VARCHAR(191) NULL,
+    `mes` VARCHAR(191) NULL,
+    `supervisor` VARCHAR(191) NULL,
+    `sucursal` VARCHAR(191) NULL,
+    `area` VARCHAR(191) NULL,
+    `cliente` VARCHAR(191) NULL,
+    `actividades_ejecucion_diaria` LONGTEXT NULL,
+    `actividades_ejecucion_semanal` LONGTEXT NULL,
+    `actividades_quincenales` LONGTEXT NULL,
+    `actividades_mensual` LONGTEXT NULL,
+    `actividades_bimensual` LONGTEXT NULL,
+    `actividades_trimestral` LONGTEXT NULL,
+    `actividades_cuatrimestral` LONGTEXT NULL,
+    `actividades_semestral` LONGTEXT NULL,
+    `actividades_anual` LONGTEXT NULL,
+    `otras_actividades` LONGTEXT NULL,
+    `programa_eventos_especiales` LONGTEXT NULL,
+    `firma_miscelaneo` LONGTEXT NULL,
+    `firma_supervisor` LONGTEXT NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `created_by` VARCHAR(191) NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_matriz_riesgos` (
+    `id` VARCHAR(191) NOT NULL,
+    `empresa_id` VARCHAR(191) NULL,
+    `cliente_id` VARCHAR(191) NULL,
+    `contrato_id` VARCHAR(191) NULL,
+    `corpo_id` VARCHAR(191) NULL,
+    `puesto_id` VARCHAR(191) NULL,
+    `plaza_id` VARCHAR(191) NULL,
+    `riesgos` LONGTEXT NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `created_by` VARCHAR(191) NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_matriz_oportunidades` (
+    `id` VARCHAR(191) NOT NULL,
+    `empresa_id` VARCHAR(191) NULL,
+    `cliente_id` VARCHAR(191) NULL,
+    `contrato_id` VARCHAR(191) NULL,
+    `corpo_id` VARCHAR(191) NULL,
+    `puesto_id` VARCHAR(191) NULL,
+    `plaza_id` VARCHAR(191) NULL,
+    `oportunidades` LONGTEXT NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `created_by` VARCHAR(191) NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_matriz_indicador_procesos` (
+    `id` VARCHAR(191) NOT NULL,
+    `empresa_id` VARCHAR(191) NULL,
+    `cliente_id` VARCHAR(191) NULL,
+    `contrato_id` VARCHAR(191) NULL,
+    `corpo_id` VARCHAR(191) NULL,
+    `puesto_id` VARCHAR(191) NULL,
+    `plaza_id` VARCHAR(191) NULL,
+    `procesos` LONGTEXT NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `created_by` VARCHAR(191) NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_rol_trabajo_mensual` (
+    `id` VARCHAR(191) NOT NULL,
+    `empresa_id` VARCHAR(191) NULL,
+    `cliente_id` VARCHAR(191) NULL,
+    `contrato_id` VARCHAR(191) NULL,
+    `corpo_id` VARCHAR(191) NULL,
+    `puesto_id` VARCHAR(191) NULL,
+    `plaza_id` VARCHAR(191) NULL,
+    `mes_ano` VARCHAR(191) NULL,
+    `cliente` VARCHAR(191) NULL,
+    `empleados` LONGTEXT NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `created_by` VARCHAR(191) NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_solicitud_permiso` (
+    `id` VARCHAR(191) NOT NULL,
+    `empresa_id` VARCHAR(191) NULL,
+    `cliente_id` VARCHAR(191) NULL,
+    `contrato_id` VARCHAR(191) NULL,
+    `corpo_id` VARCHAR(191) NULL,
+    `puesto_id` VARCHAR(191) NULL,
+    `plaza_id` VARCHAR(191) NULL,
+    `persona_solicita` VARCHAR(191) NULL,
+    `codigo` VARCHAR(191) NULL,
+    `contrato` VARCHAR(191) NULL,
+    `horario` VARCHAR(191) NULL,
+    `fecha_solicitud` VARCHAR(191) NULL,
+    `motivo_permiso` LONGTEXT NULL,
+    `permiso_sustituido_por` VARCHAR(191) NULL,
+    `codigo_sustituto` VARCHAR(191) NULL,
+    `firma_gerente` LONGTEXT NULL,
+    `firma_encargado_monitoreo` LONGTEXT NULL,
+    `permiso_coordinado_por` VARCHAR(191) NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `created_by` VARCHAR(191) NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_control_asistencia` (
+    `id` VARCHAR(191) NOT NULL,
+    `empresa_id` VARCHAR(191) NULL,
+    `cliente_id` VARCHAR(191) NULL,
+    `contrato_id` VARCHAR(191) NULL,
+    `corpo_id` VARCHAR(191) NULL,
+    `puesto_id` VARCHAR(191) NULL,
+    `plaza_id` VARCHAR(191) NULL,
+    `cliente` VARCHAR(191) NULL,
+    `fecha` VARCHAR(191) NULL,
+    `turno` VARCHAR(191) NULL,
+    `area_piso` VARCHAR(191) NULL,
+    `total_presentes` VARCHAR(191) NULL,
+    `fijos` VARCHAR(191) NULL,
+    `colaboradores` LONGTEXT NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `created_by` VARCHAR(191) NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_apertura_cierre_puesto` (
+    `id` VARCHAR(191) NOT NULL,
+    `empresa_id` VARCHAR(191) NULL,
+    `cliente_id` VARCHAR(191) NULL,
+    `contrato_id` VARCHAR(191) NULL,
+    `corpo_id` VARCHAR(191) NULL,
+    `puesto_id` VARCHAR(191) NULL,
+    `plaza_id` VARCHAR(191) NULL,
+    `cliente` VARCHAR(191) NULL,
+    `numero_corpo` VARCHAR(191) NULL,
+    `numero_puesto` VARCHAR(191) NULL,
+    `fecha_realizado` VARCHAR(191) NULL,
+    `nombre_corpo` VARCHAR(191) NULL,
+    `nombre_puesto` VARCHAR(191) NULL,
+    `tipo` VARCHAR(191) NULL,
+    `actividades` LONGTEXT NULL,
+    `inventario` LONGTEXT NULL,
+    `fotos` LONGTEXT NULL,
+    `otras_observaciones` LONGTEXT NULL,
+    `nombre_representante_cliente` VARCHAR(191) NULL,
+    `firma_cliente` LONGTEXT NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `created_by` VARCHAR(191) NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_registro_induccion_recorrido` (
+    `id` VARCHAR(191) NOT NULL,
+    `empresa_id` VARCHAR(191) NULL,
+    `cliente_id` VARCHAR(191) NULL,
+    `contrato_id` VARCHAR(191) NULL,
+    `corpo_id` VARCHAR(191) NULL,
+    `puesto_id` VARCHAR(191) NULL,
+    `plaza_id` VARCHAR(191) NULL,
+    `fecha` VARCHAR(191) NULL,
+    `renglon_edificio` VARCHAR(191) NULL,
+    `supervisor_cliente` VARCHAR(191) NULL,
+    `supervisor_corporacion` VARCHAR(191) NULL,
+    `temas_desarrollados` LONGTEXT NULL,
+    `aspectos_especificos` LONGTEXT NULL,
+    `participantes` LONGTEXT NULL,
+    `firma_supervisor` LONGTEXT NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `created_by` VARCHAR(191) NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_informe_supervision` (
+    `id` VARCHAR(191) NOT NULL,
+    `empresa_id` VARCHAR(191) NULL,
+    `cliente_id` VARCHAR(191) NULL,
+    `contrato_id` VARCHAR(191) NULL,
+    `corpo_id` VARCHAR(191) NULL,
+    `puesto_id` VARCHAR(191) NULL,
+    `plaza_id` VARCHAR(191) NULL,
+    `fecha` VARCHAR(191) NULL,
+    `piso` VARCHAR(191) NULL,
+    `area` VARCHAR(191) NULL,
+    `aseador` VARCHAR(191) NULL,
+    `supervisor` VARCHAR(191) NULL,
+    `limpieza_general` LONGTEXT NULL,
+    `cuarto_aseo` LONGTEXT NULL,
+    `servicios_sanitarios` LONGTEXT NULL,
+    `uniforme_presentacion` LONGTEXT NULL,
+    `estado_equipos` LONGTEXT NULL,
+    `calificacion_general` LONGTEXT NULL,
+    `firma_aseador` LONGTEXT NULL,
+    `firma_supervisor` LONGTEXT NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `created_by` VARCHAR(191) NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_guia_uso_cepillo_electrico` (
+    `id` VARCHAR(191) NOT NULL,
+    `empresa_id` VARCHAR(191) NULL,
+    `cliente_id` VARCHAR(191) NULL,
+    `contrato_id` VARCHAR(191) NULL,
+    `corpo_id` VARCHAR(191) NULL,
+    `puesto_id` VARCHAR(191) NULL,
+    `plaza_id` VARCHAR(191) NULL,
+    `miscelaneo` VARCHAR(191) NULL,
+    `capacitador` VARCHAR(191) NULL,
+    `cedula` VARCHAR(191) NULL,
+    `fecha` VARCHAR(191) NULL,
+    `firma_miscelaneo` LONGTEXT NULL,
+    `firma_capacitador` LONGTEXT NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `created_by` VARCHAR(191) NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_listado_general_clientes` (
+    `id` VARCHAR(191) NOT NULL,
+    `empresa_id` VARCHAR(191) NULL,
+    `cliente_id` VARCHAR(191) NULL,
+    `contrato_id` VARCHAR(191) NULL,
+    `corpo_id` VARCHAR(191) NULL,
+    `puesto_id` VARCHAR(191) NULL,
+    `plaza_id` VARCHAR(191) NULL,
+    `numero_cliente` VARCHAR(191) NULL,
+    `fecha_inicio` VARCHAR(191) NULL,
+    `fecha_finalizacion` VARCHAR(191) NULL,
+    `extension_prorroga` VARCHAR(191) NULL,
+    `nombre_cliente` VARCHAR(191) NULL,
+    `area_sede` VARCHAR(191) NULL,
+    `numero_corpo` VARCHAR(191) NULL,
+    `numero_licitacion` VARCHAR(191) NULL,
+    `cantidad_miscelaneos` VARCHAR(191) NULL,
+    `tipo_requerimiento_insumos` VARCHAR(191) NULL,
+    `tipo_requerimiento_utencilios` VARCHAR(191) NULL,
+    `tipo_requerimiento_equipos` VARCHAR(191) NULL,
+    `ubicacion` VARCHAR(191) NULL,
+    `fecha_reunion_apertura` VARCHAR(191) NULL,
+    `necesidades` LONGTEXT NULL,
+    `gustos_preferencias` LONGTEXT NULL,
+    `supervisor_asignado` VARCHAR(191) NULL,
+    `condiciones_licitaciones` LONGTEXT NULL,
+    `plan_trabajo` LONGTEXT NULL,
+    `encuestas` LONGTEXT NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `created_by` VARCHAR(191) NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_control_acciones_mejora` (
+    `id` VARCHAR(191) NOT NULL,
+    `empresa_id` VARCHAR(191) NULL,
+    `cliente_id` VARCHAR(191) NULL,
+    `contrato_id` VARCHAR(191) NULL,
+    `corpo_id` VARCHAR(191) NULL,
+    `puesto_id` VARCHAR(191) NULL,
+    `plaza_id` VARCHAR(191) NULL,
+    `numero_accion` VARCHAR(191) NULL,
+    `causa_origen` LONGTEXT NULL,
+    `fecha_deteccion_incidencia` VARCHAR(191) NULL,
+    `mes_deteccion` VARCHAR(191) NULL,
+    `tipo_accion` VARCHAR(191) NULL,
+    `proceso_relacionado` LONGTEXT NULL,
+    `encargado_proceso` VARCHAR(191) NULL,
+    `origen_accion` VARCHAR(191) NULL,
+    `fecha_elaboracion_plan` VARCHAR(191) NULL,
+    `tiempo_plan_vs_deteccion` VARCHAR(191) NULL,
+    `plan_elaborado_a_tiempo` VARCHAR(191) NULL,
+    `detalle_nc_opr_dm` LONGTEXT NULL,
+    `analisis_causas` LONGTEXT NULL,
+    `accion_inmediata` LONGTEXT NULL,
+    `accion_mejora` LONGTEXT NULL,
+    `fecha_aprobacion` VARCHAR(191) NULL,
+    `responsable_ejecucion` VARCHAR(191) NULL,
+    `fecha_programada_ejecucion` VARCHAR(191) NULL,
+    `fecha_real_ejecucion` VARCHAR(191) NULL,
+    `mes_ejecucion` VARCHAR(191) NULL,
+    `modif_fecha_ejecucion_motivo` LONGTEXT NULL,
+    `aplica_seguimiento` VARCHAR(191) NULL,
+    `seguimiento_meses` LONGTEXT NULL,
+    `evidencias` LONGTEXT NULL,
+    `estado_accion` VARCHAR(191) NULL,
+    `a_tiempo` VARCHAR(191) NULL,
+    `no_conformidades_similares` VARCHAR(191) NULL,
+    `reincidencia` VARCHAR(191) NULL,
+    `actualiza_matriz_riesgos` VARCHAR(191) NULL,
+    `efectividad` VARCHAR(191) NULL,
+    `no_efectiva` VARCHAR(191) NULL,
+    `cambiar_al_8d` VARCHAR(191) NULL,
+    `cerrada` VARCHAR(191) NULL,
+    `dueño_proceso` VARCHAR(191) NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `created_by` VARCHAR(191) NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_politica_calidad` (
+    `id` VARCHAR(191) NOT NULL,
+    `empresa_id` VARCHAR(191) NULL,
+    `cliente_id` VARCHAR(191) NULL,
+    `contrato_id` VARCHAR(191) NULL,
+    `corpo_id` VARCHAR(191) NULL,
+    `puesto_id` VARCHAR(191) NULL,
+    `plaza_id` VARCHAR(191) NULL,
+    `politica_contenido` LONGTEXT NULL,
+    `nombre_aprobado` VARCHAR(191) NULL,
+    `firma_aprobado` LONGTEXT NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `created_by` VARCHAR(191) NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_objetivos_empresariales_calidad` (
+    `id` VARCHAR(191) NOT NULL,
+    `empresa_id` VARCHAR(191) NULL,
+    `cliente_id` VARCHAR(191) NULL,
+    `contrato_id` VARCHAR(191) NULL,
+    `corpo_id` VARCHAR(191) NULL,
+    `puesto_id` VARCHAR(191) NULL,
+    `plaza_id` VARCHAR(191) NULL,
+    `ambitos` LONGTEXT NULL,
+    `nombre_aprobado` VARCHAR(191) NULL,
+    `firma_aprobado` LONGTEXT NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `created_by` VARCHAR(191) NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_matriz_analisis_partes_interesadas` (
+    `id` VARCHAR(191) NOT NULL,
+    `empresa_id` VARCHAR(191) NULL,
+    `cliente_id` VARCHAR(191) NULL,
+    `contrato_id` VARCHAR(191) NULL,
+    `corpo_id` VARCHAR(191) NULL,
+    `puesto_id` VARCHAR(191) NULL,
+    `plaza_id` VARCHAR(191) NULL,
+    `partes_interesadas` LONGTEXT NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `created_by` VARCHAR(191) NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_plan_comunicacion` (
+    `id` VARCHAR(191) NOT NULL,
+    `empresa_id` VARCHAR(191) NULL,
+    `cliente_id` VARCHAR(191) NULL,
+    `contrato_id` VARCHAR(191) NULL,
+    `corpo_id` VARCHAR(191) NULL,
+    `puesto_id` VARCHAR(191) NULL,
+    `plaza_id` VARCHAR(191) NULL,
+    `comunicaciones` LONGTEXT NULL,
+    `responsable_aprobacion` VARCHAR(191) NULL,
+    `puesto_aprobacion` VARCHAR(191) NULL,
+    `fecha_aprobacion` VARCHAR(191) NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `created_by` VARCHAR(191) NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_matriz_gestion_conocimiento` (
+    `id` VARCHAR(191) NOT NULL,
+    `empresa_id` VARCHAR(191) NULL,
+    `cliente_id` VARCHAR(191) NULL,
+    `contrato_id` VARCHAR(191) NULL,
+    `corpo_id` VARCHAR(191) NULL,
+    `puesto_id` VARCHAR(191) NULL,
+    `plaza_id` VARCHAR(191) NULL,
+    `registros` LONGTEXT NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `created_by` VARCHAR(191) NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_planificacion_cambios_sgc` (
+    `id` VARCHAR(191) NOT NULL,
+    `empresa_id` VARCHAR(191) NULL,
+    `cliente_id` VARCHAR(191) NULL,
+    `contrato_id` VARCHAR(191) NULL,
+    `corpo_id` VARCHAR(191) NULL,
+    `puesto_id` VARCHAR(191) NULL,
+    `plaza_id` VARCHAR(191) NULL,
+    `datos_cambio` LONGTEXT NULL,
+    `actividades` LONGTEXT NULL,
+    `aprobado_por` VARCHAR(191) NULL,
+    `firma_representante` LONGTEXT NULL,
+    `fecha_aprobacion` VARCHAR(191) NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `created_by` VARCHAR(191) NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_rutas_giras` (
+    `id` VARCHAR(191) NOT NULL,
+    `empresa_id` VARCHAR(191) NULL,
+    `cliente_id` VARCHAR(191) NULL,
+    `contrato_id` VARCHAR(191) NULL,
+    `corpo_id` VARCHAR(191) NULL,
+    `puesto_id` VARCHAR(191) NULL,
+    `plaza_id` VARCHAR(191) NULL,
+    `sociedad` VARCHAR(191) NULL,
+    `cliente` VARCHAR(191) NULL,
+    `zona` VARCHAR(191) NULL,
+    `cantidad_personal` VARCHAR(191) NULL,
+    `gira_ruta` VARCHAR(191) NULL,
+    `dia_entrega` VARCHAR(191) NULL,
+    `estatus` VARCHAR(191) NULL,
+    `cumplimiento_supervision` VARCHAR(191) NULL,
+    `cumplimiento_entrega_insumos` VARCHAR(191) NULL,
+    `persona_refuerzo` VARCHAR(191) NULL,
+    `notas_cambios` VARCHAR(191) NULL,
+    `estado` VARCHAR(191) NULL,
+    `nombre_persona_refuerzo` VARCHAR(191) NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `created_by` VARCHAR(191) NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
 CREATE TABLE `c_empleado_almuerzo` (
     `id` INTEGER NOT NULL AUTO_INCREMENT,
     `empleadoId` INTEGER NOT NULL,
@@ -705,6 +1651,38 @@ CREATE TABLE `c_empleado_almuerzo` (
     `es_manual` BOOLEAN NOT NULL DEFAULT false,
 
     INDEX `empleadoId_almuerzo_fkey`(`empleadoId`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_encuesta_cliente` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `empresa_id` INTEGER NOT NULL,
+    `cliente_id` INTEGER NOT NULL,
+    `corpo_id` INTEGER NOT NULL,
+    `puesto_id` INTEGER NOT NULL,
+    `division_id` INTEGER NOT NULL,
+    `responsable_id` INTEGER NOT NULL,
+    `fecha` DATE NOT NULL,
+    `evaluaciones` LONGTEXT NOT NULL,
+    `created_at` DATETIME(0) NOT NULL,
+    `firma_responsable` LONGTEXT NOT NULL,
+    `nombre_evaluado` VARCHAR(45) NOT NULL,
+    `cedula_evaluado` VARCHAR(25) NOT NULL,
+    `cedula_responsable` VARCHAR(25) NOT NULL,
+    `nombre_responsable` VARCHAR(45) NOT NULL,
+    `email_evaluado` VARCHAR(50) NOT NULL,
+    `firma_evaluado` LONGTEXT NOT NULL,
+    `telefono_evaluado` VARCHAR(25) NOT NULL,
+    `empresa_evaluado` VARCHAR(55) NOT NULL,
+    `observaciones` LONGTEXT NOT NULL,
+
+    INDEX `c_encuesta_cliente_cliente_id_fkey`(`cliente_id`),
+    INDEX `c_encuesta_cliente_corpo_id_fkey`(`corpo_id`),
+    INDEX `c_encuesta_cliente_division_id_fkey`(`division_id`),
+    INDEX `c_encuesta_cliente_empresa_id_fkey`(`empresa_id`),
+    INDEX `c_encuesta_cliente_puesto_id_fkey`(`puesto_id`),
+    INDEX `c_encuesta_cliente_responsable_id_fkey`(`responsable_id`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
@@ -2160,6 +3138,7 @@ CREATE TABLE `e_actividad_corpo` (
     `frecuencia` LONGTEXT NOT NULL,
     `es_revision_equipo` BOOLEAN NOT NULL,
     `descripcion_actividad` LONGTEXT NOT NULL,
+    `reglas` LONGTEXT NOT NULL,
 
     INDEX `e_actividad_corpo_cliente_id_fkey`(`cliente_id`),
     INDEX `e_actividad_corpo_contrato_id_fkey`(`contrato_id`),
@@ -2171,44 +3150,35 @@ CREATE TABLE `e_actividad_corpo` (
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- CreateTable
-CREATE TABLE `e_actividad_corpo_marcada` (
+CREATE TABLE `e_actividad_corpo_plaza` (
     `id` INTEGER NOT NULL AUTO_INCREMENT,
     `actividadCorpo_id` INTEGER NOT NULL,
-    `empleado_id` INTEGER NOT NULL,
+    `plaza_id` INTEGER NOT NULL,
     `bitacora` LONGTEXT NOT NULL,
+    `file_name` LONGTEXT NULL,
     `created_at` DATETIME(3) NOT NULL,
     `updated_at` DATETIME(3) NOT NULL,
     `marcada` BOOLEAN NOT NULL DEFAULT false,
 
-    INDEX `e_actividad_corpo_marcada_actividadCorpo_id_fkey`(`actividadCorpo_id`),
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `e_actividad_corpo_equipo` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `actividadCorpo_id` INTEGER NOT NULL,
-    `reglas` LONGTEXT NOT NULL,
-    `created_at` DATETIME(3) NOT NULL,
-
-    INDEX `e_actividad_corpo_equipo_actividadCorpo_id_fkey`(`actividadCorpo_id`),
+    INDEX `e_actividad_corpo_plaza_actividadCorpo_id_fkey`(`actividadCorpo_id`),
+    INDEX `e_actividad_corpo_plaza_plaza_id_fkey`(`plaza_id`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- CreateTable
 CREATE TABLE `e_actividad_corpo_revision_equipo` (
     `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `actividadCorpoEquipo_id` INTEGER NOT NULL,
-    `empleado_id` INTEGER NOT NULL,
     `articulo_id` INTEGER NOT NULL,
     `es_correcto` BOOLEAN NOT NULL,
     `motivo_incorrecto` LONGTEXT NOT NULL,
     `created_at` DATETIME(3) NOT NULL,
     `updated_at` DATETIME(3) NOT NULL,
     `marcada` BOOLEAN NOT NULL DEFAULT false,
+    `actividadCorpoMarcada_id` INTEGER NOT NULL,
+    `file_name` LONGTEXT NULL,
 
     INDEX `e_actividad_corpo_revision_equipo_articulo_id_fkey`(`articulo_id`),
-    INDEX `e_actividad_corpo_revision_equipo_empleado_id_fkey`(`empleado_id`),
+    INDEX `e_actividad_corpo_revision_equipo_actividad_corpo_marcada_fkey`(`actividadCorpoMarcada_id`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
@@ -2382,6 +3352,52 @@ CREATE TABLE `e_referencia_personal` (
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- CreateTable
+CREATE TABLE `e_registro_capacitaciones` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `empresa_id` INTEGER NOT NULL,
+    `cliente_id` INTEGER NOT NULL,
+    `corpo_id` INTEGER NOT NULL,
+    `titulo` LONGTEXT NOT NULL,
+    `descripcion` LONGTEXT NOT NULL,
+    `resultado` VARCHAR(15) NULL,
+    `observaciones` LONGTEXT NOT NULL,
+    `nombre_responsable` LONGTEXT NOT NULL,
+    `firma_responsable` LONGTEXT NOT NULL,
+    `cedula_responsable` VARCHAR(25) NOT NULL,
+    `responsable_id` INTEGER NOT NULL,
+    `fecha` DATE NOT NULL,
+    `file` LONGTEXT NULL,
+    `tipo` VARCHAR(15) NOT NULL,
+
+    INDEX `e_registro_capacitaciones_cliente_id_fkey`(`cliente_id`),
+    INDEX `e_registro_capacitaciones_corpo_id_fkey`(`corpo_id`),
+    INDEX `e_registro_capacitaciones_empresa_id_fkey`(`empresa_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `e_capacitacion_empleado` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `capacitacion_id` INTEGER NOT NULL,
+    `empleado_id` INTEGER NOT NULL,
+
+    INDEX `e_capacitacion_empleado_capacitacion_id_fkey`(`capacitacion_id`),
+    INDEX `e_capacitacion_empleado_empleado_id_fkey`(`empleado_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `e_capacitacion_puesto` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `capacitacion_id` INTEGER NOT NULL,
+    `puesto_id` INTEGER NOT NULL,
+
+    INDEX `e_capacitacion_puesto_capacitacion_id_fkey`(`capacitacion_id`),
+    INDEX `e_capacitacion_puesto_puesto_id_fkey`(`puesto_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
 CREATE TABLE `e_registro_enfermedades` (
     `id` INTEGER NOT NULL AUTO_INCREMENT,
     `empleado_id` INTEGER NULL,
@@ -2444,6 +3460,72 @@ CREATE TABLE `e_registro_habilidades` (
     `arma_no_letal` BOOLEAN NOT NULL,
 
     UNIQUE INDEX `UNIQ_7BA0E6E9952BE730`(`empleado_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `e_registro_vehiculos` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `cliente_id` INTEGER NOT NULL,
+    `corpo_id` INTEGER NOT NULL,
+    `puesto_id` INTEGER NOT NULL,
+    `tipo` VARCHAR(20) NOT NULL,
+    `placa` VARCHAR(30) NOT NULL,
+    `nombre` VARCHAR(75) NOT NULL,
+    `cedula` VARCHAR(30) NOT NULL,
+    `hora_entrada` DATETIME(0) NOT NULL,
+    `hora_salida` DATETIME(0) NULL,
+    `razon_visita` LONGTEXT NOT NULL,
+    `responsable_id` INTEGER NOT NULL,
+    `created_at` DATETIME(0) NOT NULL,
+    `updated_at` DATETIME(0) NOT NULL,
+    `file_name` LONGTEXT NULL,
+
+    INDEX `FK_BB503B25952BE730`(`responsable_id`),
+    INDEX `FK_BB503B25953BE730`(`cliente_id`),
+    INDEX `FK_BB503B25954BE730`(`corpo_id`),
+    INDEX `FK_BB503B25955BE730`(`puesto_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `e_registro_personas` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `cliente_id` INTEGER NOT NULL,
+    `corpo_id` INTEGER NOT NULL,
+    `puesto_id` INTEGER NOT NULL,
+    `nombre` VARCHAR(75) NOT NULL,
+    `cedula` VARCHAR(30) NOT NULL,
+    `hora_entrada` DATETIME(0) NOT NULL,
+    `hora_salida` DATETIME(0) NULL,
+    `razon_visita` VARCHAR(75) NOT NULL,
+    `responsable_id` INTEGER NOT NULL,
+    `es_funcionario` BOOLEAN NOT NULL,
+    `observaciones` VARCHAR(255) NULL,
+    `tipo_accion` VARCHAR(15) NULL,
+    `created_at` DATETIME(0) NOT NULL,
+    `updated_at` DATETIME(0) NOT NULL,
+    `foto_cedula` LONGTEXT NULL,
+    `pers_autoriza_salida` VARCHAR(255) NULL,
+
+    INDEX `FK_BB503B25992BE730`(`responsable_id`),
+    INDEX `FK_BB603B25953BE730`(`cliente_id`),
+    INDEX `FK_BB703B25954BE730`(`corpo_id`),
+    INDEX `FK_BB803B25955BE730`(`puesto_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `e_activo_visitante` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `visitante_id` INTEGER NOT NULL,
+    `tipo_id` INTEGER NOT NULL,
+    `detalles` LONGTEXT NOT NULL,
+    `numero_serie` VARCHAR(50) NOT NULL,
+    `numero_activo` VARCHAR(50) NULL,
+
+    INDEX `FK_BB503B25992BE739`(`visitante_id`),
+    INDEX `FK_BB503B25993BE739`(`tipo_id`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
@@ -2656,6 +3738,24 @@ CREATE TABLE `n_novedades_categoria` (
     `id` INTEGER NOT NULL AUTO_INCREMENT,
     `nombre` VARCHAR(191) NOT NULL,
 
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `n_tipo_activo_visitas` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `nombre` VARCHAR(255) NOT NULL,
+
+    UNIQUE INDEX `UNIQ_92DE8E473A989126`(`nombre`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `n_clasificacion_incidente` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `nombre` VARCHAR(255) NOT NULL,
+
+    UNIQUE INDEX `UNIQ_92DE8E473A988126`(`nombre`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
@@ -4449,7 +5549,64 @@ ALTER TABLE `c_empleado` ADD CONSTRAINT `FK_C84A3999ED33694C` FOREIGN KEY (`cate
 ALTER TABLE `c_empleado` ADD CONSTRAINT `FK_C84A3999FCBB0AEC` FOREIGN KEY (`tipoPagoCasa_id`) REFERENCES `n_tipo_pago_casa`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
 
 -- AddForeignKey
+ALTER TABLE `c_plaza_notification` ADD CONSTRAINT `c_plaza_notification_notificationId_fkey` FOREIGN KEY (`notificationId`) REFERENCES `c_notifications`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `c_plaza_notification` ADD CONSTRAINT `c_plaza_notification_plazaId_fkey` FOREIGN KEY (`plazaId`) REFERENCES `e_estructura_plazas`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `c_notas_voz` ADD CONSTRAINT `c_notas_voz_cliente_id_fkey` FOREIGN KEY (`cliente_id`) REFERENCES `e_estructura_cliente`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `c_notas_voz` ADD CONSTRAINT `c_notas_voz_corpo_id_fkey` FOREIGN KEY (`corpo_id`) REFERENCES `e_estructura_sucursal`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `c_notas_voz` ADD CONSTRAINT `c_notas_voz_empresa_id_fkey` FOREIGN KEY (`empresa_id`) REFERENCES `e_estructura_empresa`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `c_incidente` ADD CONSTRAINT `c_incidente_clasificacion_fkey` FOREIGN KEY (`clasificacion`) REFERENCES `n_clasificacion_incidente`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `c_incidente` ADD CONSTRAINT `c_incidente_cliente_id_fkey` FOREIGN KEY (`cliente_id`) REFERENCES `e_estructura_cliente`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `c_incidente` ADD CONSTRAINT `c_incidente_corpo_id_fkey` FOREIGN KEY (`corpo_id`) REFERENCES `e_estructura_sucursal`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `c_incidente` ADD CONSTRAINT `c_incidente_ejecutivo_cuenta_fkey` FOREIGN KEY (`ejecutivo_cuenta`) REFERENCES `n_ejecutivo_cuenta`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `c_incidente` ADD CONSTRAINT `c_incidente_empresa_id_fkey` FOREIGN KEY (`empresa_id`) REFERENCES `e_estructura_empresa`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `c_evaluacion` ADD CONSTRAINT `c_evaluacion_corpo_id_fkey` FOREIGN KEY (`corpo_id`) REFERENCES `e_estructura_sucursal`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `c_evaluacion` ADD CONSTRAINT `c_evaluacion_plaza_id_fkey` FOREIGN KEY (`plaza_id`) REFERENCES `e_estructura_plazas`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `c_evaluacion` ADD CONSTRAINT `c_evaluacion_puesto_id_fkey` FOREIGN KEY (`puesto_id`) REFERENCES `e_estructura_puesto`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE `c_empleado_almuerzo` ADD CONSTRAINT `c_empleado_almuerzo_empleadoId_fkey` FOREIGN KEY (`empleadoId`) REFERENCES `c_empleado`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `c_encuesta_cliente` ADD CONSTRAINT `c_encuesta_cliente_cliente_id_fkey` FOREIGN KEY (`cliente_id`) REFERENCES `e_estructura_cliente`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `c_encuesta_cliente` ADD CONSTRAINT `c_encuesta_cliente_corpo_id_fkey` FOREIGN KEY (`corpo_id`) REFERENCES `e_estructura_sucursal`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `c_encuesta_cliente` ADD CONSTRAINT `c_encuesta_cliente_division_id_fkey` FOREIGN KEY (`division_id`) REFERENCES `n_division`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `c_encuesta_cliente` ADD CONSTRAINT `c_encuesta_cliente_empresa_id_fkey` FOREIGN KEY (`empresa_id`) REFERENCES `e_estructura_empresa`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `c_encuesta_cliente` ADD CONSTRAINT `c_encuesta_cliente_puesto_id_fkey` FOREIGN KEY (`puesto_id`) REFERENCES `e_estructura_puesto`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `c_encuesta_cliente` ADD CONSTRAINT `c_encuesta_cliente_responsable_id_fkey` FOREIGN KEY (`responsable_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE `refresh_token` ADD CONSTRAINT `refresh_token_empleadoId_fkey` FOREIGN KEY (`empleadoId`) REFERENCES `c_empleado`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
@@ -4965,13 +6122,13 @@ ALTER TABLE `e_actividad_corpo` ADD CONSTRAINT `e_actividad_corpo_plaza_id_fkey`
 ALTER TABLE `e_actividad_corpo` ADD CONSTRAINT `e_actividad_corpo_puesto_id_fkey` FOREIGN KEY (`puesto_id`) REFERENCES `e_estructura_puesto`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `e_actividad_corpo_marcada` ADD CONSTRAINT `e_actividad_corpo_marcada_actividadCorpo_id_fkey` FOREIGN KEY (`actividadCorpo_id`) REFERENCES `e_actividad_corpo`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE `e_actividad_corpo_plaza` ADD CONSTRAINT `e_actividad_corpo_plaza_actividadCorpo_id_fkey` FOREIGN KEY (`actividadCorpo_id`) REFERENCES `e_actividad_corpo`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `e_actividad_corpo_plaza` ADD CONSTRAINT `e_actividad_corpo_plaza_plaza_id_fkey` FOREIGN KEY (`plaza_id`) REFERENCES `e_estructura_plazas`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE `e_actividad_corpo_revision_equipo` ADD CONSTRAINT `e_actividad_corpo_revision_equipo_articulo_id_fkey` FOREIGN KEY (`articulo_id`) REFERENCES `n_articulo_corpo_puesto`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE `e_actividad_corpo_revision_equipo` ADD CONSTRAINT `e_actividad_corpo_revision_equipo_empleado_id_fkey` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE `e_familia` ADD CONSTRAINT `FK_BFFE2C1E5BA311FC` FOREIGN KEY (`parentesco_id`) REFERENCES `n_parentesco`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
@@ -5034,10 +6191,61 @@ ALTER TABLE `e_persona_empresa` ADD CONSTRAINT `FK_61EEE3DCA57A8FE0` FOREIGN KEY
 ALTER TABLE `e_referencia_personal` ADD CONSTRAINT `FK_BFAFF6A4952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
 
 -- AddForeignKey
+ALTER TABLE `e_registro_capacitaciones` ADD CONSTRAINT `e_registro_capacitaciones_cliente_id_fkey` FOREIGN KEY (`cliente_id`) REFERENCES `e_estructura_cliente`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `e_registro_capacitaciones` ADD CONSTRAINT `e_registro_capacitaciones_corpo_id_fkey` FOREIGN KEY (`corpo_id`) REFERENCES `e_estructura_sucursal`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `e_registro_capacitaciones` ADD CONSTRAINT `e_registro_capacitaciones_empresa_id_fkey` FOREIGN KEY (`empresa_id`) REFERENCES `e_estructura_empresa`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `e_capacitacion_empleado` ADD CONSTRAINT `e_capacitacion_empleado_capacitacion_id_fkey` FOREIGN KEY (`capacitacion_id`) REFERENCES `e_registro_capacitaciones`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `e_capacitacion_empleado` ADD CONSTRAINT `e_capacitacion_empleado_empleado_id_fkey` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `e_capacitacion_puesto` ADD CONSTRAINT `e_capacitacion_puesto_capacitacion_id_fkey` FOREIGN KEY (`capacitacion_id`) REFERENCES `e_registro_capacitaciones`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `e_capacitacion_puesto` ADD CONSTRAINT `e_capacitacion_puesto_puesto_id_fkey` FOREIGN KEY (`puesto_id`) REFERENCES `e_estructura_puesto`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE `e_registro_enfermedades` ADD CONSTRAINT `FK_946DE77A952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
 
 -- AddForeignKey
 ALTER TABLE `e_registro_habilidades` ADD CONSTRAINT `FK_7BA0E6E9952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE `e_registro_vehiculos` ADD CONSTRAINT `FK_BB503B25952BE730` FOREIGN KEY (`responsable_id`) REFERENCES `c_empleado`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `e_registro_vehiculos` ADD CONSTRAINT `FK_BB503B25953BE730` FOREIGN KEY (`cliente_id`) REFERENCES `e_estructura_cliente`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `e_registro_vehiculos` ADD CONSTRAINT `FK_BB503B25954BE730` FOREIGN KEY (`corpo_id`) REFERENCES `e_estructura_sucursal`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `e_registro_vehiculos` ADD CONSTRAINT `FK_BB503B25955BE730` FOREIGN KEY (`puesto_id`) REFERENCES `e_estructura_puesto`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `e_registro_personas` ADD CONSTRAINT `FK_BB503B25992BE730` FOREIGN KEY (`responsable_id`) REFERENCES `c_empleado`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `e_registro_personas` ADD CONSTRAINT `FK_BB603B25953BE730` FOREIGN KEY (`cliente_id`) REFERENCES `e_estructura_cliente`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `e_registro_personas` ADD CONSTRAINT `FK_BB703B25954BE730` FOREIGN KEY (`corpo_id`) REFERENCES `e_estructura_sucursal`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `e_registro_personas` ADD CONSTRAINT `FK_BB803B25955BE730` FOREIGN KEY (`puesto_id`) REFERENCES `e_estructura_puesto`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `e_activo_visitante` ADD CONSTRAINT `FK_BB503B25992BE739` FOREIGN KEY (`visitante_id`) REFERENCES `e_registro_personas`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `e_activo_visitante` ADD CONSTRAINT `FK_BB503B25993BE739` FOREIGN KEY (`tipo_id`) REFERENCES `n_tipo_activo_visitas`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE `e_requerimiento_cumplido` ADD CONSTRAINT `FK_BB503B1551DD0900` FOREIGN KEY (`requerimiento_id`) REFERENCES `n_requerimiento`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
