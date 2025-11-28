@@ -617,7 +617,22 @@ function AppContent() {
 
     for (const action of actions) {
       try {
-        if (action.type === 'update') {
+        if (action.type === 'create') {
+          console.log('Creando actividad desde cache');
+          const { createActivity } = await import('@/hooks/activitiesFunctions');
+          const result = await createActivity({
+            requestData: action.requestData,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result.status) {
+            const updatedActions = actions.filter(
+              (a: any) => !(a.id === action.id && a.type === 'create')
+            );
+            await AsyncStorage.setItem('activities_actions', JSON.stringify(updatedActions));
+          }
+        } else if (action.type === 'update') {
           console.log('Actualizando actividad:', action.activity_id);
           const { updateActivity } = await import('@/hooks/activitiesFunctions');
           const result = await updateActivity({

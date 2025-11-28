@@ -16,8 +16,13 @@ import Ionicons from '@expo/vector-icons/build/Ionicons';
 import * as Network from 'expo-network';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Picker } from '@react-native-picker/picker';
+import * as Location from 'expo-location';
+import { jwtDecode } from 'jwt-decode';
+import { Buffer } from 'buffer';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import { eventBus } from '@/hooks/eventBus';
+import { useQRScanner } from '@/hooks/useQRScanner';
+import { createActivity } from '@/hooks/activitiesFunctions';
 
 type ActivitiesScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Activities'>;
 
@@ -647,6 +652,52 @@ interface RevisionEquipo {
     imagen_adjunta: string;
 }
 
+interface EmpleadoOption {
+  nombre: string;
+  primer_apellido: string;
+  segundo_apellido: string;
+}
+
+interface PlazaOption {
+  id: number;
+  nombre: string;
+  empleados: EmpleadoOption[];
+}
+
+interface PuestoOption {
+  id: number;
+  nombre: string;
+  plazas: PlazaOption[];
+}
+
+interface ArticuloOption {
+  id: number;
+  nombre: string;
+}
+
+interface AssignedResponsable {
+  puestoId: number;
+  puestoNombre: string;
+  assignAll: boolean;
+  plazas: { plazaId: number; plazaNombre: string }[];
+}
+
+interface ArticuloRuleEntry {
+  articuloId: number;
+  articuloNombre: string;
+  reglas: { id: string; nombre: string; valor: string }[];
+}
+
+interface SignatureData {
+  raw: string;
+  sessionId: string;
+  employeeId: string;
+  latitude: string;
+  longitude: string;
+  timestamp: string;
+  employeeName?: string;
+}
+
 interface ActivitiesResponse {
   status: boolean;
   actividades?: Actividad[];
@@ -708,12 +759,14 @@ export default function ActivitiesScreen() {
   const [targetInventoryId, setTargetInventoryId] = useState<number | null>(null);
   const [inventoryImages, setInventoryImages] = useState<{[key: number]: string}>({});
   // Repetition config modal state
-  const [isRepetitionModalVisible, setIsRepetitionModalVisible] = useState(false);
+  const [isCreateActivityVisible, setIsCreateActivityVisible] = useState(false);
   const [repetitionType, setRepetitionType] = useState<'daily' | 'weekly' | 'monthly-weekday' | 'monthly-last' | 'yearly' | 'weekdays' | 'custom'>('custom');
   const [weeklyLabel, setWeeklyLabel] = useState<string>('Cada semana');
   const [monthlyWeekdayLabel, setMonthlyWeekdayLabel] = useState<string>('Mes (día sem.)');
   const [monthlyLastLabel, setMonthlyLastLabel] = useState<string>('Mes (último día sem.)');
   const [yearlyLabel, setYearlyLabel] = useState<string>('Anual');
+  const [monthDayOfMonthLabel, setMonthDayOfMonthLabel] = useState<string>('Día del mes actual');
+  const [monthWeekdayOfMonthLabel, setMonthWeekdayOfMonthLabel] = useState<string>('Mismo día de semana');
   const [customInterval, setCustomInterval] = useState<string>('1');
   const [customUnit, setCustomUnit] = useState<'day' | 'week' | 'month' | 'year'>('week');
   const [selectedWeekdays, setSelectedWeekdays] = useState<string[]>([]);
@@ -723,7 +776,28 @@ export default function ActivitiesScreen() {
   const [endType, setEndType] = useState<'never' | 'date'>('never');
   const [endDate, setEndDate] = useState<string>('');
   const [showEndDatePicker, setShowEndDatePicker] = useState(false);
-  const [generatedConfigJson, setGeneratedConfigJson] = useState<string>('');
+  const [activityName, setActivityName] = useState('');
+  const [activityDescription, setActivityDescription] = useState('');
+  const [activityStartDate, setActivityStartDate] = useState<Date>(new Date());
+  const [showStartDatePicker, setShowStartDatePicker] = useState(false);
+  const [tipoActividad, setTipoActividad] = useState<'Normal' | 'Inventario'>('Normal');
+  const [puestos, setPuestos] = useState<PuestoOption[]>([]);
+  const [articulosCatalog, setArticulosCatalog] = useState<ArticuloOption[]>([]);
+  const [selectedPuestoId, setSelectedPuestoId] = useState<string>('');
+  const [markedPlazaIds, setMarkedPlazaIds] = useState<string[]>([]);
+  const [selectedArticuloId, setSelectedArticuloId] = useState<string>('');
+  const [assignedResponsables, setAssignedResponsables] = useState<AssignedResponsable[]>([]);
+  const [articuloRules, setArticuloRules] = useState<ArticuloRuleEntry[]>([]);
+  const [isLoadingCatalogs, setIsLoadingCatalogs] = useState(false);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [currentMarcaId, setCurrentMarcaId] = useState<number | null>(null);
+  const [currentCorpoId, setCurrentCorpoId] = useState<number | null>(null);
+  const [signatureData, setSignatureData] = useState<SignatureData | null>(null);
+  const [signatureEmployeeName, setSignatureEmployeeName] = useState<string | null>(null);
+  const [isProcessingSignature, setIsProcessingSignature] = useState(false);
+  const [isSubmittingActivity, setIsSubmittingActivity] = useState(false);
+  const { scanQR, QRScannerComponent } = useQRScanner();
+
   useFocusEffect(
     useCallback(() => {
       fetchActivities();
@@ -732,28 +806,40 @@ export default function ActivitiesScreen() {
 
   // Update dynamic labels for monthly and yearly options
   useEffect(() => {
-    const now = new Date();
+    const baseDate = activityStartDate || new Date();
     const weekdays = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
     const weekOrdinals = ['primer', 'segundo', 'tercer', 'cuarto', 'último'];
     const months = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
       'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
     
-    const currentWeekday = now.getDay();
+    const currentWeekday = baseDate.getDay();
     const weekdayName = weekdays[currentWeekday];
-    const weekOrdinal = getWeekOrdinal(now);
+    const weekOrdinal = getWeekOrdinal(baseDate);
     const ordinalName = weekOrdinals[weekOrdinal - 1] || 'último';
     
-    const currentDay = now.getDate();
-    const currentMonth = now.getMonth();
+    const currentDay = baseDate.getDate();
+    const currentMonth = baseDate.getMonth();
     const monthName = months[currentMonth];
+    
+    // Calculate last weekday of current month
+    const lastWeekdayName = weekdays[currentWeekday];
     
     setWeeklyLabel(`Cada semana el ${weekdayName}`);
     setMonthlyWeekdayLabel(`Cada mes el ${ordinalName} ${weekdayName}`);
     setMonthlyLastLabel(`Cada mes el último ${weekdayName}`);
     setYearlyLabel(`Anual (${currentDay} de ${monthName})`);
-  }, []);
+    setMonthDayOfMonthLabel(`Cada mes el día ${currentDay}`);
+    setMonthWeekdayOfMonthLabel(`Cada mes el ${ordinalName} ${lastWeekdayName}`);
+  }, [activityStartDate]);
 
-  
+  useEffect(() => {
+    if (!activityStartDate) return;
+    const monthString = String(activityStartDate.getMonth() + 1);
+    const dayString = String(activityStartDate.getDate());
+    setYearMonth(prev => (prev === monthString ? prev : monthString));
+    setYearDay(prev => (prev === dayString ? prev : dayString));
+  }, [activityStartDate]);
+
   useEffect(() => {
     const handler = () => {
       fetchActivities();
@@ -869,6 +955,224 @@ export default function ActivitiesScreen() {
     }
   };
 
+  const resetCreateActivityForm = () => {
+    setActivityName('');
+    setActivityDescription('');
+    setActivityStartDate(new Date());
+    setShowStartDatePicker(false);
+    setTipoActividad('Normal');
+    setSelectedPuestoId('');
+    setMarkedPlazaIds([]);
+    setSelectedArticuloId('');
+    setAssignedResponsables([]);
+    setArticuloRules([]);
+    setSignatureData(null);
+    setSignatureEmployeeName(null);
+    setCatalogError(null);
+    setRepetitionType('custom');
+    setCustomInterval('1');
+    setCustomUnit('week');
+    setSelectedWeekdays([]);
+    setMonthOption('day-of-month');
+    setYearMonth('1');
+    setYearDay('1');
+    setEndType('never');
+    setEndDate('');
+    setShowEndDatePicker(false);
+  };
+
+  const prepareCreateActivityForm = async () => {
+    try {
+      setCatalogError(null);
+      setIsLoadingCatalogs(true);
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      if (!currentMarcaStr) {
+        Alert.alert('Error', 'No se encontró la marca actual. Registra una marca antes de crear actividades.');
+        setIsCreateActivityVisible(false);
+        return;
+      }
+
+      const currentMarcaData = JSON.parse(currentMarcaStr);
+      if (!currentMarcaData?.id || !currentMarcaData?.corpo?.id) {
+        Alert.alert('Error', 'La marca actual no tiene información del corpo.');
+        setIsCreateActivityVisible(false);
+        return;
+      }
+
+      setCurrentMarcaId(currentMarcaData.id);
+      setCurrentCorpoId(currentMarcaData.corpo.id);
+
+      const isConnected = await getConnectionStatus();
+      await Promise.all([
+        loadPuestosCatalog(currentMarcaData.corpo.id, isConnected),
+        loadArticulosCatalog(isConnected),
+      ]);
+    } catch (error) {
+      console.error('Error preparing activity form:', error);
+      setCatalogError('No se pudieron cargar los catálogos. Intenta nuevamente.');
+    } finally {
+      setIsLoadingCatalogs(false);
+    }
+  };
+
+  const loadPuestosCatalog = async (corpoId: number, isConnected: boolean) => {
+    const loadFromCache = async () => {
+      const cache = await AsyncStorage.getItem('puestos_corpo_cache');
+      if (cache) {
+        const parsed = JSON.parse(cache);
+        setPuestos(parsed);
+      } else {
+        throw new Error('No hay puestos guardados en caché');
+      }
+    };
+
+    if (isConnected) {
+      try {
+        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        if (!apiUrl) {
+          throw new Error('Server URL not configured');
+        }
+
+        let token = await AsyncStorage.getItem('access_token');
+        if (!token) {
+          const refreshed = await refreshAccessToken();
+          if (!refreshed) {
+            throw new Error('No authentication token found');
+          }
+          token = await AsyncStorage.getItem('access_token');
+        }
+
+        const response = await fetch(`${apiUrl}/api/puestos/corpo/${corpoId}`, {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+            'ngrok-skip-browser-warning': '69420',
+          },
+        });
+
+        if (response.status === 401 || response.status === 403) {
+          const refreshed = await refreshAccessToken();
+          if (refreshed) {
+            return loadPuestosCatalog(corpoId, isConnected);
+          } else {
+            await logout();
+            throw new Error('Sesión expirada');
+          }
+        }
+
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const data = await response.json();
+        if (data.status && data.puestos) {
+          setPuestos(data.puestos);
+          await AsyncStorage.setItem('puestos_corpo_cache', JSON.stringify(data.puestos));
+        } else {
+          throw new Error(data.message || 'No se pudieron cargar los puestos');
+        }
+      } catch (error) {
+        console.error('Error fetching puestos catalog:', error);
+        try {
+          await loadFromCache();
+          Alert.alert('Modo offline', 'No se pudo conectar al servidor. Se usarán los puestos guardados.');
+        } catch (cacheError) {
+          console.error('No puestos cache available:', cacheError);
+          setCatalogError('No hay información de puestos disponible sin conexión.');
+          setPuestos([]);
+        }
+      }
+    } else {
+      try {
+        await loadFromCache();
+      } catch (error) {
+        console.error('No puestos cache available:', error);
+        setCatalogError('No hay información de puestos disponible sin conexión.');
+        setPuestos([]);
+      }
+    }
+  };
+
+  const loadArticulosCatalog = async (isConnected: boolean) => {
+    const loadFromCache = async () => {
+      const cache = await AsyncStorage.getItem('articulos_cache');
+      if (cache) {
+        const parsed = JSON.parse(cache);
+        setArticulosCatalog(parsed);
+      } else {
+        throw new Error('No hay artículos guardados en caché');
+      }
+    };
+
+    if (isConnected) {
+      try {
+        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        if (!apiUrl) {
+          throw new Error('Server URL not configured');
+        }
+
+        let token = await AsyncStorage.getItem('access_token');
+        if (!token) {
+          const refreshed = await refreshAccessToken();
+          if (!refreshed) {
+            throw new Error('No authentication token found');
+          }
+          token = await AsyncStorage.getItem('access_token');
+        }
+
+        const response = await fetch(`${apiUrl}/api/articulos`, {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+            'ngrok-skip-browser-warning': '69420',
+          },
+        });
+
+        if (response.status === 401 || response.status === 403) {
+          const refreshed = await refreshAccessToken();
+          if (refreshed) {
+            return loadArticulosCatalog(isConnected);
+          } else {
+            await logout();
+            throw new Error('Sesión expirada');
+          }
+        }
+
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const data = await response.json();
+        if (data.status && data.articulos) {
+          setArticulosCatalog(data.articulos);
+          await AsyncStorage.setItem('articulos_cache', JSON.stringify(data.articulos));
+        } else {
+          throw new Error(data.message || 'No se pudieron cargar los artículos');
+        }
+      } catch (error) {
+        console.error('Error fetching articulos catalog:', error);
+        try {
+          await loadFromCache();
+          Alert.alert('Modo offline', 'No se pudo conectar al servidor. Se usarán los artículos guardados.');
+        } catch (cacheError) {
+          console.error('No articulos cache available:', cacheError);
+          setCatalogError('No hay artículos disponibles sin conexión.');
+          setArticulosCatalog([]);
+        }
+      }
+    } else {
+      try {
+        await loadFromCache();
+      } catch (error) {
+        console.error('No articulos cache available:', error);
+        setCatalogError('No hay artículos disponibles sin conexión.');
+        setArticulosCatalog([]);
+      }
+    }
+  };
+
   const getActionIcon = (action: string) => {
     switch (action.toLowerCase()) {
       case 'activities': return <Ionicons name="list" size={25} color='#000000' />;
@@ -876,8 +1180,16 @@ export default function ActivitiesScreen() {
       case 'uncheck': return <Ionicons name="close" size={20} color='#FF3B30' />;
       case 'confirm': return <Ionicons name="checkmark" size={35} color='#fff' />;
       case 'cancel': return <Ionicons name="close" size={35} color='#fff' />;
+      case 'clear': return <Ionicons name="trash" size={20} color='#000000' />;
       default: return <Ionicons name="list" size={25} color='#000000' />;
     }
+  };
+
+  const generateDateTime = (timestamp: string) => {
+    const fecha = new Date(parseInt(timestamp)).toISOString();
+    const fechaSplit = fecha.split('T');
+    fechaSplit[1] = fechaSplit[1].split('.')[0];
+    return fechaSplit[0] + ' ' + fechaSplit[1];
   };
 
   // ===== Repetition configuration helpers (based on repeticion-evento project) =====
@@ -1037,19 +1349,571 @@ export default function ActivitiesScreen() {
     );
   };
 
-  const openRepetitionModal = () => {
-    setIsRepetitionModalVisible(true);
+  const openRepetitionModal = async () => {
+    resetCreateActivityForm();
+    setIsCreateActivityVisible(true);
+    await prepareCreateActivityForm();
   };
 
   const closeRepetitionModal = () => {
-    setIsRepetitionModalVisible(false);
+    resetCreateActivityForm();
+    setIsCreateActivityVisible(false);
   };
 
-  const generateRepetitionConfig = () => {
-    const now = new Date();
-    const currentWeekday = now.getDay();
-    const currentDay = now.getDate();
-    const currentMonth = now.getMonth() + 1;
+  const formatDateForDisplay = (date: Date) => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${day}/${month}/${year}`;
+  };
+
+  const formatDateForApi = (date: Date) => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  const formatPlazaLabel = (plaza: PlazaOption) => {
+    if (!plaza.empleados || plaza.empleados.length === 0) {
+      return plaza.nombre;
+    }
+    const empleadosNombres = plaza.empleados.map(emp => emp.nombre).join(', ');
+    return `${plaza.nombre} (${empleadosNombres})`;
+  };
+
+  const handleStartDateChange = (_event: any, selectedDate?: Date) => {
+    if (Platform.OS === 'android') {
+      setShowStartDatePicker(false);
+    }
+    if (selectedDate) {
+      setActivityStartDate(selectedDate);
+    }
+  };
+
+  useEffect(() => {
+    if (!selectedPuestoId) {
+      setMarkedPlazaIds([]);
+      return;
+    }
+    const puestoId = parseInt(selectedPuestoId, 10);
+    const existing = assignedResponsables.find(
+      (r) => r.puestoId === puestoId && !r.assignAll
+    );
+    if (existing) {
+      setMarkedPlazaIds(existing.plazas.map((p: { plazaId: number }) => String(p.plazaId)));
+    } else {
+      setMarkedPlazaIds([]);
+    }
+  }, [selectedPuestoId, assignedResponsables]);
+
+  const handleSelectPuesto = (value: string) => {
+    setSelectedPuestoId(value);
+    if (!value) {
+      setMarkedPlazaIds([]);
+      return;
+    }
+    const puestoId = parseInt(value, 10);
+    const existing = assignedResponsables.find(
+      (r) => r.puestoId === puestoId && !r.assignAll
+    );
+    if (existing) {
+      setMarkedPlazaIds(existing.plazas.map((p: { plazaId: number }) => String(p.plazaId)));
+    } else {
+      setMarkedPlazaIds([]);
+    }
+  };
+
+  const handleAddSelectedPlazas = () => {
+    if (!selectedPuestoId) {
+      Alert.alert('Validación', 'Selecciona un puesto.');
+      return;
+    }
+
+    const puestoId = parseInt(selectedPuestoId, 10);
+    const puesto = puestos.find(p => p.id === puestoId);
+    if (!puesto) {
+      Alert.alert('Validación', 'El puesto seleccionado no es válido.');
+      return;
+    }
+
+    if (markedPlazaIds.length === 0) {
+      Alert.alert('Validación', 'Selecciona al menos una plaza de la lista.');
+      return;
+    }
+
+    const plazasToAdd = puesto.plazas.filter(plaza =>
+      markedPlazaIds.includes(String(plaza.id))
+    );
+
+    if (plazasToAdd.length === 0) {
+      Alert.alert('Validación', 'Las plazas seleccionadas no son válidas para este puesto.');
+      return;
+    }
+
+    const assignedEntry = assignedResponsables.find(r => r.puestoId === puestoId);
+    if (assignedEntry?.assignAll) {
+      Alert.alert('Aviso', 'La actividad ya está asignada a todo este puesto.');
+      return;
+    }
+
+    const newPlazaRecords = plazasToAdd
+      .filter(plaza => !(assignedEntry?.plazas.some(p => p.plazaId === plaza.id)))
+      .map(plaza => ({
+        plazaId: plaza.id,
+        plazaNombre: formatPlazaLabel(plaza),
+      }));
+
+    if (newPlazaRecords.length === 0) {
+      Alert.alert('Aviso', 'Las plazas seleccionadas ya fueron agregadas.');
+      return;
+    }
+
+    setAssignedResponsables(prev => {
+      const existing = prev.find(r => r.puestoId === puestoId);
+      if (existing) {
+        return prev.map(r =>
+          r.puestoId === puestoId
+            ? {
+                ...r,
+                plazas: [...r.plazas, ...newPlazaRecords],
+              }
+            : r
+        );
+      }
+
+      return [
+        ...prev,
+        {
+          puestoId,
+          puestoNombre: puesto.nombre,
+          assignAll: false,
+          plazas: newPlazaRecords,
+        },
+      ];
+    });
+  };
+
+  const handleAssignPuestoCompleto = () => {
+    if (!selectedPuestoId) {
+      Alert.alert('Validación', 'Selecciona un puesto.');
+      return;
+    }
+    const puestoId = parseInt(selectedPuestoId, 10);
+    const puesto = puestos.find(p => p.id === puestoId);
+    if (!puesto) {
+      Alert.alert('Validación', 'El puesto seleccionado no es válido.');
+      return;
+    }
+
+    const alreadyAssigned = assignedResponsables.some(r => r.puestoId === puestoId);
+    if (alreadyAssigned) {
+      Alert.alert('Aviso', 'Ya agregaste plazas o este puesto completo.');
+      return;
+    }
+
+    setAssignedResponsables(prev => [
+      ...prev,
+      {
+        puestoId,
+        puestoNombre: puesto.nombre,
+        assignAll: true,
+        plazas: [],
+      },
+    ]);
+  };
+
+  const togglePlazaSelection = (plazaId: string) => {
+    if (selectedPuestoEntry?.assignAll) {
+      return;
+    }
+    setMarkedPlazaIds(prev =>
+      prev.includes(plazaId)
+        ? prev.filter(id => id !== plazaId)
+        : [...prev, plazaId]
+    );
+  };
+
+  const handleRemovePuesto = (puestoId: number) => {
+    setAssignedResponsables(prev => prev.filter(r => r.puestoId !== puestoId));
+  };
+
+  const handleRemovePlaza = (puestoId: number, plazaId: number) => {
+    setAssignedResponsables(prev =>
+      prev
+        .map(r =>
+          r.puestoId === puestoId
+            ? {
+                ...r,
+                plazas: r.plazas.filter(p => p.plazaId !== plazaId),
+              }
+            : r
+        )
+        .filter(r => r.assignAll || r.plazas.length > 0)
+    );
+  };
+
+  const generateRuleId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+  const handleArticuloSelection = (value: string) => {
+    setSelectedArticuloId(value);
+    if (!value) return;
+
+    const articuloId = parseInt(value, 10);
+    if (articuloRules.some(rule => rule.articuloId === articuloId)) {
+      return;
+    }
+
+    const articulo = articulosCatalog.find(a => a.id === articuloId);
+    setArticuloRules(prev => [
+      ...prev,
+      {
+        articuloId,
+        articuloNombre: articulo?.nombre || 'Artículo',
+        reglas: [{ id: generateRuleId(), nombre: '', valor: '' }],
+      },
+    ]);
+    setSelectedArticuloId('');
+  };
+
+  const handleRemoveArticulo = (articuloId: number) => {
+    setArticuloRules(prev => prev.filter(rule => rule.articuloId !== articuloId));
+  };
+
+  const handleAddRule = (articuloId: number) => {
+    setArticuloRules(prev =>
+      prev.map(rule =>
+        rule.articuloId === articuloId
+          ? {
+              ...rule,
+              reglas: [...rule.reglas, { id: generateRuleId(), nombre: '', valor: '' }],
+            }
+          : rule
+      )
+    );
+  };
+
+  const handleRuleChange = (articuloId: number, ruleId: string, field: 'nombre' | 'valor', value: string) => {
+    setArticuloRules(prev =>
+      prev.map(rule =>
+        rule.articuloId === articuloId
+          ? {
+              ...rule,
+              reglas: rule.reglas.map(r =>
+                r.id === ruleId
+                  ? {
+                      ...r,
+                      [field]: value,
+                    }
+                  : r
+              ),
+            }
+          : rule
+      )
+    );
+  };
+
+  const handleRemoveRule = (articuloId: number, ruleId: string) => {
+    setArticuloRules(prev =>
+      prev
+        .map(rule =>
+          rule.articuloId === articuloId
+            ? {
+                ...rule,
+                reglas: rule.reglas.filter(r => r.id !== ruleId),
+              }
+            : rule
+        )
+        .filter(rule => rule.reglas.length > 0)
+    );
+  };
+
+  const decodeSignatureHash = (hash: string) => {
+    const decoded = Buffer.from(hash, 'base64').toString('utf-8');
+    const parts = decoded.split(':');
+    if (parts.length < 5) {
+      throw new Error('Formato de firma inválido');
+    }
+    const [sessionId, employeeId, latitude, longitude, timestamp] = parts;
+    return { sessionId, employeeId, latitude, longitude, timestamp };
+  };
+
+  const fetchSignatureEmployee = async (employeeId: string) => {
+    try {
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) {
+        throw new Error('Server URL not configured');
+      }
+
+      let token = await AsyncStorage.getItem('access_token');
+      if (!token) {
+        const refreshed = await refreshAccessToken();
+        if (!refreshed) {
+          throw new Error('No authentication token found');
+        }
+        token = await AsyncStorage.getItem('access_token');
+      }
+
+      const response = await fetch(`${apiUrl}/api/empleados/${employeeId}`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': '69420',
+        },
+      });
+
+      if (response.status === 401 || response.status === 403) {
+        const refreshed = await refreshAccessToken();
+        if (refreshed) {
+          return fetchSignatureEmployee(employeeId);
+        } else {
+          await logout();
+          throw new Error('Sesión expirada');
+        }
+      }
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      if (data?.nombre) {
+        return `${data.nombre} ${data.primer_apellido || ''} ${data.segundo_apellido || ''}`.trim();
+      }
+      return null;
+    } catch (error) {
+      console.error('Error fetching employee info:', error);
+      return null;
+    }
+  };
+
+  const handleSignatureData = async (hash: string) => {
+    try {
+      setIsProcessingSignature(true);
+      const decoded = decodeSignatureHash(hash);
+      const fullName = await fetchSignatureEmployee(decoded.employeeId);
+      setSignatureData({
+        raw: hash,
+        sessionId: decoded.sessionId,
+        employeeId: decoded.employeeId,
+        latitude: decoded.latitude,
+        longitude: decoded.longitude,
+        timestamp: decoded.timestamp,
+        employeeName: fullName || undefined,
+      });
+      setSignatureEmployeeName(fullName);
+    } catch (error) {
+      console.error('Error processing signature:', error);
+      Alert.alert('Error', 'La firma no tiene el formato esperado.');
+    } finally {
+      setIsProcessingSignature(false);
+    }
+  };
+
+  const handleGenerateSignature = async () => {
+    try {
+      if (!employee?.id) {
+        Alert.alert('Error', 'No se encontró información del empleado.');
+        return;
+      }
+
+      setIsProcessingSignature(true);
+
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permisos', 'Debes otorgar permiso de ubicación para generar la firma.');
+        return;
+      }
+
+      const location = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High,
+      });
+
+      const horaAccion = await getHoraAccion();
+      if (!horaAccion) {
+        throw new Error('No se pudo obtener la hora actual');
+      }
+
+      const token = await AsyncStorage.getItem('access_token');
+      if (!token) {
+        const refreshed = await refreshAccessToken();
+        if (!refreshed) {
+          throw new Error('No authentication token found');
+        }
+      }
+
+      const storedToken = await AsyncStorage.getItem('access_token');
+      if (!storedToken) {
+        throw new Error('No authentication token found');
+      }
+
+      const decodedToken = jwtDecode(storedToken);
+      const sessionId = JSON.parse(JSON.stringify(decodedToken)).sessionId;
+
+      const payload = `${sessionId}:${employee.id}:${location.coords.latitude}:${location.coords.longitude}:${horaAccion}`;
+      const hash = Buffer.from(payload).toString('base64');
+      await handleSignatureData(hash);
+      Alert.alert('Éxito', 'Firma generada correctamente.');
+    } catch (error) {
+      console.error('Error generating signature:', error);
+      Alert.alert('Error', 'No se pudo generar la firma. Intenta nuevamente.');
+    } finally {
+      setIsProcessingSignature(false);
+    }
+  };
+
+  const handleScanSignature = async () => {
+    try {
+      const qrData = await scanQR();
+      if (!qrData) {
+        Alert.alert('Cancelado', 'Se canceló el escaneo de la firma.');
+        return;
+      }
+      await handleSignatureData(qrData);
+      Alert.alert('Éxito', 'Firma escaneada correctamente.');
+    } catch (error) {
+      console.error('Error scanning signature:', error);
+      Alert.alert('Error', 'No se pudo procesar el QR de la firma.');
+    }
+  };
+
+  const queueCreateActivityAction = async (requestData: any) => {
+    const actionsStr = await AsyncStorage.getItem('activities_actions');
+    const actions = actionsStr ? JSON.parse(actionsStr) : [];
+    const actionId = Date.now();
+    actions.push({
+      id: actionId,
+      type: 'create',
+      requestData,
+    });
+    await AsyncStorage.setItem('activities_actions', JSON.stringify(actions));
+  };
+
+  const validateCreateActivityForm = () => {
+    if (!activityName.trim()) {
+      return 'Debes ingresar el nombre de la actividad.';
+    }
+    if (!activityDescription.trim()) {
+      return 'Debes ingresar la descripción de la actividad.';
+    }
+    if (assignedResponsables.length === 0) {
+      return 'Debes asignar al menos un puesto o plaza responsable.';
+    }
+    if (assignedResponsables.some(r => !r.assignAll && r.plazas.length === 0)) {
+      return 'Las asignaciones por puesto deben incluir al menos una plaza o marcarse como puesto completo.';
+    }
+    if (tipoActividad === 'Inventario') {
+      if (articuloRules.length === 0) {
+        return 'Agrega al menos un artículo en la sección de reglas.';
+      }
+      for (const articulo of articuloRules) {
+        if (articulo.reglas.length === 0) {
+          return `El artículo ${articulo.articuloNombre} debe tener al menos una regla.`;
+        }
+        for (const regla of articulo.reglas) {
+          if (!regla.nombre.trim() || !regla.valor.trim()) {
+            return `Completa los campos de nombre y valor para todas las reglas del artículo ${articulo.articuloNombre}.`;
+          }
+        }
+      }
+    }
+    if (!signatureData?.raw) {
+      return 'Debes generar o escanear la firma del responsable.';
+    }
+    if (!currentMarcaId) {
+      return 'No se encontró la marca actual.';
+    }
+    return null;
+  };
+
+  const submitCreateActivity = async () => {
+    try {
+      setIsSubmittingActivity(true);
+      const frequencyConfig = buildFrequencyConfig();
+      const frequencyString = JSON.stringify(frequencyConfig);
+
+      const reglasPayload = articuloRules.map(rule => ({
+        id: rule.articuloId,
+        reglas: rule.reglas.map(r => ({
+          nombre: r.nombre.trim(),
+          valor: r.valor.trim(),
+        })),
+      }));
+
+      const puestosPayload = assignedResponsables.map(responsable => ({
+        puesto_id: responsable.puestoId,
+        plazas: responsable.assignAll
+          ? []
+          : responsable.plazas.map(plaza => ({
+              plaza_id: plaza.plazaId,
+            })),
+      }));
+
+      const requestData = {
+        marca_id: currentMarcaId,
+        nombre_actividad: activityName.trim(),
+        fecha_inicio: formatDateForApi(activityStartDate),
+        frecuencia: frequencyString,
+        es_revision_equipo: tipoActividad === 'Inventario',
+        descripcion_actividad: activityDescription.trim(),
+        reglas: JSON.stringify(reglasPayload),
+        puestos_plazas: JSON.stringify(puestosPayload),
+        firma_responsable: signatureData?.raw || '',
+      };
+
+      const isConnected = await getConnectionStatus();
+      if (isConnected) {
+        const response = await createActivity({
+          requestData,
+          refreshAccessToken,
+          logout,
+        });
+
+        if (response.status) {
+          Alert.alert('Éxito', 'La actividad se creó correctamente.');
+          closeRepetitionModal();
+          await fetchActivities();
+          eventBus.emit('activitiesUpdated');
+        } else {
+          Alert.alert('Error', response.message || 'No se pudo crear la actividad.');
+        }
+      } else {
+        await queueCreateActivityAction(requestData);
+        Alert.alert('Modo offline', 'La actividad se guardó y se sincronizará cuando recuperes la conexión.');
+        closeRepetitionModal();
+      }
+    } catch (error) {
+      console.error('Error creating activity:', error);
+      Alert.alert('Error', 'No se pudo crear la actividad. Intenta nuevamente.');
+    } finally {
+      setIsSubmittingActivity(false);
+    }
+  };
+
+  const handleConfirmCreateActivity = () => {
+    const validationError = validateCreateActivityForm();
+    if (validationError) {
+      Alert.alert('Validación', validationError);
+      return;
+    }
+
+    Alert.alert(
+      'Confirmar',
+      '¿Deseas crear esta actividad?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Crear', onPress: submitCreateActivity },
+      ],
+      { cancelable: false }
+    );
+  };
+
+  const buildFrequencyConfig = () => {
+    const baseDate = activityStartDate || new Date();
+    const currentWeekday = baseDate.getDay();
+    const currentDay = baseDate.getDate();
+    const currentMonth = baseDate.getMonth() + 1;
 
     const config: any = {
       type: repetitionType,
@@ -1060,7 +1924,7 @@ export default function ActivitiesScreen() {
       config.weekday = currentWeekday;
     } else if (repetitionType === 'monthly-weekday') {
       config.weekday = currentWeekday;
-      config.weekOrdinal = getWeekOrdinal(now);
+      config.weekOrdinal = getWeekOrdinal(baseDate);
     } else if (repetitionType === 'monthly-last') {
       config.weekday = currentWeekday;
       config.weekOrdinal = 5;
@@ -1084,7 +1948,7 @@ export default function ActivitiesScreen() {
           config.day = currentDay;
         } else {
           config.weekday = currentWeekday;
-          config.weekOrdinal = getWeekOrdinal(now);
+          config.weekOrdinal = getWeekOrdinal(baseDate);
         }
       } else if (customUnit === 'year') {
         const monthNumber = parseInt(yearMonth || `${currentMonth}`, 10) || currentMonth;
@@ -1100,8 +1964,7 @@ export default function ActivitiesScreen() {
     }
 
     config.title = generateRepetitionTitle(config, repetitionType);
-
-    setGeneratedConfigJson(JSON.stringify(config, null, 2));
+    return config;
   };
 
   const handleEndDateChange = (event: any, selectedDate?: Date) => {
@@ -1397,6 +2260,11 @@ export default function ActivitiesScreen() {
     );
   };
 
+  const selectedPuesto = selectedPuestoId ? puestos.find(p => p.id === parseInt(selectedPuestoId, 10)) : null;
+  const selectedPuestoEntry = selectedPuesto ? assignedResponsables.find(r => r.puestoId === selectedPuesto.id) : null;
+  const selectedPuestoPlazas = selectedPuesto?.plazas || [];
+  const canAssignEntirePuesto = Boolean(selectedPuesto && !selectedPuestoEntry);
+
   if (isLoading) {
     return (
       <ThemedView style={styles.container}>
@@ -1467,288 +2335,576 @@ export default function ActivitiesScreen() {
           </ThemedView>
 
           {/* Create Button */}
-          {!isRepetitionModalVisible && (
+          {!isCreateActivityVisible && (
             <TouchableOpacity style={styles.createButton} onPress={openRepetitionModal}>
               <Ionicons name="add" size={24} color="#fff" />
             </TouchableOpacity>
           )}
 
           {/* Activities List */}
-          {!isRepetitionModalVisible && (
-            <ThemedView style={styles.activitiesContainer}>
-              {error ? (
-                <ThemedView style={styles.errorContainer}>
-                  <ThemedText style={styles.errorText}>{error}</ThemedText>
-                  <TouchableOpacity 
-                    style={styles.retryButton}
-                    onPress={fetchActivities}
-                  >
-                    <ThemedText style={styles.retryButtonText}>Reintentar</ThemedText>
-                  </TouchableOpacity>
-                </ThemedView>
-              ) : activities.length === 0 ? (
-                <ThemedView style={styles.emptyContainer}>
-                  <ThemedText style={styles.emptyText}>
-                    No hay actividades asignadas
-                  </ThemedText>
-                </ThemedView>
-              ) : (
-                activities.map(activity => renderActivityItem(activity))
-              )}
-            </ThemedView>
+          {!isCreateActivityVisible && (
+          <ThemedView style={styles.activitiesContainer}>
+            {error ? (
+              <ThemedView style={styles.errorContainer}>
+                <ThemedText style={styles.errorText}>{error}</ThemedText>
+                <TouchableOpacity 
+                  style={styles.retryButton}
+                  onPress={fetchActivities}
+                >
+                  <ThemedText style={styles.retryButtonText}>Reintentar</ThemedText>
+                </TouchableOpacity>
+              </ThemedView>
+            ) : activities.length === 0 ? (
+              <ThemedView style={styles.emptyContainer}>
+                <ThemedText style={styles.emptyText}>
+                  No hay actividades asignadas
+                </ThemedText>
+              </ThemedView>
+            ) : (
+              activities.map(activity => renderActivityItem(activity))
+            )}
+          </ThemedView>
           )}
 
-          {/* Repetition Configuration Form (inline, hides activities list) */}
-          {isRepetitionModalVisible && (
+          {/* Activity creation form (inline, hides activities list) */}
+          {isCreateActivityVisible && (
             <ThemedView style={styles.repetitionModalContainer}>
               <ScrollView
                 contentContainerStyle={{ paddingBottom: 16 }}
                 showsVerticalScrollIndicator={true}
+                keyboardShouldPersistTaps="handled"
               >
-                <ThemedText style={styles.modalTitle}>
+                <ThemedText style={[styles.modalTitle, { marginBottom: 20 }]}>
                   Configuración de la actividad
                 </ThemedText>
 
-                {/* Tipo de repetición */}
-                <ThemedView style={styles.formGroup}>
-                  <ThemedText style={styles.formLabel}>Tipo de repetición:</ThemedText>
+                  <ThemedText style={styles.formLabel}>Nombre de la actividad</ThemedText>
+                  <TextInput
+                    style={styles.textInput}
+                    placeholder="Ingresa el nombre de la actividad"
+                    value={activityName}
+                    onChangeText={setActivityName}
+                  />
+                  <ThemedText style={styles.formLabel}>Descripción de la actividad</ThemedText>
+                  <TextInput
+                    style={[styles.textInput, styles.textArea]}
+                    placeholder="Describe la actividad"
+                    multiline
+                    value={activityDescription}
+                    onChangeText={setActivityDescription}
+                  />
+                  <ThemedText style={styles.formLabel}>Fecha de inicio de la actividad</ThemedText>
+                  <TouchableOpacity
+                    style={styles.dateButton}
+                    onPress={() => setShowStartDatePicker(true)}
+                  >
+                    <ThemedText style={styles.dateButtonText}>
+                      {formatDateForDisplay(activityStartDate)}
+                    </ThemedText>
+                    <Ionicons name="calendar" size={20} color="#007AFF" />
+                  </TouchableOpacity>
+                  {showStartDatePicker && (
+                    <DateTimePicker
+                      value={activityStartDate}
+                      mode="date"
+                      display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                      onChange={handleStartDateChange}
+                    />
+                  )}
+
+                  <ThemedView style={styles.sectionCard}>
+                  {catalogError ? (
+                    <ThemedText style={styles.formErrorText}>{catalogError}</ThemedText>
+                  ) : null}
+                  {isLoadingCatalogs ? (
+                    <ActivityIndicator size="small" color="#007AFF" />
+                  ) : (
+                    <>
+                      <ThemedText style={styles.formLabel}>Puestos</ThemedText>
+                      <ThemedView style={styles.pickerContainer}>
+                        <Picker
+                          selectedValue={selectedPuestoId}
+                          onValueChange={handleSelectPuesto}
+                          style={styles.picker}
+                        >
+                          <Picker.Item label="Selecciona un puesto" value="" />
+                          {puestos.map(puesto => (
+                            <Picker.Item key={puesto.id} label={puesto.nombre} value={String(puesto.id)} />
+                          ))}
+                        </Picker>
+                      </ThemedView>
+
+                      {selectedPuesto && (
+                        <>
+                          <ThemedText style={styles.formLabel}>Plazas</ThemedText>
+                          {selectedPuestoEntry?.assignAll ? (
+                            <ThemedText style={styles.helperText}>
+                              Este puesto ya se asignó completo. Elimina la asignación para seleccionar plazas específicas.
+                            </ThemedText>
+                          ) : selectedPuestoPlazas.length === 0 ? (
+                            <ThemedText style={styles.helperText}>
+                              Este puesto no tiene plazas configuradas.
+                            </ThemedText>
+                          ) : (
+                            <>
+                              <ThemedView style={styles.plazaListContainer}>
+                                {selectedPuestoPlazas.map((plaza, index) => {
+                                  const plazaIdStr = String(plaza.id);
+                                  const isChecked = markedPlazaIds.includes(plazaIdStr);
+                                  const employeesLabel = plaza.empleados && plaza.empleados.length > 0
+                                    ? plaza.empleados.map(emp => emp.nombre).join(', ')
+                                    : 'Sin empleados asignados';
+                                  const isLast = index === selectedPuestoPlazas.length - 1;
+                                  return (
+                                    <TouchableOpacity
+                                      key={plaza.id}
+                                      style={[
+                                        styles.plazaListItem,
+                                        isChecked && styles.plazaListItemSelected,
+                                        isLast && styles.plazaListItemLast,
+                                      ]}
+                                      onPress={() => togglePlazaSelection(plazaIdStr)}
+                                      activeOpacity={0.8}
+                                    >
+                                      <View style={[styles.plazaCheckbox, isChecked && styles.plazaCheckboxChecked]}>
+                                        {isChecked && <Ionicons name="checkmark" size={14} color="#fff" />}
+                                      </View>
+                                      <View style={styles.plazaInfo}>
+                                        <ThemedText style={styles.plazaName}>{plaza.nombre}</ThemedText>
+                                        <ThemedText
+                                          style={
+                                            plaza.empleados && plaza.empleados.length > 0
+                                              ? styles.plazaEmployees
+                                              : styles.plazaEmployeesEmpty
+                                          }
+                                        >
+                                          {employeesLabel}
+                                        </ThemedText>
+                                      </View>
+                                    </TouchableOpacity>
+                                  );
+                                })}
+                              </ThemedView>
+                              <TouchableOpacity
+                                style={[
+                                  styles.secondaryButton,
+                                  (markedPlazaIds.length === 0) && styles.secondaryButtonDisabled,
+                                ]}
+                                onPress={handleAddSelectedPlazas}
+                                disabled={markedPlazaIds.length === 0}
+                              >
+                                <Ionicons name="add-circle" size={18} color="#fff" />
+                                <ThemedText style={styles.secondaryButtonText}>Agregar plaza</ThemedText>
+                              </TouchableOpacity>
+                            </>
+                          )}
+
+                          {canAssignEntirePuesto && (
+                            <TouchableOpacity
+                              style={styles.secondaryButtonOutline}
+                              onPress={handleAssignPuestoCompleto}
+                            >
+                              <Ionicons name="people-circle-outline" size={18} color="#007AFF" />
+                              <ThemedText style={styles.secondaryButtonOutlineText}>
+                                Asignar a todo el puesto
+                              </ThemedText>
+                            </TouchableOpacity>
+                          )}
+                        </>
+                      )}
+
+                      <ThemedView style={styles.assignedList}>
+                        {assignedResponsables.length === 0 ? (
+                          <ThemedText style={styles.helperText}>
+                            Aún no has asignado plazas o puestos completos.
+                          </ThemedText>
+                        ) : (
+                          assignedResponsables.map(responsable => (
+                            <ThemedView key={responsable.puestoId} style={styles.assignedItem}>
+                              <View style={styles.assignedHeader}>
+                                <ThemedText style={styles.assignedTitle}>{responsable.puestoNombre}</ThemedText>
+                                <TouchableOpacity 
+                                  style={styles.removeButton}
+                                  onPress={() => handleRemovePuesto(responsable.puestoId)}
+                                >
+                                  <Ionicons name="trash" size={18} color="#FF3B30" />
+                                </TouchableOpacity>
+                              </View>
+                              {responsable.assignAll ? (
+                                <ThemedText style={styles.helperText}>
+                                  Actividad asignada a todo el puesto.
+                                </ThemedText>
+                              ) : (
+                                responsable.plazas.map(plaza => (
+                                  <View key={plaza.plazaId} style={styles.plazaChip}>
+                                    <ThemedText style={styles.plazaChipText}>{plaza.plazaNombre}</ThemedText>
+                                    <TouchableOpacity 
+                                      style={styles.removeButton}
+                                      onPress={() => handleRemovePlaza(responsable.puestoId, plaza.plazaId)}
+                                    >
+                                      <Ionicons name="close-circle" size={18} color="#FF3B30" />
+                                    </TouchableOpacity>
+                                  </View>
+                                ))
+                              )}
+                            </ThemedView>
+                          ))
+                        )}
+                      </ThemedView>
+                    </>
+                  )}
+                  </ThemedView>
+
+                  <ThemedText style={styles.sectionTitle}>Tipo de actividad</ThemedText>
                   <ThemedView style={styles.pickerContainer}>
                     <Picker
-                      selectedValue={repetitionType}
-                      onValueChange={(value) => setRepetitionType(value as any)}
+                      selectedValue={tipoActividad}
+                      onValueChange={(value) => setTipoActividad(value as 'Normal' | 'Inventario')}
                       style={styles.picker}
                     >
-                      <Picker.Item label="Cada día" value="daily" />
-                      <Picker.Item label={weeklyLabel} value="weekly" />
-                      <Picker.Item label={monthlyWeekdayLabel} value="monthly-weekday" />
-                      <Picker.Item label={monthlyLastLabel} value="monthly-last" />
-                      <Picker.Item label={yearlyLabel} value="yearly" />
-                      <Picker.Item label="Todos los días laborales (lunes a viernes)" value="weekdays" />
-                      <Picker.Item label="Personalizado" value="custom" />
+                      <Picker.Item label="Normal" value="Normal" />
+                      <Picker.Item label="Inventario" value="Inventario" />
                     </Picker>
                   </ThemedView>
-                </ThemedView>
 
-                {/* Sección personalizada */}
-                {repetitionType === 'custom' && (
-                  <>
-                    <ThemedView style={styles.formGroup}>
-                      <ThemedText style={styles.formLabel}>Repetir cada:</ThemedText>
-                      <View style={styles.intervalRow}>
-                        <TextInput
-                          style={styles.intervalInput}
-                          value={customInterval}
-                          onChangeText={text => setCustomInterval(text.replace(/[^0-9]/g, '') || '1')}
-                          keyboardType="numeric"
-                        />
-                        <ThemedView style={styles.pickerContainer}>
-                          <Picker
-                            selectedValue={customUnit}
-                            onValueChange={(value) => setCustomUnit(value as any)}
-                            style={styles.picker}
-                          >
-                            <Picker.Item label="día" value="day" />
-                            <Picker.Item label="semana" value="week" />
-                            <Picker.Item label="mes" value="month" />
-                            <Picker.Item label="año" value="year" />
-                          </Picker>
-                        </ThemedView>
-                      </View>
+                {tipoActividad === 'Inventario' && (
+                  <ThemedView style={styles.sectionCard}>
+                    <ThemedText style={styles.sectionTitle}>Reglas</ThemedText>
+                    <ThemedText style={styles.formLabel}>Artículos</ThemedText>
+                    <ThemedView style={styles.pickerContainer}>
+                      <Picker
+                        selectedValue={selectedArticuloId}
+                        onValueChange={handleArticuloSelection}
+                        style={styles.picker}
+                      >
+                        <Picker.Item label="Selecciona un artículo" value="" />
+                        {articulosCatalog.map(articulo => (
+                          <Picker.Item key={articulo.id} label={articulo.nombre} value={String(articulo.id)} />
+                        ))}
+                      </Picker>
                     </ThemedView>
 
-                    {/* Días de la semana */}
-                    {customUnit === 'week' && (
-                      <ThemedView style={styles.formGroup}>
-                        <ThemedText style={styles.formLabel}>
-                          Se repite el... (puedes seleccionar múltiples días)
-                        </ThemedText>
-                        <View style={styles.weekdaysRow}>
-                          {[
-                            { value: 'monday', label: 'L' },
-                            { value: 'tuesday', label: 'M' },
-                            { value: 'wednesday', label: 'X' },
-                            { value: 'thursday', label: 'J' },
-                            { value: 'friday', label: 'V' },
-                            { value: 'saturday', label: 'S' },
-                            { value: 'sunday', label: 'D' },
-                          ].map(day => (
-                            <TouchableOpacity
-                              key={day.value}
-                              style={[
-                                styles.weekdayChip,
-                                selectedWeekdays.includes(day.value) && styles.weekdayChipSelected,
-                              ]}
-                              onPress={() => toggleWeekday(day.value)}
+                    {articuloRules.length === 0 ? (
+                      <ThemedText style={styles.helperText}>
+                        Selecciona un artículo para comenzar a definir reglas.
+                      </ThemedText>
+                    ) : (
+                      articuloRules.map(articulo => (
+                        <ThemedView key={articulo.articuloId} style={styles.articleCard}>
+                          <View style={styles.assignedHeader}>
+                            <ThemedText style={styles.assignedTitle}>{articulo.articuloNombre}</ThemedText>
+                            <TouchableOpacity 
+                              style={styles.removeButton}
+                              onPress={() => handleRemoveArticulo(articulo.articuloId)}
                             >
-                              <ThemedText
-                                style={[
-                                  styles.weekdayChipText,
-                                  selectedWeekdays.includes(day.value) && styles.weekdayChipTextSelected,
-                                ]}
-                              >
-                                {day.label}
-                              </ThemedText>
+                              <Ionicons name="trash" size={18} color="#FF3B30" />
                             </TouchableOpacity>
-                          ))}
-                        </View>
-                      </ThemedView>
-                    )}
-
-                    {/* Opciones mes */}
-                    {customUnit === 'month' && (
-                      <ThemedView style={styles.formGroup}>
-                        <ThemedText style={styles.formLabel}>Opción de mes:</ThemedText>
-                        <View style={styles.chipGroup}>
-                          {[
-                            { value: 'day-of-month', label: 'Día del mes actual' },
-                            { value: 'weekday-of-month', label: 'Mismo día de semana' },
-                          ].map(option => (
-                            <TouchableOpacity
-                              key={option.value}
-                              style={[
-                                styles.chip,
-                                monthOption === option.value && styles.chipSelected,
-                              ]}
-                              onPress={() => setMonthOption(option.value as any)}
-                            >
-                              <ThemedText
-                                style={[
-                                  styles.chipText,
-                                  monthOption === option.value && styles.chipTextSelected,
-                                ]}
+                          </View>
+                          {articulo.reglas.map(regla => (
+                            <View key={regla.id} style={styles.ruleRow}>
+                              <TextInput
+                                style={[styles.textInput, styles.ruleInput]}
+                                placeholder="Nombre"
+                                value={regla.nombre}
+                                onChangeText={text => handleRuleChange(articulo.articuloId, regla.id, 'nombre', text)}
+                              />
+                              <TextInput
+                                style={[styles.textInput, styles.ruleInput]}
+                                placeholder="Valor"
+                                value={regla.valor}
+                                onChangeText={text => handleRuleChange(articulo.articuloId, regla.id, 'valor', text)}
+                              />
+                              <TouchableOpacity 
+                                style={styles.removeButton}
+                                onPress={() => handleRemoveRule(articulo.articuloId, regla.id)}
                               >
-                                {option.label}
-                              </ThemedText>
-                            </TouchableOpacity>
+                                <Ionicons name="close-circle" size={20} color="#FF3B30" />
+                              </TouchableOpacity>
+                            </View>
                           ))}
-                        </View>
-                      </ThemedView>
+                          <TouchableOpacity
+                            style={styles.secondaryButton}
+                            onPress={() => handleAddRule(articulo.articuloId)}
+                          >
+                            <Ionicons name="add-circle" size={18} color="#fff" />
+                            <ThemedText style={styles.secondaryButtonText}>Agregar regla</ThemedText>
+                          </TouchableOpacity>
+                        </ThemedView>
+                      ))
                     )}
-
-                    {/* Opciones año */}
-                    {customUnit === 'year' && (
-                      <ThemedView style={styles.formGroup}>
-                        <ThemedText style={styles.formLabel}>Configuración anual:</ThemedText>
-                        <View style={styles.yearRow}>
-                          <View style={styles.yearField}>
-                            <ThemedText style={styles.formLabelSmall}>Mes (1-12)</ThemedText>
-                            <TextInput
-                              style={styles.intervalInput}
-                              value={yearMonth}
-                              onChangeText={text =>
-                                setYearMonth(text.replace(/[^0-9]/g, ''))
-                              }
-                              keyboardType="numeric"
-                            />
-                          </View>
-                          <View style={styles.yearField}>
-                            <ThemedText style={styles.formLabelSmall}>Día (1-31)</ThemedText>
-                            <TextInput
-                              style={styles.intervalInput}
-                              value={yearDay}
-                              onChangeText={text =>
-                                setYearDay(text.replace(/[^0-9]/g, ''))
-                              }
-                              keyboardType="numeric"
-                            />
-                          </View>
-                        </View>
-                      </ThemedView>
-                    )}
-                  </>
+                  </ThemedView>
                 )}
 
-                {/* Terminación */}
-                <ThemedView style={styles.formGroup}>
-                  <ThemedText style={styles.formLabel}>Termina...</ThemedText>
-                  <ThemedView style={styles.radioGroup}>
-                    <TouchableOpacity
-                      style={styles.radioOption}
-                      onPress={() => setEndType('never')}
-                    >
-                      <ThemedView style={[
-                        styles.radioCircle,
-                        endType === 'never' ? styles.radioSelected : styles.radioUnselected
-                      ]}>
-                        {endType === 'never' && <ThemedView style={styles.radioInner} />}
-                      </ThemedView>
-                      <ThemedText style={styles.radioLabel}>Nunca</ThemedText>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={styles.radioOption}
-                      onPress={() => {
-                        setEndType('date');
-                        if (!endDate) {
-                          const today = new Date().toISOString().split('T')[0];
-                          setEndDate(today);
-                        }
-                      }}
-                    >
-                      <ThemedView style={[
-                        styles.radioCircle,
-                        endType === 'date' ? styles.radioSelected : styles.radioUnselected
-                      ]}>
-                        {endType === 'date' && <ThemedView style={styles.radioInner} />}
-                      </ThemedView>
-                      <ThemedText style={styles.radioLabel}>El...</ThemedText>
-                    </TouchableOpacity>
+                <ThemedView style={styles.sectionCard}>
+                  <ThemedText style={styles.sectionTitle}>Repetición de la actividad</ThemedText>
+                    <ThemedView style={styles.pickerContainer}>
+                      <Picker
+                        selectedValue={repetitionType}
+                        onValueChange={(value) => setRepetitionType(value as any)}
+                        style={styles.picker}
+                      >
+                        <Picker.Item label="Cada día" value="daily" />
+                        <Picker.Item label={weeklyLabel} value="weekly" />
+                        <Picker.Item label={monthlyWeekdayLabel} value="monthly-weekday" />
+                        <Picker.Item label={monthlyLastLabel} value="monthly-last" />
+                        <Picker.Item label={yearlyLabel} value="yearly" />
+                        <Picker.Item label="Todos los días laborales (lunes a viernes)" value="weekdays" />
+                        <Picker.Item label="Personalizado" value="custom" />
+                      </Picker>
+                    </ThemedView>
+
+                  {repetitionType === 'custom' && (
+                    <>
+                        <ThemedText style={styles.formLabel}>Repetir cada:</ThemedText>
+                        <View style={styles.intervalRow}>
+                          <TextInput
+                            style={styles.intervalInput}
+                            value={customInterval}
+                            onChangeText={text => setCustomInterval(text.replace(/[^0-9]/g, '') || '1')}
+                            keyboardType="numeric"
+                          />
+                          <ThemedView style={styles.pickerContainerInline}>
+                            <Picker
+                              selectedValue={customUnit}
+                              onValueChange={(value) => setCustomUnit(value as any)}
+                              style={styles.picker}
+                            >
+                              <Picker.Item label="día" value="day" />
+                              <Picker.Item label="semana" value="week" />
+                              <Picker.Item label="mes" value="month" />
+                              <Picker.Item label="año" value="year" />
+                            </Picker>
+                          </ThemedView>
+                        </View>
+                      {customUnit === 'week' && (
+                        <ThemedView style={{marginTop: 16}}>
+                          <ThemedText style={styles.formLabel}>
+                            Se repite el... (puedes seleccionar múltiples días)
+                          </ThemedText>
+                          <View style={styles.weekdaysRow}>
+                            {[
+                              { value: 'monday', label: 'L' },
+                              { value: 'tuesday', label: 'M' },
+                              { value: 'wednesday', label: 'X' },
+                              { value: 'thursday', label: 'J' },
+                              { value: 'friday', label: 'V' },
+                              { value: 'saturday', label: 'S' },
+                              { value: 'sunday', label: 'D' },
+                            ].map(day => (
+                              <TouchableOpacity
+                                key={day.value}
+                                style={[
+                                  styles.weekdayChip,
+                                  selectedWeekdays.includes(day.value) && styles.weekdayChipSelected,
+                                ]}
+                                onPress={() => toggleWeekday(day.value)}
+                              >
+                                <ThemedText
+                                  style={[
+                                    styles.weekdayChipText,
+                                    selectedWeekdays.includes(day.value) && styles.weekdayChipTextSelected,
+                                  ]}
+                                >
+                                  {day.label}
+                                </ThemedText>
+                              </TouchableOpacity>
+                            ))}
+                          </View>
+                        </ThemedView>
+                      )}
+
+                      {customUnit === 'month' && (
+                        <ThemedView style={{marginTop: 16}}>
+                          <ThemedText style={styles.formLabel}>Opción de mes:</ThemedText>
+                          <ThemedView style={styles.pickerContainer}>
+                            <Picker
+                              selectedValue={monthOption}
+                              onValueChange={(value) => setMonthOption(value as 'day-of-month' | 'weekday-of-month')}
+                              style={styles.picker}
+                            >
+                              <Picker.Item label={monthDayOfMonthLabel} value="day-of-month" />
+                              <Picker.Item label={monthWeekdayOfMonthLabel} value="weekday-of-month" />
+                            </Picker>
+                          </ThemedView>
+                        </ThemedView>
+                      )}
+
+                      {customUnit === 'year' && (
+                        <ThemedView style={styles.formGroup}>
+                          <ThemedText style={styles.formLabel}>Configuración anual:</ThemedText>
+                          <View style={styles.yearRow}>
+                            <View style={styles.yearFieldMonth}>
+                              <ThemedText style={styles.formLabelSmall}>Mes</ThemedText>
+                              <ThemedView style={styles.pickerContainer}>
+                                <Picker
+                                  selectedValue={yearMonth}
+                                  onValueChange={(value) => setYearMonth(value)}
+                                  style={styles.picker}
+                                >
+                                  <Picker.Item label="Enero" value="1" />
+                                  <Picker.Item label="Febrero" value="2" />
+                                  <Picker.Item label="Marzo" value="3" />
+                                  <Picker.Item label="Abril" value="4" />
+                                  <Picker.Item label="Mayo" value="5" />
+                                  <Picker.Item label="Junio" value="6" />
+                                  <Picker.Item label="Julio" value="7" />
+                                  <Picker.Item label="Agosto" value="8" />
+                                  <Picker.Item label="Septiembre" value="9" />
+                                  <Picker.Item label="Octubre" value="10" />
+                                  <Picker.Item label="Noviembre" value="11" />
+                                  <Picker.Item label="Diciembre" value="12" />
+                                </Picker>
+                              </ThemedView>
+                            </View>
+                            <View style={styles.yearFieldDay}>
+                              <ThemedText style={styles.formLabelSmall}>Día (1-31)</ThemedText>
+                              <TextInput
+                                style={styles.intervalInput}
+                                value={yearDay}
+                                onChangeText={text => setYearDay(text.replace(/[^0-9]/g, ''))}
+                                keyboardType="numeric"
+                              />
+                            </View>
+                          </View>
+                        </ThemedView>
+                      )}
+                    </>
+                  )}
+
+                  <ThemedView style={styles.formGroup}>
+                    <ThemedText style={styles.formLabel}>Termina...</ThemedText>
+                    <ThemedView style={styles.radioGroup}>
+                      <TouchableOpacity
+                        style={styles.radioOption}
+                        onPress={() => setEndType('never')}
+                      >
+                        <ThemedView style={[
+                          styles.radioCircle,
+                          endType === 'never' ? styles.radioSelected : styles.radioUnselected
+                        ]}>
+                          {endType === 'never' && <ThemedView style={styles.radioInner} />}
+                        </ThemedView>
+                        <ThemedText style={styles.radioLabel}>Nunca</ThemedText>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.radioOption}
+                        onPress={() => {
+                          setEndType('date');
+                          if (!endDate) {
+                            const startDateString = formatDateForApi(activityStartDate);
+                            setEndDate(startDateString);
+                          }
+                        }}
+                      >
+                        <ThemedView style={[
+                          styles.radioCircle,
+                          endType === 'date' ? styles.radioSelected : styles.radioUnselected
+                        ]}>
+                          {endType === 'date' && <ThemedView style={styles.radioInner} />}
+                        </ThemedView>
+                        <ThemedText style={styles.radioLabel}>El...</ThemedText>
+                      </TouchableOpacity>
+                    </ThemedView>
                   </ThemedView>
+
+                  {endType === 'date' && (
+                    <ThemedView>
+                      <ThemedText style={styles.formLabel}>Fecha de finalización:</ThemedText>
+                      <TouchableOpacity
+                        style={styles.dateButton}
+                        onPress={() => setShowEndDatePicker(true)}
+                      >
+                        <ThemedText style={styles.dateButtonText}>
+                          {endDate || 'Seleccionar fecha'}
+                        </ThemedText>
+                        <Ionicons name="calendar" size={20} color="#007AFF" />
+                      </TouchableOpacity>
+                      {showEndDatePicker && (
+                        <DateTimePicker
+                          value={endDate ? new Date(endDate) : activityStartDate}
+                          mode="date"
+                          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                          onChange={handleEndDateChange}
+                        />
+                      )}
+                    </ThemedView>
+                  )}
                 </ThemedView>
 
-                {endType === 'date' && (
-                  <ThemedView style={styles.formGroup}>
-                    <ThemedText style={styles.formLabel}>Fecha de finalización:</ThemedText>
+                  <ThemedText style={styles.sectionTitle}>Firma del responsable</ThemedText>
+                  <ThemedView style={styles.signatureButtons}>
                     <TouchableOpacity
-                      style={styles.dateButton}
-                      onPress={() => setShowEndDatePicker(true)}
+                      style={styles.signatureButton}
+                      onPress={handleGenerateSignature}
+                      disabled={isProcessingSignature}
                     >
-                      <ThemedText style={styles.dateButtonText}>
-                        {endDate || 'Seleccionar fecha'}
-                      </ThemedText>
-                      <Ionicons name="calendar" size={20} color="#007AFF" />
+                      {isProcessingSignature ? (
+                        <ActivityIndicator size="small" color="#FFFFFF" />
+                      ) : (
+                        <>
+                          <Ionicons name="finger-print" size={20} color="#FFFFFF" />
+                          <ThemedText style={styles.signatureButtonText}>Generar</ThemedText>
+                        </>
+                      )}
                     </TouchableOpacity>
-                    {showEndDatePicker && (
-                      <DateTimePicker
-                        value={endDate ? new Date(endDate) : new Date()}
-                        mode="date"
-                        display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                        onChange={handleEndDateChange}
-                      />
-                    )}
+                    <TouchableOpacity
+                      style={styles.signatureButton}
+                      onPress={handleScanSignature}
+                    >
+                      <Ionicons name="qr-code" size={20} color="#FFFFFF" />
+                      <ThemedText style={styles.signatureButtonText}>Escanear QR</ThemedText>
+                    </TouchableOpacity>
                   </ThemedView>
-                )}
-
-                <TouchableOpacity
-                  style={styles.generateButton}
-                  onPress={generateRepetitionConfig}
-                >
-                  <ThemedText style={styles.generateButtonText}>
-                    Generar Configuración JSON
-                  </ThemedText>
-                </TouchableOpacity>
-
-                {generatedConfigJson ? (
-                  <ThemedView style={styles.jsonOutputContainer}>
-                    <ThemedText style={styles.jsonOutputLabel}>
-                      Configuración JSON generada:
-                    </ThemedText>
-                    <TextInput
-                      style={styles.jsonOutputText}
-                      value={generatedConfigJson}
-                      editable={false}
-                      multiline
-                    />
-                  </ThemedView>
-                ) : null}
+                  {signatureData && (
+                    <ThemedView style={styles.signatureInfo}>
+                      <ThemedText style={styles.signatureInfoTitle}>Información de la firma:</ThemedText>
+                      <ThemedText style={styles.signatureInfoText}>ID de sesión: {signatureData.sessionId}</ThemedText>
+                      <ThemedText style={styles.signatureInfoText}>ID del empleado: {signatureData.employeeId}</ThemedText>
+                      {signatureEmployeeName && (
+                        <ThemedView style={styles.signatureInfoDetail}>
+                          <ThemedText style={styles.signatureInfoDetailText}>
+                            {signatureEmployeeName}
+                          </ThemedText>
+                        </ThemedView>
+                      )}
+                      <ThemedText style={styles.signatureInfoText}>Latitud: {signatureData.latitude}</ThemedText>
+                      <ThemedText style={styles.signatureInfoText}>Longitud: {signatureData.longitude}</ThemedText>
+                      <ThemedText style={styles.signatureInfoText}>Hora actual: {generateDateTime(signatureData.timestamp)}</ThemedText>
+                      <TouchableOpacity
+                        style={styles.clearSignatureButton}
+                        onPress={() => {
+                          setSignatureData(null);
+                          setSignatureEmployeeName(null);
+                        }}
+                      >
+                        <ThemedText style={styles.clearSignatureText}>{getActionIcon('clear')}</ThemedText>
+                      </TouchableOpacity>
+                    </ThemedView>
+                  )}
 
                 <ThemedView style={styles.repetitionModalButtons}>
                   <TouchableOpacity
                     style={[styles.modalButton, styles.modalCancelButton]}
                     onPress={closeRepetitionModal}
+                    disabled={isSubmittingActivity}
                   >
                     <ThemedText style={styles.modalCancelButtonText}>
-                      Cerrar
+                      Cancelar
                     </ThemedText>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.modalButton, styles.modalConfirmButton, isSubmittingActivity && styles.modalButtonDisabled]}
+                    onPress={handleConfirmCreateActivity}
+                    disabled={isSubmittingActivity}
+                  >
+                    {isSubmittingActivity ? (
+                      <ActivityIndicator size="small" color="#fff" />
+                    ) : (
+                      <ThemedText style={styles.modalConfirmButtonText}>
+                        Crear actividad
+                      </ThemedText>
+                    )}
                   </TouchableOpacity>
                 </ThemedView>
               </ScrollView>
@@ -1756,6 +2912,121 @@ export default function ActivitiesScreen() {
           )}
         </ThemedView>
       </ScrollView>
+      {QRScannerComponent}
+
+      {/* Bitacora Modal */}
+      <Modal
+        visible={isBitacoraModalVisible}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={handleBitacoraCancel}
+      >
+        <ThemedView style={styles.modalOverlay}>
+          <ThemedView style={styles.modalContainer}>
+            <ThemedView style={styles.modalHeader}>
+              <ThemedText style={styles.modalTitle}>Bitácora de Actividad</ThemedText>
+              <TouchableOpacity onPress={handleBitacoraCancel}>
+                <Ionicons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+            </ThemedView>
+            
+            <ThemedText style={styles.modalSubtitle}>
+              {selectedActivity?.nombre_actividad}
+            </ThemedText>
+            
+            <ThemedView style={styles.formGroup}>
+              <ThemedText style={styles.formLabel}>Bitácora:</ThemedText>
+            <TextInput
+              style={styles.bitacoraInput}
+              value={bitacoraText}
+              onChangeText={setBitacoraText}
+                placeholder="Ingresa la bitácora de la actividad..."
+              placeholderTextColor="#999"
+                multiline
+              numberOfLines={4}
+              textAlignVertical="top"
+            />
+            </ThemedView>
+
+            <ThemedView style={styles.formGroup}>
+              <ThemedText style={styles.formLabel}>Adjuntar imagen (opcional):</ThemedText>
+            <TouchableOpacity
+              style={styles.captureImageButton}
+              onPress={openCameraForActivity}
+            >
+              <Ionicons name="camera" size={20} color="#007AFF" />
+              <ThemedText style={styles.captureImageButtonText}>
+                  {activityImageBase64 ? 'Cambiar imagen' : 'Capturar imagen'}
+              </ThemedText>
+            </TouchableOpacity>
+
+            {activityImageBase64 && (
+              <ThemedView style={styles.imagePreviewContainer}>
+                <ThemedText style={styles.imagePreviewTitle}>Imagen capturada:</ThemedText>
+                <Image
+                    source={{ uri: activityImageBase64 }}
+                  style={styles.imagePreview}
+                  resizeMode="contain"
+                />
+                  <TouchableOpacity
+                    style={styles.removeImageButton}
+                    onPress={() => setActivityImageBase64(null)}
+                  >
+                    <Ionicons name="trash" size={20} color="#FF3B30" />
+                    <ThemedText style={styles.removeImageText}>Eliminar imagen</ThemedText>
+                  </TouchableOpacity>
+              </ThemedView>
+            )}
+            </ThemedView>
+            
+            <ThemedView style={styles.modalButtons}>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.modalCancelButton]}
+                onPress={handleBitacoraCancel}
+              >
+                <ThemedText style={styles.modalCancelButtonText}>Cancelar</ThemedText>
+              </TouchableOpacity>
+              
+              <TouchableOpacity
+                style={[styles.modalButton, styles.modalConfirmButton]}
+                onPress={handleBitacoraConfirm}
+              >
+                <ThemedText style={styles.modalConfirmButtonText}>Confirmar</ThemedText>
+              </TouchableOpacity>
+            </ThemedView>
+          </ThemedView>
+        </ThemedView>
+      </Modal>
+
+      {/* Camera Modal */}
+      <Modal
+        visible={isCameraVisible}
+        animationType="slide"
+        onRequestClose={() => setIsCameraVisible(false)}
+      >
+        <ThemedView style={{ flex: 1, backgroundColor: '#000' }}>
+          <CameraView
+            ref={cameraRef}
+            style={{ flex: 1 }}
+            facing="back"
+          >
+            <TouchableOpacity
+              style={styles.cameraCloseButton}
+              onPress={() => setIsCameraVisible(false)}
+            >
+              <Ionicons name="close" size={30} color="#fff" />
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={styles.cameraCaptureButton}
+              onPress={takePicture}
+            >
+              <ThemedView style={styles.cameraCaptureButtonInner} />
+            </TouchableOpacity>
+          </CameraView>
+        </ThemedView>
+      </Modal>
+
       <AppFooter />
       <SlideMenu 
         isVisible={isMenuVisible} 
@@ -2003,17 +3274,22 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 8,
   },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
   modalTitle: {
     fontSize: 20,
     fontWeight: 'bold',
+    flex: 1,
     textAlign: 'center',
-    marginBottom: 8,
     color: '#333333',
   },
   modalSubtitle: {
     fontSize: 16,
     textAlign: 'center',
-    marginBottom: 20,
     color: '#666666',
     lineHeight: 22,
   },
@@ -2024,7 +3300,6 @@ const styles = StyleSheet.create({
     padding: 12,
     fontSize: 16,
     backgroundColor: '#F8F9FA',
-    marginBottom: 24,
     minHeight: 80,
     textAlignVertical: 'top',
   },
@@ -2043,6 +3318,26 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     padding: 20,
     marginBottom: 20, 
+  },
+  sectionCard: {
+    marginTop: 12,
+    marginBottom: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 12,
+    backgroundColor: '#ffffff',
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#111827',
+    marginBottom: 12,
+  },
+  formErrorText: {
+    color: '#FF3B30',
+    fontSize: 13,
+    marginBottom: 8,
   },
   formGroup: {
     marginTop: 12,
@@ -2066,11 +3361,40 @@ const styles = StyleSheet.create({
     backgroundColor: '#F9F9F9',
     overflow: 'hidden',
     minHeight: 50,
+    marginBottom: 12,
+  },
+  pickerContainerInline: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    backgroundColor: '#F9F9F9',
+    overflow: 'hidden',
+    height: 50,
+    marginBottom: 0,
   },
   picker: {
     width: '100%',
     height: 50,
     color: '#000000',
+  },
+  textInput: {
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 14,
+    backgroundColor: '#F9FAFB',
+    color: '#111827',
+    marginBottom: 12,
+  },
+  textArea: {
+    minHeight: 90,
+    textAlignVertical: 'top',
+  },
+  helperText: {
+    fontSize: 13,
+    color: '#6B7280',
   },
   radioGroup: {
     flexDirection: 'row',
@@ -2118,14 +3442,16 @@ const styles = StyleSheet.create({
   },
   intervalInput: {
     width: 70,
+    height: 50,
     paddingHorizontal: 10,
-    paddingVertical: 8,
+    paddingVertical: 0,
     borderWidth: 1,
     borderColor: '#E0E0E0',
     borderRadius: 8,
     fontSize: 14,
     backgroundColor: '#F9F9F9',
     color: '#000000',
+    textAlignVertical: 'center',
   },
   weekdaysRow: {
     flexDirection: 'row',
@@ -2161,8 +3487,11 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: 12,
   },
-  yearField: {
+  yearFieldMonth: {
     flex: 1,
+  },
+  yearFieldDay: {
+    width: 70,
   },
   dateButton: {
     flexDirection: 'row',
@@ -2173,44 +3502,16 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     padding: 12,
     backgroundColor: '#F9F9F9',
+    marginBottom: 12,
   },
   dateButtonText: {
     fontSize: 16,
     color: '#000000',
   },
-  generateButton: {
-    marginTop: 16,
-    backgroundColor: '#007AFF',
-    paddingVertical: 12,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  generateButtonText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  jsonOutputContainer: {
-    marginTop: 16,
-    backgroundColor: '#2d3748',
-    padding: 12,
-    borderRadius: 8,
-  },
-  jsonOutputLabel: {
-    color: '#e2e8f0',
-    marginBottom: 8,
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  jsonOutputText: {
-    minHeight: 100,
-    color: '#e2e8f0',
-    fontFamily: 'Courier',
-    fontSize: 12,
-  },
   repetitionModalButtons: {
     marginTop: 16,
-    alignItems: 'flex-end',
+    flexDirection: 'row',
+    gap: 12,
   },
   modalButton: {
     flex: 1,
@@ -2218,6 +3519,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     borderRadius: 8,
     alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 44,
   },
   modalCancelButton: {
     backgroundColor: '#E0E0E0',
@@ -2225,15 +3528,245 @@ const styles = StyleSheet.create({
   modalConfirmButton: {
     backgroundColor: '#FF3B30',
   },
+  modalButtonDisabled: {
+    opacity: 0.5,
+  },
   modalCancelButtonText: {
     fontSize: 16,
     fontWeight: '600',
     color: '#333333',
+    lineHeight: 20,
+    textAlign: 'center',
   },
   modalConfirmButtonText: {
     fontSize: 16,
     fontWeight: '600',
     color: '#FFFFFF',
+    lineHeight: 20,
+    textAlign: 'center',
+  },
+  secondaryButton: {
+    marginTop: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: '#34C759',
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
+  secondaryButtonDisabled: {
+    opacity: 0.5,
+  },
+  secondaryButtonText: {
+    color: '#fff',
+    fontWeight: '600',
+  },
+  secondaryButtonOutline: {
+    marginTop: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    borderWidth: 1,
+    borderColor: '#007AFF',
+    borderRadius: 8,
+    paddingVertical: 10,
+  },
+  secondaryButtonOutlineText: {
+    color: '#007AFF',
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  assignedList: {
+    marginTop: 12,
+    gap: 12,
+  },
+  assignedItem: {
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 10,
+    padding: 12,
+    backgroundColor: '#F9FAFB',
+  },
+  assignedHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  assignedTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#111827',
+    flex: 1,
+    flexShrink: 1,
+    marginRight: 8,
+  },
+  plazaChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 20,
+    paddingVertical: 4,
+    paddingHorizontal: 12,
+    backgroundColor: '#fff',
+    marginBottom: 8,
+  },
+  plazaChipText: {
+    fontSize: 13,
+    color: '#111827',
+    flex: 1,
+    flexShrink: 1,
+    marginRight: 8,
+  },
+  removeButton: {
+    flexShrink: 0,
+  },
+  plazaListContainer: {
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 10,
+    overflow: 'hidden',
+    backgroundColor: '#fff',
+  },
+  plazaListItem: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
+  },
+  plazaListItemLast: {
+    borderBottomWidth: 0,
+  },
+  plazaListItemSelected: {
+    backgroundColor: '#E6F0FF',
+  },
+  plazaCheckbox: {
+    width: 20,
+    height: 20,
+    borderRadius: 4,
+    borderWidth: 1.5,
+    borderColor: '#BFD2F3',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+    marginTop: 4,
+    backgroundColor: '#fff',
+  },
+  plazaCheckboxChecked: {
+    backgroundColor: '#007AFF',
+    borderColor: '#007AFF',
+  },
+  plazaInfo: {
+    flex: 1,
+  },
+  plazaName: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#0f172a',
+  },
+  plazaEmployees: {
+    fontSize: 12,
+    color: '#475569',
+    marginTop: 4,
+  },
+  plazaEmployeesEmpty: {
+    fontSize: 12,
+    color: '#94a3b8',
+    marginTop: 4,
+    fontStyle: 'italic',
+  },
+  articleCard: {
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 10,
+    padding: 12,
+    marginTop: 12,
+    backgroundColor: '#F9FAFB',
+  },
+  ruleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+  },
+  ruleInput: {
+    flex: 1,
+    marginBottom: 0,
+  },
+  signatureButtons: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    backgroundColor: '#fff',
+    marginTop: 8,
+  },
+  signatureButton: {
+    backgroundColor: '#007AFF',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flex: 1,
+    minWidth: '45%',
+  },
+  signatureButtonDisabled: {
+    opacity: 0.6,
+  },
+  signatureButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
+    marginLeft: 8,
+  },
+  signatureInfo: {
+    backgroundColor: '#F5F5F5',
+    borderRadius: 8,
+    padding: 12,
+    marginTop: 8,
+  },
+  signatureInfoTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginBottom: 8,
+    color: '#000000',
+  },
+  signatureInfoText: {
+    fontSize: 14,
+    marginBottom: 4,
+    color: '#000000',
+  },
+  signatureInfoDetail: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    backgroundColor: '#BDE4FF',
+    borderRadius: 8,
+    marginBottom: 4,
+  },
+  signatureInfoDetailText: {
+    fontSize: 12,
+    color: '#000000',
+  },
+  clearSignatureButton: {
+    marginTop: 8,
+    padding: 8,
+    backgroundColor: '#FF3B30',
+    borderRadius: 6,
+    alignItems: 'center',
+    width: '100%',
+  },
+  clearSignatureText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
   },
   // Inventory styles
   inventoryContainer: {
@@ -2421,5 +3954,23 @@ const styles = StyleSheet.create({
     height: 60,
     borderRadius: 30,
     backgroundColor: '#fff',
+  },
+  removeImageButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    backgroundColor: '#FFEBEE',
+    borderWidth: 1,
+    borderColor: '#FF3B30',
+  },
+  removeImageText: {
+    color: '#FF3B30',
+    fontSize: 14,
+    fontWeight: '600',
   },
 });
