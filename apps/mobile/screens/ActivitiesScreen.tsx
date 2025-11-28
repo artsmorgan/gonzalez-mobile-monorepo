@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, Modal, TextInput, Image } from 'react-native';
+import { StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, Modal, TextInput, Image, View, Platform } from 'react-native';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import { useAuth } from '@/contexts/AuthContext';
@@ -14,6 +15,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import * as Network from 'expo-network';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import { Picker } from '@react-native-picker/picker';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import { eventBus } from '@/hooks/eventBus';
 
@@ -705,11 +707,51 @@ export default function ActivitiesScreen() {
   const [cameraTarget, setCameraTarget] = useState<'activity' | 'inventory'>('activity');
   const [targetInventoryId, setTargetInventoryId] = useState<number | null>(null);
   const [inventoryImages, setInventoryImages] = useState<{[key: number]: string}>({});
+  // Repetition config modal state
+  const [isRepetitionModalVisible, setIsRepetitionModalVisible] = useState(false);
+  const [repetitionType, setRepetitionType] = useState<'daily' | 'weekly' | 'monthly-weekday' | 'monthly-last' | 'yearly' | 'weekdays' | 'custom'>('custom');
+  const [weeklyLabel, setWeeklyLabel] = useState<string>('Cada semana');
+  const [monthlyWeekdayLabel, setMonthlyWeekdayLabel] = useState<string>('Mes (día sem.)');
+  const [monthlyLastLabel, setMonthlyLastLabel] = useState<string>('Mes (último día sem.)');
+  const [yearlyLabel, setYearlyLabel] = useState<string>('Anual');
+  const [customInterval, setCustomInterval] = useState<string>('1');
+  const [customUnit, setCustomUnit] = useState<'day' | 'week' | 'month' | 'year'>('week');
+  const [selectedWeekdays, setSelectedWeekdays] = useState<string[]>([]);
+  const [monthOption, setMonthOption] = useState<'day-of-month' | 'weekday-of-month'>('day-of-month');
+  const [yearMonth, setYearMonth] = useState<string>('1');
+  const [yearDay, setYearDay] = useState<string>('1');
+  const [endType, setEndType] = useState<'never' | 'date'>('never');
+  const [endDate, setEndDate] = useState<string>('');
+  const [showEndDatePicker, setShowEndDatePicker] = useState(false);
+  const [generatedConfigJson, setGeneratedConfigJson] = useState<string>('');
   useFocusEffect(
     useCallback(() => {
       fetchActivities();
     }, [])
   );
+
+  // Update dynamic labels for monthly and yearly options
+  useEffect(() => {
+    const now = new Date();
+    const weekdays = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+    const weekOrdinals = ['primer', 'segundo', 'tercer', 'cuarto', 'último'];
+    const months = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
+      'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+    
+    const currentWeekday = now.getDay();
+    const weekdayName = weekdays[currentWeekday];
+    const weekOrdinal = getWeekOrdinal(now);
+    const ordinalName = weekOrdinals[weekOrdinal - 1] || 'último';
+    
+    const currentDay = now.getDate();
+    const currentMonth = now.getMonth();
+    const monthName = months[currentMonth];
+    
+    setWeeklyLabel(`Cada semana el ${weekdayName}`);
+    setMonthlyWeekdayLabel(`Cada mes el ${ordinalName} ${weekdayName}`);
+    setMonthlyLastLabel(`Cada mes el último ${weekdayName}`);
+    setYearlyLabel(`Anual (${currentDay} de ${monthName})`);
+  }, []);
 
   
   useEffect(() => {
@@ -835,6 +877,244 @@ export default function ActivitiesScreen() {
       case 'confirm': return <Ionicons name="checkmark" size={35} color='#fff' />;
       case 'cancel': return <Ionicons name="close" size={35} color='#fff' />;
       default: return <Ionicons name="list" size={25} color='#000000' />;
+    }
+  };
+
+  // ===== Repetition configuration helpers (based on repeticion-evento project) =====
+
+  const getWeekOrdinal = (date: Date) => {
+    const dayOfMonth = date.getDate();
+    const dayOfWeek = date.getDay();
+
+    const firstDayOfMonth = new Date(date.getFullYear(), date.getMonth(), 1);
+    const firstWeekday = firstDayOfMonth.getDay();
+
+    const daysToFirstWeekday = (dayOfWeek - firstWeekday + 7) % 7;
+    const firstWeekdayDate = 1 + daysToFirstWeekday;
+
+    const ordinal = Math.floor((dayOfMonth - firstWeekdayDate) / 7) + 1;
+
+    const lastWeekdayDate = getLastWeekdayOfMonth(date.getFullYear(), date.getMonth(), dayOfWeek);
+    if (dayOfMonth === lastWeekdayDate) {
+      return 5; // último
+    }
+
+    return ordinal;
+  };
+
+  const getLastWeekdayOfMonth = (year: number, month: number, weekday: number) => {
+    const lastDay = new Date(year, month + 1, 0);
+    const lastWeekday = lastDay.getDay();
+    const daysToSubtract = (lastWeekday - weekday + 7) % 7;
+    const targetDate = new Date(year, month + 1, 0 - daysToSubtract);
+    return targetDate.getDate();
+  };
+
+  const generateRepetitionTitle = (config: any, type: string) => {
+    const weekdays = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+    const months = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
+      'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+    const weekOrdinals = ['primer', 'segundo', 'tercer', 'cuarto', 'último'];
+
+    let title = '';
+
+    switch (type) {
+      case 'daily':
+        if (config.interval === 1) {
+          title = 'Cada día';
+        } else {
+          title = `Cada ${config.interval} días`;
+        }
+        break;
+      case 'weekly': {
+        const weekdayName = weekdays[config.weekday];
+        if (config.interval === 1) {
+          title = `Cada semana el ${weekdayName}`;
+        } else {
+          title = `Cada ${config.interval} semanas el ${weekdayName}`;
+        }
+        break;
+      }
+      case 'monthly-weekday': {
+        const weekdayName2 = weekdays[config.weekday];
+        const ordinalName = weekOrdinals[config.weekOrdinal - 1] || 'último';
+        if (config.interval === 1) {
+          title = `Cada mes el ${ordinalName} ${weekdayName2}`;
+        } else {
+          title = `Cada ${config.interval} meses el ${ordinalName} ${weekdayName2}`;
+        }
+        break;
+      }
+      case 'monthly-last': {
+        const weekdayName3 = weekdays[config.weekday];
+        if (config.interval === 1) {
+          title = `Cada mes el último ${weekdayName3}`;
+        } else {
+          title = `Cada ${config.interval} meses el último ${weekdayName3}`;
+        }
+        break;
+      }
+      case 'yearly': {
+        const monthName = months[config.month - 1];
+        if (config.interval === 1) {
+          title = `Anualmente el ${config.day} de ${monthName}`;
+        } else {
+          title = `Cada ${config.interval} años el ${config.day} de ${monthName}`;
+        }
+        break;
+      }
+      case 'weekdays':
+        if (config.interval === 1) {
+          title = 'Todos los días laborables (lunes a viernes)';
+        } else {
+          title = `Cada ${config.interval} días laborables (lunes a viernes)`;
+        }
+        break;
+      case 'custom': {
+        const unit = config.unit;
+        const interval = config.interval;
+
+        switch (unit) {
+          case 'day':
+            title = `Cada ${interval} ${interval === 1 ? 'día' : 'días'}`;
+            break;
+          case 'week':
+            if (config.weekdays && config.weekdays.length > 0) {
+              const weekdayMap: Record<string, string> = {
+                sunday: 'domingo',
+                monday: 'lunes',
+                tuesday: 'martes',
+                wednesday: 'miércoles',
+                thursday: 'jueves',
+                friday: 'viernes',
+                saturday: 'sábado',
+              };
+              const selectedWeekdays = config.weekdays
+                .map((wd: string) => weekdayMap[wd] || wd)
+                .join(', ');
+              title = `Cada ${interval} ${interval === 1 ? 'semana' : 'semanas'} los ${selectedWeekdays}`;
+            } else {
+              title = `Cada ${interval} ${interval === 1 ? 'semana' : 'semanas'}`;
+            }
+            break;
+          case 'month':
+            if (config.monthOption === 'day-of-month') {
+              title = `Cada ${interval} ${interval === 1 ? 'mes' : 'meses'} el día ${config.day}`;
+            } else {
+              const weekdayName4 = weekdays[config.weekday];
+              const ordinalName2 = weekOrdinals[config.weekOrdinal - 1] || 'último';
+              title = `Cada ${interval} ${interval === 1 ? 'mes' : 'meses'} el ${ordinalName2} ${weekdayName4}`;
+            }
+            break;
+          case 'year': {
+            const monthName2 = months[config.month - 1];
+            title = `Cada ${interval} ${interval === 1 ? 'año' : 'años'} el ${config.day} de ${monthName2}`;
+            break;
+          }
+          default:
+            title = `Repetición personalizada cada ${interval} ${unit}`;
+        }
+        break;
+      }
+      default:
+        title = 'Configuración de la actividad';
+    }
+
+    if (config.endType === 'date' && config.endDate) {
+      const endDateObj = new Date(config.endDate);
+      const endDateStr = endDateObj.toLocaleDateString('es-ES');
+      title += ` (termina el ${endDateStr})`;
+    } else if (config.endType === 'never') {
+      title += ' (sin fecha de finalización)';
+    }
+
+    return title;
+  };
+
+  const toggleWeekday = (value: string) => {
+    setSelectedWeekdays(prev =>
+      prev.includes(value) ? prev.filter(w => w !== value) : [...prev, value]
+    );
+  };
+
+  const openRepetitionModal = () => {
+    setIsRepetitionModalVisible(true);
+  };
+
+  const closeRepetitionModal = () => {
+    setIsRepetitionModalVisible(false);
+  };
+
+  const generateRepetitionConfig = () => {
+    const now = new Date();
+    const currentWeekday = now.getDay();
+    const currentDay = now.getDate();
+    const currentMonth = now.getMonth() + 1;
+
+    const config: any = {
+      type: repetitionType,
+      interval: 1,
+    };
+
+    if (repetitionType === 'weekly') {
+      config.weekday = currentWeekday;
+    } else if (repetitionType === 'monthly-weekday') {
+      config.weekday = currentWeekday;
+      config.weekOrdinal = getWeekOrdinal(now);
+    } else if (repetitionType === 'monthly-last') {
+      config.weekday = currentWeekday;
+      config.weekOrdinal = 5;
+    } else if (repetitionType === 'yearly') {
+      config.day = currentDay;
+      config.month = currentMonth;
+    }
+
+    if (repetitionType === 'custom') {
+      const intervalNumber = parseInt(customInterval || '1', 10) || 1;
+      config.interval = intervalNumber;
+      config.unit = customUnit;
+
+      if (customUnit === 'week') {
+        if (selectedWeekdays.length > 0) {
+          config.weekdays = selectedWeekdays;
+        }
+      } else if (customUnit === 'month') {
+        config.monthOption = monthOption;
+        if (monthOption === 'day-of-month') {
+          config.day = currentDay;
+        } else {
+          config.weekday = currentWeekday;
+          config.weekOrdinal = getWeekOrdinal(now);
+        }
+      } else if (customUnit === 'year') {
+        const monthNumber = parseInt(yearMonth || `${currentMonth}`, 10) || currentMonth;
+        const dayNumber = parseInt(yearDay || `${currentDay}`, 10) || currentDay;
+        config.month = monthNumber;
+        config.day = dayNumber;
+      }
+    }
+
+    config.endType = endType;
+    if (endType === 'date' && endDate) {
+      config.endDate = endDate;
+    }
+
+    config.title = generateRepetitionTitle(config, repetitionType);
+
+    setGeneratedConfigJson(JSON.stringify(config, null, 2));
+  };
+
+  const handleEndDateChange = (event: any, selectedDate?: Date) => {
+    if (Platform.OS === 'android') {
+      setShowEndDatePicker(false);
+    }
+    if (selectedDate) {
+      // Formatear la fecha a AAAA-MM-DD
+      const year = selectedDate.getFullYear();
+      const month = String(selectedDate.getMonth() + 1).padStart(2, '0');
+      const day = String(selectedDate.getDate()).padStart(2, '0');
+      const formattedDate = `${year}-${month}-${day}`;
+      setEndDate(formattedDate);
     }
   };
 
@@ -1186,28 +1466,294 @@ export default function ActivitiesScreen() {
             </ThemedText>
           </ThemedView>
 
+          {/* Create Button */}
+          {!isRepetitionModalVisible && (
+            <TouchableOpacity style={styles.createButton} onPress={openRepetitionModal}>
+              <Ionicons name="add" size={24} color="#fff" />
+            </TouchableOpacity>
+          )}
+
           {/* Activities List */}
-          <ThemedView style={styles.activitiesContainer}>
-            {error ? (
-              <ThemedView style={styles.errorContainer}>
-                <ThemedText style={styles.errorText}>{error}</ThemedText>
-                <TouchableOpacity 
-                  style={styles.retryButton}
-                  onPress={fetchActivities}
-                >
-                  <ThemedText style={styles.retryButtonText}>Reintentar</ThemedText>
-                </TouchableOpacity>
-              </ThemedView>
-            ) : activities.length === 0 ? (
-              <ThemedView style={styles.emptyContainer}>
-                <ThemedText style={styles.emptyText}>
-                  No hay actividades asignadas
+          {!isRepetitionModalVisible && (
+            <ThemedView style={styles.activitiesContainer}>
+              {error ? (
+                <ThemedView style={styles.errorContainer}>
+                  <ThemedText style={styles.errorText}>{error}</ThemedText>
+                  <TouchableOpacity 
+                    style={styles.retryButton}
+                    onPress={fetchActivities}
+                  >
+                    <ThemedText style={styles.retryButtonText}>Reintentar</ThemedText>
+                  </TouchableOpacity>
+                </ThemedView>
+              ) : activities.length === 0 ? (
+                <ThemedView style={styles.emptyContainer}>
+                  <ThemedText style={styles.emptyText}>
+                    No hay actividades asignadas
+                  </ThemedText>
+                </ThemedView>
+              ) : (
+                activities.map(activity => renderActivityItem(activity))
+              )}
+            </ThemedView>
+          )}
+
+          {/* Repetition Configuration Form (inline, hides activities list) */}
+          {isRepetitionModalVisible && (
+            <ThemedView style={styles.repetitionModalContainer}>
+              <ScrollView
+                contentContainerStyle={{ paddingBottom: 16 }}
+                showsVerticalScrollIndicator={true}
+              >
+                <ThemedText style={styles.modalTitle}>
+                  Configuración de la actividad
                 </ThemedText>
-              </ThemedView>
-            ) : (
-              activities.map(activity => renderActivityItem(activity))
-            )}
-          </ThemedView>
+
+                {/* Tipo de repetición */}
+                <ThemedView style={styles.formGroup}>
+                  <ThemedText style={styles.formLabel}>Tipo de repetición:</ThemedText>
+                  <ThemedView style={styles.pickerContainer}>
+                    <Picker
+                      selectedValue={repetitionType}
+                      onValueChange={(value) => setRepetitionType(value as any)}
+                      style={styles.picker}
+                    >
+                      <Picker.Item label="Cada día" value="daily" />
+                      <Picker.Item label={weeklyLabel} value="weekly" />
+                      <Picker.Item label={monthlyWeekdayLabel} value="monthly-weekday" />
+                      <Picker.Item label={monthlyLastLabel} value="monthly-last" />
+                      <Picker.Item label={yearlyLabel} value="yearly" />
+                      <Picker.Item label="Todos los días laborales (lunes a viernes)" value="weekdays" />
+                      <Picker.Item label="Personalizado" value="custom" />
+                    </Picker>
+                  </ThemedView>
+                </ThemedView>
+
+                {/* Sección personalizada */}
+                {repetitionType === 'custom' && (
+                  <>
+                    <ThemedView style={styles.formGroup}>
+                      <ThemedText style={styles.formLabel}>Repetir cada:</ThemedText>
+                      <View style={styles.intervalRow}>
+                        <TextInput
+                          style={styles.intervalInput}
+                          value={customInterval}
+                          onChangeText={text => setCustomInterval(text.replace(/[^0-9]/g, '') || '1')}
+                          keyboardType="numeric"
+                        />
+                        <ThemedView style={styles.pickerContainer}>
+                          <Picker
+                            selectedValue={customUnit}
+                            onValueChange={(value) => setCustomUnit(value as any)}
+                            style={styles.picker}
+                          >
+                            <Picker.Item label="día" value="day" />
+                            <Picker.Item label="semana" value="week" />
+                            <Picker.Item label="mes" value="month" />
+                            <Picker.Item label="año" value="year" />
+                          </Picker>
+                        </ThemedView>
+                      </View>
+                    </ThemedView>
+
+                    {/* Días de la semana */}
+                    {customUnit === 'week' && (
+                      <ThemedView style={styles.formGroup}>
+                        <ThemedText style={styles.formLabel}>
+                          Se repite el... (puedes seleccionar múltiples días)
+                        </ThemedText>
+                        <View style={styles.weekdaysRow}>
+                          {[
+                            { value: 'monday', label: 'L' },
+                            { value: 'tuesday', label: 'M' },
+                            { value: 'wednesday', label: 'X' },
+                            { value: 'thursday', label: 'J' },
+                            { value: 'friday', label: 'V' },
+                            { value: 'saturday', label: 'S' },
+                            { value: 'sunday', label: 'D' },
+                          ].map(day => (
+                            <TouchableOpacity
+                              key={day.value}
+                              style={[
+                                styles.weekdayChip,
+                                selectedWeekdays.includes(day.value) && styles.weekdayChipSelected,
+                              ]}
+                              onPress={() => toggleWeekday(day.value)}
+                            >
+                              <ThemedText
+                                style={[
+                                  styles.weekdayChipText,
+                                  selectedWeekdays.includes(day.value) && styles.weekdayChipTextSelected,
+                                ]}
+                              >
+                                {day.label}
+                              </ThemedText>
+                            </TouchableOpacity>
+                          ))}
+                        </View>
+                      </ThemedView>
+                    )}
+
+                    {/* Opciones mes */}
+                    {customUnit === 'month' && (
+                      <ThemedView style={styles.formGroup}>
+                        <ThemedText style={styles.formLabel}>Opción de mes:</ThemedText>
+                        <View style={styles.chipGroup}>
+                          {[
+                            { value: 'day-of-month', label: 'Día del mes actual' },
+                            { value: 'weekday-of-month', label: 'Mismo día de semana' },
+                          ].map(option => (
+                            <TouchableOpacity
+                              key={option.value}
+                              style={[
+                                styles.chip,
+                                monthOption === option.value && styles.chipSelected,
+                              ]}
+                              onPress={() => setMonthOption(option.value as any)}
+                            >
+                              <ThemedText
+                                style={[
+                                  styles.chipText,
+                                  monthOption === option.value && styles.chipTextSelected,
+                                ]}
+                              >
+                                {option.label}
+                              </ThemedText>
+                            </TouchableOpacity>
+                          ))}
+                        </View>
+                      </ThemedView>
+                    )}
+
+                    {/* Opciones año */}
+                    {customUnit === 'year' && (
+                      <ThemedView style={styles.formGroup}>
+                        <ThemedText style={styles.formLabel}>Configuración anual:</ThemedText>
+                        <View style={styles.yearRow}>
+                          <View style={styles.yearField}>
+                            <ThemedText style={styles.formLabelSmall}>Mes (1-12)</ThemedText>
+                            <TextInput
+                              style={styles.intervalInput}
+                              value={yearMonth}
+                              onChangeText={text =>
+                                setYearMonth(text.replace(/[^0-9]/g, ''))
+                              }
+                              keyboardType="numeric"
+                            />
+                          </View>
+                          <View style={styles.yearField}>
+                            <ThemedText style={styles.formLabelSmall}>Día (1-31)</ThemedText>
+                            <TextInput
+                              style={styles.intervalInput}
+                              value={yearDay}
+                              onChangeText={text =>
+                                setYearDay(text.replace(/[^0-9]/g, ''))
+                              }
+                              keyboardType="numeric"
+                            />
+                          </View>
+                        </View>
+                      </ThemedView>
+                    )}
+                  </>
+                )}
+
+                {/* Terminación */}
+                <ThemedView style={styles.formGroup}>
+                  <ThemedText style={styles.formLabel}>Termina...</ThemedText>
+                  <ThemedView style={styles.radioGroup}>
+                    <TouchableOpacity
+                      style={styles.radioOption}
+                      onPress={() => setEndType('never')}
+                    >
+                      <ThemedView style={[
+                        styles.radioCircle,
+                        endType === 'never' ? styles.radioSelected : styles.radioUnselected
+                      ]}>
+                        {endType === 'never' && <ThemedView style={styles.radioInner} />}
+                      </ThemedView>
+                      <ThemedText style={styles.radioLabel}>Nunca</ThemedText>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.radioOption}
+                      onPress={() => {
+                        setEndType('date');
+                        if (!endDate) {
+                          const today = new Date().toISOString().split('T')[0];
+                          setEndDate(today);
+                        }
+                      }}
+                    >
+                      <ThemedView style={[
+                        styles.radioCircle,
+                        endType === 'date' ? styles.radioSelected : styles.radioUnselected
+                      ]}>
+                        {endType === 'date' && <ThemedView style={styles.radioInner} />}
+                      </ThemedView>
+                      <ThemedText style={styles.radioLabel}>El...</ThemedText>
+                    </TouchableOpacity>
+                  </ThemedView>
+                </ThemedView>
+
+                {endType === 'date' && (
+                  <ThemedView style={styles.formGroup}>
+                    <ThemedText style={styles.formLabel}>Fecha de finalización:</ThemedText>
+                    <TouchableOpacity
+                      style={styles.dateButton}
+                      onPress={() => setShowEndDatePicker(true)}
+                    >
+                      <ThemedText style={styles.dateButtonText}>
+                        {endDate || 'Seleccionar fecha'}
+                      </ThemedText>
+                      <Ionicons name="calendar" size={20} color="#007AFF" />
+                    </TouchableOpacity>
+                    {showEndDatePicker && (
+                      <DateTimePicker
+                        value={endDate ? new Date(endDate) : new Date()}
+                        mode="date"
+                        display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                        onChange={handleEndDateChange}
+                      />
+                    )}
+                  </ThemedView>
+                )}
+
+                <TouchableOpacity
+                  style={styles.generateButton}
+                  onPress={generateRepetitionConfig}
+                >
+                  <ThemedText style={styles.generateButtonText}>
+                    Generar Configuración JSON
+                  </ThemedText>
+                </TouchableOpacity>
+
+                {generatedConfigJson ? (
+                  <ThemedView style={styles.jsonOutputContainer}>
+                    <ThemedText style={styles.jsonOutputLabel}>
+                      Configuración JSON generada:
+                    </ThemedText>
+                    <TextInput
+                      style={styles.jsonOutputText}
+                      value={generatedConfigJson}
+                      editable={false}
+                      multiline
+                    />
+                  </ThemedView>
+                ) : null}
+
+                <ThemedView style={styles.repetitionModalButtons}>
+                  <TouchableOpacity
+                    style={[styles.modalButton, styles.modalCancelButton]}
+                    onPress={closeRepetitionModal}
+                  >
+                    <ThemedText style={styles.modalCancelButtonText}>
+                      Cerrar
+                    </ThemedText>
+                  </TouchableOpacity>
+                </ThemedView>
+              </ScrollView>
+            </ThemedView>
+          )}
         </ThemedView>
       </ScrollView>
       <AppFooter />
@@ -1217,108 +1763,6 @@ export default function ActivitiesScreen() {
         onHomePress={handleHomePress}
         currentRoute="Activities"
       />
-
-      {/* Bitacora Modal */}
-      <Modal
-        visible={isBitacoraModalVisible}
-        transparent={true}
-        animationType="fade"
-        onRequestClose={handleBitacoraCancel}
-      >
-        <ThemedView style={styles.modalOverlay}>
-          <ThemedView style={styles.modalContainer}>
-            <ThemedText style={styles.modalTitle}>
-              Agregar Bitácora
-            </ThemedText>
-            <ThemedText style={styles.modalSubtitle}>
-              Ingresa una descripción de la actividad realizada (opcional):
-            </ThemedText>
-            
-            <TextInput
-              style={styles.bitacoraInput}
-              value={bitacoraText}
-              onChangeText={setBitacoraText}
-              placeholder="Ej: Completé la revisión del equipo, realicé mantenimiento preventivo..."
-              placeholderTextColor="#999"
-              multiline={true}
-              numberOfLines={4}
-              textAlignVertical="top"
-            />
-
-            {/* Image capture button */}
-            <TouchableOpacity
-              style={styles.captureImageButton}
-              onPress={openCameraForActivity}
-            >
-              <Ionicons name="camera" size={20} color="#007AFF" />
-              <ThemedText style={styles.captureImageButtonText}>
-                {activityImageBase64 ? 'Cambiar imagen' : 'Capturar imagen (opcional)'}
-              </ThemedText>
-            </TouchableOpacity>
-
-            {/* Show captured image preview */}
-            {activityImageBase64 && (
-              <ThemedView style={styles.imagePreviewContainer}>
-                <ThemedText style={styles.imagePreviewTitle}>Imagen capturada:</ThemedText>
-                <Image
-                  source={{ uri: activityImageBase64.startsWith('data:') ? activityImageBase64 : `data:image/jpeg;base64,${activityImageBase64}` }}
-                  style={styles.imagePreview}
-                  resizeMode="contain"
-                />
-              </ThemedView>
-            )}
-            
-            <ThemedView style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.modalCancelButton]}
-                onPress={handleBitacoraCancel}
-              >
-                <ThemedText style={styles.modalCancelButtonText}>
-                  {getActionIcon('cancel')}
-                </ThemedText>
-              </TouchableOpacity>
-              
-              <TouchableOpacity
-                style={[styles.modalButton, styles.modalConfirmButton]}
-                onPress={handleBitacoraConfirm}
-              >
-                <ThemedText style={styles.modalConfirmButtonText}>
-                  {getActionIcon('confirm')}
-                </ThemedText>
-              </TouchableOpacity>
-            </ThemedView>
-          </ThemedView>
-        </ThemedView>
-      </Modal>
-
-      {/* Camera Modal */}
-      <Modal
-        visible={isCameraVisible}
-        animationType="slide"
-        onRequestClose={() => setIsCameraVisible(false)}
-      >
-        <ThemedView style={{ flex: 1, backgroundColor: '#000' }}>
-          <CameraView
-            ref={cameraRef}
-            style={{ flex: 1 }}
-            facing="back"
-          >
-            <TouchableOpacity
-              style={styles.cameraCloseButton}
-              onPress={() => setIsCameraVisible(false)}
-            >
-              <Ionicons name="close" size={30} color="#000000" />
-            </TouchableOpacity>
-            
-            <TouchableOpacity
-              style={styles.cameraCaptureButton}
-              onPress={takePicture}
-            >
-              <ThemedView style={styles.cameraCaptureButtonInner} />
-            </TouchableOpacity>
-          </CameraView>
-        </ThemedView>
-      </Modal>
     </ThemedView>
   );
 }
@@ -1356,6 +1800,18 @@ const styles = StyleSheet.create({
     fontSize: 16,
     opacity: 0.7,
     textAlign: 'center',
+  },
+  createButton: {
+    backgroundColor: '#007AFF',
+    padding: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  createButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
   },
   loadingContainer: {
     flex: 1,
@@ -1578,6 +2034,184 @@ const styles = StyleSheet.create({
     gap: 12,
     backgroundColor: '#FAFAFA',
   },
+  repetitionModalContainer: {
+    width: '100%',
+    maxWidth: 600,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    padding: 20,
+    marginBottom: 20, 
+  },
+  formGroup: {
+    marginTop: 12,
+    marginBottom: 12,
+  },
+  formLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 8,
+  },
+  formLabelSmall: {
+    fontSize: 12,
+    fontWeight: '500',
+    marginBottom: 4,
+  },
+  pickerContainer: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    backgroundColor: '#F9F9F9',
+    overflow: 'hidden',
+    minHeight: 50,
+  },
+  picker: {
+    width: '100%',
+    height: 50,
+    color: '#000000',
+  },
+  radioGroup: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    backgroundColor: '#fff',
+  },
+  radioOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginRight: 20,
+    marginBottom: 10,
+  },
+  chipGroup: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  chip: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    backgroundColor: '#F0F0F0',
+  },
+  chipSmall: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 14,
+    backgroundColor: '#F0F0F0',
+  },
+  chipSelected: {
+    backgroundColor: '#007AFF',
+  },
+  chipText: {
+    fontSize: 12,
+    color: '#333',
+  },
+  chipTextSelected: {
+    color: '#fff',
+    fontWeight: '600',
+  },
+  intervalRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  intervalInput: {
+    width: 70,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    fontSize: 14,
+    backgroundColor: '#F9F9F9',
+    color: '#000000',
+  },
+  weekdaysRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginTop: 4,
+  },
+  weekdayChip: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+  },
+  weekdayChipSelected: {
+    backgroundColor: '#007AFF',
+    borderColor: '#007AFF',
+  },
+  weekdayChipText: {
+    fontSize: 12,
+    color: '#333',
+    fontWeight: '600',
+  },
+  weekdayChipTextSelected: {
+    color: '#fff',
+  },
+  yearRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  yearField: {
+    flex: 1,
+  },
+  dateButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    padding: 12,
+    backgroundColor: '#F9F9F9',
+  },
+  dateButtonText: {
+    fontSize: 16,
+    color: '#000000',
+  },
+  generateButton: {
+    marginTop: 16,
+    backgroundColor: '#007AFF',
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  generateButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  jsonOutputContainer: {
+    marginTop: 16,
+    backgroundColor: '#2d3748',
+    padding: 12,
+    borderRadius: 8,
+  },
+  jsonOutputLabel: {
+    color: '#e2e8f0',
+    marginBottom: 8,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  jsonOutputText: {
+    minHeight: 100,
+    color: '#e2e8f0',
+    fontFamily: 'Courier',
+    fontSize: 12,
+  },
+  repetitionModalButtons: {
+    marginTop: 16,
+    alignItems: 'flex-end',
+  },
   modalButton: {
     flex: 1,
     paddingVertical: 12,
@@ -1678,6 +2312,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#fafafa',
+    marginRight: 8,
   },
   radioSelected: {
     borderColor: '#007AFF',
