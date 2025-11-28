@@ -22,9 +22,20 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         const puestos_return: { id: number, nombre: string, plazas: { id: number, nombre: string }[] }[] = [];
         for (const puesto of puestos) {
             const plazas = await prisma.e_estructura_plazas.findMany({ where: { puesto_id: puesto.id } });
-            const plazas_return: { id: number, nombre: string }[] = [];
+            const plazas_return: { id: number, nombre: string, empleados: { nombre: string, primer_apellido: string, segundo_apellido: string }[] }[] = [];
             for (const plaza of plazas) {
-                plazas_return.push({ id: plaza.id, nombre: plaza.nombre });
+                const empleados_plaza = await prisma.c_empleado_plaza.findMany({ where: { plaza_id: plaza.id } });
+                const empleados_plaza_return: { nombre: string, primer_apellido: string, segundo_apellido: string }[] = [];
+                for (const empleado_plaza of empleados_plaza) {
+                    if (empleado_plaza.empleado_id) {
+                        const empleado = await prisma.c_empleado.findUnique({ where: { id: empleado_plaza.empleado_id } });
+                        if (empleado == null) continue;
+                        if (empleado.fecha_contratacion == null) continue;
+                        if (empleado.estado == "BA") continue;
+                        empleados_plaza_return.push({ nombre: empleado.nombre || "", primer_apellido: empleado.primer_apellido || "", segundo_apellido: empleado.segundo_apellido || "" });
+                    }
+                }
+                plazas_return.push({ id: plaza.id, nombre: plaza.nombre, empleados: empleados_plaza_return });
             }
             puestos_return.push({ id: puesto.id, nombre: puesto.nombre, plazas: plazas_return });
         }
