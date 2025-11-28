@@ -499,6 +499,7 @@ export default function MarcarIngresoSalidaScreen() {
               getPuestosCorpo(attendanceData.marca.corpo.id),
               getTrainings(attendanceData.marca.id),
               getVoiceNotes(attendanceData.marca.id),
+              getArticulos()
             ]);
           }
         }
@@ -871,6 +872,35 @@ export default function MarcarIngresoSalidaScreen() {
     const data = await response.json();
     if (data.status) {
       await AsyncStorage.setItem('puestos_corpo_cache', JSON.stringify(data.puestos));
+    }
+  }
+  
+  const getArticulos = async () => {
+    // Eliminar actions
+    await AsyncStorage.removeItem('articulos_actions');
+    await AsyncStorage.removeItem('articulos_cache');
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+    const token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      throw new Error('No authentication token found');
+    }
+    const response = await fetch(`${apiUrl}/api/articulos`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status} getArticulos`);
+    }
+    const data = await response.json();
+    if (data.status) {
+      await AsyncStorage.setItem('articulos_cache', JSON.stringify(data.articulos));
     }
   }
 

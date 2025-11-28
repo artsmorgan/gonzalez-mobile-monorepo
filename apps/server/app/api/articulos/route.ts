@@ -1,0 +1,21 @@
+import { NextRequest, NextResponse } from "next/server";
+import { verifyAccessToken } from "../../../utils/verifyToken";
+import { prisma } from "../../../utils/prismaClient";
+
+export async function GET(req: NextRequest) {
+    try {
+        const { valid, payload, message } = verifyAccessToken(req);
+        if (!valid) {
+            return NextResponse.json({ status: false, message: message }, { status: 401 });
+        }
+        const articulos = await prisma.n_articulo_corpo_puesto.findMany();
+        const articulos_return: { id: number, nombre: string }[] = [];
+        for (const articulo of articulos) {
+            articulos_return.push({ id: articulo.id, nombre: articulo.nombre });
+        }
+        return NextResponse.json({ status: true, articulos: articulos_return }, { status: 200 });
+    } catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        return NextResponse.json({ message: errorMessage }, { status: 500 });
+    }
+}
