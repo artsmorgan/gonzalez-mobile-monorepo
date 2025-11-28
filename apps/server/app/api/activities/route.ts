@@ -25,9 +25,9 @@ export async function POST(req: NextRequest) {
             );
         }
 
-        const { marca_id, nombre_actividad, fecha_inicio, frecuencia, es_revision_equipo, descripcion_actividad, reglas, puestos_plazas } = await req.json();
+        const { marca_id, nombre_actividad, fecha_inicio, frecuencia, es_revision_equipo, descripcion_actividad, reglas, puestos_plazas, firma_responsable } = await req.json();
 
-        if (!marca_id || !nombre_actividad || !fecha_inicio || !frecuencia || !es_revision_equipo || !descripcion_actividad || !reglas) {
+        if (!marca_id || !nombre_actividad || !fecha_inicio || !frecuencia || !es_revision_equipo || !descripcion_actividad || !reglas || !firma_responsable) {
             console.log("marca_id", marca_id);
             console.log("nombre_actividad", nombre_actividad);
             console.log("fecha_inicio", fecha_inicio);
@@ -36,6 +36,7 @@ export async function POST(req: NextRequest) {
             console.log("descripcion_actividad", descripcion_actividad);
             console.log("reglas", reglas);
             console.log("puestos_plazas", puestos_plazas);
+            console.log("firma_responsable", firma_responsable);
             console.log("--------------------------------");
             return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 200 });
         }
@@ -79,6 +80,7 @@ export async function POST(req: NextRequest) {
                 es_revision_equipo: es_revision_equipo,
                 descripcion_actividad: descripcion_actividad,
                 reglas: reglas,
+                firma_responsable: firma_responsable,
             }
         });
 

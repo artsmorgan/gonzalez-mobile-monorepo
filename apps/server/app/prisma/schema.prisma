@@ -3197,6 +3197,7 @@ model e_actividad_corpo {
   es_revision_equipo      Boolean
   descripcion_actividad   String                    @db.LongText
   reglas                  String                    @db.LongText
+  firma_responsable       String                    @db.LongText
   e_estructura_cliente    e_estructura_cliente      @relation(fields: [cliente_id], references: [id], onDelete: Cascade)
   e_estructura_contrato   e_estructura_contrato     @relation(fields: [contrato_id], references: [id], onDelete: Cascade)
   e_estructura_sucursal   e_estructura_sucursal     @relation(fields: [corpo_id], references: [id], onDelete: Cascade)
