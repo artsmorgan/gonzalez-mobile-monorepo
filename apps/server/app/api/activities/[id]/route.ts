@@ -90,7 +90,14 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             return NextResponse.json({ status: true, message: "Actividad marcada correctamente" }, { status: 200 });
         }
         else {
-            await prisma.e_actividad_corpo_plaza.update({ where: { id }, data: { marcada: false, updated_at: toZonedTime(new Date(), "America/Costa_Rica") } });
+            if (actividad_marcada.file_name) {
+                const path_file = path.join(process.cwd(), "public", "uploads", "activities", actividad_marcada.id.toString(), actividad_marcada.file_name);
+                if (fs.existsSync(path_file)) {
+                    fs.unlinkSync(path_file);
+                }
+            }
+
+            await prisma.e_actividad_corpo_plaza.update({ where: { id }, data: { marcada: false, file_name: null, updated_at: toZonedTime(new Date(), "America/Costa_Rica") } });
 
             return NextResponse.json({ status: true, message: "Actividad desmarcada correctamente" }, { status: 200 });
         }

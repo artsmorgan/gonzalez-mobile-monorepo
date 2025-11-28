@@ -27,7 +27,7 @@ export async function POST(req: NextRequest) {
 
         const { marca_id, nombre_actividad, fecha_inicio, frecuencia, es_revision_equipo, descripcion_actividad, reglas, puestos_plazas, firma_responsable } = await req.json();
 
-        if (!marca_id || !nombre_actividad || !fecha_inicio || !frecuencia || !es_revision_equipo || !descripcion_actividad || !reglas || !firma_responsable) {
+        if (!marca_id || !nombre_actividad || !fecha_inicio || !frecuencia || es_revision_equipo === undefined || !descripcion_actividad || !reglas || !firma_responsable) {
             console.log("marca_id", marca_id);
             console.log("nombre_actividad", nombre_actividad);
             console.log("fecha_inicio", fecha_inicio);
@@ -75,7 +75,7 @@ export async function POST(req: NextRequest) {
                 puesto_id: null,
                 plaza_id: null,
                 nombre_actividad: nombre_actividad,
-                fecha_inicio: fecha_inicio,
+                fecha_inicio: new Date(fecha_inicio),
                 frecuencia: frecuencia,
                 es_revision_equipo: es_revision_equipo,
                 descripcion_actividad: descripcion_actividad,
@@ -85,7 +85,9 @@ export async function POST(req: NextRequest) {
         });
 
         if (actividad_corpo) {
-            for (const puesto of puestos_plazas) {
+            const puestos_plazas_parse = JSON.parse(puestos_plazas);
+            for (const puesto of puestos_plazas_parse) {
+                console.log("puesto", puesto);
                 const ps = await prisma.e_estructura_puesto.findUnique({ where: { id: puesto.puesto_id } });
                 if (ps) {
                     if (puesto.plazas.length > 0) {
@@ -117,6 +119,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ status: true, message: "Actividad creada correctamente" }, { status: 200 });
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        console.log("errorMessage", errorMessage);
         return NextResponse.json({ message: errorMessage }, { status: 500 });
     }
 }
