@@ -19,9 +19,14 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
         const puestos = await prisma.e_estructura_puesto.findMany({ where: { sucursal_id: corpo.id } });
 
-        const puestos_return: { id: number, nombre: string }[] = [];
+        const puestos_return: { id: number, nombre: string, plazas: { id: number, nombre: string }[] }[] = [];
         for (const puesto of puestos) {
-            puestos_return.push({ id: puesto.id, nombre: puesto.nombre });
+            const plazas = await prisma.e_estructura_plazas.findMany({ where: { puesto_id: puesto.id } });
+            const plazas_return: { id: number, nombre: string }[] = [];
+            for (const plaza of plazas) {
+                plazas_return.push({ id: plaza.id, nombre: plaza.nombre });
+            }
+            puestos_return.push({ id: puesto.id, nombre: puesto.nombre, plazas: plazas_return });
         }
         return NextResponse.json({ status: true, puestos: puestos_return }, { status: 200 });
     }
