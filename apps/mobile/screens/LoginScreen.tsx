@@ -1,11 +1,13 @@
 import { ThemedText } from '../components/ThemedText';
 import { ThemedView } from '../components/ThemedView';
 import { useAuth } from '../contexts/AuthContext';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../App';
-import React, { useState } from 'react';
-import { ActivityIndicator, Alert, StyleSheet, TextInput, TouchableOpacity } from 'react-native';
+import React, { useState, useCallback } from 'react';
+import { ActivityIndicator, Alert, StyleSheet, TextInput, TouchableOpacity, View } from 'react-native';
+import Ionicons from '@expo/vector-icons/build/Ionicons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 type LoginScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Login'>;
 
@@ -13,8 +15,28 @@ export default function LoginScreen() {
   const [cedula, setCedula] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [rememberCedula, setRememberCedula] = useState(false);
   const { login } = useAuth();
   const navigation = useNavigation<LoginScreenNavigationProp>();
+
+  // Cargar cédula guardada cuando la pantalla se enfoque
+  useFocusEffect(
+    useCallback(() => {
+      const loadSavedCedula = async () => {
+        try {
+          const savedCedula = await AsyncStorage.getItem('remembered_cedula');
+          if (savedCedula) {
+            setCedula(savedCedula);
+            setRememberCedula(true);
+          }
+        } catch (error) {
+          console.error('Error loading saved cedula:', error);
+        }
+      };
+      loadSavedCedula();
+    }, [])
+  );
 
   const handleLogin = async () => {
     if (!cedula.trim() || !password.trim()) {
@@ -27,6 +49,17 @@ export default function LoginScreen() {
       const result = await login(cedula.trim(), password);
       
       if (result.success) {
+        // Guardar o eliminar la cédula según el checkbox
+        try {
+          if (rememberCedula) {
+            await AsyncStorage.setItem('remembered_cedula', cedula.trim());
+          } else {
+            await AsyncStorage.removeItem('remembered_cedula');
+          }
+        } catch (storageError) {
+          console.error('Error saving/removing cedula:', storageError);
+        }
+        
         // Login successful, navigate to home
         navigation.replace('Home');
       } else {
@@ -64,19 +97,46 @@ export default function LoginScreen() {
             autoCorrect={false}
             keyboardType="numeric"
           />
+          <TouchableOpacity
+            style={styles.checkboxContainer}
+            onPress={() => setRememberCedula(!rememberCedula)}
+            activeOpacity={0.7}
+          >
+            <View style={[
+              styles.checkbox,
+              rememberCedula ? styles.checkboxChecked : styles.checkboxUnchecked
+            ]}>
+              {rememberCedula && (
+                <Ionicons name="checkmark" size={16} color="#fff" />
+              )}
+            </View>
+            <ThemedText style={styles.checkboxLabel}>Recordar cédula</ThemedText>
+          </TouchableOpacity>
         </ThemedView>
 
         <ThemedView style={styles.inputContainer}>
           <ThemedText style={styles.label}>Contraseña</ThemedText>
-          <TextInput
-            style={styles.input}
-            value={password}
-            onChangeText={setPassword}
-            placeholder="Ingrese su contraseña"
-            secureTextEntry
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
+          <View style={styles.passwordInputContainer}>
+            <TextInput
+              style={styles.passwordInput}
+              value={password}
+              onChangeText={setPassword}
+              placeholder="Ingrese su contraseña"
+              secureTextEntry={!showPassword}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <TouchableOpacity
+              style={styles.eyeIcon}
+              onPress={() => setShowPassword(!showPassword)}
+            >
+              <Ionicons
+                name={showPassword ? 'eye-off' : 'eye'}
+                size={24}
+                color="#666666"
+              />
+            </TouchableOpacity>
+          </View>
         </ThemedView>
 
         <TouchableOpacity 
@@ -136,6 +196,25 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff',
     color: '#000000',
   },
+  passwordInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#cccccc',
+    borderRadius: 8,
+    backgroundColor: '#ffffff',
+  },
+  passwordInput: {
+    flex: 1,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    fontSize: 16,
+    color: '#000000',
+  },
+  eyeIcon: {
+    paddingRight: 16,
+    paddingLeft: 8,
+  },
   loginButton: {
     backgroundColor: '#007AFF',
     paddingHorizontal: 32,
@@ -161,6 +240,32 @@ const styles = StyleSheet.create({
     color: '#007AFF',
     fontSize: 14,
     textDecorationLine: 'underline',
+  },
+  checkboxContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  checkbox: {
+    width: 20,
+    height: 20,
+    borderRadius: 4,
+    borderWidth: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 8,
+  },
+  checkboxChecked: {
+    backgroundColor: '#007AFF',
+    borderColor: '#007AFF',
+  },
+  checkboxUnchecked: {
+    backgroundColor: '#ffffff',
+    borderColor: '#cccccc',
+  },
+  checkboxLabel: {
+    fontSize: 14,
+    color: '#000000',
   },
 });
 

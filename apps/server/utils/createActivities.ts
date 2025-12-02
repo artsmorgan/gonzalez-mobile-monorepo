@@ -73,7 +73,7 @@ export async function getActivities(marcaDia: any) {
                         for (const item of equipo_items) {
                             const articulo = await prisma.n_articulo_corpo_puesto.findFirst({ where: { id: item.id } });
                             if (articulo) {
-                                const item_add: { id: number, nombre: string, reglas: { nombre: string, valor: string }[], revision_equipo: { id: number, es_correcto: boolean, motivo_incorrecto: string } | null } = {
+                                const item_add: { id: number, nombre: string, reglas: { nombre: string, valor: string }[], revision_equipo: { id: number, marcada: boolean, imagen_adjunta: string | null, es_correcto: boolean, motivo_incorrecto: string } | null } = {
                                     id: articulo.id,
                                     nombre: articulo.nombre,
                                     reglas: [],

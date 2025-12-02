@@ -43,6 +43,8 @@ export async function createNote({
             throw new Error('No authentication token found');
         }
         
+        requestData.marca_id = marcaId;
+
         const response = await fetch(`${apiUrl}/api/puestos/${puestoId}/notas`, {
             method: 'POST',
             headers: {
@@ -85,6 +87,18 @@ export async function updateNote({
     logout
 }: UpdateNoteParams) {
     try {
+        const currentMarcaData = await AsyncStorage.getItem('current_marca_data');
+        if (!currentMarcaData) {
+            throw new Error('Current marca data not found');
+        }
+        
+        const currentMarcaDataObject = JSON.parse(currentMarcaData);
+        const marcaId = currentMarcaDataObject.id;
+
+        if (!marcaId) {
+            throw new Error('Marca ID not found');
+        }
+
         const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
         if (!apiUrl) {
             throw new Error('Server URL not configured');
@@ -98,6 +112,8 @@ export async function updateNote({
         if (!token) {
             throw new Error('No authentication token found');
         }
+
+        requestData.marca_id = marcaId;
         
         const response = await fetch(`${apiUrl}/api/puestos/${puestoId}/notas/${noteId}`, {
             method: 'PUT',

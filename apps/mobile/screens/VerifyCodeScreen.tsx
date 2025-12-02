@@ -10,6 +10,31 @@ import { ActivityIndicator, Alert, StyleSheet, TextInput, TouchableOpacity, View
 type VerifyCodeScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'VerifyCode'>;
 type VerifyCodeScreenRouteProp = RouteProp<RootStackParamList, 'VerifyCode'>;
 
+// Función para ocultar el correo electrónico
+const maskEmail = (text: string): string => {
+  // Expresión regular para encontrar correos electrónicos
+  const emailRegex = /([a-zA-Z0-9._-]+)@([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/g;
+  
+  return text.replace(emailRegex, (match, localPart, domain) => {
+    // Si la parte local tiene 3 o más caracteres
+    if (localPart.length >= 3) {
+      const firstTwo = localPart.substring(0, 2);
+      const lastOne = localPart.substring(localPart.length - 1);
+      const middleLength = localPart.length - 3;
+      const maskedMiddle = '*'.repeat(middleLength);
+      return `${firstTwo}${maskedMiddle}${lastOne}@${domain}`;
+    }
+    // Si tiene 2 caracteres, mostrar solo los 2 primeros
+    else if (localPart.length === 2) {
+      return `${localPart.substring(0, 2)}@${domain}`;
+    }
+    // Si tiene 1 carácter, mostrar solo ese
+    else {
+      return `${localPart}@${domain}`;
+    }
+  });
+};
+
 export default function VerifyCodeScreen() {
   const [code, setCode] = useState(['', '', '', '', '', '']);
   const [isLoading, setIsLoading] = useState(false);
@@ -109,7 +134,7 @@ export default function VerifyCodeScreen() {
         
         {message && (
           <ThemedText style={styles.serverMessage}>
-            {message}
+            {maskEmail(message)}
           </ThemedText>
         )}
         
