@@ -106,7 +106,7 @@ export default function MarcarIngresoSalidaScreen() {
   const [absentReason, setAbsentReason] = useState('');
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const navigation = useNavigation<MarcarIngresoSalidaScreenNavigationProp>();
-  
+  const [horaAccion, setHoraAccion] = useState<number | null>(null);
   useEffect(() => {
     const handler = () => {
       fetchAttendanceStatus();
@@ -147,6 +147,12 @@ export default function MarcarIngresoSalidaScreen() {
 
   const fetchAttendanceStatus = async () => {
     try {
+
+      const horaAccion = await getHoraAccion();
+      if (horaAccion) {
+        setHoraAccion(horaAccion);
+      }
+
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) {
         throw new Error('Server URL not configured');
@@ -217,8 +223,6 @@ export default function MarcarIngresoSalidaScreen() {
       let marca_send = null;
       let result = null;
       let data = null;
-
-
 
       if (networkState.isConnected && networkState.isInternetReachable) {
 
@@ -332,7 +336,6 @@ export default function MarcarIngresoSalidaScreen() {
     let change_available = true;
     let is_late = false;
     
-    const horaAccion = await getHoraAccion();
     if (!horaAccion) {
       throw new Error('Hora de acción not found');
     }
@@ -421,7 +424,6 @@ export default function MarcarIngresoSalidaScreen() {
       if (attendanceData.estado !== 'No ingresado') {
         type = 'salida';
 
-        const horaAccion = await getHoraAccion();
         if (!horaAccion) {
           throw new Error('Hora de acción not found');
         }
@@ -455,7 +457,6 @@ export default function MarcarIngresoSalidaScreen() {
       throw new Error('No se encontró la marca');
     }
     
-    const horaAccion = await getHoraAccion();
     if (!horaAccion) {
       throw new Error('Hora de acción not found');
     }
@@ -1052,6 +1053,69 @@ export default function MarcarIngresoSalidaScreen() {
     }
   }
 
+  const convertDateToLocal = (date: string) => {
+    const dateSplit = date.split('T');
+    return dateSplit[0] + ' a las ' + getNextTime(date);
+  };
+
+  const getLateTime = (attendanceData: AttendanceSuccessResponse, horaAccion: number | null) => {
+    const fecha = attendanceData.marca.fecha.split('T')[0];
+    const horaInicio = attendanceData.marca.hora_inicio.split('T')[1];
+    const inicio = fecha + 'T' + horaInicio;
+    if (!horaAccion) {
+      return '--:--';
+    }
+    const ahora = new Date(horaAccion).toISOString();
+
+    // Convertir a Date objects para comparar
+    const inicioDate = new Date(inicio);
+    const ahoraDate = new Date(ahora);
+
+    // Validar si ahora es mayor que inicio
+    if (ahoraDate > inicioDate) {
+      // Calcular la diferencia en milisegundos
+      const diferenciaMs = ahoraDate.getTime() - inicioDate.getTime();
+      
+      // Convertir a segundos, minutos y horas
+      const segundos = Math.floor(diferenciaMs / 1000);
+      const minutos = Math.floor(segundos / 60);
+      const horas = Math.floor(minutos / 60);
+      
+      // Obtener los valores restantes
+      const segundosRestantes = segundos % 60;
+      const minutosRestantes = minutos % 60;
+      
+      // Construir el texto legible
+      const partes: string[] = [];
+      
+      if (horas > 0) {
+        partes.push(`${horas} ${horas === 1 ? 'hora' : 'horas'}`);
+      }
+      if (minutosRestantes > 0) {
+        partes.push(`${minutosRestantes} ${minutosRestantes === 1 ? 'min' : 'mins'}`);
+      }
+      if (segundosRestantes > 0) {
+        partes.push(`${segundosRestantes} ${segundosRestantes === 1 ? 'seg' : 'segs'}`);
+      }
+      
+      // Si no hay diferencia significativa, mostrar solo segundos
+      if (partes.length === 0) {
+        return '0 segundos';
+      }
+      
+      // Unir las partes con comas y "y" antes de la última
+      if (partes.length === 1) {
+        return partes[0];
+      } else if (partes.length === 2) {
+        return `${partes[0]} y ${partes[1]}`;
+      } else {
+        return `${partes.slice(0, -1).join(', ')} y ${partes[partes.length - 1]}`;
+      }
+    }
+
+    return '--:--';
+  };
+
   const getActivities = async (marcaId: number) => {  
     // Eliminar actions
     await AsyncStorage.removeItem('activities_actions');
@@ -1374,10 +1438,18 @@ export default function MarcarIngresoSalidaScreen() {
             </ThemedView>
           ) : attendanceData ? (
             <ThemedView style={styles.contentContainer}>
-              <ThemedText style={styles.currentTime}>{attendanceData ? getNextTime(attendanceData?.current_time) : ''}</ThemedText>
+              <ThemedView style={styles.infoCard}>
+                <ThemedText style={styles.currentTimeTitle}>Hora actual</ThemedText>
+                <ThemedText style={styles.currentTime}>{attendanceData ? getNextTime(attendanceData?.current_time) : ''}</ThemedText>
+              </ThemedView>
               {/* Work Information Card */}
               <ThemedView style={styles.infoCard}>
                 <ThemedText style={styles.infoCardTitle}>Información Laboral</ThemedText>
+                
+                <ThemedView style={styles.infoRow}>
+                  <ThemedText style={styles.infoLabel}>Fecha de la marca:</ThemedText>
+                  <ThemedText style={styles.infoValue}>{attendanceData.marca.fecha.split('T')[0]}</ThemedText>
+                </ThemedView>
                 
                 <ThemedView style={styles.infoRow}>
                   <ThemedText style={styles.infoLabel}>Empresa:</ThemedText>
@@ -1429,6 +1501,16 @@ export default function MarcarIngresoSalidaScreen() {
                       {attendanceData.estado === 'Ingresado' ? 'Ingresado' : 'No ingresado'}
                     </ThemedText>
                   </ThemedView>
+                  {attendanceData.estado === 'Ingresado' && attendanceData.marca.hora_entrada_digitada != null && (
+                    <ThemedView style={styles.enterAtContainer}>
+                      <ThemedText style={styles.enterAtLabel}>
+                        Fecha y hora de ingreso:
+                      </ThemedText>
+                      <ThemedText style={styles.enterAtText}>
+                        {convertDateToLocal(attendanceData.marca.hora_entrada_digitada)}
+                      </ThemedText>
+                    </ThemedView>
+                  )}
                 </ThemedView>
 
                 {/* Next Time */}
@@ -1443,7 +1525,7 @@ export default function MarcarIngresoSalidaScreen() {
                 {attendanceData.is_late && (
                   <ThemedView style={styles.lateWarning}>
                     <ThemedText style={styles.lateWarningText}>
-                      {getActionIcon('warning')} Tienes una tardía
+                      {getActionIcon('warning')} Tardía de {getLateTime(attendanceData, horaAccion)}
                     </ThemedText>
                   </ThemedView>
                 )}
@@ -1545,10 +1627,13 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     textAlign: 'center',
-    backgroundColor: '#F8F9FA',
+    color: '#000000',
+  },
+  currentTimeTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    textAlign: 'center',
     color: '#007AFF',
-    padding: 10,
-    borderRadius: 8,
   },
   scrollView: {
     flex: 1,
@@ -1692,9 +1777,14 @@ const styles = StyleSheet.create({
   statusBadge: {
     paddingVertical: 12,
     paddingHorizontal: 24,
-    borderRadius: 20,
-    minWidth: 200,
+    borderRadius: 10,
+    width: '100%',
     alignItems: 'center',
+  },
+  enterAtBadge: {
+    width: '100%',
+    alignItems: 'center',
+    backgroundColor: '#FF9500',
   },
   statusBadgeWorking: {
     backgroundColor: '#34C759',
@@ -1707,12 +1797,31 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#FFFFFF',
   },
+  enterAtLabel: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#fff',
+  },
+  enterAtText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#fff',
+    backgroundColor: '#FF9500',
+  },
   nextTimeContainer: {
     alignItems: 'center',
     gap: 8,
     backgroundColor: '#D1E6FF',
     padding: 10,
     borderRadius: 8,
+  },
+  enterAtContainer: {
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#FF9500',
+    padding: 10,
+    borderRadius: 8,
+    width: '100%',
   },
   nextTimeLabel: {
     fontSize: 15,

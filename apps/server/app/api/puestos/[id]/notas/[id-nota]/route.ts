@@ -3,6 +3,7 @@ import { verifyAccessToken } from "../../../../../../utils/verifyToken";
 import { toZonedTime } from "date-fns-tz";
 
 import { prisma } from "../../../../../../utils/prismaClient";
+import { sendNotificationByPlaza } from "../../../../../../utils/sendNotification";
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string, "id-nota": string }> }) {
     try {
@@ -50,7 +51,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         const id = parseInt(resolvedParams.id);
         const id_nota = parseInt(resolvedParams["id-nota"]);
 
-        const { titulo, description, categoria_id, empleado_id } = await req.json();
+        const { marca_id, titulo, description, categoria_id, empleado_id } = await req.json();
 
         const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id } });
         if (!puesto) return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
@@ -64,11 +65,22 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         const nota = await prisma.c_puesto_notas.findUnique({ where: { id: id_nota } });
         if (!nota) return NextResponse.json({ status: false, message: "Nota no encontrada" }, { status: 200 });
 
+        const previous_titulo = nota.titulo;
+        const previous_description = nota.description;
+        const previous_categoria = categoriaData.nombre;
+
         if (nota.puesto_id !== puesto.id) return NextResponse.json({ status: false, message: "Nota no pertenece al puesto" }, { status: 200 });
 
         const updated_at = toZonedTime(new Date(), "America/Costa_Rica");
 
         const updatedNota = await prisma.c_puesto_notas.update({ where: { id: id_nota }, data: { titulo, description, categoria_id: categoria_id, puesto_id: puesto.id, updated_at } });
+
+        if (updatedNota) {
+            const all_plazas_puesto = await prisma.e_estructura_plazas.findMany({ where: { puesto_id: puesto.id } });
+            if (all_plazas_puesto.length > 0) {
+                await sendNotificationByPlaza(marca_id, "Bitácora actualizada", `${empleado.nombre} ${empleado.primer_apellido} ha actualizado la nota ${previous_titulo} de tipo ${previous_categoria}`, all_plazas_puesto.map(plaza => plaza.id));
+            }
+        }
 
         await prisma.c_puesto_notas_bitacora_cambios.create({ data: { nota_id: id_nota, titulo, description, created_at: updated_at, empleado_id: empleado.id, categoria: categoriaData.nombre } });
 

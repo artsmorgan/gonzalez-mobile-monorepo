@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessToken } from "../../../../utils/verifyToken";
 import { prisma } from "../../../../utils/prismaClient";
 import { sendNotificationByRole } from "../../../../utils/sendNotification";
+import { getActivities } from "../../../../utils/createActivities";
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
@@ -126,8 +127,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             await sendNotificationByRole(marcaDia.id, title, description, ["ADMINISTRATIVO", "SUPERVISOR"]);
         }
 
+        const empleado = await prisma.c_empleado.findUnique({ where: { id: marcaDia.empleadoFijo_id ?? 0 } });
         if (type == "entrada") {
-            const empleado = await prisma.c_empleado.findUnique({ where: { id: marcaDia.empleadoFijo_id ?? 0 } });
             const current_corpo = await prisma.e_estructura_sucursal.findUnique({ where: { id: marcaDia.corpo_id } });
             const current_puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: marcaDia.puesto_id } });
             if (empleado && current_corpo && current_puesto) {
@@ -156,6 +157,41 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                     }
                     const title = "Ingreso de trabajo confirmado";
                     const description = `El empleado ${empleado.nombre} ${empleado.primer_apellido} ha ingresado a su puesto de ${current_puesto.nombre}${desc_tardia}`;
+                    await sendNotificationByRole(marcaDia.id, title, description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+                }
+            }
+        }
+        else {
+            const activities = await getActivities(marcaDia);
+            if (activities.status && activities.actividades && activities.actividades.length > 0) {
+                let unmarked = false;
+                let unmarked_activities = "";
+                for (const activity of activities.actividades) {
+                    if (!activity.is_marcada) {
+                        unmarked = true;
+                        unmarked_activities += activity.nombre_actividad;
+                        if (activity.is_revision_equipo) {
+                            let unmarked_items = " (";
+                            for (const item of activity.inventario) {
+                                if (item.revision_equipo && !item.revision_equipo.marcada) {
+                                    unmarked = true;
+                                    unmarked_items += item.nombre;
+                                    unmarked_items += ", ";
+                                }
+                            }
+                            // Remover la última coma
+                            unmarked_items = unmarked_items.slice(0, -2);
+                            unmarked_items += ")";
+                            unmarked_activities += unmarked_items;
+                        }
+                        unmarked_activities += ", ";
+                    }
+                }
+                if (empleado && unmarked) {
+                    // Remover la última coma
+                    unmarked_activities = unmarked_activities.slice(0, -2);
+                    const title = "Actividades sin marcar";
+                    const description = `El empleado ${empleado.nombre} ${empleado.primer_apellido} marcó salida sin haber marcado las siguientes actividades: ${unmarked_activities}`;
                     await sendNotificationByRole(marcaDia.id, title, description, ["ADMINISTRATIVO", "SUPERVISOR"]);
                 }
             }

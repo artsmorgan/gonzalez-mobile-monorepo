@@ -85,3 +85,34 @@ export async function sendNotificationByRole(marcaDiaId: number, title: string, 
         }
     }
 }
+
+export async function sendNotificationByPlaza(marcaDiaId: number, title: string, description: string, plazaIds: number[]) {
+    const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: marcaDiaId } });
+    if (!marcaDia) {
+        return;
+    }
+
+    if (plazaIds.length > 0) {
+        const notification = await prisma.c_notifications.create({
+            data: {
+                title: title,
+                description: description,
+                created_at: toZonedTime(new Date(), "America/Costa_Rica"),
+            }
+        });
+
+        if (notification) {
+            for (const plazaId of plazaIds) {
+                if (plazaId != marcaDia.plaza_id) {
+                    await prisma.c_plaza_notification.create({
+                        data: {
+                            plazaId: plazaId,
+                            notificationId: notification.id,
+                            watched: false,
+                        }
+                    });
+                }
+            }
+        }
+    }
+}
