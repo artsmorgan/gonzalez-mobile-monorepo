@@ -8,7 +8,8 @@ import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../App';
 import React, { useEffect, useState, useRef, useCallback } from 'react';
-import { ActivityIndicator, Alert, StyleSheet, TouchableOpacity, View, ScrollView, AppState, TextInput, Modal } from 'react-native';
+import { ActivityIndicator, Alert, StyleSheet, TouchableOpacity, View, ScrollView, AppState, TextInput, Modal, Platform } from 'react-native';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
@@ -60,6 +61,12 @@ export default function LunchTimeScreen() {
   const [manualStartHour, setManualStartHour] = useState('');
   const [manualStartMinute, setManualStartMinute] = useState('');
   const [manualInactivities, setManualInactivities] = useState<ManualInactivityData[]>([]);
+  // Time picker state for manual start
+  const [showStartTimePicker, setShowStartTimePicker] = useState(false);
+  const [startTimePickerValue, setStartTimePickerValue] = useState(new Date());
+  // Time picker state for pauses (one at a time)
+  const [activeInactivityPicker, setActiveInactivityPicker] = useState<null | { index: number; type: 'start' | 'end' }>(null);
+  const [inactivityPickerValue, setInactivityPickerValue] = useState(new Date());
   
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const navigation = useNavigation<LunchTimeScreenNavigationProp>();
@@ -613,6 +620,69 @@ const handleManualLunchTime = () => {
   setManualStartHour('');
   setManualStartMinute('');
   setManualInactivities([]);
+  setShowStartTimePicker(false);
+  setActiveInactivityPicker(null);
+};
+
+const handleStartTimePickerChange = (event: any, selectedTime?: Date) => {
+  if (Platform.OS === 'android') {
+    setShowStartTimePicker(false);
+  }
+  if (selectedTime) {
+    setStartTimePickerValue(selectedTime);
+    const hours = selectedTime.getHours().toString().padStart(2, '0');
+    const minutes = selectedTime.getMinutes().toString().padStart(2, '0');
+    setManualStartHour(hours);
+    setManualStartMinute(minutes);
+  }
+};
+
+const openStartTimePicker = () => {
+  const baseDate = new Date();
+  if (manualStartHour && manualStartMinute) {
+    baseDate.setHours(parseInt(manualStartHour, 10), parseInt(manualStartMinute, 10), 0, 0);
+  }
+  setStartTimePickerValue(baseDate);
+  setShowStartTimePicker(true);
+};
+
+const openInactivityPicker = (index: number, type: 'start' | 'end') => {
+  const baseDate = new Date();
+  const inactivity = manualInactivities[index];
+
+  if (type === 'start') {
+    if (inactivity.startHour && inactivity.startMinute) {
+      baseDate.setHours(parseInt(inactivity.startHour, 10), parseInt(inactivity.startMinute, 10), 0, 0);
+    }
+  } else {
+    if (inactivity.endHour && inactivity.endMinute) {
+      baseDate.setHours(parseInt(inactivity.endHour, 10), parseInt(inactivity.endMinute, 10), 0, 0);
+    }
+  }
+
+  setInactivityPickerValue(baseDate);
+  setActiveInactivityPicker({ index, type });
+};
+
+const handleInactivityTimePickerChange = (event: any, selectedTime?: Date) => {
+  if (Platform.OS === 'android') {
+    setActiveInactivityPicker(null);
+  }
+  if (!selectedTime || !activeInactivityPicker) {
+    return;
+  }
+
+  setInactivityPickerValue(selectedTime);
+  const hours = selectedTime.getHours().toString().padStart(2, '0');
+  const minutes = selectedTime.getMinutes().toString().padStart(2, '0');
+
+  if (activeInactivityPicker.type === 'start') {
+    handleManualInactivityChange(activeInactivityPicker.index, 'startHour', hours);
+    handleManualInactivityChange(activeInactivityPicker.index, 'startMinute', minutes);
+  } else {
+    handleManualInactivityChange(activeInactivityPicker.index, 'endHour', hours);
+    handleManualInactivityChange(activeInactivityPicker.index, 'endMinute', minutes);
+  }
 };
 
 const handleAddManualInactivity = () => {
@@ -843,6 +913,11 @@ const handleManualSubmit = async () => {
             </ThemedView>
           ) : timerConfig ? (
             <ThemedView style={styles.timerContainer}>
+              {/* Container Title */}
+              <ThemedText style={styles.containerTitle}>
+                Inicia tu tiempo de almuerzo y añade pausas
+              </ThemedText>
+              
               {/* Timer Display */}
               <ThemedView style={styles.timerDisplay}>
                 <ThemedView style={styles.timerDisplayContent}>
@@ -951,12 +1026,18 @@ const handleManualSubmit = async () => {
       {/* Manual Registration Modal */}
       <Modal
         visible={isManualModalVisible}
-        animationType="slide"
+        animationType="fade"
         transparent={true}
         onRequestClose={() => setIsManualModalVisible(false)}
       >
         <View style={styles.modalOverlay}>
-          <ThemedView style={styles.modalContainer}>
+          <TouchableOpacity 
+            style={StyleSheet.absoluteFill}
+            activeOpacity={1}
+            onPress={() => setIsManualModalVisible(false)}
+          />
+          <View style={styles.modalContainerWrapper}>
+            <ThemedView style={styles.modalContainer}>
             {/* Modal Header */}
             <View style={styles.modalHeader}>
               <ThemedText style={styles.modalTitle}>Registro Manual de Almuerzo</ThemedText>
@@ -969,40 +1050,29 @@ const handleManualSubmit = async () => {
             <ScrollView style={styles.modalContent}>
               {/* Start Time Input */}
               <ThemedView style={styles.inputGroup}>
-                <ThemedText style={styles.inputLabel}>Hora de Inicio del Almuerzo:</ThemedText>
-                <View style={styles.timeInputsRow}>
-                  <View style={styles.timeInputColumn}>
-                    <ThemedText style={styles.timeLabel}>Hora:</ThemedText>
-                    <TextInput
-                      style={styles.timeInputSmall}
-                      value={manualStartHour}
-                      onChangeText={(value) => setManualStartHour(validateNumberInput(value, 23))}
-                      placeholder="00"
-                      placeholderTextColor="#999"
-                      keyboardType="numeric"
-                      maxLength={2}
+                <ThemedText style={[styles.inputLabel, { color: '#000000' }]}>Hora de Inicio del Almuerzo:</ThemedText>
+                <TouchableOpacity style={styles.timePickerButton} onPress={openStartTimePicker}>
+                  <ThemedText style={styles.timePickerButtonText}>
+                    {manualStartHour && manualStartMinute ? `${manualStartHour}:${manualStartMinute}` : 'Seleccionar hora'}
+                  </ThemedText>
+                  <Ionicons name="time-outline" size={20} color="#007AFF" />
+                </TouchableOpacity>
+                {showStartTimePicker && (
+                  <View style={styles.inlinePickerContainer}>
+                    <DateTimePicker
+                      value={startTimePickerValue}
+                      mode="time"
+                      display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                      onChange={handleStartTimePickerChange}
                     />
                   </View>
-                  <ThemedText style={styles.timeSeparator}>:</ThemedText>
-                  <View style={styles.timeInputColumn}>
-                    <ThemedText style={styles.timeLabel}>Minutos:</ThemedText>
-                    <TextInput
-                      style={styles.timeInputSmall}
-                      value={manualStartMinute}
-                      onChangeText={(value) => setManualStartMinute(validateNumberInput(value, 59))}
-                      placeholder="00"
-                      placeholderTextColor="#999"
-                      keyboardType="numeric"
-                      maxLength={2}
-                    />
-                  </View>
-                </View>
+                )}
               </ThemedView>
 
               {/* Inactivities Section */}
               <ThemedView style={styles.inactivitiesSection}>
                 <View style={styles.sectionHeader}>
-                  <ThemedText style={styles.sectionTitle}>Pausas agregadas:</ThemedText>
+                  <ThemedText style={[styles.sectionTitle, { color: '#000000' }]}>Agrega las pausas:</ThemedText>
                   <TouchableOpacity 
                     style={styles.addButton}
                     onPress={handleAddManualInactivity}
@@ -1029,68 +1099,48 @@ const handleManualSubmit = async () => {
                     <View style={styles.pauseTimesRow}>
                       {/* Hora de Inicio */}
                       <ThemedView style={styles.pauseTimeSection}>
-                        <ThemedText style={styles.pauseTimeLabel}>Inicio:</ThemedText>
-                        <View style={styles.timeInputsRowSmall}>
-                          <View style={styles.timeInputColumn}>
-                            <ThemedText style={styles.timeLabel}>H:</ThemedText>
-                            <TextInput
-                              style={styles.timeInputSmall}
-                              value={inactivity.startHour}
-                              onChangeText={(value) => handleManualInactivityChange(index, 'startHour', value)}
-                              placeholder="00"
-                              placeholderTextColor="#999"
-                              keyboardType="numeric"
-                              maxLength={2}
-                            />
-                          </View>
-                          <ThemedText style={styles.timeSeparatorSmall}>:</ThemedText>
-                          <View style={styles.timeInputColumn}>
-                            <ThemedText style={styles.timeLabel}>M:</ThemedText>
-                            <TextInput
-                              style={styles.timeInputSmall}
-                              value={inactivity.startMinute}
-                              onChangeText={(value) => handleManualInactivityChange(index, 'startMinute', value)}
-                              placeholder="00"
-                              placeholderTextColor="#999"
-                              keyboardType="numeric"
-                              maxLength={2}
-                            />
-                          </View>
-                        </View>
-                      </ThemedView>
+                        <ThemedView style={styles.pauseTimeHoursSection}>
+                          <ThemedText style={styles.pauseTimeLabel}>Inicio:</ThemedText>
+                          <TouchableOpacity
+                            style={styles.timePickerButtonSmall}
+                            onPress={() => openInactivityPicker(index, 'start')}
+                          >
+                            <ThemedText style={styles.timePickerButtonTextSmall}>
+                              {inactivity.startHour && inactivity.startMinute
+                                ? `${inactivity.startHour}:${inactivity.startMinute}`
+                                : 'Seleccione'}
+                            </ThemedText>
+                            <Ionicons name="time-outline" size={16} color="#007AFF" />
+                          </TouchableOpacity>
+                        </ThemedView>
 
-                      {/* Hora de Fin */}
-                      <ThemedView style={styles.pauseTimeSection}>
-                        <ThemedText style={styles.pauseTimeLabel}>Fin:</ThemedText>
-                        <View style={styles.timeInputsRowSmall}>
-                          <View style={styles.timeInputColumn}>
-                            <ThemedText style={styles.timeLabel}>H:</ThemedText>
-                            <TextInput
-                              style={styles.timeInputSmall}
-                              value={inactivity.endHour}
-                              onChangeText={(value) => handleManualInactivityChange(index, 'endHour', value)}
-                              placeholder="00"
-                              placeholderTextColor="#999"
-                              keyboardType="numeric"
-                              maxLength={2}
-                            />
-                          </View>
-                          <ThemedText style={styles.timeSeparatorSmall}>:</ThemedText>
-                          <View style={styles.timeInputColumn}>
-                            <ThemedText style={styles.timeLabel}>M:</ThemedText>
-                            <TextInput
-                              style={styles.timeInputSmall}
-                              value={inactivity.endMinute}
-                              onChangeText={(value) => handleManualInactivityChange(index, 'endMinute', value)}
-                              placeholder="00"
-                              placeholderTextColor="#999"
-                              keyboardType="numeric"
-                              maxLength={2}
-                            />
-                          </View>
-                        </View>
+                        {/* Hora de Fin */}
+                        <ThemedView style={styles.pauseTimeHoursSection}>
+                          <ThemedText style={styles.pauseTimeLabel}>Fin:</ThemedText>
+                          <TouchableOpacity
+                            style={styles.timePickerButtonSmall}
+                            onPress={() => openInactivityPicker(index, 'end')}
+                          >
+                            <ThemedText style={styles.timePickerButtonTextSmall}>
+                              {inactivity.endHour && inactivity.endMinute
+                                ? `${inactivity.endHour}:${inactivity.endMinute}`
+                                : 'Seleccione'}
+                            </ThemedText>
+                            <Ionicons name="time-outline" size={16} color="#007AFF" />
+                          </TouchableOpacity>
+                        </ThemedView>
                       </ThemedView>
                     </View>
+                    {activeInactivityPicker && activeInactivityPicker.index === index && (
+                      <View style={styles.inlinePickerContainer}>
+                        <DateTimePicker
+                          value={inactivityPickerValue}
+                          mode="time"
+                          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                          onChange={handleInactivityTimePickerChange}
+                        />
+                      </View>
+                    )}
 
                     <ThemedView style={styles.reasonInputGroup}>
                       <ThemedText style={styles.reasonLabel}>Razón:</ThemedText>
@@ -1119,6 +1169,7 @@ const handleManualSubmit = async () => {
               </TouchableOpacity>
             </ScrollView>
           </ThemedView>
+          </View>
         </View>
       </Modal>
     </ThemedView>
@@ -1201,8 +1252,22 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   timerContainer: {
-    alignItems: 'center',
+    width: '100%',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    backgroundColor: '#fff',
+    overflow: 'hidden',
+    padding: 16,
+    marginBottom: 20,
     gap: 20,
+  },
+  containerTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#000000',
+    textAlign: 'center',
+    marginBottom: 8,
   },
   timerDisplay: {
     backgroundColor: '#007AFF', // Azul
@@ -1318,6 +1383,7 @@ const styles = StyleSheet.create({
     marginTop: 15,
     alignItems: 'center',
     justifyContent: 'center',
+    width: '100%',
   },
   manualButtonText: {
     color: '#FFFFFF',
@@ -1388,20 +1454,30 @@ const styles = StyleSheet.create({
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'flex-end',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 15,
+  },
+  modalContainerWrapper: {
+    width: '100%',
+    maxWidth: 500,
+    maxHeight: '90%',
+    zIndex: 1,
   },
   modalContainer: {
-    height: '80%',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
+    width: '100%',
+    maxHeight: '90%',
+    borderRadius: 20,
+    backgroundColor: '#FFFFFF',
     shadowColor: '#000',
     shadowOffset: {
       width: 0,
-      height: -2,
+      height: 2,
     },
     shadowOpacity: 0.25,
     shadowRadius: 3.84,
     elevation: 5,
+    overflow: 'hidden',
   },
   modalHeader: {
     flexDirection: 'row',
@@ -1421,7 +1497,7 @@ const styles = StyleSheet.create({
     color: '#666666',
   },
   modalContent: {
-    flex: 1,
+    flexGrow: 1,
     padding: 20,
   },
   inputGroup: {
@@ -1545,7 +1621,15 @@ const styles = StyleSheet.create({
     gap: 15,
     marginBottom: 10,
   },
+  pauseTimeHoursSection: {
+    flex: 1,
+    backgroundColor: '#D1E6FF', // Light blue
+    padding: 5,
+    borderRadius: 8,
+  },
   pauseTimeSection: {
+    display: 'flex',
+    flexDirection: 'row',
     flex: 1,
     backgroundColor: '#D1E6FF', // Light blue
     padding: 5,
@@ -1600,5 +1684,49 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '600',
+  },
+  pausasTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#333333',
+    marginBottom: 8,
+  },
+  timePickerButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#F8F9FA',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    padding: 12,
+    marginTop: 8,
+  },
+  timePickerButtonText: {
+    fontSize: 16,
+    color: '#000000',
+    fontWeight: '500',
+  },
+  timePickerButtonSmall: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 6,
+    padding: 8,
+    marginTop: 6,
+  },
+  timePickerButtonTextSmall: {
+    fontSize: 14,
+    color: '#000000',
+    fontWeight: '500',
+  },
+  inlinePickerContainer: {
+    backgroundColor: '#F8F9FA',
+    borderRadius: 10,
+    marginTop: 10,
+    padding: 10,
   },
 });

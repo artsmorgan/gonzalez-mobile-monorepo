@@ -556,6 +556,11 @@ export default function NotesScreen() {
       return;
     }
 
+    if (!newNote.categoria_id) {
+      Alert.alert('Error', 'Debe seleccionar una categoría');
+      return;
+    }
+    
     Alert.alert(
       'Confirmar creación',
       '¿Estás seguro de que deseas crear esta nota?',
@@ -567,18 +572,18 @@ export default function NotesScreen() {
             try {
               // Determine puestos array based on role
               const isSupervisor = currentMarcaData?.roleDivision?.role?.nombre === 'SUPERVISOR';
-              let puestosArray: string[] = [];
+              let puestosArray: number[] = [];
               
               if (isSupervisor) {
                 // For supervisor: use selected puestos (convert to string)
-                puestosArray = selectedPuestos.map(id => id.toString());
+                puestosArray = selectedPuestos.map(id => id);
               } else {
                 // For non-supervisor: use only current puesto
                 const currentPuestoId = currentMarcaData?.puesto?.id;
                 if (currentPuestoId) {
-                  puestosArray = [currentPuestoId.toString()];
+                  puestosArray = [currentPuestoId];
                 } else {
-                  puestosArray = ['0'];
+                  puestosArray = [0];
                 }
               }
 
@@ -588,7 +593,7 @@ export default function NotesScreen() {
                 description: descriptionRef.current,
                 division: newNote.division,
                 categoria_id: newNote.categoria_id,
-                puestos: puestosArray
+                puestos: JSON.stringify(puestosArray)
               };
 
               // Verificar conectividad
