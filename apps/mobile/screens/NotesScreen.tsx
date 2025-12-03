@@ -30,6 +30,16 @@ interface CurrentMarca {
   fecha: string;
   tipo_turno: string;
   horas_duracion: number;
+  roleDivision?: {
+    role: {
+      id: number;
+      nombre: string;
+    };
+    division: {
+      id: number;
+      nombre: string;
+    };
+  };
   empresa: {
     id: number;
     nombre: string;
@@ -168,6 +178,11 @@ export default function NotesScreen() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [isLoadingCategories, setIsLoadingCategories] = useState(false);
 
+  // Puestos corpo state
+  const [puestosCorpo, setPuestosCorpo] = useState<Puesto[]>([]);
+  const [selectedPuestos, setSelectedPuestos] = useState<number[]>([]);
+  const [isLoadingPuestos, setIsLoadingPuestos] = useState(false);
+
 
   useEffect(() => {
     if (employee?.roles) {
@@ -182,6 +197,7 @@ export default function NotesScreen() {
     useCallback(() => {
       fetchNotes();
       fetchCategories();
+      fetchPuestosCorpo();
     }, [])
   );
   
@@ -190,6 +206,7 @@ export default function NotesScreen() {
       Promise.all([
         fetchNotes(),
         fetchCategories(),
+        fetchPuestosCorpo(),
       ]);
     };
 
@@ -295,6 +312,113 @@ export default function NotesScreen() {
       }
     } finally {
       setIsLoadingCategories(false);
+    }
+  };
+
+  const fetchPuestosCorpo = async () => {
+    try {
+      setIsLoadingPuestos(true);
+
+      // Verificar si existe current_marca
+      const currentMarca = await AsyncStorage.getItem('current_marca');
+      if (!currentMarca) {
+        setPuestosCorpo([]);
+        setIsLoadingPuestos(false);
+        return;
+      }
+
+      const currentMarcaData = JSON.parse(currentMarca);
+      if (!currentMarcaData?.corpo?.id) {
+        setPuestosCorpo([]);
+        setIsLoadingPuestos(false);
+        return;
+      }
+
+      const corpoId = currentMarcaData.corpo.id;
+
+      // Verificar conectividad
+      const isConnected = await getConnectionStatus();
+
+      if (isConnected) {
+        // Con internet: hacer fetch normal
+        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        if (!apiUrl) {
+          throw new Error('Server URL not configured');
+        }
+
+        let token = await AsyncStorage.getItem('access_token');
+        if (!token) {
+          const refreshed = await refreshAccessToken();
+          if (!refreshed) {
+            throw new Error('No authentication token found');
+          }
+          token = await AsyncStorage.getItem('access_token');
+        }
+
+        const response = await fetch(`${apiUrl}/api/puestos/corpo/${corpoId}`, {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+            'ngrok-skip-browser-warning': '69420',
+          },
+        });
+
+        if (response.status === 401 || response.status === 403) {
+          const refreshed = await refreshAccessToken();
+          if (refreshed) {
+            return fetchPuestosCorpo();
+          } else {
+            Alert.alert('Error', 'Sesión expirada. Por favor inicie sesión nuevamente.');
+            await logout();
+            return;
+          }
+        }
+
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const data = await response.json();
+
+        if (data.status && data.puestos) {
+          setPuestosCorpo(data.puestos || []);
+          // Actualizar puestos_corpo_cache
+          await AsyncStorage.setItem(`puestos_corpo_cache_${corpoId}`, JSON.stringify(data.puestos || []));
+        } else {
+          console.error('Error loading puestos:', data.message);
+        }
+      } else {
+        // Sin internet: cargar desde cache
+        const puestosCache = await AsyncStorage.getItem(`puestos_corpo_cache_${corpoId}`);
+        if (puestosCache) {
+          const cachedPuestos = JSON.parse(puestosCache);
+          setPuestosCorpo(cachedPuestos);
+        } else {
+          setPuestosCorpo([]);
+        }
+      }
+    } catch (err) {
+      console.error('Error fetching puestos corpo:', err);
+      // En caso de error, intentar cargar desde cache
+      try {
+        const currentMarca = await AsyncStorage.getItem('current_marca');
+        if (currentMarca) {
+          const currentMarcaData = JSON.parse(currentMarca);
+          const corpoId = currentMarcaData?.corpo?.id;
+          if (corpoId) {
+            const puestosCache = await AsyncStorage.getItem(`puestos_corpo_cache_${corpoId}`);
+            if (puestosCache) {
+              const cachedPuestos = JSON.parse(puestosCache);
+              setPuestosCorpo(cachedPuestos);
+            }
+          }
+        }
+      } catch (cacheErr) {
+        console.error('Error loading puestos from cache:', cacheErr);
+      }
+    } finally {
+      setIsLoadingPuestos(false);
     }
   };
 
@@ -441,13 +565,30 @@ export default function NotesScreen() {
           text: 'Crear',
           onPress: async () => {
             try {
+              // Determine puestos array based on role
+              const isSupervisor = currentMarcaData?.roleDivision?.role?.nombre === 'SUPERVISOR';
+              let puestosArray: string[] = [];
+              
+              if (isSupervisor) {
+                // For supervisor: use selected puestos (convert to string)
+                puestosArray = selectedPuestos.map(id => id.toString());
+              } else {
+                // For non-supervisor: use only current puesto
+                const currentPuestoId = currentMarcaData?.puesto?.id;
+                if (currentPuestoId) {
+                  puestosArray = [currentPuestoId.toString()];
+                } else {
+                  puestosArray = ['0'];
+                }
+              }
+
               const requestBody = {
                 empleado_id: employee?.id,
                 titulo: tituloRef.current,
                 description: descriptionRef.current,
                 division: newNote.division,
                 categoria_id: newNote.categoria_id,
-                puesto_id: puesto?.id || 0
+                puestos: puestosArray
               };
 
               // Verificar conectividad
@@ -467,6 +608,7 @@ export default function NotesScreen() {
                   Alert.alert('Éxito', data.message || 'Nota creada correctamente');
                   setIsCreating(false);
                   setNewNote({ id: null, id_local: '', titulo: '', description: '', division: null, categoria_id: null });
+                  setSelectedPuestos([]);
                   fetchNotes();
                 } else {
                   Alert.alert('Error', data.message || 'Error al crear la nota');
@@ -509,6 +651,7 @@ export default function NotesScreen() {
                 Alert.alert('Modo Offline', 'Nota creada localmente. Se sincronizará cuando haya conexión.');
                 setIsCreating(false);
                 setNewNote({ id: null, id_local: '', titulo: '', description: '', division: null, categoria_id: null });
+                setSelectedPuestos([]);
                 fetchNotes();
               }
             } catch (err) {
@@ -737,17 +880,45 @@ const getActionIcon = (action: string) => {
     setEditingNote(null);
   };
 
-  const startCreating = () => {
+  const startCreating = async () => {
     setIsCreating(true);
     setNewNote({ id: null, id_local: '', titulo: '', description: '', division: divisions[0] || null, categoria_id: null });
     // Initialize refs
     tituloRef.current = '';
     descriptionRef.current = '';
+
+    // Initialize selected puestos based on role
+    const currentMarca = await AsyncStorage.getItem('current_marca');
+    if (currentMarca) {
+      const currentMarcaData = JSON.parse(currentMarca);
+      const isSupervisor = currentMarcaData?.roleDivision?.role?.nombre === 'SUPERVISOR';
+      
+      if (isSupervisor) {
+        // For supervisor: start with current puesto selected
+        const currentPuestoId = currentMarcaData?.puesto?.id;
+        if (currentPuestoId) {
+          setSelectedPuestos([currentPuestoId]);
+        } else {
+          setSelectedPuestos([]);
+        }
+      } else {
+        // For non-supervisor: always use current puesto
+        const currentPuestoId = currentMarcaData?.puesto?.id;
+        if (currentPuestoId) {
+          setSelectedPuestos([currentPuestoId]);
+        } else {
+          setSelectedPuestos([]);
+        }
+      }
+    } else {
+      setSelectedPuestos([]);
+    }
   };
 
   const cancelCreating = () => {
     setIsCreating(false);
     setNewNote({ id: null, id_local: '', titulo: '', description: '', division: null, categoria_id: null });
+    setSelectedPuestos([]);
   };
 
   const formatDate = (dateString: string) => {
@@ -1049,8 +1220,20 @@ const getActionIcon = (action: string) => {
     );
   };
 
+  const togglePuestoSelection = (puestoId: number) => {
+    setSelectedPuestos(prev => {
+      if (prev.includes(puestoId)) {
+        return prev.filter(id => id !== puestoId);
+      } else {
+        return [...prev, puestoId];
+      }
+    });
+  };
+
   const renderNewNoteForm = () => {
     if (!isCreating) return null;
+
+    const isSupervisor = currentMarca?.roleDivision?.role?.nombre === 'SUPERVISOR';
 
     return (
       <ThemedView style={[styles.noteCard, styles.newNoteCard]}>
@@ -1098,6 +1281,47 @@ const getActionIcon = (action: string) => {
               </Picker>
             </ThemedView>
           </ThemedView>
+
+          {/* Puestos checkboxes - Solo para SUPERVISOR */}
+          {isSupervisor && (
+            <ThemedView style={styles.inputGroup}>
+              <ThemedText style={styles.inputLabel}>Puestos:</ThemedText>
+              {isLoadingPuestos ? (
+                <ThemedView style={styles.loadingContainer}>
+                  <ActivityIndicator size="small" color="#007AFF" />
+                  <ThemedText style={styles.loadingText}>Cargando puestos...</ThemedText>
+                </ThemedView>
+              ) : puestosCorpo.length > 0 ? (
+                <ThemedView style={styles.puestosListContainer}>
+                  {puestosCorpo.map((puesto, index) => {
+                    const isChecked = selectedPuestos.includes(puesto.id);
+                    const isLast = index === puestosCorpo.length - 1;
+                    return (
+                      <TouchableOpacity
+                        key={puesto.id}
+                        style={[
+                          styles.puestoListItem,
+                          isChecked && styles.puestoListItemSelected,
+                          isLast && styles.puestoListItemLast,
+                        ]}
+                        onPress={() => togglePuestoSelection(puesto.id)}
+                        activeOpacity={0.8}
+                      >
+                        <View style={[styles.puestoCheckbox, isChecked && styles.puestoCheckboxChecked]}>
+                          {isChecked && <Ionicons name="checkmark" size={14} color="#fff" />}
+                        </View>
+                        <View style={styles.puestoInfo}>
+                          <ThemedText style={styles.puestoCheckboxName}>{puesto.nombre}</ThemedText>
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ThemedView>
+              ) : (
+                <ThemedText style={styles.emptyText}>No hay puestos disponibles</ThemedText>
+              )}
+            </ThemedView>
+          )}
 
           <ThemedView style={styles.buttonRow}>
             <TouchableOpacity style={styles.confirmButton} onPress={createNote}>
@@ -1446,6 +1670,8 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     alignItems: 'center',
     gap: 8,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
   },
   puestoLabel: {
     fontSize: 14,
@@ -1951,6 +2177,52 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     marginTop: 8,
     gap: 4,
+  },
+  puestosListContainer: {
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    backgroundColor: '#fff',
+    overflow: 'hidden',
+  },
+  puestoListItem: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
+    backgroundColor: '#fff',
+  },
+  puestoListItemLast: {
+    borderBottomWidth: 0,
+  },
+  puestoListItemSelected: {
+    backgroundColor: '#E6F0FF',
+  },
+  puestoCheckbox: {
+    width: 20,
+    height: 20,
+    borderRadius: 4,
+    borderWidth: 1.5,
+    borderColor: '#BFD2F3',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+    marginTop: 4,
+    backgroundColor: '#fff',
+  },
+  puestoCheckboxChecked: {
+    backgroundColor: '#007AFF',
+    borderColor: '#007AFF',
+  },
+  puestoInfo: {
+    flex: 1,
+  },
+  puestoCheckboxName: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#0f172a',
   },
 });
 

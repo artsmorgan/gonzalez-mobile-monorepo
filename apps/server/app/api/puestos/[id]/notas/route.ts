@@ -84,7 +84,7 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
         const resolvedParams = await context.params;
         const id = parseInt(resolvedParams.id);
 
-        const { marca_id, empleado_id, titulo, description, categoria_id, puesto_id } = await req.json();
+        const { marca_id, empleado_id, titulo, description, categoria_id, puestos } = await req.json();
 
         const created_at = toZonedTime(new Date(), "America/Costa_Rica");
         const updated_at = toZonedTime(new Date(), "America/Costa_Rica");
@@ -92,21 +92,24 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
         const categoriaData = await prisma.n_novedades_categoria.findUnique({ where: { id: categoria_id } });
         if (!categoriaData) return NextResponse.json({ status: false, message: "Categoría no encontrada" }, { status: 200 });
 
-        const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: puesto_id } });
-        if (!puesto) return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
+        const puestos_parse: number[] = JSON.parse(puestos);
 
-        const empleado = await prisma.c_empleado.findUnique({ where: { id: empleado_id } });
-        if (!empleado) return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 200 });
+        for (const puesto_id of puestos_parse) {
+            const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: puesto_id } });
+            if (!puesto) return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
 
-        const newNote = await prisma.c_puesto_notas.create({ data: { titulo, description, categoria_id: categoria_id, puesto_id, created_at, updated_at } });
+            const empleado = await prisma.c_empleado.findUnique({ where: { id: empleado_id } });
+            if (!empleado) return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 200 });
 
-        const bitacora = await prisma.c_puesto_notas_bitacora_cambios.create({ data: { nota_id: newNote.id, titulo, description, created_at, empleado_id, categoria: categoriaData.nombre } });
+            const newNote = await prisma.c_puesto_notas.create({ data: { titulo, description, categoria_id: categoria_id, puesto_id, created_at, updated_at } });
 
-        if (bitacora) {
-            const plazaIds = await prisma.e_estructura_plazas.findMany({ where: { puesto_id: puesto.id } });
-            await sendNotificationByPlaza(marca_id, "Bitácora creada", `${empleado.nombre} ${empleado.primer_apellido} ha creado una nota llamada ${newNote.titulo} de tipo ${categoriaData.nombre}`, plazaIds.map(plaza => plaza.id));
+            const bitacora = await prisma.c_puesto_notas_bitacora_cambios.create({ data: { nota_id: newNote.id, titulo, description, created_at, empleado_id, categoria: categoriaData.nombre } });
+
+            if (bitacora) {
+                const plazaIds = await prisma.e_estructura_plazas.findMany({ where: { puesto_id: puesto.id } });
+                await sendNotificationByPlaza(marca_id, "Bitácora creada", `${empleado.nombre} ${empleado.primer_apellido} ha creado una nota llamada ${newNote.titulo} de tipo ${categoriaData.nombre}`, plazaIds.map(plaza => plaza.id));
+            }
         }
-
         return NextResponse.json({ status: true, message: "Nota creada con éxito" }, { status: 200 });
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";

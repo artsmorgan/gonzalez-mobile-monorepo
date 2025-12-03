@@ -1459,7 +1459,7 @@ const VehicleItemComponent: React.FC<VehicleItemComponentProps> = ({
   convertDate,
   getConnectionStatus,
 }) => {
-  const { refreshAccessToken } = useAuth();
+  const { employee, refreshAccessToken } = useAuth();
   const [imageBase64, setImageBase64] = React.useState<string | null>(null);
   const [isLoadingImage, setIsLoadingImage] = React.useState<boolean>(false);
   const [isImageExpanded, setIsImageExpanded] = React.useState<boolean>(false);
@@ -1628,6 +1628,8 @@ const VehicleItemComponent: React.FC<VehicleItemComponentProps> = ({
         </ThemedView>
       )}
       
+      {/* Solo serán visibles si el dato responsable_id es igual al id del empleado actual */}
+      {vehicle.responsable.id === parseInt(employee?.id || '0') && (
       <ThemedView style={styles.buttonRow}>
         <TouchableOpacity style={styles.editButton} onPress={onEdit}>
           <ThemedText style={styles.editButtonText}>{getActionIcon('edit')}</ThemedText>
@@ -1636,6 +1638,7 @@ const VehicleItemComponent: React.FC<VehicleItemComponentProps> = ({
           <ThemedText style={styles.deleteButtonText}>{getActionIcon('delete')}</ThemedText>
         </TouchableOpacity>
       </ThemedView>
+      )}
     </ThemedView>
   );
 };
