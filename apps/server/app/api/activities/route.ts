@@ -86,7 +86,7 @@ export async function POST(req: NextRequest) {
         });
 
         if (actividad_corpo) {
-            let plazas_ids: number[] = [];
+            const plazas_ids: number[] = [];
             const puestos_plazas_parse = JSON.parse(puestos_plazas);
             for (const puesto of puestos_plazas_parse) {
                 console.log("puesto", puesto);
