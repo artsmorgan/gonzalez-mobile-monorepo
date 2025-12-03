@@ -7,6 +7,7 @@ import path from "path";
 import fs from "fs";
 import { v4 as uuidv4 } from "uuid";
 import { createVehicleImage } from "../../../utils/createVehicleImage";
+import { sendNotificationByRole } from "../../../utils/sendNotification";
 
 export async function GET(req: NextRequest) {
     try {
@@ -116,9 +117,19 @@ export async function POST(req: NextRequest) {
         });
 
         // Guardar imagen si existe
-        if (new_vehicle && file) {
-            const result = await createVehicleImage(new_vehicle.id, file);
-            console.log("result", result);
+        if (new_vehicle) {
+            if (file) {
+                const result = await createVehicleImage(new_vehicle.id, file);
+                console.log("result", result);
+            }
+            const empleado = await prisma.c_empleado.findUnique({ where: { id: payload.id } });
+            if (empleado) {
+                const entrada = new_vehicle.hora_entrada.toISOString();
+                const fecha_entrada = entrada.split("T")[0];
+                const hora_entrada = entrada.split("T")[1].split(".")[0];
+                const desc = `El empleado ${empleado.nombre} ${empleado.primer_apellido} ha registrado la visita de un vehículo de tipo ${tipo} con la placa ${placa} el día ${fecha_entrada} a las ${hora_entrada}. Razón de la visita: ${razon_visita}`;
+                await sendNotificationByRole(marca_id, "Vehículo registrado", desc, ["ADMINISTRATIVO", "SUPERVISOR"]);    
+            }
         }
 
         return NextResponse.json({ status: true, message: "Vehículo registrado correctamente" }, { status: 200 });

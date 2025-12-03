@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { PrismaClient } from "@prisma/client";
 import { verifyAccessToken } from "../../../utils/verifyToken";
 import { toZonedTime } from "date-fns-tz";
+import { sendNotificationByPlaza } from "../../../utils/sendNotification";
 
 const prisma = new PrismaClient();
 
@@ -85,6 +86,7 @@ export async function POST(req: NextRequest) {
         });
 
         if (actividad_corpo) {
+            let plazas_ids: number[] = [];
             const puestos_plazas_parse = JSON.parse(puestos_plazas);
             for (const puesto of puestos_plazas_parse) {
                 console.log("puesto", puesto);
@@ -94,6 +96,8 @@ export async function POST(req: NextRequest) {
                         for (const plaza of puesto.plazas) {
                             const pl = await prisma.e_estructura_plazas.findUnique({ where: { id: plaza.plaza_id } });
                             if (pl) {
+                                // Verificar si la plaza ya existe en el array de plazas_ids
+                                if (!plazas_ids.includes(pl.id)) plazas_ids.push(pl.id);
                                 await prisma.e_actividad_puesto_plaza.create({
                                     data: {
                                         actividadCorpo_id: actividad_corpo.id,
@@ -111,9 +115,15 @@ export async function POST(req: NextRequest) {
                                 puesto_id: ps.id,
                             }
                         });
+                        const plzs = await prisma.e_estructura_plazas.findMany({ where: { puesto_id: ps.id } });
+                        for (const plz of plzs) {
+                            if (!plazas_ids.includes(plz.id)) plazas_ids.push(plz.id);
+                        }
                     }
                 }
             }
+            const frecuencia_parse = JSON.parse(frecuencia);
+            await sendNotificationByPlaza(marca_id, "Actividad asignada", `Se te ha asignado la actividad ${nombre_actividad}, la cual deberá realizarse "${frecuencia_parse.title}"`, plazas_ids);
         }
 
         return NextResponse.json({ status: true, message: "Actividad creada correctamente" }, { status: 200 });

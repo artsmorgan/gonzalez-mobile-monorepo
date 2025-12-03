@@ -6,6 +6,7 @@ import fs from "fs";
 import { v4 as uuidv4 } from 'uuid';
 import { toZonedTime } from "date-fns-tz";
 import path from "path";
+import { sendNotificationByRole } from "../../../utils/sendNotification";
 
 export async function GET(req: NextRequest) {
     try {
@@ -157,61 +158,73 @@ export async function POST(req: NextRequest) {
             },
         });
 
-        if (activos.length > 0) {
-            for (const a of activos) {
-                const tipo_activo = await prisma.n_tipo_activo_visitas.findUnique({ where: { id: a.tipo_id } });
-                if (tipo_activo) {
-                    await prisma.e_activo_visitante.create({
-                        data: {
-                            visitante_id: new_visita.id,
-                            tipo_id: tipo_activo.id,
-                            detalles: JSON.stringify(a.detalles),
-                            numero_serie: a.numero_serie,
-                            numero_activo: a.numero_activo ? a.numero_activo : null,
-                        },
-                    });
+        if (new_visita) {
+            const empleado = await prisma.c_empleado.findUnique({ where: { id: payload.id } });
+            if (empleado) {
+                const entrada = new_visita.hora_entrada.toISOString();
+                const fecha_entrada = entrada.split("T")[0];
+                const hora_entrada = entrada.split("T")[1].split(".")[0];
+                const tipo_visitante = es_funcionario ? "Funcionario" : "Visitante";
+                const desc = `El empleado ${empleado.nombre} ${empleado.primer_apellido} ha registrado la visita de ${nombre} con la cedula ${cedula} el día ${fecha_entrada} a las ${hora_entrada}. Tipo de visitante: ${tipo_visitante}. Razón de la visita: ${razon_visita}`;
+                await sendNotificationByRole(marca_id, "Visita registrada", desc, ["ADMINISTRATIVO", "SUPERVISOR"]);    
+            }
+
+            if (activos.length > 0) {
+                for (const a of activos) {
+                    const tipo_activo = await prisma.n_tipo_activo_visitas.findUnique({ where: { id: a.tipo_id } });
+                    if (tipo_activo) {
+                        await prisma.e_activo_visitante.create({
+                            data: {
+                                visitante_id: new_visita.id,
+                                tipo_id: tipo_activo.id,
+                                detalles: JSON.stringify(a.detalles),
+                                numero_serie: a.numero_serie,
+                                numero_activo: a.numero_activo ? a.numero_activo : null,
+                            },
+                        });
+                    }
                 }
             }
-        }
 
-        // Guardar imagen si existe
-        if (foto_cedula) {
-            // ejemplo de cadena base64: data:image/jpeg;base64,/9j/4AAQ...
-            const matches = foto_cedula.match(/^data:(.+);base64,(.+)$/);
-            if (!matches) {
-                throw new Error("Formato base64 inválido");
+            // Guardar imagen si existe
+            if (foto_cedula) {
+                // ejemplo de cadena base64: data:image/jpeg;base64,/9j/4AAQ...
+                const matches = foto_cedula.match(/^data:(.+);base64,(.+)$/);
+                if (!matches) {
+                    throw new Error("Formato base64 inválido");
+                }
+
+                const mimeType = matches[1];
+                const base64Data = matches[2];
+                const extension = mimeType.split("/")[1]; // ej. 'jpeg' o 'png'
+
+                const id_cedula = uuidv4();
+                const file_name = `${id_cedula}.${extension}`;
+
+                const dir = path.join(
+                    process.cwd(),
+                    "public",
+                    "uploads",
+                    "visitors",
+                    `${new_visita.id}`,
+                    "cedula"
+                );
+
+                if (!fs.existsSync(dir)) {
+                    fs.mkdirSync(dir, { recursive: true });
+                }
+
+                const filePath = path.join(dir, file_name);
+
+                // Escribir el archivo en binario
+                fs.writeFileSync(filePath, Buffer.from(base64Data, "base64"));
+
+                // Guardar el nombre del archivo en la BD
+                await prisma.e_registro_personas.update({
+                    where: { id: new_visita.id },
+                    data: { foto_cedula: file_name },
+                });
             }
-
-            const mimeType = matches[1];
-            const base64Data = matches[2];
-            const extension = mimeType.split("/")[1]; // ej. 'jpeg' o 'png'
-
-            const id_cedula = uuidv4();
-            const file_name = `${id_cedula}.${extension}`;
-
-            const dir = path.join(
-                process.cwd(),
-                "public",
-                "uploads",
-                "visitors",
-                `${new_visita.id}`,
-                "cedula"
-            );
-
-            if (!fs.existsSync(dir)) {
-                fs.mkdirSync(dir, { recursive: true });
-            }
-
-            const filePath = path.join(dir, file_name);
-
-            // Escribir el archivo en binario
-            fs.writeFileSync(filePath, Buffer.from(base64Data, "base64"));
-
-            // Guardar el nombre del archivo en la BD
-            await prisma.e_registro_personas.update({
-                where: { id: new_visita.id },
-                data: { foto_cedula: file_name },
-            });
         }
 
         return NextResponse.json(

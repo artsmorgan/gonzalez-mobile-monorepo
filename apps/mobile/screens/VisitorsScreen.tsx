@@ -327,7 +327,6 @@ export default function VisitorsScreen() {
         const data = await response.json();
 
         if (data.status && data.data) {
-            console.log("data.data", data.data);
           setVisitors(data.data);
           // Actualizar visitors_cache
           await AsyncStorage.setItem('visitors_cache', JSON.stringify(data.data));
@@ -1165,11 +1164,6 @@ export default function VisitorsScreen() {
         
         setTimeout(() => {
           try {
-            console.log('Guardando imagen en estado:', {
-              isEditingCamera,
-              base64ImageLength: base64Image.length,
-              base64Preview: base64Image.substring(0, 50) + '...'
-            });
             
             if (isEditingCamera && editingVisitor) {
               setEditingVisitor((prev) => {
@@ -1718,35 +1712,11 @@ export default function VisitorsScreen() {
   const renderVisitorItem = (visitor: Visitor) => {
     const isExpanded = expandedVisitorIds.includes(visitor.id);
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-    
-    // Empleado actual
-    const empleadoActual = employee;
-    const esResponsable = empleadoActual?.id == visitor.responsable.id.toString();
 
     return (
       <ThemedView key={visitor.id} style={styles.visitorCard}>
         <ThemedView style={styles.visitorHeader}>
           <ThemedText style={styles.visitorName}>{visitor.nombre}</ThemedText>
-          {esResponsable && (
-            <ThemedView style={styles.visitorActions}>
-                <TouchableOpacity
-                style={styles.editButton}
-                onPress={() => startEditing(visitor)}
-                >
-                <ThemedText style={styles.editButtonText}>
-                    <Ionicons name="pencil" size={20} color="#FFFFFF" />
-                </ThemedText>
-                </TouchableOpacity>
-                <TouchableOpacity
-                style={styles.deleteButton}
-                onPress={() => deleteVisitor(visitor)}
-                >
-                <ThemedText style={styles.deleteButtonText}>
-                    <Ionicons name="trash-outline" size={20} color="#FFFFFF" />
-                </ThemedText>
-                </TouchableOpacity>
-            </ThemedView>
-            )}
         </ThemedView>
 
         {/* Información principal */}
@@ -1890,6 +1860,22 @@ export default function VisitorsScreen() {
                 )}
               </ThemedView>
             )}
+          </ThemedView>
+        )}
+
+        {/* Solo serán visibles si el dato responsable_id es igual al id del empleado actual */}
+        {visitor.responsable.id === parseInt(employee?.id || '0') && (
+          <ThemedView style={styles.buttonRow}>
+            <TouchableOpacity style={styles.editButton} onPress={() => startEditing(visitor)}>
+              <ThemedText style={styles.editButtonText}>
+                <Ionicons name="pencil" size={20} color="#FFFFFF" />
+              </ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.deleteButton} onPress={() => deleteVisitor(visitor)}>
+              <ThemedText style={styles.deleteButtonText}>
+                <Ionicons name="trash-outline" size={20} color="#FFFFFF" />
+              </ThemedText>
+            </TouchableOpacity>
           </ThemedView>
         )}
       </ThemedView>
@@ -2529,13 +2515,14 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#007AFF',
   },
-  visitorActions: {
+  buttonRow: {
     flexDirection: 'row',
     gap: 12,
     marginTop: 8,
     backgroundColor: '#fff',
   },
   editButton: {
+    flex: 1,
     backgroundColor: '#007AFF',
     padding: 12,
     borderRadius: 6,
@@ -2547,6 +2534,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   deleteButton: {
+    flex: 1,
     backgroundColor: '#FF3B30',
     padding: 12,
     borderRadius: 6,
