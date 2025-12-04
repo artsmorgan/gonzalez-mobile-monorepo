@@ -38,7 +38,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             return NextResponse.json({ status: false, message: "Plaza no encontrada" }, { status: 200 });
         }
 
-        const actividades = await getActivities(marcaDia);
+        const actividades = await getActivities(marcaDia.id);
 
         if (!actividades.status) {
             return NextResponse.json({ status: false, message: actividades.message }, { status: 200 });
