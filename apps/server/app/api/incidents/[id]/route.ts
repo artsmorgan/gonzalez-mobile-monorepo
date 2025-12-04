@@ -52,7 +52,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                 }
                 const desc_notification = `La solución al incidente de tipo "${nombre_clasificacion}" ocurrido el ${fecha_incidente_string} a las ${hora_incidente_string} ha sido añadida por ${ejecutivo.nombre} el ${fecha_solucion_string} a las ${hora_solucion_string}.`;
 
-                let plazas_ids: number[] = [];
+                const plazas_ids: number[] = [];
                 const puestos_sucursal = await prisma.e_estructura_puesto.findMany({ where: { sucursal_id: incident.corpo_id } });
                 for (const puesto of puestos_sucursal) {
                     const plazas_puesto = await prisma.e_estructura_plazas.findMany({ where: { puesto_id: puesto.id } });

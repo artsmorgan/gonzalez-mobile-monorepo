@@ -289,9 +289,9 @@ export async function POST(req: NextRequest) {
                 `
             });
 
-            let fecha_encuesta_string = fecha.toISOString().split('T')[0];
-            let hora_encuesta_string = fecha.toISOString().split('T')[1].split('.')[0];
-            let desc_notification = `La encuesta de satisfacción del puesto "${puesto_db.nombre}" realizada el día ${fecha_encuesta_string} a las ${hora_encuesta_string} por parte de "${persona_evaluada}" (${cedula_persona_evaluada}) de la empresa "${empresa_evaluada}" ha sido agregada. Se ha enviado un correo de confirmación a ${email_persona_evaluada}.`;
+            const fecha_encuesta_string = fecha.toISOString().split('T')[0];
+            const hora_encuesta_string = fecha.toISOString().split('T')[1].split('.')[0];
+            const desc_notification = `La encuesta de satisfacción del puesto "${puesto_db.nombre}" realizada el día ${fecha_encuesta_string} a las ${hora_encuesta_string} por parte de "${persona_evaluada}" (${cedula_persona_evaluada}) de la empresa "${empresa_evaluada}" ha sido agregada. Se ha enviado un correo de confirmación a ${email_persona_evaluada}.`;
             await sendNotificationByRole(marca_id, "Encuesta de satisfacción agregada", desc_notification, ["ADMINISTRATIVO", "SUPERVISOR"]);
         }
 

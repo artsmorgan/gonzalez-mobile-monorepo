@@ -174,7 +174,10 @@ async function marcar_salida(id: number, horaAccion: string, reason: string) {
             return { status: false, message: "No se pudo actualizar la marca del dia" };
         }
 
-        await check_unmarked_activities(marcaDia);
+        const response = await check_unmarked_activities(marcaDia.id);
+        if (!response.status) {
+            return { status: false, message: response.message };
+        }
 
         return { status: true, message: "Salida marcada correctamente" };
     }
@@ -185,41 +188,51 @@ async function marcar_salida(id: number, horaAccion: string, reason: string) {
     }
 }
 
-async function check_unmarked_activities(marcaDia: any) {
-    const activities = await getActivities(marcaDia);
-    if (activities.status && activities.actividades && activities.actividades.length > 0) {
-        let unmarked = false;
-        let unmarked_activities = "";
-        for (const activity of activities.actividades) {
-            if (!activity.is_marcada) {
-                unmarked = true;
-                unmarked_activities += activity.nombre_actividad;
-                if (activity.is_revision_equipo) {
-                    let unmarked_items = " (";
-                    for (const item of activity.inventario) {
-                        if (item.revision_equipo && !item.revision_equipo.marcada) {
-                            unmarked = true;
-                            unmarked_items += item.nombre;
-                            unmarked_items += ", ";
+async function check_unmarked_activities(id: number) {
+    const activities = await getActivities(id);
+    if (activities.status) {
+        if (activities.actividades && activities.actividades.length > 0) {
+            const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id } });
+            if (!marcaDia) {
+                return { status: false, message: "Marca no encontrada" };
+            }
+            let unmarked = false;
+            let unmarked_activities = "";
+            for (const activity of activities.actividades) {
+                if (!activity.is_marcada) {
+                    unmarked = true;
+                    unmarked_activities += activity.nombre_actividad;
+                    if (activity.is_revision_equipo) {
+                        let unmarked_items = " (";
+                        for (const item of activity.inventario) {
+                            if (item.revision_equipo && !item.revision_equipo.marcada) {
+                                unmarked = true;
+                                unmarked_items += item.nombre;
+                                unmarked_items += ", ";
+                            }
                         }
+                        // Remover la última coma
+                        unmarked_items = unmarked_items.slice(0, -2);
+                        unmarked_items += ")";
+                        unmarked_activities += unmarked_items;
                     }
-                    // Remover la última coma
-                    unmarked_items = unmarked_items.slice(0, -2);
-                    unmarked_items += ")";
-                    unmarked_activities += unmarked_items;
+                    unmarked_activities += ", ";
                 }
-                unmarked_activities += ", ";
+            }
+            const empleado = await prisma.c_empleado.findUnique({ where: { id: marcaDia.empleadoFijo_id ?? 0 } });
+            if (empleado && unmarked) {
+                // Remover la última coma
+                unmarked_activities = unmarked_activities.slice(0, -2);
+                const title = "Actividades sin marcar";
+                const description = `El empleado ${empleado.nombre} ${empleado.primer_apellido} marcó salida sin haber marcado las siguientes actividades: ${unmarked_activities}`;
+                await sendNotificationByRole(marcaDia.id, title, description, ["ADMINISTRATIVO", "SUPERVISOR"]);
             }
         }
-        const empleado = await prisma.c_empleado.findUnique({ where: { id: marcaDia.empleadoFijo_id ?? 0 } });
-        if (empleado && unmarked) {
-            // Remover la última coma
-            unmarked_activities = unmarked_activities.slice(0, -2);
-            const title = "Actividades sin marcar";
-            const description = `El empleado ${empleado.nombre} ${empleado.primer_apellido} marcó salida sin haber marcado las siguientes actividades: ${unmarked_activities}`;
-            await sendNotificationByRole(marcaDia.id, title, description, ["ADMINISTRATIVO", "SUPERVISOR"]);
-        }
     }
+    else {
+        return { status: false, message: activities.message };
+    }
+    return { status: true, message: "Actividades marcadas correctamente" };
 }
 
 
