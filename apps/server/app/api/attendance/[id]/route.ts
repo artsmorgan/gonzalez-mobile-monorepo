@@ -26,8 +26,6 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             return NextResponse.json({ status: false, message: "No se encontró la marca" }, { status: 200 });
         }
 
-        let earlyLeaving = false;
-        let fecha_salida_string = "";
         switch (type) {
             case "entrada":
                 if (marcaDia.hora_entrada_digitada != null) {
@@ -69,132 +67,48 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                 if (!horario) {
                     return NextResponse.json({ status: false, message: "Horario no encontrado" }, { status: 200 });
                 }
+
+                const previousUserMarca = await prisma.c_marca_dia.findFirst({ where: { empleadoFijo_id: marcaDia.empleadoFijo_id, id: { lt: marcaDia.id } }, orderBy: { id: "desc" } });
+
+                if (previousUserMarca && previousUserMarca.hora_entrada_digitada != null && previousUserMarca.hora_salida_digitada == null) {
+                    const response = await marcar_salida(previousUserMarca.id, horaAccion, reason);
+                }
+
+                const updated = await prisma.c_marca_dia.update({ where: { id: marcaDia.id }, data: marcaDia });
+
+                if (!updated) {
+                    return { status: false, message: "No se pudo actualizar la marca del dia" };
+                }
+
+                const empleado = await prisma.c_empleado.findUnique({ where: { id: marcaDia.empleadoFijo_id ?? 0 } });
+                const current_corpo = await prisma.e_estructura_sucursal.findUnique({ where: { id: marcaDia.corpo_id } });
+                const current_puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: marcaDia.puesto_id } });
+                if (empleado && current_corpo && current_puesto) {
+                    if (marcaDia.hora_inicio && marcaDia.fecha && marcaDia.hora_entrada_digitada) {
+                        const momentoEntrada = marcaDia.fecha.getTime() + marcaDia.hora_inicio.getTime();
+                        let desc_tardia = "";
+                        if (momentoEntrada < marcaDia.hora_entrada_digitada.getTime()) {
+                            const lateTime = await getLateTime(marcaDia.id, marcaDia.hora_entrada_digitada.getTime());
+                            if (lateTime) {
+                                desc_tardia = " con una tardía de " + lateTime;
+                            }
+                        }
+                        const title = "Ingreso de trabajo confirmado";
+                        const description = `El empleado ${empleado.nombre} ${empleado.primer_apellido} ha ingresado a su puesto de ${current_puesto.nombre}${desc_tardia}`;
+                        await sendNotificationByRole(marcaDia.id, title, description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+                    }
+                }
                 break;
             case "salida":
                 if (marcaDia.hora_salida_digitada != null) {
                     return NextResponse.json({ status: false, message: "Ya has marcado la salida" }, { status: 200 });
                 }
 
-                const now = new Date(horaAccion);
-
-                marcaDia.hora_salida_digitada = now;
-
-                if (!marcaDia.hora_fin || !marcaDia.hora_inicio) {
-                    return NextResponse.json({ status: false, message: "Hora de finalización no establecida" }, { status: 200 });
-                }
-
-                if (!marcaDia.fecha) {
-                    return NextResponse.json({ status: false, message: "Fecha no establecida" }, { status: 200 });
-                }
-
-                const endDate = new Date(marcaDia.hora_fin);
-                endDate.setFullYear(marcaDia.fecha.getFullYear(), marcaDia.fecha.getMonth(), marcaDia.hora_inicio > marcaDia.hora_fin ? marcaDia.fecha.getDate() + 1 : marcaDia.fecha.getDate());
-
-                if (now.getTime() < (endDate.getTime() - 15 * 60 * 1000)) {
-                    const salidaAnticipada = await prisma.c_salida_anticipada.create({
-                        data: {
-                            tipo_turno: marcaDia.tipo_turno,
-                            horario_str: `${marcaDia.hora_inicio.getHours().toString().padStart(2, '0')}:${marcaDia.hora_inicio.getMinutes().toString().padStart(2, '0')}-${marcaDia.hora_fin.getHours().toString().padStart(2, '0')}:${marcaDia.hora_fin.getMinutes().toString().padStart(2, '0')}`,
-                            cantidad_horas: marcaDia.horas_duracion || 0,
-                            hora_salida_anticipada: now,
-                            minutos_descuento: (endDate.getTime() - now.getTime()) / 60000,
-                            motivo: reason
-                        }
-                    });
-
-                    marcaDia.hora_salida_anticipada = now;
-                    marcaDia.salida_anticipada_id = salidaAnticipada.id;
-                    earlyLeaving = true;
-                    fecha_salida_string = now.toISOString().split('T')[0];
+                const response = await marcar_salida(marcaDia.id, horaAccion, reason);
+                if (!response.status) {
+                    return NextResponse.json({ status: false, message: response.message }, { status: 200 });
                 }
                 break;
-        }
-
-        const updated = await prisma.c_marca_dia.update({ where: { id: marcaDia.id }, data: marcaDia });
-
-        if (!updated) {
-            return NextResponse.json({ status: false, message: "No se pudo actualizar la marca del dia" }, { status: 200 });
-        }
-
-        if (earlyLeaving) {
-            const empleado = await prisma.c_empleado.findUnique({ where: { id: marcaDia.empleadoFijo_id ?? 0 } });
-            if (!empleado) {
-                return NextResponse.json({ status: false, message: "No se encontró el empleado" }, { status: 200 });
-            }
-
-            const title = "Salida anticipada";
-            const description = `El empleado ${empleado.nombre} ${empleado.primer_apellido} ha salido anticipadamente a las ${fecha_salida_string}. Motivo: ${reason}`;
-            await sendNotificationByRole(marcaDia.id, title, description, ["ADMINISTRATIVO", "SUPERVISOR"]);
-        }
-
-        const empleado = await prisma.c_empleado.findUnique({ where: { id: marcaDia.empleadoFijo_id ?? 0 } });
-        if (type == "entrada") {
-            const current_corpo = await prisma.e_estructura_sucursal.findUnique({ where: { id: marcaDia.corpo_id } });
-            const current_puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: marcaDia.puesto_id } });
-            if (empleado && current_corpo && current_puesto) {
-                const lastTwoMarks = await prisma.c_marca_dia.findMany({ where: { empleadoFijo_id: marcaDia.empleadoFijo_id }, orderBy: { id: "desc" }, take: 2 });
-                if (lastTwoMarks.length <= 2) {
-                    const secondLastMark = lastTwoMarks[1];
-                    if (secondLastMark.hora_salida_digitada == null) {
-                        const previous_corpo = await prisma.e_estructura_sucursal.findUnique({ where: { id: secondLastMark.corpo_id } });
-                        const previous_puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: secondLastMark.puesto_id } });
-                        if (previous_corpo && previous_puesto) {
-                            const title = "Cambio de puesto sin confirmación de salida";
-                            const description = `El empleado ${empleado.nombre} ${empleado.primer_apellido} ha ingresado a su puesto de ${current_puesto.nombre} en ${current_corpo.nombre} sin confirmar la salida de su puesto ${previous_puesto.nombre} en ${previous_corpo.nombre}`;
-                            await sendNotificationByRole(secondLastMark.id, title, description, ["ADMINISTRATIVO", "SUPERVISOR"]);
-                        }
-                    }
-                }
-
-                if (marcaDia.hora_inicio && marcaDia.fecha && marcaDia.hora_entrada_digitada) {
-                    const momentoEntrada = marcaDia.fecha.getTime() + marcaDia.hora_inicio.getTime();
-                    let title_tardia = "Ingreso de trabajo confirmado";
-                    let desc_tardia = "";
-                    if (momentoEntrada < marcaDia.hora_entrada_digitada.getTime()) {
-                        const hora_entrada_digitada_string = marcaDia.hora_entrada_digitada.toISOString().split('T');
-                        title_tardia = " con una tardía";
-                        desc_tardia = " con una tardía al marcar ingreso en " + hora_entrada_digitada_string[0] + " a las " + hora_entrada_digitada_string[1].split('.')[0];
-                    }
-                    const title = "Ingreso de trabajo confirmado";
-                    const description = `El empleado ${empleado.nombre} ${empleado.primer_apellido} ha ingresado a su puesto de ${current_puesto.nombre}${desc_tardia}`;
-                    await sendNotificationByRole(marcaDia.id, title, description, ["ADMINISTRATIVO", "SUPERVISOR"]);
-                }
-            }
-        }
-        else {
-            const activities = await getActivities(marcaDia);
-            if (activities.status && activities.actividades && activities.actividades.length > 0) {
-                let unmarked = false;
-                let unmarked_activities = "";
-                for (const activity of activities.actividades) {
-                    if (!activity.is_marcada) {
-                        unmarked = true;
-                        unmarked_activities += activity.nombre_actividad;
-                        if (activity.is_revision_equipo) {
-                            let unmarked_items = " (";
-                            for (const item of activity.inventario) {
-                                if (item.revision_equipo && !item.revision_equipo.marcada) {
-                                    unmarked = true;
-                                    unmarked_items += item.nombre;
-                                    unmarked_items += ", ";
-                                }
-                            }
-                            // Remover la última coma
-                            unmarked_items = unmarked_items.slice(0, -2);
-                            unmarked_items += ")";
-                            unmarked_activities += unmarked_items;
-                        }
-                        unmarked_activities += ", ";
-                    }
-                }
-                if (empleado && unmarked) {
-                    // Remover la última coma
-                    unmarked_activities = unmarked_activities.slice(0, -2);
-                    const title = "Actividades sin marcar";
-                    const description = `El empleado ${empleado.nombre} ${empleado.primer_apellido} marcó salida sin haber marcado las siguientes actividades: ${unmarked_activities}`;
-                    await sendNotificationByRole(marcaDia.id, title, description, ["ADMINISTRATIVO", "SUPERVISOR"]);
-                }
-            }
         }
 
         return NextResponse.json({ status: true, message: type == "entrada" ? "Ingreso de trabajo confirmado" : "Salida de trabajo confirmada" }, { status: 200 });
@@ -204,3 +118,169 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }
+
+async function marcar_salida(id: number, horaAccion: string, reason: string) {
+    try {
+        const now = new Date(horaAccion);
+
+        const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id } });
+        if (!marcaDia) {
+            return { status: false, message: "Marca no encontrada" };
+        }
+
+        marcaDia.hora_salida_digitada = now;
+
+        if (!marcaDia.hora_fin || !marcaDia.hora_inicio) {
+            return { status: false, message: "Hora de fin o inicio no establecida" };
+        }
+
+        if (!marcaDia.fecha) {
+            return { status: false, message: "Fecha no establecida" };
+        }
+
+        const endDate = new Date(marcaDia.hora_fin);
+        endDate.setFullYear(marcaDia.fecha.getFullYear(), marcaDia.fecha.getMonth(), marcaDia.hora_inicio > marcaDia.hora_fin ? marcaDia.fecha.getDate() + 1 : marcaDia.fecha.getDate());
+
+        let salidaAnticipada = null;
+        if (now.getTime() < (endDate.getTime() - 15 * 60 * 1000)) {
+            salidaAnticipada = await prisma.c_salida_anticipada.create({
+                data: {
+                    tipo_turno: marcaDia.tipo_turno,
+                    horario_str: `${marcaDia.hora_inicio.getHours().toString().padStart(2, '0')}:${marcaDia.hora_inicio.getMinutes().toString().padStart(2, '0')}-${marcaDia.hora_fin.getHours().toString().padStart(2, '0')}:${marcaDia.hora_fin.getMinutes().toString().padStart(2, '0')}`,
+                    cantidad_horas: marcaDia.horas_duracion || 0,
+                    hora_salida_anticipada: now,
+                    minutos_descuento: (endDate.getTime() - now.getTime()) / 60000,
+                    motivo: reason
+                }
+            });
+        }
+
+        if (salidaAnticipada) {
+            marcaDia.hora_salida_digitada = now;
+            marcaDia.salida_anticipada_id = salidaAnticipada.id;
+            const empleado = await prisma.c_empleado.findUnique({ where: { id: marcaDia.empleadoFijo_id ?? 0 } });
+            if (empleado) {
+                const title = "Salida anticipada";
+                const fecha_salida_string = now.toISOString().split('T')[0];
+                const hora_salida_string = now.toISOString().split('T')[1].split('.')[0];
+                const description = `El empleado ${empleado.nombre} ${empleado.primer_apellido} ha salido anticipadamente el día ${fecha_salida_string} a las ${hora_salida_string}. Motivo: ${reason}`;
+                await sendNotificationByRole(marcaDia.id, title, description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+            }
+        }
+
+        const updated = await prisma.c_marca_dia.update({ where: { id: marcaDia.id }, data: marcaDia });
+
+        if (!updated) {
+            return { status: false, message: "No se pudo actualizar la marca del dia" };
+        }
+
+        await check_unmarked_activities(marcaDia);
+
+        return { status: true, message: "Salida marcada correctamente" };
+    }
+    catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        console.log(errorMessage);
+        return { status: false, message: errorMessage };
+    }
+}
+
+async function check_unmarked_activities(marcaDia: any) {
+    const activities = await getActivities(marcaDia);
+    if (activities.status && activities.actividades && activities.actividades.length > 0) {
+        let unmarked = false;
+        let unmarked_activities = "";
+        for (const activity of activities.actividades) {
+            if (!activity.is_marcada) {
+                unmarked = true;
+                unmarked_activities += activity.nombre_actividad;
+                if (activity.is_revision_equipo) {
+                    let unmarked_items = " (";
+                    for (const item of activity.inventario) {
+                        if (item.revision_equipo && !item.revision_equipo.marcada) {
+                            unmarked = true;
+                            unmarked_items += item.nombre;
+                            unmarked_items += ", ";
+                        }
+                    }
+                    // Remover la última coma
+                    unmarked_items = unmarked_items.slice(0, -2);
+                    unmarked_items += ")";
+                    unmarked_activities += unmarked_items;
+                }
+                unmarked_activities += ", ";
+            }
+        }
+        const empleado = await prisma.c_empleado.findUnique({ where: { id: marcaDia.empleadoFijo_id ?? 0 } });
+        if (empleado && unmarked) {
+            // Remover la última coma
+            unmarked_activities = unmarked_activities.slice(0, -2);
+            const title = "Actividades sin marcar";
+            const description = `El empleado ${empleado.nombre} ${empleado.primer_apellido} marcó salida sin haber marcado las siguientes actividades: ${unmarked_activities}`;
+            await sendNotificationByRole(marcaDia.id, title, description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+        }
+    }
+}
+
+
+const getLateTime = async (id: number, horaAccion: number | null) => {
+    const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id } });
+    if (!marcaDia) {
+        return null;
+    }
+    const fecha = marcaDia.fecha.toISOString().split('T')[0];
+    const horaInicio = marcaDia.hora_inicio?.toISOString().split('T')[1].split('.')[0] ?? '00:00:00';
+    const inicio = fecha + 'T' + horaInicio;
+    if (!horaAccion) {
+        return null;
+    }
+    const ahora = new Date(horaAccion).toISOString();
+
+    // Convertir a Date objects para comparar
+    const inicioDate = new Date(inicio);
+    const ahoraDate = new Date(ahora);
+
+    // Validar si ahora es mayor que inicio
+    if (ahoraDate > inicioDate) {
+        // Calcular la diferencia en milisegundos
+        const diferenciaMs = ahoraDate.getTime() - inicioDate.getTime();
+
+        // Convertir a segundos, minutos y horas
+        const segundos = Math.floor(diferenciaMs / 1000);
+        const minutos = Math.floor(segundos / 60);
+        const horas = Math.floor(minutos / 60);
+
+        // Obtener los valores restantes
+        const segundosRestantes = segundos % 60;
+        const minutosRestantes = minutos % 60;
+
+        // Construir el texto legible
+        const partes: string[] = [];
+
+        if (horas > 0) {
+            partes.push(`${horas} ${horas === 1 ? 'hora' : 'horas'}`);
+        }
+        if (minutosRestantes > 0) {
+            partes.push(`${minutosRestantes} ${minutosRestantes === 1 ? 'min' : 'mins'}`);
+        }
+        if (segundosRestantes > 0) {
+            partes.push(`${segundosRestantes} ${segundosRestantes === 1 ? 'seg' : 'segs'}`);
+        }
+
+        // Si no hay diferencia significativa, mostrar solo segundos
+        if (partes.length === 0) {
+            return '0 segundos';
+        }
+
+        // Unir las partes con comas y "y" antes de la última
+        if (partes.length === 1) {
+            return partes[0];
+        } else if (partes.length === 2) {
+            return `${partes[0]} y ${partes[1]}`;
+        } else {
+            return `${partes.slice(0, -1).join(', ')} y ${partes[partes.length - 1]}`;
+        }
+    }
+
+    return null;
+};

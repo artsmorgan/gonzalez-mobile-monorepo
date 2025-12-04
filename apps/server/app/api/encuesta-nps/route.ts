@@ -4,6 +4,7 @@ import { toZonedTime, format } from "date-fns-tz";
 import { transporter } from '../../../transporter';
 
 import { prisma } from "../../../utils/prismaClient";
+import { sendNotificationByRole } from "../../../utils/sendNotification";
 
 export async function GET(req: NextRequest) {
     try {
@@ -268,24 +269,31 @@ export async function POST(req: NextRequest) {
             }
         });
 
-        const evaluaciones_json = JSON.parse(evaluaciones);
-        let evaluaciones_html = "";
-        for (const item of evaluaciones_json) {
-            evaluaciones_html += `<p>${item.question}: ${item.result}</p><br>`;
-        }
+        if (encuesta) {
+            const evaluaciones_json = JSON.parse(evaluaciones);
+            let evaluaciones_html = "";
+            for (const item of evaluaciones_json) {
+                evaluaciones_html += `<p>${item.question}: ${item.result}</p><br>`;
+            }
 
-        await transporter.sendMail({
-            from: `Encuesta NPS - <${process.env.EMAIL_USER}>`,
-            to: email_persona_evaluada,
-            subject: "Encuesta de satisfacción del puesto " + puesto_db.nombre,
-            html: `
-              <h1>Buenos días, estimado(a) ${persona_evaluada} (${cedula_persona_evaluada}) de la organización ${empresa_evaluada}</h1>
-              <p>Gracias por tu tiempo y esfuerzo en completar la encuesta de satisfacción del puesto ${puesto_db.nombre}.</p>
-              <p>A continuación, te mostramos un resumen de la encuesta:</p><br>
-              ${evaluaciones_html}
-              <p>Gracias por tu colaboración.</p>
-            `
-        });
+            await transporter.sendMail({
+                from: `Encuesta NPS - <${process.env.EMAIL_USER}>`,
+                to: email_persona_evaluada,
+                subject: "Encuesta de satisfacción del puesto " + puesto_db.nombre,
+                html: `
+                    <h1>Buenos días, estimado(a) ${persona_evaluada} (${cedula_persona_evaluada}) de la organización ${empresa_evaluada}</h1>
+                    <p>Gracias por tu tiempo y esfuerzo en completar la encuesta de satisfacción del puesto ${puesto_db.nombre}.</p>
+                    <p>A continuación, te mostramos un resumen de la encuesta:</p><br>
+                    ${evaluaciones_html}
+                    <p>Gracias por tu colaboración.</p>
+                `
+            });
+
+            let fecha_encuesta_string = fecha.toISOString().split('T')[0];
+            let hora_encuesta_string = fecha.toISOString().split('T')[1].split('.')[0];
+            let desc_notification = `La encuesta de satisfacción del puesto "${puesto_db.nombre}" realizada el día ${fecha_encuesta_string} a las ${hora_encuesta_string} por parte de "${persona_evaluada}" (${cedula_persona_evaluada}) de la empresa "${empresa_evaluada}" ha sido agregada. Se ha enviado un correo de confirmación a ${email_persona_evaluada}.`;
+            await sendNotificationByRole(marca_id, "Encuesta de satisfacción agregada", desc_notification, ["ADMINISTRATIVO", "SUPERVISOR"]);
+        }
 
         return NextResponse.json({ status: true, message: "Encuesta creada correctamente" }, { status: 200 });
     }

@@ -30,8 +30,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 200 });
         }
 
-        // Obtener siempre la última marca agregada
-        const marcaDia = await prisma.c_marca_dia.findFirst({ where: { empleadoFijo_id: id }, orderBy: { id: "desc" } });
+        const marcaDia = await get_last_marca(empleado.id);
         if (!marcaDia) {
             return NextResponse.json({ status: false, message: "No se encontró la marca del dia" }, { status: 200 });
         }
@@ -233,20 +232,78 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
     }
 }
 
-function getDistanceFromLatLonInMeters(lat1: number, lon1: number, lat2: number, lon2: number) {
-    const R = 6371000; // radio de la Tierra en metros
-    const toRad = (value: number) => (value * Math.PI) / 180;
+async function get_last_marca(id: number) {
+    const now = toZonedTime(new Date(), "America/Costa_Rica");
+    const nowPlus15 = new Date(now.getTime() + 15 * 60 * 1000);
 
-    const dLat = toRad(lat2 - lat1);
-    const dLon = toRad(lon2 - lon1);
+    // Paso 1: Buscar si existe un registro dentro de los próximos 15 minutos
+    const proximo = await prisma.c_marca_dia.findFirst({
+        where: {
+            empleadoFijo_id: id,
+            hora_salida_digitada: null,
+            // fecha + hora_inicio >= now
+            OR: [
+                {
+                    fecha: {
+                        gt: now, // fecha futura
+                    },
+                },
+                {
+                    fecha: {
+                        equals: now.toISOString().split("T")[0],
+                    },
+                    hora_inicio: {
+                        gte: now.toTimeString().slice(0, 8),
+                    },
+                },
+            ],
+        },
+        orderBy: [
+            { fecha: "asc" },
+            { hora_inicio: "asc" },
+        ],
+    });
 
-    const a =
-        Math.sin(dLat / 2) ** 2 +
-        Math.cos(toRad(lat1)) *
-        Math.cos(toRad(lat2)) *
-        Math.sin(dLon / 2) ** 2;
+    // Si existe uno futuro, validar si está dentro del rango de 15 minutos
+    if (proximo) {
+        // Convertimos la fecha + hora_inicio en un solo Date
+        const proximoDateTime = new Date(`${proximo.fecha}T${proximo.hora_inicio}`);
 
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        if (proximoDateTime <= nowPlus15) {
+            return proximo;
+        }
+    }
 
-    return R * c;
+    // Paso 2: Si no hay ninguno dentro de 15 minutos, tomar el último anterior
+    const ultimo = await prisma.c_marca_dia.findFirst({
+        where: {
+            empleadoFijo_id: id,
+            hora_salida_digitada: null,
+            OR: [
+                {
+                    fecha: {
+                        lt: now, // fecha pasada
+                    },
+                },
+                {
+                    fecha: {
+                        equals: now.toISOString().split("T")[0],
+                    },
+                    hora_inicio: {
+                        lt: now.toTimeString().slice(0, 8),
+                    },
+                },
+            ],
+        },
+        orderBy: [
+            { fecha: "desc" },
+            { hora_inicio: "desc" },
+        ],
+    });
+
+    if (!ultimo) {
+        return null;
+    }
+
+    return ultimo;
 }
