@@ -22,6 +22,7 @@ interface Notification {
   title: string;
   description: string;
   watched: boolean;
+  is_plaza: boolean;
   created_at: string;
 }
 
@@ -29,7 +30,7 @@ export default function NotificationsScreen() {
   const { employee, refreshAccessToken, logout } = useAuth();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const navigation = useNavigation<NotificationsScreenNavigationProp>();
-  
+
   // Notifications state
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -57,7 +58,7 @@ export default function NotificationsScreen() {
 
       // Verificar si existe la variable notifications en AsyncStorage
       let notificationsStr = await AsyncStorage.getItem('notifications');
-      
+
       // Si no existe, crear un array vacío
       if (!notificationsStr) {
         await AsyncStorage.setItem('notifications', JSON.stringify([]));
@@ -80,7 +81,7 @@ export default function NotificationsScreen() {
     return networkState.isConnected && networkState.isInternetReachable ? true : false;
   };
 
-  const markAsRead = async (notificationId: number) => {
+  const markAsRead = async (notificationId: number, is_plaza: boolean) => {
     Alert.alert(
       'Confirmar',
       '¿Deseas marcar esta notificación como leída?',
@@ -96,7 +97,7 @@ export default function NotificationsScreen() {
               if (isConnected) {
                 // Con internet: llamar a la función API
                 const data = await markNotificationsAsRead({
-                  notificationIds: [notificationId],
+                  notificationIds: [{ id: notificationId, is_plaza: is_plaza } as { id: number, is_plaza: boolean }],
                   refreshAccessToken,
                   logout,
                 });
@@ -106,12 +107,12 @@ export default function NotificationsScreen() {
                   const notificationsStr = await AsyncStorage.getItem('notifications');
                   if (notificationsStr) {
                     const notificationsData = JSON.parse(notificationsStr);
-                    const updatedNotifications = notificationsData.map((n: Notification) => 
+                    const updatedNotifications = notificationsData.map((n: Notification) =>
                       n.id === notificationId ? { ...n, watched: true } : n
                     );
                     await AsyncStorage.setItem('notifications', JSON.stringify(updatedNotifications));
                     setNotifications(updatedNotifications);
-                    
+
                     // Emitir evento para actualizar el contador en AppHeader
                     eventBus.emit('notificationsUpdated');
                     eventBus.emit('notificationsUpdatedCounter');
@@ -124,12 +125,12 @@ export default function NotificationsScreen() {
                 // Sin internet: modo offline
                 const actionsStr = await AsyncStorage.getItem('notifications_actions');
                 const actions = actionsStr ? JSON.parse(actionsStr) : [];
-                
+
                 // Verificar si ya existe una acción para esta notificación
-                const existingActionIndex = actions.findIndex((a: any) => 
+                const existingActionIndex = actions.findIndex((a: any) =>
                   a.type === 'markAsRead' && a.notificationIds.includes(notificationId)
                 );
-                
+
                 if (existingActionIndex === -1) {
                   // Agregar nueva acción
                   actions.push({
@@ -143,12 +144,12 @@ export default function NotificationsScreen() {
                 const notificationsStr = await AsyncStorage.getItem('notifications');
                 if (notificationsStr) {
                   const notificationsData = JSON.parse(notificationsStr);
-                  const updatedNotifications = notificationsData.map((n: Notification) => 
+                  const updatedNotifications = notificationsData.map((n: Notification) =>
                     n.id === notificationId ? { ...n, watched: true } : n
                   );
                   await AsyncStorage.setItem('notifications', JSON.stringify(updatedNotifications));
                   setNotifications(updatedNotifications);
-                  
+
                   // Emitir evento para actualizar el contador en AppHeader
                   eventBus.emit('notificationsUpdated');
                   eventBus.emit('notificationsUpdatedCounter');
@@ -169,7 +170,7 @@ export default function NotificationsScreen() {
   const markAllAsRead = async () => {
     // Obtener todas las notificaciones no leídas
     const unreadNotifications = notifications.filter(n => !n.watched);
-    
+
     if (unreadNotifications.length === 0) {
       Alert.alert('Información', 'No hay notificaciones sin leer');
       return;
@@ -184,15 +185,15 @@ export default function NotificationsScreen() {
           text: 'Marcar todas como leídas',
           onPress: async () => {
             try {
-              const unreadIds = unreadNotifications.map(n => n.id);
-              
+              const unreadIds = unreadNotifications.map(n => ({ id: n.id, is_plaza: n.is_plaza }));
+
               // Verificar conectividad
               const isConnected = await getConnectionStatus();
 
               if (isConnected) {
                 // Con internet: llamar a la función API
                 const data = await markNotificationsAsRead({
-                  notificationIds: unreadIds,
+                  notificationIds: unreadIds as { id: number, is_plaza: boolean }[],
                   refreshAccessToken,
                   logout,
                 });
@@ -208,7 +209,7 @@ export default function NotificationsScreen() {
                     }));
                     await AsyncStorage.setItem('notifications', JSON.stringify(updatedNotifications));
                     setNotifications(updatedNotifications);
-                    
+
                     // Emitir evento para actualizar el contador en AppHeader
                     eventBus.emit('notificationsUpdated');
                     eventBus.emit('notificationsUpdatedCounter');
@@ -221,11 +222,11 @@ export default function NotificationsScreen() {
                 // Sin internet: modo offline
                 const actionsStr = await AsyncStorage.getItem('notifications_actions');
                 const actions = actionsStr ? JSON.parse(actionsStr) : [];
-                
+
                 // Agregar nueva acción con todos los IDs no leídos
                 actions.push({
                   type: 'markAsRead',
-                  notificationIds: unreadIds,
+                  notificationIds: unreadIds as { id: number, is_plaza: boolean }[],
                 });
                 await AsyncStorage.setItem('notifications_actions', JSON.stringify(actions));
 
@@ -239,7 +240,7 @@ export default function NotificationsScreen() {
                   }));
                   await AsyncStorage.setItem('notifications', JSON.stringify(updatedNotifications));
                   setNotifications(updatedNotifications);
-                  
+
                   // Emitir evento para actualizar el contador en AppHeader
                   eventBus.emit('notificationsUpdated');
                   eventBus.emit('notificationsUpdatedCounter');
@@ -295,8 +296,8 @@ export default function NotificationsScreen() {
           <ThemedText style={styles.loadingText}>Cargando notificaciones...</ThemedText>
         </ThemedView>
         <AppFooter />
-        <SlideMenu 
-          isVisible={isMenuVisible} 
+        <SlideMenu
+          isVisible={isMenuVisible}
           onClose={handleMenuClose}
           onHomePress={handleHomePress}
           currentRoute="Notifications"
@@ -308,7 +309,7 @@ export default function NotificationsScreen() {
   return (
     <ThemedView style={styles.container}>
       <AppHeader onMenuPress={handleMenuPress} title="Notificaciones" />
-      <ScrollView 
+      <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={true}
@@ -345,8 +346,8 @@ export default function NotificationsScreen() {
               </ThemedView>
             ) : (
               notifications.map(notification => (
-                <ThemedView 
-                  key={notification.id} 
+                <ThemedView
+                  key={notification.id}
                   style={[
                     styles.notificationCard,
                     { backgroundColor: notification.watched ? '#FFF' : '#E5F1FF' }
@@ -356,37 +357,37 @@ export default function NotificationsScreen() {
                     <ThemedText style={styles.notificationTitle}>
                       {notification.title}
                     </ThemedText>
-                    <TouchableOpacity 
+                    <TouchableOpacity
                       style={styles.eyeButton}
-                      onPress={() => markAsRead(notification.id)}
+                      onPress={() => markAsRead(notification.id, notification.is_plaza)}
                       disabled={notification.watched}
                     >
-                      <Ionicons 
-                        name={notification.watched ? "eye" : "eye-off"} 
-                        size={24} 
-                        color={notification.watched ? "#666" : "#007AFF"} 
+                      <Ionicons
+                        name={notification.watched ? "eye" : "eye-off"}
+                        size={24}
+                        color={notification.watched ? "#666" : "#007AFF"}
                       />
                     </TouchableOpacity>
                   </ThemedView>
-                  
+
                   <ThemedText style={styles.notificationDescription}>
                     {notification.description}
                   </ThemedText>
-                  
+
                   <ThemedText style={styles.notificationDate}>
                     <Ionicons name="time-outline" size={14} color="#666" /> {formatDate(notification.created_at)}
                   </ThemedText>
-                  
+
                 </ThemedView>
               ))
             )}
           </ThemedView>
         </ThemedView>
       </ScrollView>
-      
+
       <AppFooter />
-      <SlideMenu 
-        isVisible={isMenuVisible} 
+      <SlideMenu
+        isVisible={isMenuVisible}
         onClose={handleMenuClose}
         onHomePress={handleHomePress}
         currentRoute="Notifications"

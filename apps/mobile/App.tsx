@@ -251,15 +251,15 @@ function AppContent() {
   const routeNameRef = useRef<string | undefined>(undefined);
   // 🆕 Variable de estado para conexión a internet
   const [isConnected, setIsConnected] = React.useState<boolean | null>(null);
- 
+
   const FORCE_OFFLINE = false;
-  
+
   // 🆕 useEffect para escuchar el estado de conexión en tiempo real
   useEffect(() => {
     // Verificar conexión inicial
     if (FORCE_OFFLINE) {
       setIsConnected(false);
-      return; 
+      return;
     }
 
     const checkInitialConnection = async () => {
@@ -276,7 +276,7 @@ function AppContent() {
 
     return () => subscription.remove();
   }, []);
- 
+
   // 🆕 Mostrar alerta si se pierde la conexión
   useEffect(() => {
     const checkCaches = async () => {
@@ -290,7 +290,7 @@ function AppContent() {
           checkManualSignatureCache(),
           checkMarcaCache(),
           checkAbsentReasonCache(),
-          checkLunchTimeActionsCache(), 
+          checkLunchTimeActionsCache(),
           checkVehiclesActionsCache(),
           checkNotificationsActionsCache(),
           checkVisitorsActionsCache(),
@@ -311,8 +311,8 @@ function AppContent() {
   const checkManualSignatureCache = async () => {
     if (!employee) return;
     const manual_signature_cache = await AsyncStorage.getItem('manual_signature_cache');
-    if(manual_signature_cache) {
-      const data = await saveManualSignature({ signature: manual_signature_cache, employeeId: employee.id, refreshAccessToken, logout }); 
+    if (manual_signature_cache) {
+      const data = await saveManualSignature({ signature: manual_signature_cache, employeeId: employee.id, refreshAccessToken, logout });
       if (data.status) {
         console.log('Firma guardada correctamente');
       }
@@ -321,7 +321,7 @@ function AppContent() {
 
   const checkMarcaCache = async () => {
     const marca_cache = await AsyncStorage.getItem('marca_cache');
-    if(marca_cache) {
+    if (marca_cache) {
       const data_params = JSON.parse(marca_cache);
       const data = await saveMarca({ data_params: { type: data_params.type, reason: data_params.reason, horaAccion: data_params.horaAccion }, marcaId: data_params.marcaId, refreshAccessToken, logout });
       if (data.status) {
@@ -332,7 +332,7 @@ function AppContent() {
 
   const checkAbsentReasonCache = async () => {
     const absent_reason_cache = await AsyncStorage.getItem('absent_reason_cache');
-    if(absent_reason_cache) {
+    if (absent_reason_cache) {
       const data_params = JSON.parse(absent_reason_cache);
       const data = await saveAbsentReason({ reason: data_params.reason, marcaId: data_params.marcaId, refreshAccessToken, logout });
       if (data.status) {
@@ -343,7 +343,7 @@ function AppContent() {
 
   const checkVisitorsActionsCache = async () => {
     if (!employee) return;
-    
+
     const actionsStr = await AsyncStorage.getItem('visitors_actions');
     if (!actionsStr) return;
 
@@ -411,7 +411,7 @@ function AppContent() {
 
   const checkVehiclesActionsCache = async () => {
     if (!employee) return;
-    
+
     const actionsStr = await AsyncStorage.getItem('vehicles_actions');
     if (!actionsStr) return;
 
@@ -477,7 +477,7 @@ function AppContent() {
 
   const checkNotificationsActionsCache = async () => {
     if (!employee) return;
-    
+
     const actionsStr = await AsyncStorage.getItem('notifications_actions');
     if (!actionsStr) return;
 
@@ -500,11 +500,11 @@ function AppContent() {
           if (result.status) {
             console.log('Notificaciones marcadas como leídas correctamente');
             // Eliminar esta acción específica del array
-            const updatedActions = actions.filter((a: any) => 
+            const updatedActions = actions.filter((a: any) =>
               !(a.type === 'markAsRead' && JSON.stringify(a.notificationIds) === JSON.stringify(action.notificationIds))
             );
             await AsyncStorage.setItem('notifications_actions', JSON.stringify(updatedActions));
-            
+
             // Emitir evento para actualizar la UI
             eventBus.emit('notificationsUpdated');
           }
@@ -517,7 +517,7 @@ function AppContent() {
 
   const checkLunchTimeActionsCache = async () => {
     if (!employee) return;
-    
+
     const actionsStr = await AsyncStorage.getItem('lunchtime_actions');
     if (!actionsStr) return;
 
@@ -553,7 +553,7 @@ function AppContent() {
 
   const checkNotesActionsCache = async () => {
     if (!employee) return;
-    
+
     const actionsStr = await AsyncStorage.getItem('notes_actions');
     if (!actionsStr) return;
 
@@ -606,7 +606,7 @@ function AppContent() {
 
   const checkActivitiesActionsCache = async () => {
     if (!employee) return;
-    
+
     const actionsStr = await AsyncStorage.getItem('activities_actions');
     if (!actionsStr) return;
 
@@ -672,10 +672,10 @@ function AppContent() {
       }
     }
   }
-  
+
   const checkEvaluationsActionsCache = async () => {
     if (!employee) return;
-    
+
     const actionsStr = await AsyncStorage.getItem('evaluations_actions');
     if (!actionsStr) return;
 
@@ -702,7 +702,7 @@ function AppContent() {
               // Eliminar acción del array
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'mileage_control'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-              
+
               // Actualizar cache para marcar como sincronizado
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -730,7 +730,7 @@ function AppContent() {
               // Eliminar acción del array
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'uniform_request'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-              
+
               // Actualizar cache para marcar como sincronizado
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -742,842 +742,842 @@ function AppContent() {
                   return item;
                 });
                 await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'employee_satisfaction') {
+            console.log('Creando encuesta de satisfacción:', action.id);
+            const { createEmployeeSatisfaction } = await import('@/hooks/evaluationFunctions');
+            const result = await createEmployeeSatisfaction({
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
+
+            if (result.status) {
+              console.log('Encuesta de satisfacción creada correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'employee_satisfaction'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if (item.id_local === action.id && item.type === 'employee_satisfaction') {
+                    return { ...item, synced: true, id: result.data?.id || item.id };
                   }
-                }
-              } else if (action.type === 'employee_satisfaction') {
-                console.log('Creando encuesta de satisfacción:', action.id);
-                const { createEmployeeSatisfaction } = await import('@/hooks/evaluationFunctions');
-                const result = await createEmployeeSatisfaction({
-                  requestData: action.payload,
-                  refreshAccessToken,
-                  logout,
+                  return item;
                 });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'vehicle_maintenance') {
+            console.log('Creando planificación de mantenimiento:', action.id);
+            const { createVehicleMaintenance } = await import('@/hooks/evaluationFunctions');
+            const result = await createVehicleMaintenance({
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                if (result.status) {
-                  console.log('Encuesta de satisfacción creada correctamente');
-                  const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'employee_satisfaction'));
-                  await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-                  
-                  const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                  if (cacheStr) {
-                    const cache = JSON.parse(cacheStr);
-                    const updatedCache = cache.map((item: any) => {
-                      if (item.id_local === action.id && item.type === 'employee_satisfaction') {
-                        return { ...item, synced: true, id: result.data?.id || item.id };
-                      }
-                      return item;
-                    });
-                    await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+            if (result.status) {
+              console.log('Planificación de mantenimiento creada correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'vehicle_maintenance'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if (item.id_local === action.id && item.type === 'vehicle_maintenance') {
+                    return { ...item, synced: true, id: result.data?.id || item.id };
                   }
-                }
-              } else if (action.type === 'vehicle_maintenance') {
-                console.log('Creando planificación de mantenimiento:', action.id);
-                const { createVehicleMaintenance } = await import('@/hooks/evaluationFunctions');
-                const result = await createVehicleMaintenance({
-                  requestData: action.payload,
-                  refreshAccessToken,
-                  logout,
+                  return item;
                 });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'non_conforming_product') {
+            console.log('Creando producto no conforme:', action.id);
+            const { createNonConformingProduct } = await import('@/hooks/evaluationFunctions');
+            const result = await createNonConformingProduct({
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                if (result.status) {
-                  console.log('Planificación de mantenimiento creada correctamente');
-                  const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'vehicle_maintenance'));
-                  await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-                  
-                  const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                  if (cacheStr) {
-                    const cache = JSON.parse(cacheStr);
-                    const updatedCache = cache.map((item: any) => {
-                      if (item.id_local === action.id && item.type === 'vehicle_maintenance') {
-                        return { ...item, synced: true, id: result.data?.id || item.id };
-                      }
-                      return item;
-                    });
-                    await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+            if (result.status) {
+              console.log('Producto no conforme creado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'non_conforming_product'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if (item.id_local === action.id && item.type === 'non_conforming_product') {
+                    return { ...item, synced: true, id: result.data?.id || item.id };
                   }
-                }
-              } else if (action.type === 'non_conforming_product') {
-                console.log('Creando producto no conforme:', action.id);
-                const { createNonConformingProduct } = await import('@/hooks/evaluationFunctions');
-                const result = await createNonConformingProduct({
-                  requestData: action.payload,
-                  refreshAccessToken,
-                  logout,
+                  return item;
                 });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'complaints_master') {
+            console.log('Creando queja:', action.id);
+            const { createComplaintsMaster } = await import('@/hooks/evaluationFunctions');
+            const result = await createComplaintsMaster({
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                if (result.status) {
-                  console.log('Producto no conforme creado correctamente');
-                  const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'non_conforming_product'));
-                  await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-                  
-                  const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                  if (cacheStr) {
-                    const cache = JSON.parse(cacheStr);
-                    const updatedCache = cache.map((item: any) => {
-                      if (item.id_local === action.id && item.type === 'non_conforming_product') {
-                        return { ...item, synced: true, id: result.data?.id || item.id };
-                      }
-                      return item;
-                    });
-                    await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+            if (result.status) {
+              console.log('Queja creada correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'complaints_master'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if (item.id_local === action.id && item.type === 'complaints_master') {
+                    return { ...item, synced: true, id: result.data?.id || item.id };
                   }
-                }
-              } else if (action.type === 'complaints_master') {
-                console.log('Creando queja:', action.id);
-                const { createComplaintsMaster } = await import('@/hooks/evaluationFunctions');
-                const result = await createComplaintsMaster({
-                  requestData: action.payload,
-                  refreshAccessToken,
-                  logout,
+                  return item;
                 });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'cleaners_control') {
+            console.log('Creando control de aseadores:', action.id);
+            const { createCleanersControl } = await import('@/hooks/evaluationFunctions');
+            const result = await createCleanersControl({
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                if (result.status) {
-                  console.log('Queja creada correctamente');
-                  const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'complaints_master'));
-                  await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-                  
-                  const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                  if (cacheStr) {
-                    const cache = JSON.parse(cacheStr);
-                    const updatedCache = cache.map((item: any) => {
-                      if (item.id_local === action.id && item.type === 'complaints_master') {
-                        return { ...item, synced: true, id: result.data?.id || item.id };
-                      }
-                      return item;
-                    });
-                    await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+            if (result.status) {
+              console.log('Control de aseadores creado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'cleaners_control'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if (item.id_local === action.id && item.type === 'cleaners_control') {
+                    return { ...item, synced: true, id: result.data?.id || item.id };
                   }
-                }
-              } else if (action.type === 'cleaners_control') {
-                console.log('Creando control de aseadores:', action.id);
-                const { createCleanersControl } = await import('@/hooks/evaluationFunctions');
-                const result = await createCleanersControl({
-                  requestData: action.payload,
-                  refreshAccessToken,
-                  logout,
+                  return item;
                 });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'physical_minute_agenda') {
+            console.log('Creando agenda minuta física:', action.id);
+            const { createPhysicalMinuteAgenda } = await import('@/hooks/evaluationFunctions');
+            const result = await createPhysicalMinuteAgenda({
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                if (result.status) {
-                  console.log('Control de aseadores creado correctamente');
-                  const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'cleaners_control'));
-                  await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-                  
-                  const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                  if (cacheStr) {
-                    const cache = JSON.parse(cacheStr);
-                    const updatedCache = cache.map((item: any) => {
-                      if (item.id_local === action.id && item.type === 'cleaners_control') {
-                        return { ...item, synced: true, id: result.data?.id || item.id };
-                      }
-                      return item;
-                    });
-                    await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+            if (result.status) {
+              console.log('Agenda minuta física creada correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'physical_minute_agenda'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if (item.id_local === action.id && item.type === 'physical_minute_agenda') {
+                    return { ...item, synced: true, id: result.data?.id || item.id };
                   }
-                }
-              } else if (action.type === 'physical_minute_agenda') {
-                console.log('Creando agenda minuta física:', action.id);
-                const { createPhysicalMinuteAgenda } = await import('@/hooks/evaluationFunctions');
-                const result = await createPhysicalMinuteAgenda({
-                  requestData: action.payload,
-                  refreshAccessToken,
-                  logout,
+                  return item;
                 });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'action_plan') {
+            console.log('Creando plan de acción:', action.id);
+            const { createActionPlan } = await import('@/hooks/evaluationFunctions');
+            const result = await createActionPlan({
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                if (result.status) {
-                  console.log('Agenda minuta física creada correctamente');
-                  const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'physical_minute_agenda'));
-                  await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-                  
-                  const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                  if (cacheStr) {
-                    const cache = JSON.parse(cacheStr);
-                    const updatedCache = cache.map((item: any) => {
-                      if (item.id_local === action.id && item.type === 'physical_minute_agenda') {
-                        return { ...item, synced: true, id: result.data?.id || item.id };
-                      }
-                      return item;
-                    });
-                    await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+            if (result.status) {
+              console.log('Plan de acción creado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'action_plan'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if (item.id_local === action.id && item.type === 'action_plan') {
+                    return { ...item, synced: true, id: result.data?.id || item.id };
                   }
-                }
-              } else if (action.type === 'action_plan') {
-                console.log('Creando plan de acción:', action.id);
-                const { createActionPlan } = await import('@/hooks/evaluationFunctions');
-                const result = await createActionPlan({
-                  requestData: action.payload,
-                  refreshAccessToken,
-                  logout,
+                  return item;
                 });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'work_role') {
+            console.log('Creando rol de trabajo:', action.id);
+            const { createWorkRole } = await import('@/hooks/evaluationFunctions');
+            const result = await createWorkRole({
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                if (result.status) {
-                  console.log('Plan de acción creado correctamente');
-                  const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'action_plan'));
-                  await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-                  
-                  const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                  if (cacheStr) {
-                    const cache = JSON.parse(cacheStr);
-                    const updatedCache = cache.map((item: any) => {
-                      if (item.id_local === action.id && item.type === 'action_plan') {
-                        return { ...item, synced: true, id: result.data?.id || item.id };
-                      }
-                      return item;
-                    });
-                    await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+            if (result.status) {
+              console.log('Rol de trabajo creado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'work_role'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if (item.id_local === action.id && item.type === 'work_role') {
+                    return { ...item, synced: true, id: result.data?.id || item.id };
                   }
-                }
-                  } else if (action.type === 'work_role') {
-                    console.log('Creando rol de trabajo:', action.id);
-                    const { createWorkRole } = await import('@/hooks/evaluationFunctions');
-                    const result = await createWorkRole({
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+                  return item;
+                });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'contract_basic_data') {
+            console.log('Creando datos básicos de contrato:', action.id);
+            const { createContractBasicData } = await import('@/hooks/evaluationFunctions');
+            const result = await createContractBasicData({
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Rol de trabajo creado correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'work_role'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Datos básicos de contrato creados correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'contract_basic_data'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.map((item: any) => {
-                          if (item.id_local === action.id && item.type === 'work_role') {
-                            return { ...item, synced: true, id: result.data?.id || item.id };
-                          }
-                          return item;
-                        });
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'contract_basic_data') {
-                    console.log('Creando datos básicos de contrato:', action.id);
-                    const { createContractBasicData } = await import('@/hooks/evaluationFunctions');
-                    const result = await createContractBasicData({
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if (item.id_local === action.id && item.type === 'contract_basic_data') {
+                    return { ...item, synced: true, id: result.data?.id || item.id };
+                  }
+                  return item;
+                });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'delivery_schedule') {
+            console.log('Creando cronograma de entrega:', action.id);
+            const { createDeliverySchedule } = await import('@/hooks/evaluationFunctions');
+            const result = await createDeliverySchedule({
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Datos básicos de contrato creados correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'contract_basic_data'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Cronograma de entrega creado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'delivery_schedule'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.map((item: any) => {
-                          if (item.id_local === action.id && item.type === 'contract_basic_data') {
-                            return { ...item, synced: true, id: result.data?.id || item.id };
-                          }
-                          return item;
-                        });
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'delivery_schedule') {
-                    console.log('Creando cronograma de entrega:', action.id);
-                    const { createDeliverySchedule } = await import('@/hooks/evaluationFunctions');
-                    const result = await createDeliverySchedule({
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if (item.id_local === action.id && item.type === 'delivery_schedule') {
+                    return { ...item, synced: true, id: result.data?.id || item.id };
+                  }
+                  return item;
+                });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'environmental_management_plan') {
+            console.log('Creando plan de gestión ambiental:', action.id);
+            const { createEnvironmentalManagementPlan } = await import('@/hooks/evaluationFunctions');
+            const result = await createEnvironmentalManagementPlan({
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Cronograma de entrega creado correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'delivery_schedule'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Plan de gestión ambiental creado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'environmental_management_plan'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.map((item: any) => {
-                          if (item.id_local === action.id && item.type === 'delivery_schedule') {
-                            return { ...item, synced: true, id: result.data?.id || item.id };
-                          }
-                          return item;
-                        });
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'environmental_management_plan') {
-                    console.log('Creando plan de gestión ambiental:', action.id);
-                    const { createEnvironmentalManagementPlan } = await import('@/hooks/evaluationFunctions');
-                    const result = await createEnvironmentalManagementPlan({
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if (item.id_local === action.id && item.type === 'environmental_management_plan') {
+                    return { ...item, synced: true, id: result.data?.id || item.id };
+                  }
+                  return item;
+                });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'cleaning_work_plan') {
+            console.log('Creando plan de trabajo - Personal Aseo y limpieza:', action.id);
+            const { createCleaningWorkPlan } = await import('@/hooks/evaluationFunctions');
+            const result = await createCleaningWorkPlan({
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Plan de gestión ambiental creado correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'environmental_management_plan'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Plan de trabajo - Personal Aseo y limpieza creado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'cleaning_work_plan'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.map((item: any) => {
-                          if (item.id_local === action.id && item.type === 'environmental_management_plan') {
-                            return { ...item, synced: true, id: result.data?.id || item.id };
-                          }
-                          return item;
-                        });
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'cleaning_work_plan') {
-                    console.log('Creando plan de trabajo - Personal Aseo y limpieza:', action.id);
-                    const { createCleaningWorkPlan } = await import('@/hooks/evaluationFunctions');
-                    const result = await createCleaningWorkPlan({
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if (item.id_local === action.id && item.type === 'cleaning_work_plan') {
+                    return { ...item, synced: true, id: result.data?.id || item.id };
+                  }
+                  return item;
+                });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'special_situations_plan') {
+            console.log('Creando plan para la atención de situaciones especiales:', action.id);
+            const { createSpecialSituationsPlan } = await import('@/hooks/evaluationFunctions');
+            const result = await createSpecialSituationsPlan({
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Plan de trabajo - Personal Aseo y limpieza creado correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'cleaning_work_plan'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Plan para la atención de situaciones especiales creado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'special_situations_plan'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.map((item: any) => {
-                          if (item.id_local === action.id && item.type === 'cleaning_work_plan') {
-                            return { ...item, synced: true, id: result.data?.id || item.id };
-                          }
-                          return item;
-                        });
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'special_situations_plan') {
-                    console.log('Creando plan para la atención de situaciones especiales:', action.id);
-                    const { createSpecialSituationsPlan } = await import('@/hooks/evaluationFunctions');
-                    const result = await createSpecialSituationsPlan({
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if (item.id_local === action.id && item.type === 'special_situations_plan') {
+                    return { ...item, synced: true, id: result.data?.id || item.id };
+                  }
+                  return item;
+                });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'cleaning_tasks_activities') {
+            console.log('Creando registro de tareas o actividades de limpieza:', action.id);
+            const { createCleaningTasksActivities } = await import('@/hooks/evaluationFunctions');
+            const result = await createCleaningTasksActivities({
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Plan para la atención de situaciones especiales creado correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'special_situations_plan'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Registro de tareas o actividades de limpieza creado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'cleaning_tasks_activities'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.map((item: any) => {
-                          if (item.id_local === action.id && item.type === 'special_situations_plan') {
-                            return { ...item, synced: true, id: result.data?.id || item.id };
-                          }
-                          return item;
-                        });
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'cleaning_tasks_activities') {
-                    console.log('Creando registro de tareas o actividades de limpieza:', action.id);
-                    const { createCleaningTasksActivities } = await import('@/hooks/evaluationFunctions');
-                    const result = await createCleaningTasksActivities({
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if (item.id_local === action.id && item.type === 'cleaning_tasks_activities') {
+                    return { ...item, synced: true, id: result.data?.id || item.id };
+                  }
+                  return item;
+                });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'risk_matrix') {
+            console.log('Creando matriz de riesgos:', action.id);
+            const { createRiskMatrix } = await import('@/hooks/evaluationFunctions');
+            const result = await createRiskMatrix({
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Registro de tareas o actividades de limpieza creado correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'cleaning_tasks_activities'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Matriz de riesgos creada correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'risk_matrix'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.map((item: any) => {
-                          if (item.id_local === action.id && item.type === 'cleaning_tasks_activities') {
-                            return { ...item, synced: true, id: result.data?.id || item.id };
-                          }
-                          return item;
-                        });
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'risk_matrix') {
-                    console.log('Creando matriz de riesgos:', action.id);
-                    const { createRiskMatrix } = await import('@/hooks/evaluationFunctions');
-                    const result = await createRiskMatrix({
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if (item.id_local === action.id && item.type === 'risk_matrix') {
+                    return { ...item, synced: true, id: result.data?.id || item.id };
+                  }
+                  return item;
+                });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'opportunity_matrix') {
+            console.log('Creando matriz de oportunidades:', action.id);
+            const { createOpportunityMatrix } = await import('@/hooks/evaluationFunctions');
+            const result = await createOpportunityMatrix({
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Matriz de riesgos creada correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'risk_matrix'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Matriz de oportunidades creada correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'opportunity_matrix'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.map((item: any) => {
-                          if (item.id_local === action.id && item.type === 'risk_matrix') {
-                            return { ...item, synced: true, id: result.data?.id || item.id };
-                          }
-                          return item;
-                        });
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'opportunity_matrix') {
-                    console.log('Creando matriz de oportunidades:', action.id);
-                    const { createOpportunityMatrix } = await import('@/hooks/evaluationFunctions');
-                    const result = await createOpportunityMatrix({
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if (item.id_local === action.id && item.type === 'opportunity_matrix') {
+                    return { ...item, synced: true, id: result.data?.id || item.id };
+                  }
+                  return item;
+                });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'process_indicator_matrix') {
+            console.log('Creando matriz de indicador de procesos:', action.id);
+            const { createProcessIndicatorMatrix } = await import('@/hooks/evaluationFunctions');
+            const result = await createProcessIndicatorMatrix({
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Matriz de oportunidades creada correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'opportunity_matrix'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Matriz de indicador de procesos creada correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'process_indicator_matrix'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.map((item: any) => {
-                          if (item.id_local === action.id && item.type === 'opportunity_matrix') {
-                            return { ...item, synced: true, id: result.data?.id || item.id };
-                          }
-                          return item;
-                        });
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'process_indicator_matrix') {
-                    console.log('Creando matriz de indicador de procesos:', action.id);
-                    const { createProcessIndicatorMatrix } = await import('@/hooks/evaluationFunctions');
-                    const result = await createProcessIndicatorMatrix({
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if (item.id_local === action.id && item.type === 'process_indicator_matrix') {
+                    return { ...item, synced: true, id: result.data?.id || item.id };
+                  }
+                  return item;
+                });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'monthly_work_role') {
+            console.log('Creando rol de trabajo mensual:', action.id);
+            const { createMonthlyWorkRole } = await import('@/hooks/evaluationFunctions');
+            const result = await createMonthlyWorkRole({
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Matriz de indicador de procesos creada correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'process_indicator_matrix'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Rol de trabajo mensual creado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'monthly_work_role'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.map((item: any) => {
-                          if (item.id_local === action.id && item.type === 'process_indicator_matrix') {
-                            return { ...item, synced: true, id: result.data?.id || item.id };
-                          }
-                          return item;
-                        });
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'monthly_work_role') {
-                    console.log('Creando rol de trabajo mensual:', action.id);
-                    const { createMonthlyWorkRole } = await import('@/hooks/evaluationFunctions');
-                    const result = await createMonthlyWorkRole({
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if (item.id_local === action.id && item.type === 'monthly_work_role') {
+                    return { ...item, synced: true, id: result.data?.id || item.id };
+                  }
+                  return item;
+                });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'permit_request') {
+            console.log('Creando solicitud de permiso:', action.id);
+            const { createPermitRequest } = await import('@/hooks/evaluationFunctions');
+            const result = await createPermitRequest({
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Rol de trabajo mensual creado correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'monthly_work_role'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Solicitud de permiso creada correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'permit_request'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.map((item: any) => {
-                          if (item.id_local === action.id && item.type === 'monthly_work_role') {
-                            return { ...item, synced: true, id: result.data?.id || item.id };
-                          }
-                          return item;
-                        });
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'permit_request') {
-                    console.log('Creando solicitud de permiso:', action.id);
-                    const { createPermitRequest } = await import('@/hooks/evaluationFunctions');
-                    const result = await createPermitRequest({
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if (item.id_local === action.id && item.type === 'permit_request') {
+                    return { ...item, synced: true, id: result.data?.id || item.id };
+                  }
+                  return item;
+                });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'attendance_control') {
+            console.log('Creando control de asistencia:', action.id);
+            const { createAttendanceControl } = await import('@/hooks/evaluationFunctions');
+            const result = await createAttendanceControl({
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Solicitud de permiso creada correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'permit_request'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Control de asistencia creado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'attendance_control'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.map((item: any) => {
-                          if (item.id_local === action.id && item.type === 'permit_request') {
-                            return { ...item, synced: true, id: result.data?.id || item.id };
-                          }
-                          return item;
-                        });
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'attendance_control') {
-                    console.log('Creando control de asistencia:', action.id);
-                    const { createAttendanceControl } = await import('@/hooks/evaluationFunctions');
-                    const result = await createAttendanceControl({
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if (item.id_local === action.id && item.type === 'attendance_control') {
+                    return { ...item, synced: true, id: result.data?.id || item.id };
+                  }
+                  return item;
+                });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'opening_closing_position') {
+            console.log('Creando apertura-cierre de puesto:', action.id);
+            const { createOpeningClosingPosition } = await import('@/hooks/evaluationFunctions');
+            const result = await createOpeningClosingPosition({
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Control de asistencia creado correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'attendance_control'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Apertura-Cierre de Puesto creado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'opening_closing_position'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.map((item: any) => {
-                          if (item.id_local === action.id && item.type === 'attendance_control') {
-                            return { ...item, synced: true, id: result.data?.id || item.id };
-                          }
-                          return item;
-                        });
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'opening_closing_position') {
-                    console.log('Creando apertura-cierre de puesto:', action.id);
-                    const { createOpeningClosingPosition } = await import('@/hooks/evaluationFunctions');
-                    const result = await createOpeningClosingPosition({
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if (item.id_local === action.id && item.type === 'opening_closing_position') {
+                    return { ...item, synced: true, id: result.data?.id || item.id };
+                  }
+                  return item;
+                });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'induction_tour_record') {
+            console.log('Creando registro de inducción y recorrido:', action.id);
+            const { createInductionTourRecord } = await import('@/hooks/evaluationFunctions');
+            const result = await createInductionTourRecord({
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Apertura-Cierre de Puesto creado correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'opening_closing_position'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Registro de inducción y recorrido creado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'induction_tour_record'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.map((item: any) => {
-                          if (item.id_local === action.id && item.type === 'opening_closing_position') {
-                            return { ...item, synced: true, id: result.data?.id || item.id };
-                          }
-                          return item;
-                        });
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'induction_tour_record') {
-                    console.log('Creando registro de inducción y recorrido:', action.id);
-                    const { createInductionTourRecord } = await import('@/hooks/evaluationFunctions');
-                    const result = await createInductionTourRecord({
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if (item.id_local === action.id && item.type === 'induction_tour_record') {
+                    return { ...item, synced: true, id: result.data?.id || item.id };
+                  }
+                  return item;
+                });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'supervision_report') {
+            console.log('Creando informe de supervisión:', action.id);
+            const { createSupervisionReport } = await import('@/hooks/evaluationFunctions');
+            const result = await createSupervisionReport({
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Registro de inducción y recorrido creado correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'induction_tour_record'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Informe de supervisión creado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'supervision_report'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.map((item: any) => {
-                          if (item.id_local === action.id && item.type === 'induction_tour_record') {
-                            return { ...item, synced: true, id: result.data?.id || item.id };
-                          }
-                          return item;
-                        });
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'supervision_report') {
-                    console.log('Creando informe de supervisión:', action.id);
-                    const { createSupervisionReport } = await import('@/hooks/evaluationFunctions');
-                    const result = await createSupervisionReport({
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if (item.id_local === action.id && item.type === 'supervision_report') {
+                    return { ...item, synced: true, id: result.data?.id || item.id };
+                  }
+                  return item;
+                });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'electric_brush_guide') {
+            console.log('Creando guía de uso de cepillo eléctrico:', action.id);
+            const { createElectricBrushGuide } = await import('@/hooks/evaluationFunctions');
+            const result = await createElectricBrushGuide({
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Informe de supervisión creado correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'supervision_report'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Guía de uso de cepillo eléctrico creada correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'electric_brush_guide'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.map((item: any) => {
-                          if (item.id_local === action.id && item.type === 'supervision_report') {
-                            return { ...item, synced: true, id: result.data?.id || item.id };
-                          }
-                          return item;
-                        });
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'electric_brush_guide') {
-                    console.log('Creando guía de uso de cepillo eléctrico:', action.id);
-                    const { createElectricBrushGuide } = await import('@/hooks/evaluationFunctions');
-                    const result = await createElectricBrushGuide({
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if (item.id_local === action.id && item.type === 'electric_brush_guide') {
+                    return { ...item, synced: true, id: result.data?.id || item.id };
+                  }
+                  return item;
+                });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'general_clients_list') {
+            console.log('Creando listado general de clientes:', action.id);
+            const { createGeneralClientsList } = await import('@/hooks/evaluationFunctions');
+            const result = await createGeneralClientsList({
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Guía de uso de cepillo eléctrico creada correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'electric_brush_guide'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Listado general de clientes creado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'general_clients_list'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.map((item: any) => {
-                          if (item.id_local === action.id && item.type === 'electric_brush_guide') {
-                            return { ...item, synced: true, id: result.data?.id || item.id };
-                          }
-                          return item;
-                        });
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'general_clients_list') {
-                    console.log('Creando listado general de clientes:', action.id);
-                    const { createGeneralClientsList } = await import('@/hooks/evaluationFunctions');
-                    const result = await createGeneralClientsList({
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if (item.id_local === action.id && item.type === 'general_clients_list') {
+                    return { ...item, synced: true, id: result.data?.id || item.id };
+                  }
+                  return item;
+                });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'improvement_actions_control') {
+            console.log('Creando control de acciones de mejora:', action.id);
+            const { createImprovementActionsControl } = await import('@/hooks/evaluationFunctions');
+            const result = await createImprovementActionsControl({
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Listado general de clientes creado correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'general_clients_list'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Control de acciones de mejora creado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'improvement_actions_control'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.map((item: any) => {
-                          if (item.id_local === action.id && item.type === 'general_clients_list') {
-                            return { ...item, synced: true, id: result.data?.id || item.id };
-                          }
-                          return item;
-                        });
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'improvement_actions_control') {
-                    console.log('Creando control de acciones de mejora:', action.id);
-                    const { createImprovementActionsControl } = await import('@/hooks/evaluationFunctions');
-                    const result = await createImprovementActionsControl({
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if (item.id_local === action.id && item.type === 'improvement_actions_control') {
+                    return { ...item, synced: true, id: result.data?.id || item.id };
+                  }
+                  return item;
+                });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'quality_policy') {
+            console.log('Creando política de calidad:', action.id);
+            const { createQualityPolicy } = await import('@/hooks/evaluationFunctions');
+            const result = await createQualityPolicy({
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Control de acciones de mejora creado correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'improvement_actions_control'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Política de calidad creada correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'quality_policy'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.map((item: any) => {
-                          if (item.id_local === action.id && item.type === 'improvement_actions_control') {
-                            return { ...item, synced: true, id: result.data?.id || item.id };
-                          }
-                          return item;
-                        });
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'quality_policy') {
-                    console.log('Creando política de calidad:', action.id);
-                    const { createQualityPolicy } = await import('@/hooks/evaluationFunctions');
-                    const result = await createQualityPolicy({
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if (item.id_local === action.id && item.type === 'quality_policy') {
+                    return { ...item, synced: true, id: result.data?.id || item.id };
+                  }
+                  return item;
+                });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'business_quality_objectives') {
+            console.log('Creando objetivos empresariales de calidad:', action.id);
+            const { createBusinessQualityObjectives } = await import('@/hooks/evaluationFunctions');
+            const result = await createBusinessQualityObjectives({
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Política de calidad creada correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'quality_policy'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Objetivos empresariales de calidad creados correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'business_quality_objectives'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.map((item: any) => {
-                          if (item.id_local === action.id && item.type === 'quality_policy') {
-                            return { ...item, synced: true, id: result.data?.id || item.id };
-                          }
-                          return item;
-                        });
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'business_quality_objectives') {
-                    console.log('Creando objetivos empresariales de calidad:', action.id);
-                    const { createBusinessQualityObjectives } = await import('@/hooks/evaluationFunctions');
-                    const result = await createBusinessQualityObjectives({
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if (item.id_local === action.id && item.type === 'business_quality_objectives') {
+                    return { ...item, synced: true, id: result.data?.id || item.id };
+                  }
+                  return item;
+                });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'stakeholder_analysis_matrix') {
+            console.log('Creando matriz de análisis de partes interesadas:', action.id);
+            const { createStakeholderAnalysisMatrix } = await import('@/hooks/evaluationFunctions');
+            const result = await createStakeholderAnalysisMatrix({
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Objetivos empresariales de calidad creados correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'business_quality_objectives'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Matriz de análisis de partes interesadas creada correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'stakeholder_analysis_matrix'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.map((item: any) => {
-                          if (item.id_local === action.id && item.type === 'business_quality_objectives') {
-                            return { ...item, synced: true, id: result.data?.id || item.id };
-                          }
-                          return item;
-                        });
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'stakeholder_analysis_matrix') {
-                    console.log('Creando matriz de análisis de partes interesadas:', action.id);
-                    const { createStakeholderAnalysisMatrix } = await import('@/hooks/evaluationFunctions');
-                    const result = await createStakeholderAnalysisMatrix({
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if (item.id_local === action.id && item.type === 'stakeholder_analysis_matrix') {
+                    return { ...item, synced: true, id: result.data?.id || item.id };
+                  }
+                  return item;
+                });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'communication_plan') {
+            console.log('Creando plan de comunicación:', action.id);
+            const { createCommunicationPlan } = await import('@/hooks/evaluationFunctions');
+            const result = await createCommunicationPlan({
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Matriz de análisis de partes interesadas creada correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'stakeholder_analysis_matrix'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Plan de comunicación creado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'communication_plan'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.map((item: any) => {
-                          if (item.id_local === action.id && item.type === 'stakeholder_analysis_matrix') {
-                            return { ...item, synced: true, id: result.data?.id || item.id };
-                          }
-                          return item;
-                        });
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'communication_plan') {
-                    console.log('Creando plan de comunicación:', action.id);
-                    const { createCommunicationPlan } = await import('@/hooks/evaluationFunctions');
-                    const result = await createCommunicationPlan({
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if (item.id_local === action.id && item.type === 'communication_plan') {
+                    return { ...item, synced: true, id: result.data?.id || item.id };
+                  }
+                  return item;
+                });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'knowledge_management_matrix') {
+            console.log('Creando matriz de gestión del conocimiento:', action.id);
+            const { createKnowledgeManagementMatrix } = await import('@/hooks/evaluationFunctions');
+            const result = await createKnowledgeManagementMatrix({
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Plan de comunicación creado correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'communication_plan'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Matriz de gestión del conocimiento creada correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'knowledge_management_matrix'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.map((item: any) => {
-                          if (item.id_local === action.id && item.type === 'communication_plan') {
-                            return { ...item, synced: true, id: result.data?.id || item.id };
-                          }
-                          return item;
-                        });
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'knowledge_management_matrix') {
-                    console.log('Creando matriz de gestión del conocimiento:', action.id);
-                    const { createKnowledgeManagementMatrix } = await import('@/hooks/evaluationFunctions');
-                    const result = await createKnowledgeManagementMatrix({
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if (item.id_local === action.id && item.type === 'knowledge_management_matrix') {
+                    return { ...item, synced: true, id: result.data?.id || item.id };
+                  }
+                  return item;
+                });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'change_planning') {
+            console.log('Creando planificación de cambios del SGC:', action.id);
+            const { createChangePlanning } = await import('@/hooks/evaluationFunctions');
+            const result = await createChangePlanning({
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Matriz de gestión del conocimiento creada correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'knowledge_management_matrix'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Planificación de cambios del SGC creada correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'change_planning'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.map((item: any) => {
-                          if (item.id_local === action.id && item.type === 'knowledge_management_matrix') {
-                            return { ...item, synced: true, id: result.data?.id || item.id };
-                          }
-                          return item;
-                        });
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'change_planning') {
-                    console.log('Creando planificación de cambios del SGC:', action.id);
-                    const { createChangePlanning } = await import('@/hooks/evaluationFunctions');
-                    const result = await createChangePlanning({
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
-
-                    if (result.status) {
-                      console.log('Planificación de cambios del SGC creada correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'change_planning'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.map((item: any) => {
-                          if (item.id_local === action.id && item.type === 'change_planning') {
-                            return { ...item, synced: true, id: result.data?.id || item.id };
-                          }
-                          return item;
-                        });
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'routes_and_tours') {
-                console.log('Creando ruta o gira:', action.id);
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if (item.id_local === action.id && item.type === 'change_planning') {
+                    return { ...item, synced: true, id: result.data?.id || item.id };
+                  }
+                  return item;
+                });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'routes_and_tours') {
+            console.log('Creando ruta o gira:', action.id);
             const { createRouteAndTour } = await import('@/hooks/evaluationFunctions');
             const result = await createRouteAndTour({
               requestData: action.payload,
@@ -1590,7 +1590,7 @@ function AppContent() {
               // Eliminar acción del array
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'routes_and_tours'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-              
+
               // Actualizar cache para marcar como sincronizado
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -1606,19 +1606,19 @@ function AppContent() {
             }
           } else {
             // Evaluación normal
-          console.log('Creando evaluación:', action.id);
-          const { createEvaluation } = await import('@/hooks/evaluationFunctions');
-          const result = await createEvaluation({
+            console.log('Creando evaluación:', action.id);
+            const { createEvaluation } = await import('@/hooks/evaluationFunctions');
+            const result = await createEvaluation({
               requestData: action.requestData || action.payload,
-            refreshAccessToken,
-            logout,
-          });
+              refreshAccessToken,
+              logout,
+            });
 
-          if (result.status) {
-            console.log('Evaluación creada correctamente');
-            // Eliminar acción del array
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && (!a.type || (a.type !== 'mileage_control' && a.type !== 'uniform_request' && a.type !== 'routes_and_tours' && a.type !== 'employee_satisfaction' && a.type !== 'vehicle_maintenance' && a.type !== 'non_conforming_product' && a.type !== 'complaints_master' && a.type !== 'cleaners_control' && a.type !== 'physical_minute_agenda' && a.type !== 'action_plan' && a.type !== 'work_role' && a.type !== 'contract_basic_data' && a.type !== 'delivery_schedule' && a.type !== 'environmental_management_plan' && a.type !== 'cleaning_work_plan' && a.type !== 'special_situations_plan' && a.type !== 'cleaning_tasks_activities' && a.type !== 'risk_matrix' && a.type !== 'opportunity_matrix' && a.type !== 'process_indicator_matrix' && a.type !== 'monthly_work_role' && a.type !== 'permit_request' && a.type !== 'attendance_control' && a.type !== 'opening_closing_position' && a.type !== 'induction_tour_record' && a.type !== 'supervision_report' && a.type !== 'electric_brush_guide'))));
-            await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Evaluación creada correctamente');
+              // Eliminar acción del array
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && (!a.type || (a.type !== 'mileage_control' && a.type !== 'uniform_request' && a.type !== 'routes_and_tours' && a.type !== 'employee_satisfaction' && a.type !== 'vehicle_maintenance' && a.type !== 'non_conforming_product' && a.type !== 'complaints_master' && a.type !== 'cleaners_control' && a.type !== 'physical_minute_agenda' && a.type !== 'action_plan' && a.type !== 'work_role' && a.type !== 'contract_basic_data' && a.type !== 'delivery_schedule' && a.type !== 'environmental_management_plan' && a.type !== 'cleaning_work_plan' && a.type !== 'special_situations_plan' && a.type !== 'cleaning_tasks_activities' && a.type !== 'risk_matrix' && a.type !== 'opportunity_matrix' && a.type !== 'process_indicator_matrix' && a.type !== 'monthly_work_role' && a.type !== 'permit_request' && a.type !== 'attendance_control' && a.type !== 'opening_closing_position' && a.type !== 'induction_tour_record' && a.type !== 'supervision_report' && a.type !== 'electric_brush_guide'))));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
             }
           }
         } else if (action.action === 'update') {
@@ -1774,382 +1774,382 @@ function AppContent() {
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'action_plan'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
             }
-                  } else if (action.type === 'work_role') {
-                    console.log('Actualizando rol de trabajo:', action.id);
-                    const { updateWorkRole } = await import('@/hooks/evaluationFunctions');
-                    const result = await updateWorkRole({
-                      id: action.id,
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+          } else if (action.type === 'work_role') {
+            console.log('Actualizando rol de trabajo:', action.id);
+            const { updateWorkRole } = await import('@/hooks/evaluationFunctions');
+            const result = await updateWorkRole({
+              id: action.id,
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Rol de trabajo actualizado correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'work_role'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-                    }
-                  } else if (action.type === 'contract_basic_data') {
-                    console.log('Actualizando datos básicos de contrato:', action.id);
-                    const { updateContractBasicData } = await import('@/hooks/evaluationFunctions');
-                    const result = await updateContractBasicData({
-                      id: action.id,
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+            if (result.status) {
+              console.log('Rol de trabajo actualizado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'work_role'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            }
+          } else if (action.type === 'contract_basic_data') {
+            console.log('Actualizando datos básicos de contrato:', action.id);
+            const { updateContractBasicData } = await import('@/hooks/evaluationFunctions');
+            const result = await updateContractBasicData({
+              id: action.id,
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Datos básicos de contrato actualizados correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'contract_basic_data'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-                    }
-                  } else if (action.type === 'delivery_schedule') {
-                    console.log('Actualizando cronograma de entrega:', action.id);
-                    const { updateDeliverySchedule } = await import('@/hooks/evaluationFunctions');
-                    const result = await updateDeliverySchedule({
-                      id: action.id,
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+            if (result.status) {
+              console.log('Datos básicos de contrato actualizados correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'contract_basic_data'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            }
+          } else if (action.type === 'delivery_schedule') {
+            console.log('Actualizando cronograma de entrega:', action.id);
+            const { updateDeliverySchedule } = await import('@/hooks/evaluationFunctions');
+            const result = await updateDeliverySchedule({
+              id: action.id,
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Cronograma de entrega actualizado correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'delivery_schedule'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-                    }
-                  } else if (action.type === 'environmental_management_plan') {
-                    console.log('Actualizando plan de gestión ambiental:', action.id);
-                    const { updateEnvironmentalManagementPlan } = await import('@/hooks/evaluationFunctions');
-                    const result = await updateEnvironmentalManagementPlan({
-                      id: action.id,
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+            if (result.status) {
+              console.log('Cronograma de entrega actualizado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'delivery_schedule'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            }
+          } else if (action.type === 'environmental_management_plan') {
+            console.log('Actualizando plan de gestión ambiental:', action.id);
+            const { updateEnvironmentalManagementPlan } = await import('@/hooks/evaluationFunctions');
+            const result = await updateEnvironmentalManagementPlan({
+              id: action.id,
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Plan de gestión ambiental actualizado correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'environmental_management_plan'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-                    }
-                  } else if (action.type === 'cleaning_work_plan') {
-                    console.log('Actualizando plan de trabajo - Personal Aseo y limpieza:', action.id);
-                    const { updateCleaningWorkPlan } = await import('@/hooks/evaluationFunctions');
-                    const result = await updateCleaningWorkPlan({
-                      id: action.id,
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+            if (result.status) {
+              console.log('Plan de gestión ambiental actualizado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'environmental_management_plan'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            }
+          } else if (action.type === 'cleaning_work_plan') {
+            console.log('Actualizando plan de trabajo - Personal Aseo y limpieza:', action.id);
+            const { updateCleaningWorkPlan } = await import('@/hooks/evaluationFunctions');
+            const result = await updateCleaningWorkPlan({
+              id: action.id,
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Plan de trabajo - Personal Aseo y limpieza actualizado correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'cleaning_work_plan'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-                    }
-                  } else if (action.type === 'special_situations_plan') {
-                    console.log('Actualizando plan para la atención de situaciones especiales:', action.id);
-                    const { updateSpecialSituationsPlan } = await import('@/hooks/evaluationFunctions');
-                    const result = await updateSpecialSituationsPlan({
-                      id: action.id,
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+            if (result.status) {
+              console.log('Plan de trabajo - Personal Aseo y limpieza actualizado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'cleaning_work_plan'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            }
+          } else if (action.type === 'special_situations_plan') {
+            console.log('Actualizando plan para la atención de situaciones especiales:', action.id);
+            const { updateSpecialSituationsPlan } = await import('@/hooks/evaluationFunctions');
+            const result = await updateSpecialSituationsPlan({
+              id: action.id,
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Plan para la atención de situaciones especiales actualizado correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'special_situations_plan'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-                    }
-                  } else if (action.type === 'cleaning_tasks_activities') {
-                    console.log('Actualizando registro de tareas o actividades de limpieza:', action.id);
-                    const { updateCleaningTasksActivities } = await import('@/hooks/evaluationFunctions');
-                    const result = await updateCleaningTasksActivities({
-                      id: action.id,
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+            if (result.status) {
+              console.log('Plan para la atención de situaciones especiales actualizado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'special_situations_plan'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            }
+          } else if (action.type === 'cleaning_tasks_activities') {
+            console.log('Actualizando registro de tareas o actividades de limpieza:', action.id);
+            const { updateCleaningTasksActivities } = await import('@/hooks/evaluationFunctions');
+            const result = await updateCleaningTasksActivities({
+              id: action.id,
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Registro de tareas o actividades de limpieza actualizado correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'cleaning_tasks_activities'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-                    }
-                  } else if (action.type === 'risk_matrix') {
-                    console.log('Actualizando matriz de riesgos:', action.id);
-                    const { updateRiskMatrix } = await import('@/hooks/evaluationFunctions');
-                    const result = await updateRiskMatrix({
-                      id: action.id,
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+            if (result.status) {
+              console.log('Registro de tareas o actividades de limpieza actualizado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'cleaning_tasks_activities'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            }
+          } else if (action.type === 'risk_matrix') {
+            console.log('Actualizando matriz de riesgos:', action.id);
+            const { updateRiskMatrix } = await import('@/hooks/evaluationFunctions');
+            const result = await updateRiskMatrix({
+              id: action.id,
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Matriz de riesgos actualizada correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'risk_matrix'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-                    }
-                  } else if (action.type === 'opportunity_matrix') {
-                    console.log('Actualizando matriz de oportunidades:', action.id);
-                    const { updateOpportunityMatrix } = await import('@/hooks/evaluationFunctions');
-                    const result = await updateOpportunityMatrix({
-                      id: action.id,
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+            if (result.status) {
+              console.log('Matriz de riesgos actualizada correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'risk_matrix'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            }
+          } else if (action.type === 'opportunity_matrix') {
+            console.log('Actualizando matriz de oportunidades:', action.id);
+            const { updateOpportunityMatrix } = await import('@/hooks/evaluationFunctions');
+            const result = await updateOpportunityMatrix({
+              id: action.id,
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Matriz de oportunidades actualizada correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'opportunity_matrix'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-                    }
-                  } else if (action.type === 'process_indicator_matrix') {
-                    console.log('Actualizando matriz de indicador de procesos:', action.id);
-                    const { updateProcessIndicatorMatrix } = await import('@/hooks/evaluationFunctions');
-                    const result = await updateProcessIndicatorMatrix({
-                      id: action.id,
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+            if (result.status) {
+              console.log('Matriz de oportunidades actualizada correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'opportunity_matrix'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            }
+          } else if (action.type === 'process_indicator_matrix') {
+            console.log('Actualizando matriz de indicador de procesos:', action.id);
+            const { updateProcessIndicatorMatrix } = await import('@/hooks/evaluationFunctions');
+            const result = await updateProcessIndicatorMatrix({
+              id: action.id,
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Matriz de indicador de procesos actualizada correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'process_indicator_matrix'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-                    }
-                  } else if (action.type === 'monthly_work_role') {
-                    console.log('Actualizando rol de trabajo mensual:', action.id);
-                    const { updateMonthlyWorkRole } = await import('@/hooks/evaluationFunctions');
-                    const result = await updateMonthlyWorkRole({
-                      id: action.id,
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+            if (result.status) {
+              console.log('Matriz de indicador de procesos actualizada correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'process_indicator_matrix'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            }
+          } else if (action.type === 'monthly_work_role') {
+            console.log('Actualizando rol de trabajo mensual:', action.id);
+            const { updateMonthlyWorkRole } = await import('@/hooks/evaluationFunctions');
+            const result = await updateMonthlyWorkRole({
+              id: action.id,
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Rol de trabajo mensual actualizado correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'monthly_work_role'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-                    }
-                  } else if (action.type === 'permit_request') {
-                    console.log('Actualizando solicitud de permiso:', action.id);
-                    const { updatePermitRequest } = await import('@/hooks/evaluationFunctions');
-                    const result = await updatePermitRequest({
-                      id: action.id,
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+            if (result.status) {
+              console.log('Rol de trabajo mensual actualizado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'monthly_work_role'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            }
+          } else if (action.type === 'permit_request') {
+            console.log('Actualizando solicitud de permiso:', action.id);
+            const { updatePermitRequest } = await import('@/hooks/evaluationFunctions');
+            const result = await updatePermitRequest({
+              id: action.id,
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Solicitud de permiso actualizada correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'permit_request'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-                    }
-                  } else if (action.type === 'attendance_control') {
-                    console.log('Actualizando control de asistencia:', action.id);
-                    const { updateAttendanceControl } = await import('@/hooks/evaluationFunctions');
-                    const result = await updateAttendanceControl({
-                      id: action.id,
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+            if (result.status) {
+              console.log('Solicitud de permiso actualizada correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'permit_request'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            }
+          } else if (action.type === 'attendance_control') {
+            console.log('Actualizando control de asistencia:', action.id);
+            const { updateAttendanceControl } = await import('@/hooks/evaluationFunctions');
+            const result = await updateAttendanceControl({
+              id: action.id,
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Control de asistencia actualizado correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'attendance_control'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-                    }
-                  } else if (action.type === 'opening_closing_position') {
-                    console.log('Actualizando apertura-cierre de puesto:', action.id);
-                    const { updateOpeningClosingPosition } = await import('@/hooks/evaluationFunctions');
-                    const result = await updateOpeningClosingPosition({
-                      id: action.id,
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+            if (result.status) {
+              console.log('Control de asistencia actualizado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'attendance_control'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            }
+          } else if (action.type === 'opening_closing_position') {
+            console.log('Actualizando apertura-cierre de puesto:', action.id);
+            const { updateOpeningClosingPosition } = await import('@/hooks/evaluationFunctions');
+            const result = await updateOpeningClosingPosition({
+              id: action.id,
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Apertura-Cierre de Puesto actualizado correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'opening_closing_position'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-                    }
-                  } else if (action.type === 'induction_tour_record') {
-                    console.log('Actualizando registro de inducción y recorrido:', action.id);
-                    const { updateInductionTourRecord } = await import('@/hooks/evaluationFunctions');
-                    const result = await updateInductionTourRecord({
-                      id: action.id,
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+            if (result.status) {
+              console.log('Apertura-Cierre de Puesto actualizado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'opening_closing_position'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            }
+          } else if (action.type === 'induction_tour_record') {
+            console.log('Actualizando registro de inducción y recorrido:', action.id);
+            const { updateInductionTourRecord } = await import('@/hooks/evaluationFunctions');
+            const result = await updateInductionTourRecord({
+              id: action.id,
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Registro de inducción y recorrido actualizado correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'induction_tour_record'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-                    }
-                  } else if (action.type === 'supervision_report') {
-                    console.log('Actualizando informe de supervisión:', action.id);
-                    const { updateSupervisionReport } = await import('@/hooks/evaluationFunctions');
-                    const result = await updateSupervisionReport({
-                      id: action.id,
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+            if (result.status) {
+              console.log('Registro de inducción y recorrido actualizado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'induction_tour_record'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            }
+          } else if (action.type === 'supervision_report') {
+            console.log('Actualizando informe de supervisión:', action.id);
+            const { updateSupervisionReport } = await import('@/hooks/evaluationFunctions');
+            const result = await updateSupervisionReport({
+              id: action.id,
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Informe de supervisión actualizado correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'supervision_report'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-                    }
-                  } else if (action.type === 'electric_brush_guide') {
-                    console.log('Actualizando guía de uso de cepillo eléctrico:', action.id);
-                    const { updateElectricBrushGuide } = await import('@/hooks/evaluationFunctions');
-                    const result = await updateElectricBrushGuide({
-                      id: action.id,
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+            if (result.status) {
+              console.log('Informe de supervisión actualizado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'supervision_report'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            }
+          } else if (action.type === 'electric_brush_guide') {
+            console.log('Actualizando guía de uso de cepillo eléctrico:', action.id);
+            const { updateElectricBrushGuide } = await import('@/hooks/evaluationFunctions');
+            const result = await updateElectricBrushGuide({
+              id: action.id,
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Guía de uso de cepillo eléctrico actualizada correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'electric_brush_guide'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-                    }
-                  } else if (action.type === 'general_clients_list') {
-                    console.log('Actualizando listado general de clientes:', action.id);
-                    const { updateGeneralClientsList } = await import('@/hooks/evaluationFunctions');
-                    const result = await updateGeneralClientsList({
-                      id: action.id,
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+            if (result.status) {
+              console.log('Guía de uso de cepillo eléctrico actualizada correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'electric_brush_guide'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            }
+          } else if (action.type === 'general_clients_list') {
+            console.log('Actualizando listado general de clientes:', action.id);
+            const { updateGeneralClientsList } = await import('@/hooks/evaluationFunctions');
+            const result = await updateGeneralClientsList({
+              id: action.id,
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Listado general de clientes actualizado correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'general_clients_list'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-                    }
-                  } else if (action.type === 'improvement_actions_control') {
-                    console.log('Actualizando control de acciones de mejora:', action.id);
-                    const { updateImprovementActionsControl } = await import('@/hooks/evaluationFunctions');
-                    const result = await updateImprovementActionsControl({
-                      id: action.id,
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+            if (result.status) {
+              console.log('Listado general de clientes actualizado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'general_clients_list'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            }
+          } else if (action.type === 'improvement_actions_control') {
+            console.log('Actualizando control de acciones de mejora:', action.id);
+            const { updateImprovementActionsControl } = await import('@/hooks/evaluationFunctions');
+            const result = await updateImprovementActionsControl({
+              id: action.id,
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Control de acciones de mejora actualizado correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'improvement_actions_control'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-                    }
-                  } else if (action.type === 'quality_policy') {
-                    console.log('Actualizando política de calidad:', action.id);
-                    const { updateQualityPolicy } = await import('@/hooks/evaluationFunctions');
-                    const result = await updateQualityPolicy({
-                      id: action.id,
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+            if (result.status) {
+              console.log('Control de acciones de mejora actualizado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'improvement_actions_control'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            }
+          } else if (action.type === 'quality_policy') {
+            console.log('Actualizando política de calidad:', action.id);
+            const { updateQualityPolicy } = await import('@/hooks/evaluationFunctions');
+            const result = await updateQualityPolicy({
+              id: action.id,
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Política de calidad actualizada correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'quality_policy'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-                    }
-                  } else if (action.type === 'business_quality_objectives') {
-                    console.log('Actualizando objetivos empresariales de calidad:', action.id);
-                    const { updateBusinessQualityObjectives } = await import('@/hooks/evaluationFunctions');
-                    const result = await updateBusinessQualityObjectives({
-                      id: action.id,
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+            if (result.status) {
+              console.log('Política de calidad actualizada correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'quality_policy'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            }
+          } else if (action.type === 'business_quality_objectives') {
+            console.log('Actualizando objetivos empresariales de calidad:', action.id);
+            const { updateBusinessQualityObjectives } = await import('@/hooks/evaluationFunctions');
+            const result = await updateBusinessQualityObjectives({
+              id: action.id,
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Objetivos empresariales de calidad actualizados correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'business_quality_objectives'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-                    }
-                  } else if (action.type === 'stakeholder_analysis_matrix') {
-                    console.log('Actualizando matriz de análisis de partes interesadas:', action.id);
-                    const { updateStakeholderAnalysisMatrix } = await import('@/hooks/evaluationFunctions');
-                    const result = await updateStakeholderAnalysisMatrix({
-                      id: action.id,
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+            if (result.status) {
+              console.log('Objetivos empresariales de calidad actualizados correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'business_quality_objectives'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            }
+          } else if (action.type === 'stakeholder_analysis_matrix') {
+            console.log('Actualizando matriz de análisis de partes interesadas:', action.id);
+            const { updateStakeholderAnalysisMatrix } = await import('@/hooks/evaluationFunctions');
+            const result = await updateStakeholderAnalysisMatrix({
+              id: action.id,
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Matriz de análisis de partes interesadas actualizada correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'stakeholder_analysis_matrix'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-                    }
-                  } else if (action.type === 'communication_plan') {
-                    console.log('Actualizando plan de comunicación:', action.id);
-                    const { updateCommunicationPlan } = await import('@/hooks/evaluationFunctions');
-                    const result = await updateCommunicationPlan({
-                      id: action.id,
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+            if (result.status) {
+              console.log('Matriz de análisis de partes interesadas actualizada correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'stakeholder_analysis_matrix'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            }
+          } else if (action.type === 'communication_plan') {
+            console.log('Actualizando plan de comunicación:', action.id);
+            const { updateCommunicationPlan } = await import('@/hooks/evaluationFunctions');
+            const result = await updateCommunicationPlan({
+              id: action.id,
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Plan de comunicación actualizado correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'communication_plan'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-                    }
-                  } else if (action.type === 'knowledge_management_matrix') {
-                    console.log('Actualizando matriz de gestión del conocimiento:', action.id);
-                    const { updateKnowledgeManagementMatrix } = await import('@/hooks/evaluationFunctions');
-                    const result = await updateKnowledgeManagementMatrix({
-                      id: action.id,
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+            if (result.status) {
+              console.log('Plan de comunicación actualizado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'communication_plan'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            }
+          } else if (action.type === 'knowledge_management_matrix') {
+            console.log('Actualizando matriz de gestión del conocimiento:', action.id);
+            const { updateKnowledgeManagementMatrix } = await import('@/hooks/evaluationFunctions');
+            const result = await updateKnowledgeManagementMatrix({
+              id: action.id,
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Matriz de gestión del conocimiento actualizada correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'knowledge_management_matrix'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-                    }
-                  } else if (action.type === 'change_planning') {
-                    console.log('Actualizando planificación de cambios del SGC:', action.id);
-                    const { updateChangePlanning } = await import('@/hooks/evaluationFunctions');
-                    const result = await updateChangePlanning({
-                      id: action.id,
-                      requestData: action.payload,
-                      refreshAccessToken,
-                      logout,
-                    });
+            if (result.status) {
+              console.log('Matriz de gestión del conocimiento actualizada correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'knowledge_management_matrix'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            }
+          } else if (action.type === 'change_planning') {
+            console.log('Actualizando planificación de cambios del SGC:', action.id);
+            const { updateChangePlanning } = await import('@/hooks/evaluationFunctions');
+            const result = await updateChangePlanning({
+              id: action.id,
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Planificación de cambios del SGC actualizada correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'change_planning'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-                    }
-                  } else if (action.type === 'routes_and_tours') {
+            if (result.status) {
+              console.log('Planificación de cambios del SGC actualizada correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'change_planning'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            }
+          } else if (action.type === 'routes_and_tours') {
             console.log('Actualizando ruta o gira:', action.id);
             const { updateRouteAndTour } = await import('@/hooks/evaluationFunctions');
             const result = await updateRouteAndTour({
@@ -2181,7 +2181,7 @@ function AppContent() {
               // Eliminar acción del array
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'mileage_control'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-              
+
               // Eliminar del cache
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -2204,689 +2204,689 @@ function AppContent() {
               // Eliminar acción del array
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'uniform_request'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-              
+
               // Eliminar del cache
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
                 const cache = JSON.parse(cacheStr);
                 const updatedCache = cache.filter((item: any) => !(item.id === action.id || item.id_local === action.id));
-                  await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                }
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
               }
-            } else if (action.type === 'employee_satisfaction') {
-              console.log('Eliminando encuesta de satisfacción:', action.id);
-              const { deleteEmployeeSatisfaction } = await import('@/hooks/evaluationFunctions');
-              const result = await deleteEmployeeSatisfaction({
-                id: action.id,
-                refreshAccessToken,
-                logout,
-              });
+            }
+          } else if (action.type === 'employee_satisfaction') {
+            console.log('Eliminando encuesta de satisfacción:', action.id);
+            const { deleteEmployeeSatisfaction } = await import('@/hooks/evaluationFunctions');
+            const result = await deleteEmployeeSatisfaction({
+              id: action.id,
+              refreshAccessToken,
+              logout,
+            });
 
-              if (result.status) {
-                console.log('Encuesta de satisfacción eliminada correctamente');
-                const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'employee_satisfaction'));
-                await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-                
-                const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                if (cacheStr) {
-                  const cache = JSON.parse(cacheStr);
-                  const updatedCache = cache.filter((item: any) => !(item.id === action.id || item.id_local === action.id));
-                  await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                }
+            if (result.status) {
+              console.log('Encuesta de satisfacción eliminada correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'employee_satisfaction'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.filter((item: any) => !(item.id === action.id || item.id_local === action.id));
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
               }
-            } else if (action.type === 'vehicle_maintenance') {
-              console.log('Eliminando planificación de mantenimiento:', action.id);
-              const { deleteVehicleMaintenance } = await import('@/hooks/evaluationFunctions');
-              const result = await deleteVehicleMaintenance({
-                id: action.id,
-                refreshAccessToken,
-                logout,
-              });
+            }
+          } else if (action.type === 'vehicle_maintenance') {
+            console.log('Eliminando planificación de mantenimiento:', action.id);
+            const { deleteVehicleMaintenance } = await import('@/hooks/evaluationFunctions');
+            const result = await deleteVehicleMaintenance({
+              id: action.id,
+              refreshAccessToken,
+              logout,
+            });
 
-              if (result.status) {
-                console.log('Planificación de mantenimiento eliminada correctamente');
-                const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'vehicle_maintenance'));
-                await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-                
-                const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                if (cacheStr) {
-                  const cache = JSON.parse(cacheStr);
-                  const updatedCache = cache.filter((item: any) => !(item.id === action.id || item.id_local === action.id));
-                  await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                }
+            if (result.status) {
+              console.log('Planificación de mantenimiento eliminada correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'vehicle_maintenance'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.filter((item: any) => !(item.id === action.id || item.id_local === action.id));
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
               }
-            } else if (action.type === 'non_conforming_product') {
-              console.log('Eliminando producto no conforme:', action.id);
-              const { deleteNonConformingProduct } = await import('@/hooks/evaluationFunctions');
-              const result = await deleteNonConformingProduct({
-                id: action.id,
-                refreshAccessToken,
-                logout,
-              });
+            }
+          } else if (action.type === 'non_conforming_product') {
+            console.log('Eliminando producto no conforme:', action.id);
+            const { deleteNonConformingProduct } = await import('@/hooks/evaluationFunctions');
+            const result = await deleteNonConformingProduct({
+              id: action.id,
+              refreshAccessToken,
+              logout,
+            });
 
-              if (result.status) {
-                console.log('Producto no conforme eliminado correctamente');
-                const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'non_conforming_product'));
-                await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-                
-                const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                if (cacheStr) {
-                  const cache = JSON.parse(cacheStr);
-                  const updatedCache = cache.filter((item: any) => !(item.id === action.id || item.id_local === action.id));
-                  await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                }
+            if (result.status) {
+              console.log('Producto no conforme eliminado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'non_conforming_product'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.filter((item: any) => !(item.id === action.id || item.id_local === action.id));
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
               }
-            } else if (action.type === 'complaints_master') {
-              console.log('Eliminando queja:', action.id);
-              const { deleteComplaintsMaster } = await import('@/hooks/evaluationFunctions');
-              const result = await deleteComplaintsMaster({
-                id: action.id,
-                refreshAccessToken,
-                logout,
-              });
+            }
+          } else if (action.type === 'complaints_master') {
+            console.log('Eliminando queja:', action.id);
+            const { deleteComplaintsMaster } = await import('@/hooks/evaluationFunctions');
+            const result = await deleteComplaintsMaster({
+              id: action.id,
+              refreshAccessToken,
+              logout,
+            });
 
-              if (result.status) {
-                console.log('Queja eliminada correctamente');
-                const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'complaints_master'));
-                await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-                
-                const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                if (cacheStr) {
-                  const cache = JSON.parse(cacheStr);
-                  const updatedCache = cache.filter((item: any) => !(item.id === action.id || item.id_local === action.id));
-                  await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                }
+            if (result.status) {
+              console.log('Queja eliminada correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'complaints_master'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.filter((item: any) => !(item.id === action.id || item.id_local === action.id));
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
               }
-            } else if (action.type === 'cleaners_control') {
-              console.log('Eliminando control de aseadores:', action.id);
-              const { deleteCleanersControl } = await import('@/hooks/evaluationFunctions');
-              const result = await deleteCleanersControl({
-                id: action.id,
-                refreshAccessToken,
-                logout,
-              });
+            }
+          } else if (action.type === 'cleaners_control') {
+            console.log('Eliminando control de aseadores:', action.id);
+            const { deleteCleanersControl } = await import('@/hooks/evaluationFunctions');
+            const result = await deleteCleanersControl({
+              id: action.id,
+              refreshAccessToken,
+              logout,
+            });
 
-              if (result.status) {
-                console.log('Control de aseadores eliminado correctamente');
-                const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'cleaners_control'));
-                await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-                
-                const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                if (cacheStr) {
-                  const cache = JSON.parse(cacheStr);
-                  const updatedCache = cache.filter((item: any) => !(item.id === action.id || item.id_local === action.id));
-                  await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                }
+            if (result.status) {
+              console.log('Control de aseadores eliminado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'cleaners_control'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.filter((item: any) => !(item.id === action.id || item.id_local === action.id));
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
               }
-            } else if (action.type === 'physical_minute_agenda') {
-              console.log('Eliminando agenda minuta física:', action.id);
-              const { deletePhysicalMinuteAgenda } = await import('@/hooks/evaluationFunctions');
-              const result = await deletePhysicalMinuteAgenda({
-                id: action.id,
-                refreshAccessToken,
-                logout,
-              });
+            }
+          } else if (action.type === 'physical_minute_agenda') {
+            console.log('Eliminando agenda minuta física:', action.id);
+            const { deletePhysicalMinuteAgenda } = await import('@/hooks/evaluationFunctions');
+            const result = await deletePhysicalMinuteAgenda({
+              id: action.id,
+              refreshAccessToken,
+              logout,
+            });
 
-              if (result.status) {
-                console.log('Agenda minuta física eliminada correctamente');
-                const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'physical_minute_agenda'));
-                await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-                
-                const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                if (cacheStr) {
-                  const cache = JSON.parse(cacheStr);
-                  const updatedCache = cache.filter((item: any) => !(item.id === action.id || item.id_local === action.id));
-                  await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                }
+            if (result.status) {
+              console.log('Agenda minuta física eliminada correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'physical_minute_agenda'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.filter((item: any) => !(item.id === action.id || item.id_local === action.id));
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
               }
-            } else if (action.type === 'action_plan') {
-              console.log('Eliminando plan de acción:', action.id);
-              const { deleteActionPlan } = await import('@/hooks/evaluationFunctions');
-              const result = await deleteActionPlan({
-                id: action.id,
-                refreshAccessToken,
-                logout,
-              });
+            }
+          } else if (action.type === 'action_plan') {
+            console.log('Eliminando plan de acción:', action.id);
+            const { deleteActionPlan } = await import('@/hooks/evaluationFunctions');
+            const result = await deleteActionPlan({
+              id: action.id,
+              refreshAccessToken,
+              logout,
+            });
 
-              if (result.status) {
-                console.log('Plan de acción eliminado correctamente');
-                const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'action_plan'));
-                await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-                
-                const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                if (cacheStr) {
-                  const cache = JSON.parse(cacheStr);
-                  const updatedCache = cache.filter((item: any) => !(item.id === action.id || item.id_local === action.id));
-                  await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                }
+            if (result.status) {
+              console.log('Plan de acción eliminado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'action_plan'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.filter((item: any) => !(item.id === action.id || item.id_local === action.id));
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
               }
-                  } else if (action.type === 'work_role') {
-                    console.log('Eliminando rol de trabajo:', action.id);
-                    const { deleteWorkRole } = await import('@/hooks/evaluationFunctions');
-                    const result = await deleteWorkRole({
-                      id: action.id,
-                      refreshAccessToken,
-                      logout,
-                    });
+            }
+          } else if (action.type === 'work_role') {
+            console.log('Eliminando rol de trabajo:', action.id);
+            const { deleteWorkRole } = await import('@/hooks/evaluationFunctions');
+            const result = await deleteWorkRole({
+              id: action.id,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Rol de trabajo eliminado correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'work_role'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Rol de trabajo eliminado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'work_role'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.filter((item: any) => !(item.id === action.id || item.id_local === action.id));
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'contract_basic_data') {
-                    console.log('Eliminando datos básicos de contrato:', action.id);
-                    const { deleteContractBasicData } = await import('@/hooks/evaluationFunctions');
-                    const result = await deleteContractBasicData({
-                      id: action.id,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.filter((item: any) => !(item.id === action.id || item.id_local === action.id));
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'contract_basic_data') {
+            console.log('Eliminando datos básicos de contrato:', action.id);
+            const { deleteContractBasicData } = await import('@/hooks/evaluationFunctions');
+            const result = await deleteContractBasicData({
+              id: action.id,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Datos básicos de contrato eliminados correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'contract_basic_data'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Datos básicos de contrato eliminados correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'contract_basic_data'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.filter((item: any) => !(item.id === action.id || item.id_local === action.id));
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'delivery_schedule') {
-                    console.log('Eliminando cronograma de entrega:', action.id);
-                    const { deleteDeliverySchedule } = await import('@/hooks/evaluationFunctions');
-                    const result = await deleteDeliverySchedule({
-                      id: action.id,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.filter((item: any) => !(item.id === action.id || item.id_local === action.id));
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'delivery_schedule') {
+            console.log('Eliminando cronograma de entrega:', action.id);
+            const { deleteDeliverySchedule } = await import('@/hooks/evaluationFunctions');
+            const result = await deleteDeliverySchedule({
+              id: action.id,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Cronograma de entrega eliminado correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'delivery_schedule'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Cronograma de entrega eliminado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'delivery_schedule'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.filter((item: any) => !(item.id === action.id || item.id_local === action.id));
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'environmental_management_plan') {
-                    console.log('Eliminando plan de gestión ambiental:', action.id);
-                    const { deleteEnvironmentalManagementPlan } = await import('@/hooks/evaluationFunctions');
-                    const result = await deleteEnvironmentalManagementPlan({
-                      id: action.id,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.filter((item: any) => !(item.id === action.id || item.id_local === action.id));
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'environmental_management_plan') {
+            console.log('Eliminando plan de gestión ambiental:', action.id);
+            const { deleteEnvironmentalManagementPlan } = await import('@/hooks/evaluationFunctions');
+            const result = await deleteEnvironmentalManagementPlan({
+              id: action.id,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Plan de gestión ambiental eliminado correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'environmental_management_plan'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Plan de gestión ambiental eliminado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'environmental_management_plan'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.filter((item: any) => !(item.id === action.id || item.id_local === action.id));
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'cleaning_work_plan') {
-                    console.log('Eliminando plan de trabajo - Personal Aseo y limpieza:', action.id);
-                    const { deleteCleaningWorkPlan } = await import('@/hooks/evaluationFunctions');
-                    const result = await deleteCleaningWorkPlan({
-                      id: action.id,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.filter((item: any) => !(item.id === action.id || item.id_local === action.id));
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'cleaning_work_plan') {
+            console.log('Eliminando plan de trabajo - Personal Aseo y limpieza:', action.id);
+            const { deleteCleaningWorkPlan } = await import('@/hooks/evaluationFunctions');
+            const result = await deleteCleaningWorkPlan({
+              id: action.id,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Plan de trabajo - Personal Aseo y limpieza eliminado correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'cleaning_work_plan'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Plan de trabajo - Personal Aseo y limpieza eliminado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'cleaning_work_plan'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'cleaning_work_plan'));
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'special_situations_plan') {
-                    console.log('Eliminando plan para la atención de situaciones especiales:', action.id);
-                    const { deleteSpecialSituationsPlan } = await import('@/hooks/evaluationFunctions');
-                    const result = await deleteSpecialSituationsPlan({
-                      id: action.id,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'cleaning_work_plan'));
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'special_situations_plan') {
+            console.log('Eliminando plan para la atención de situaciones especiales:', action.id);
+            const { deleteSpecialSituationsPlan } = await import('@/hooks/evaluationFunctions');
+            const result = await deleteSpecialSituationsPlan({
+              id: action.id,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Plan para la atención de situaciones especiales eliminado correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'special_situations_plan'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Plan para la atención de situaciones especiales eliminado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'special_situations_plan'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'special_situations_plan'));
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'cleaning_tasks_activities') {
-                    console.log('Eliminando registro de tareas o actividades de limpieza:', action.id);
-                    const { deleteCleaningTasksActivities } = await import('@/hooks/evaluationFunctions');
-                    const result = await deleteCleaningTasksActivities({
-                      id: action.id,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'special_situations_plan'));
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'cleaning_tasks_activities') {
+            console.log('Eliminando registro de tareas o actividades de limpieza:', action.id);
+            const { deleteCleaningTasksActivities } = await import('@/hooks/evaluationFunctions');
+            const result = await deleteCleaningTasksActivities({
+              id: action.id,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Registro de tareas o actividades de limpieza eliminado correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'cleaning_tasks_activities'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Registro de tareas o actividades de limpieza eliminado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'cleaning_tasks_activities'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'cleaning_tasks_activities'));
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'risk_matrix') {
-                    console.log('Eliminando matriz de riesgos:', action.id);
-                    const { deleteRiskMatrix } = await import('@/hooks/evaluationFunctions');
-                    const result = await deleteRiskMatrix({
-                      id: action.id,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'cleaning_tasks_activities'));
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'risk_matrix') {
+            console.log('Eliminando matriz de riesgos:', action.id);
+            const { deleteRiskMatrix } = await import('@/hooks/evaluationFunctions');
+            const result = await deleteRiskMatrix({
+              id: action.id,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Matriz de riesgos eliminada correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'risk_matrix'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Matriz de riesgos eliminada correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'risk_matrix'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'risk_matrix'));
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'opportunity_matrix') {
-                    console.log('Eliminando matriz de oportunidades:', action.id);
-                    const { deleteOpportunityMatrix } = await import('@/hooks/evaluationFunctions');
-                    const result = await deleteOpportunityMatrix({
-                      id: action.id,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'risk_matrix'));
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'opportunity_matrix') {
+            console.log('Eliminando matriz de oportunidades:', action.id);
+            const { deleteOpportunityMatrix } = await import('@/hooks/evaluationFunctions');
+            const result = await deleteOpportunityMatrix({
+              id: action.id,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Matriz de oportunidades eliminada correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'opportunity_matrix'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Matriz de oportunidades eliminada correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'opportunity_matrix'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'opportunity_matrix'));
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'process_indicator_matrix') {
-                    console.log('Eliminando matriz de indicador de procesos:', action.id);
-                    const { deleteProcessIndicatorMatrix } = await import('@/hooks/evaluationFunctions');
-                    const result = await deleteProcessIndicatorMatrix({
-                      id: action.id,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'opportunity_matrix'));
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'process_indicator_matrix') {
+            console.log('Eliminando matriz de indicador de procesos:', action.id);
+            const { deleteProcessIndicatorMatrix } = await import('@/hooks/evaluationFunctions');
+            const result = await deleteProcessIndicatorMatrix({
+              id: action.id,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Matriz de indicador de procesos eliminada correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'process_indicator_matrix'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Matriz de indicador de procesos eliminada correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'process_indicator_matrix'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'process_indicator_matrix'));
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'monthly_work_role') {
-                    console.log('Eliminando rol de trabajo mensual:', action.id);
-                    const { deleteMonthlyWorkRole } = await import('@/hooks/evaluationFunctions');
-                    const result = await deleteMonthlyWorkRole({
-                      id: action.id,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'process_indicator_matrix'));
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'monthly_work_role') {
+            console.log('Eliminando rol de trabajo mensual:', action.id);
+            const { deleteMonthlyWorkRole } = await import('@/hooks/evaluationFunctions');
+            const result = await deleteMonthlyWorkRole({
+              id: action.id,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Rol de trabajo mensual eliminado correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'monthly_work_role'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Rol de trabajo mensual eliminado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'monthly_work_role'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'monthly_work_role'));
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'permit_request') {
-                    console.log('Eliminando solicitud de permiso:', action.id);
-                    const { deletePermitRequest } = await import('@/hooks/evaluationFunctions');
-                    const result = await deletePermitRequest({
-                      id: action.id,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'monthly_work_role'));
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'permit_request') {
+            console.log('Eliminando solicitud de permiso:', action.id);
+            const { deletePermitRequest } = await import('@/hooks/evaluationFunctions');
+            const result = await deletePermitRequest({
+              id: action.id,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Solicitud de permiso eliminada correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'permit_request'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Solicitud de permiso eliminada correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'permit_request'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'permit_request'));
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'attendance_control') {
-                    console.log('Eliminando control de asistencia:', action.id);
-                    const { deleteAttendanceControl } = await import('@/hooks/evaluationFunctions');
-                    const result = await deleteAttendanceControl({
-                      id: action.id,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'permit_request'));
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'attendance_control') {
+            console.log('Eliminando control de asistencia:', action.id);
+            const { deleteAttendanceControl } = await import('@/hooks/evaluationFunctions');
+            const result = await deleteAttendanceControl({
+              id: action.id,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Control de asistencia eliminado correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'attendance_control'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Control de asistencia eliminado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'attendance_control'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'attendance_control'));
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'opening_closing_position') {
-                    console.log('Eliminando apertura-cierre de puesto:', action.id);
-                    const { deleteOpeningClosingPosition } = await import('@/hooks/evaluationFunctions');
-                    const result = await deleteOpeningClosingPosition({
-                      id: action.id,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'attendance_control'));
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'opening_closing_position') {
+            console.log('Eliminando apertura-cierre de puesto:', action.id);
+            const { deleteOpeningClosingPosition } = await import('@/hooks/evaluationFunctions');
+            const result = await deleteOpeningClosingPosition({
+              id: action.id,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Apertura-Cierre de Puesto eliminado correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'opening_closing_position'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Apertura-Cierre de Puesto eliminado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'opening_closing_position'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'opening_closing_position'));
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'induction_tour_record') {
-                    console.log('Eliminando registro de inducción y recorrido:', action.id);
-                    const { deleteInductionTourRecord } = await import('@/hooks/evaluationFunctions');
-                    const result = await deleteInductionTourRecord({
-                      id: action.id,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'opening_closing_position'));
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'induction_tour_record') {
+            console.log('Eliminando registro de inducción y recorrido:', action.id);
+            const { deleteInductionTourRecord } = await import('@/hooks/evaluationFunctions');
+            const result = await deleteInductionTourRecord({
+              id: action.id,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Registro de inducción y recorrido eliminado correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'induction_tour_record'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Registro de inducción y recorrido eliminado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'induction_tour_record'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'induction_tour_record'));
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'supervision_report') {
-                    console.log('Eliminando informe de supervisión:', action.id);
-                    const { deleteSupervisionReport } = await import('@/hooks/evaluationFunctions');
-                    const result = await deleteSupervisionReport({
-                      id: action.id,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'induction_tour_record'));
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'supervision_report') {
+            console.log('Eliminando informe de supervisión:', action.id);
+            const { deleteSupervisionReport } = await import('@/hooks/evaluationFunctions');
+            const result = await deleteSupervisionReport({
+              id: action.id,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Informe de supervisión eliminado correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'supervision_report'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Informe de supervisión eliminado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'supervision_report'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'supervision_report'));
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'electric_brush_guide') {
-                    console.log('Eliminando guía de uso de cepillo eléctrico:', action.id);
-                    const { deleteElectricBrushGuide } = await import('@/hooks/evaluationFunctions');
-                    const result = await deleteElectricBrushGuide({
-                      id: action.id,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'supervision_report'));
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'electric_brush_guide') {
+            console.log('Eliminando guía de uso de cepillo eléctrico:', action.id);
+            const { deleteElectricBrushGuide } = await import('@/hooks/evaluationFunctions');
+            const result = await deleteElectricBrushGuide({
+              id: action.id,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Guía de uso de cepillo eléctrico eliminada correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'electric_brush_guide'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Guía de uso de cepillo eléctrico eliminada correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'electric_brush_guide'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'electric_brush_guide'));
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'general_clients_list') {
-                    console.log('Eliminando listado general de clientes:', action.id);
-                    const { deleteGeneralClientsList } = await import('@/hooks/evaluationFunctions');
-                    const result = await deleteGeneralClientsList({
-                      id: action.id,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'electric_brush_guide'));
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'general_clients_list') {
+            console.log('Eliminando listado general de clientes:', action.id);
+            const { deleteGeneralClientsList } = await import('@/hooks/evaluationFunctions');
+            const result = await deleteGeneralClientsList({
+              id: action.id,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Listado general de clientes eliminado correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'general_clients_list'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Listado general de clientes eliminado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'general_clients_list'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'general_clients_list'));
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'improvement_actions_control') {
-                    console.log('Eliminando control de acciones de mejora:', action.id);
-                    const { deleteImprovementActionsControl } = await import('@/hooks/evaluationFunctions');
-                    const result = await deleteImprovementActionsControl({
-                      id: action.id,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'general_clients_list'));
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'improvement_actions_control') {
+            console.log('Eliminando control de acciones de mejora:', action.id);
+            const { deleteImprovementActionsControl } = await import('@/hooks/evaluationFunctions');
+            const result = await deleteImprovementActionsControl({
+              id: action.id,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Control de acciones de mejora eliminado correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'improvement_actions_control'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Control de acciones de mejora eliminado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'improvement_actions_control'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'improvement_actions_control'));
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'quality_policy') {
-                    console.log('Eliminando política de calidad:', action.id);
-                    const { deleteQualityPolicy } = await import('@/hooks/evaluationFunctions');
-                    const result = await deleteQualityPolicy({
-                      id: action.id,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'improvement_actions_control'));
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'quality_policy') {
+            console.log('Eliminando política de calidad:', action.id);
+            const { deleteQualityPolicy } = await import('@/hooks/evaluationFunctions');
+            const result = await deleteQualityPolicy({
+              id: action.id,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Política de calidad eliminada correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'quality_policy'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Política de calidad eliminada correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'quality_policy'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'quality_policy'));
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'business_quality_objectives') {
-                    console.log('Eliminando objetivos empresariales de calidad:', action.id);
-                    const { deleteBusinessQualityObjectives } = await import('@/hooks/evaluationFunctions');
-                    const result = await deleteBusinessQualityObjectives({
-                      id: action.id,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'quality_policy'));
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'business_quality_objectives') {
+            console.log('Eliminando objetivos empresariales de calidad:', action.id);
+            const { deleteBusinessQualityObjectives } = await import('@/hooks/evaluationFunctions');
+            const result = await deleteBusinessQualityObjectives({
+              id: action.id,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Objetivos empresariales de calidad eliminados correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'business_quality_objectives'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Objetivos empresariales de calidad eliminados correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'business_quality_objectives'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'business_quality_objectives'));
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'stakeholder_analysis_matrix') {
-                    console.log('Eliminando matriz de análisis de partes interesadas:', action.id);
-                    const { deleteStakeholderAnalysisMatrix } = await import('@/hooks/evaluationFunctions');
-                    const result = await deleteStakeholderAnalysisMatrix({
-                      id: action.id,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'business_quality_objectives'));
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'stakeholder_analysis_matrix') {
+            console.log('Eliminando matriz de análisis de partes interesadas:', action.id);
+            const { deleteStakeholderAnalysisMatrix } = await import('@/hooks/evaluationFunctions');
+            const result = await deleteStakeholderAnalysisMatrix({
+              id: action.id,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Matriz de análisis de partes interesadas eliminada correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'stakeholder_analysis_matrix'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Matriz de análisis de partes interesadas eliminada correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'stakeholder_analysis_matrix'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'stakeholder_analysis_matrix'));
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'communication_plan') {
-                    console.log('Eliminando plan de comunicación:', action.id);
-                    const { deleteCommunicationPlan } = await import('@/hooks/evaluationFunctions');
-                    const result = await deleteCommunicationPlan({
-                      id: action.id,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'stakeholder_analysis_matrix'));
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'communication_plan') {
+            console.log('Eliminando plan de comunicación:', action.id);
+            const { deleteCommunicationPlan } = await import('@/hooks/evaluationFunctions');
+            const result = await deleteCommunicationPlan({
+              id: action.id,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Plan de comunicación eliminado correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'communication_plan'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Plan de comunicación eliminado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'communication_plan'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'communication_plan'));
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'knowledge_management_matrix') {
-                    console.log('Eliminando matriz de gestión del conocimiento:', action.id);
-                    const { deleteKnowledgeManagementMatrix } = await import('@/hooks/evaluationFunctions');
-                    const result = await deleteKnowledgeManagementMatrix({
-                      id: action.id,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'communication_plan'));
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'knowledge_management_matrix') {
+            console.log('Eliminando matriz de gestión del conocimiento:', action.id);
+            const { deleteKnowledgeManagementMatrix } = await import('@/hooks/evaluationFunctions');
+            const result = await deleteKnowledgeManagementMatrix({
+              id: action.id,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Matriz de gestión del conocimiento eliminada correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'knowledge_management_matrix'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Matriz de gestión del conocimiento eliminada correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'knowledge_management_matrix'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'knowledge_management_matrix'));
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'change_planning') {
-                    console.log('Eliminando planificación de cambios del SGC:', action.id);
-                    const { deleteChangePlanning } = await import('@/hooks/evaluationFunctions');
-                    const result = await deleteChangePlanning({
-                      id: action.id,
-                      refreshAccessToken,
-                      logout,
-                    });
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'knowledge_management_matrix'));
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'change_planning') {
+            console.log('Eliminando planificación de cambios del SGC:', action.id);
+            const { deleteChangePlanning } = await import('@/hooks/evaluationFunctions');
+            const result = await deleteChangePlanning({
+              id: action.id,
+              refreshAccessToken,
+              logout,
+            });
 
-                    if (result.status) {
-                      console.log('Planificación de cambios del SGC eliminada correctamente');
-                      const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'change_planning'));
-                      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            if (result.status) {
+              console.log('Planificación de cambios del SGC eliminada correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'change_planning'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-                      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                      if (cacheStr) {
-                        const cache = JSON.parse(cacheStr);
-                        const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'change_planning'));
-                        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                      }
-                    }
-                  } else if (action.type === 'routes_and_tours') {
-              console.log('Eliminando ruta o gira:', action.id);
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'change_planning'));
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'routes_and_tours') {
+            console.log('Eliminando ruta o gira:', action.id);
             const { deleteRouteAndTour } = await import('@/hooks/evaluationFunctions');
             const result = await deleteRouteAndTour({
               id: action.id,
@@ -2899,7 +2899,7 @@ function AppContent() {
               // Eliminar acción del array
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'routes_and_tours'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-              
+
               // Eliminar del cache
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -2941,7 +2941,7 @@ function AppContent() {
 
           if (result.status) {
             console.log('Encuesta creada correctamente');
-            
+
             // Eliminar encuesta del cache local (la que tiene id_local)
             const cacheStr = await AsyncStorage.getItem('surveys_cache');
             if (cacheStr) {
@@ -2949,7 +2949,7 @@ function AppContent() {
               const updatedCache = cache.filter((s: any) => s.id_local !== action.id);
               await AsyncStorage.setItem('surveys_cache', JSON.stringify(updatedCache));
             }
-            
+
             // Eliminar acción del array
             const updatedActions = actions.filter((a: any) => a.id !== action.id || a.type !== 'create');
             await AsyncStorage.setItem('surveys_actions', JSON.stringify(updatedActions));
@@ -3104,7 +3104,7 @@ function AppContent() {
       if (initialUrl && initialUrl.includes('/recover-password/')) {
         const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
         const token = initialUrl.split('/recover-password/')[1];
-        
+
         try {
           const response = await fetch(apiUrl + '/api/password/check-recovery-password-token/' + token, {
             method: 'GET',
@@ -3114,15 +3114,15 @@ function AppContent() {
             },
           });
           const responseData = await response.json();
-          
+
           if (responseData.status && responseData.empleado) {
             // Navigate to RecoverPassword screen with employee data
             setTimeout(() => {
               navigationRef.current?.navigate('RecoverPassword', {
                 token: token,
                 employeeId: responseData.empleado.id || '',
-                employeeName: responseData.empleado.nombre ? 
-                  `${responseData.empleado.nombre} ${responseData.empleado.apellido || ''} ${responseData.empleado.segundo_apellido || ''}`.trim() 
+                employeeName: responseData.empleado.nombre ?
+                  `${responseData.empleado.nombre} ${responseData.empleado.apellido || ''} ${responseData.empleado.segundo_apellido || ''}`.trim()
                   : '',
                 employeeEmail: responseData.empleado.Email || '',
                 employeeCedula: responseData.empleado.cedula || '',
@@ -3202,7 +3202,7 @@ function AppContent() {
     return () => clearInterval(interval);
   }, []);
 
-  
+
   const check_conection_time = async () => {
     console.log('Checking connection time...');
     if (isConnected) {
@@ -3229,7 +3229,7 @@ function AppContent() {
     if (!current_marca_obj.plaza.id) {
       return;
     }
-    
+
     // Obtener notificaciones actuales en AsyncStorage antes de eliminarlas
     const currentNotificationsStr = await AsyncStorage.getItem('notifications');
     let currentUnwatchedCount = 0;
@@ -3237,12 +3237,12 @@ function AppContent() {
       const currentNotifications = JSON.parse(currentNotificationsStr);
       currentUnwatchedCount = currentNotifications.filter((n: any) => !n.watched).length;
     }
-    
+
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
-    const response = await fetch(`${apiUrl}/api/notification/plaza/${current_marca_obj.plaza.id}`, {
+    const response = await fetch(`${apiUrl}/api/notification?emp_id=${employee?.id}&pl_id=${current_marca_obj.plaza.id}`, {
       method: 'GET',
       headers: {
         'Authorization': `Bearer ${token}`,
@@ -3252,18 +3252,18 @@ function AppContent() {
     });
     const data = await response.json();
     if (data.status) {
-      
+
       await AsyncStorage.setItem('notifications', JSON.stringify(data.notifications));
-      
+
       // Contar notificaciones no leídas en la respuesta del servidor
       const newUnwatchedCount = data.notifications.filter((n: any) => !n.watched).length;
-      
+
       // Si hay más notificaciones no leídas en el servidor, recargar la ventana
       if (newUnwatchedCount > currentUnwatchedCount) {
         console.log('Nuevas notificaciones detectadas, recargando...');
         eventBus.emit('notificationsUpdated');
       }
-      
+
       // Emitir evento para actualizar el contador en AppHeader
       eventBus.emit('notificationsUpdatedCounter');
     }
@@ -3272,7 +3272,7 @@ function AppContent() {
     }
   }
 
-  
+
   // ✅ Aquí agregas la función que se ejecutará cada 30 segundos
   useEffect(() => {
     // Ejecuta una vez al inicio
@@ -3308,11 +3308,11 @@ function AppContent() {
     refreshAccessToken?: () => Promise<boolean>,
     logout?: () => Promise<{ status: boolean; message: string }>
   ) => {
-    
+
     const startTime = new Date(temp_state.startTime).getTime();
     const current = temp_state.currentTimestamp;
     const remainingSeconds = temp_state.remainingSeconds;
-    
+
     const requestData = {
       empleadoId: employeeId,
       inicio: new Date(startTime),
@@ -3331,14 +3331,14 @@ function AppContent() {
         refreshAccessToken,
         logout
       });
-      
+
       if (!responseData.status) {
         Alert.alert('Error', responseData.message);
         return;
       }
-      
+
       await AsyncStorage.removeItem('temp_state');
-          
+
       Alert.alert(
         '🎉 ¡Tiempo de Almuerzo Completado!',
         'Tu descanso ha terminado. ¡Es hora de volver al trabajo!',
@@ -3346,7 +3346,7 @@ function AppContent() {
           {
             text: 'OK',
             onPress: async () => {
-              
+
             },
           },
         ]
@@ -3358,7 +3358,7 @@ function AppContent() {
       for (let i = 0; i < 10; i++) {
         localId += chars.charAt(Math.floor(Math.random() * chars.length));
       }
-      
+
       // Crear entrada en lunchtime_actions
       const actionsStr = await AsyncStorage.getItem('lunchtime_actions');
       const actions = actionsStr ? JSON.parse(actionsStr) : [];
@@ -3377,7 +3377,7 @@ function AppContent() {
           {
             text: 'OK',
             onPress: async () => {
-              
+
             },
           },
         ]
@@ -3389,45 +3389,45 @@ function AppContent() {
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-    <NavigationContainer
-      ref={navigationRef}
-      linking={linking}
-      theme={colorScheme === 'dark' ? DarkTheme : DefaultTheme}
-      onReady={() => {
-        routeNameRef.current = navigationRef.current?.getCurrentRoute()?.name;
-        console.log('Pantalla inicial:', routeNameRef.current);
-      }}
-      onStateChange={() => {
-        const state = navigationRef.current?.getRootState();
-        const routes = state?.routes ?? [];
-        if (!routes.length) return;
+      <NavigationContainer
+        ref={navigationRef}
+        linking={linking}
+        theme={colorScheme === 'dark' ? DarkTheme : DefaultTheme}
+        onReady={() => {
+          routeNameRef.current = navigationRef.current?.getCurrentRoute()?.name;
+          console.log('Pantalla inicial:', routeNameRef.current);
+        }}
+        onStateChange={() => {
+          const state = navigationRef.current?.getRootState();
+          const routes = state?.routes ?? [];
+          if (!routes.length) return;
 
-        const filteredRoutes: typeof routes = [];
-        const seen = new Set<string>();
+          const filteredRoutes: typeof routes = [];
+          const seen = new Set<string>();
 
-        for (let i = routes.length - 1; i >= 0; i--) {
-          const route = routes[i];
-          if (!seen.has(route.name)) {
-            filteredRoutes.unshift(route);
-            seen.add(route.name);
+          for (let i = routes.length - 1; i >= 0; i--) {
+            const route = routes[i];
+            if (!seen.has(route.name)) {
+              filteredRoutes.unshift(route);
+              seen.add(route.name);
+            }
           }
-        }
 
-        if (filteredRoutes.length !== routes.length) {
-          navigationRef.current?.dispatch(
-            CommonActions.reset({
-              index: filteredRoutes.length - 1,
-              routes: filteredRoutes,
-            })
-          );
-        }
+          if (filteredRoutes.length !== routes.length) {
+            navigationRef.current?.dispatch(
+              CommonActions.reset({
+                index: filteredRoutes.length - 1,
+                routes: filteredRoutes,
+              })
+            );
+          }
 
-        routeNameRef.current = navigationRef.current?.getCurrentRoute()?.name;
-      }}
-    >
-      <RootNavigator />
-      <StatusBar style="auto" />
-    </NavigationContainer>
+          routeNameRef.current = navigationRef.current?.getCurrentRoute()?.name;
+        }}
+      >
+        <RootNavigator />
+        <StatusBar style="auto" />
+      </NavigationContainer>
     </GestureHandlerRootView>
   );
 }

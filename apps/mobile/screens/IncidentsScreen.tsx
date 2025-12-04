@@ -1,14 +1,14 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { 
-  StyleSheet, 
-  ScrollView, 
-  TouchableOpacity, 
-  TextInput, 
-  Alert, 
-  ActivityIndicator, 
-  Modal, 
-  View, 
-  Platform, 
+import {
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  TextInput,
+  Alert,
+  ActivityIndicator,
+  Modal,
+  View,
+  Platform,
   Image,
   Linking
 } from 'react-native';
@@ -120,7 +120,7 @@ function IncidentAudioPlayer({ audioUri }: { audioUri: string }) {
   const playPauseAudio = () => {
     try {
       if (!audioPlayer) return; // Verificar que existe
-      
+
       if (playerStatus.playing) {
         audioPlayer.pause();
       } else {
@@ -140,7 +140,7 @@ function IncidentAudioPlayer({ audioUri }: { audioUri: string }) {
   const resetAudio = () => {
     try {
       if (!audioPlayer) return; // Verificar que existe
-      
+
       audioPlayer.seekTo(0);
       audioPlayer.pause();
     } catch (error) {
@@ -191,18 +191,18 @@ export default function IncidentsScreen() {
   const { employee, refreshAccessToken, logout } = useAuth();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const navigation = useNavigation<IncidentsScreenNavigationProp>();
-  
+
   // Data state
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [executives, setExecutives] = useState<Executive[]>([]);
   const [classifications, setClassifications] = useState<Classification[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [hasCurrentMarca, setHasCurrentMarca] = useState<boolean>(false);
-  
+
   // Form states
   const [isCreating, setIsCreating] = useState(false);
   const [editingIncident, setEditingIncident] = useState<Incident | null>(null);
-  
+
   // Form refs for creation/editing
   const ejecutivoIdRef = useRef<number>(0);
   const fechaIncidenteRef = useRef<string>('');
@@ -213,7 +213,7 @@ export default function IncidentsScreen() {
   const involucradosRef = useRef<Involucrado[]>([]);
   const libroNovedadesRef = useRef<LibroNovedades>({ numero: '', fecha: '' });
   const nombreResponsableAtencionRef = useRef<string>('');
-  
+
   // Edit-only refs
   const solucionRef = useRef<string>('');
   const fechaSolucionRef = useRef<string>('');
@@ -221,7 +221,7 @@ export default function IncidentsScreen() {
   const costoAsociadoRef = useRef<string>('');
   const consecutivoInformeRef = useRef<string>('');
   const linkInformeRef = useRef<string>('');
-  
+
   // Controlled states for pickers and dates
   const [selectedEjecutivo, setSelectedEjecutivo] = useState<number>(0);
   const [selectedClasificacion, setSelectedClasificacion] = useState<number>(0);
@@ -230,23 +230,23 @@ export default function IncidentsScreen() {
   const [fechaLibroNovedades, setFechaLibroNovedades] = useState<Date>(new Date());
   const [fechaSolucion, setFechaSolucion] = useState<Date>(new Date());
   const [fechaSolucionReal, setFechaSolucionReal] = useState<Date>(new Date());
-  
+
   // Date picker visibility
   const [showFechaIncidentePicker, setShowFechaIncidentePicker] = useState(false);
   const [showFechaReportePicker, setShowFechaReportePicker] = useState(false);
   const [showFechaLibroPicker, setShowFechaLibroPicker] = useState(false);
   const [showFechaSolucionPicker, setShowFechaSolucionPicker] = useState(false);
   const [showFechaSolucionRealPicker, setShowFechaSolucionRealPicker] = useState(false);
-  
+
   // Involucrados state
   const [involucrados, setInvolucrados] = useState<Involucrado[]>([{ codigo: '', nombre: '' }]);
-  
+
   // Camera state
   const [isCameraVisible, setIsCameraVisible] = useState(false);
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef<CameraView | null>(null);
   const [incidentImageBase64, setIncidentImageBase64] = useState<string | null>(null);
-  
+
   // Audio recording states
   const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(audioRecorder, 1000); // Actualizar cada segundo
@@ -254,10 +254,10 @@ export default function IncidentsScreen() {
   const audioPlayer = useAudioPlayer(recordedAudioUri || undefined);
   const playerStatus = useAudioPlayerStatus(audioPlayer); // Estado actualizado del reproductor
   const [recordedAudioBase64, setRecordedAudioBase64] = useState<string | null>(null);
-  
+
   // Expanded incidents for audio/image
   const [expandedIncidents, setExpandedIncidents] = useState<Set<string>>(new Set());
-  
+
   // Archivos adjuntos por incidente
   const [incidentImages, setIncidentImages] = useState<Map<string, string>>(new Map());
   const [incidentAudios, setIncidentAudios] = useState<Map<string, string>>(new Map());
@@ -265,7 +265,7 @@ export default function IncidentsScreen() {
   const [loadingAudios, setLoadingAudios] = useState<Set<string>>(new Set());
   const [imageErrors, setImageErrors] = useState<Set<string>>(new Set());
   const [audioErrors, setAudioErrors] = useState<Set<string>>(new Set());
-  
+
   // Archivos adjuntos para el formulario de edición
   const [editingImage, setEditingImage] = useState<string | null>(null);
   const [editingAudio, setEditingAudio] = useState<string | null>(null);
@@ -273,10 +273,10 @@ export default function IncidentsScreen() {
   const [loadingEditingAudio, setLoadingEditingAudio] = useState(false);
   const [editingImageError, setEditingImageError] = useState(false);
   const [editingAudioError, setEditingAudioError] = useState(false);
-  
+
   // Form key for forcing re-render
   const [formKey, setFormKey] = useState(0);
-  
+
   // Estado para prevenir race conditions en cleanup
   const isCleaningUpRef = useRef(false);
   const isMountedRef = useRef(true);
@@ -284,10 +284,10 @@ export default function IncidentsScreen() {
   // Cleanup del audioRecorder y audioPlayer cuando se desmonta el componente
   useEffect(() => {
     isMountedRef.current = true;
-    
+
     return () => {
       isMountedRef.current = false;
-      
+
       // Detener grabación si está activa
       if (audioRecorder && recorderState.isRecording) {
         audioRecorder.stop().catch(err => {
@@ -297,7 +297,7 @@ export default function IncidentsScreen() {
           }
         });
       }
-      
+
       // Pausar reproductor si está reproduciendo
       if (audioPlayer && playerStatus.playing) {
         try {
@@ -337,9 +337,9 @@ export default function IncidentsScreen() {
       console.log('Cleanup already in progress, skipping...');
       return;
     }
-    
+
     isCleaningUpRef.current = true;
-    
+
     try {
       // Detener grabación si está activa (verificar el estado actual directamente)
       try {
@@ -376,7 +376,7 @@ export default function IncidentsScreen() {
       setLoadingAudios(new Set());
       setImageErrors(new Set());
       setAudioErrors(new Set());
-      
+
       // Limpiar archivos adjuntos del formulario de edición
       setEditingImage(null);
       setEditingAudio(null);
@@ -461,7 +461,7 @@ export default function IncidentsScreen() {
         const incidentsData = await incidentsResponse.json();
 
         if (incidentsData.status && incidentsData.incidents) {
-          
+
           setIncidents(incidentsData.incidents);
           // Actualizar incidents_cache preservando base64
           await AsyncStorage.setItem('incidents_cache', JSON.stringify(incidentsData.incidents));
@@ -628,12 +628,12 @@ export default function IncidentsScreen() {
     }
 
     try {
-      const photo = await cameraRef.current.takePictureAsync({ 
+      const photo = await cameraRef.current.takePictureAsync({
         base64: true,
         quality: 0.7,
         skipProcessing: false
       });
-      
+
       if (!photo || !photo.base64) {
         Alert.alert('Error', 'No se pudo capturar la foto');
         setIsCameraVisible(false);
@@ -641,9 +641,9 @@ export default function IncidentsScreen() {
       }
 
       setIsCameraVisible(false);
-      
+
       const formattedBase64 = `data:image/jpeg;base64,${photo.base64}`;
-      
+
       setTimeout(() => {
         setIncidentImageBase64(formattedBase64);
       }, 100);
@@ -658,7 +658,7 @@ export default function IncidentsScreen() {
     try {
       // Solicitar permisos de grabación
       const { granted, canAskAgain } = await requestRecordingPermissionsAsync();
-      
+
       if (!granted) {
         if (canAskAgain) {
           Alert.alert('Permisos requeridos', 'Se necesitan permisos de audio para grabar');
@@ -667,10 +667,10 @@ export default function IncidentsScreen() {
         }
         return;
       }
-      
+
       // Preparar el grabador
       await audioRecorder.prepareToRecordAsync();
-      
+
       // Iniciar grabación (no es async)
       audioRecorder.record();
     } catch (error) {
@@ -684,13 +684,13 @@ export default function IncidentsScreen() {
       if (!recorderState.isRecording) return;
 
       await audioRecorder.stop();
-      
+
       const uri = audioRecorder.uri;
       if (!uri) {
         Alert.alert('Error', 'No se pudo obtener el URI del audio');
         return;
       }
-      
+
       setRecordedAudioUri(uri);
 
       // Convert to base64
@@ -738,7 +738,7 @@ export default function IncidentsScreen() {
   const resetRecordedAudio = async () => {
     try {
       if (!audioPlayer) return;
-      
+
       audioPlayer.seekTo(0);
       audioPlayer.pause();
     } catch (error) {
@@ -787,7 +787,7 @@ export default function IncidentsScreen() {
     setIsCreating(true);
     setFormKey(prev => prev + 1);
     resetForm();
-    
+
     // Set default values
     if (executives.length > 0) {
       ejecutivoIdRef.current = executives[0].id;
@@ -797,7 +797,7 @@ export default function IncidentsScreen() {
       clasificacionIdRef.current = classifications[0].id;
       setSelectedClasificacion(classifications[0].id);
     }
-    
+
     const today = new Date();
     setFechaIncidente(today);
     setFechaReporte(today);
@@ -805,12 +805,12 @@ export default function IncidentsScreen() {
     fechaIncidenteRef.current = formatDateToISO(today);
     fechaReporteRef.current = formatDateToISO(today);
     libroNovedadesRef.current.fecha = formatDateToISO(today);
-    
+
     // Set employee name as default
     if (employee?.name) {
       nombreResponsableRef.current = employee.name;
     }
-    
+
     setInvolucrados([{ codigo: '', nombre: '' }]);
     involucradosRef.current = [{ codigo: '', nombre: '' }];
   };
@@ -1046,8 +1046,8 @@ export default function IncidentsScreen() {
       // Si tiene id_local y no hay conexión, usar base64 del cache
       if (incident && incident.id_local !== '' && !hasConnection) {
         if (incident.base64_image && incident.base64_image.trim() !== '') {
-          const formattedImage = incident.base64_image.startsWith('data:') 
-            ? incident.base64_image 
+          const formattedImage = incident.base64_image.startsWith('data:')
+            ? incident.base64_image
             : `data:image/jpeg;base64,${incident.base64_image}`;
           setEditingImage(formattedImage);
           setLoadingEditingImage(false);
@@ -1138,8 +1138,8 @@ export default function IncidentsScreen() {
       // Si tiene id_local y no hay conexión, usar base64 del cache
       if (incident && incident.id_local !== '' && !hasConnection) {
         if (incident.base64_audio && incident.base64_audio.trim() !== '') {
-          const formattedAudio = incident.base64_audio.startsWith('data:') 
-            ? incident.base64_audio 
+          const formattedAudio = incident.base64_audio.startsWith('data:')
+            ? incident.base64_audio
             : `data:audio/mp4;base64,${incident.base64_audio}`;
           setEditingAudio(formattedAudio);
           setLoadingEditingAudio(false);
@@ -1221,30 +1221,30 @@ export default function IncidentsScreen() {
   const startEditing = (incident: Incident) => {
     setEditingIncident(incident);
     setFormKey(prev => prev + 1);
-    
+
     // Reset archivos adjuntos
     setEditingImage(null);
     setEditingAudio(null);
     setEditingImageError(false);
     setEditingAudioError(false);
-    
+
     // Set refs with incident values
     ejecutivoIdRef.current = incident.ejecutivo.id;
     setSelectedEjecutivo(incident.ejecutivo.id);
-    
+
     fechaIncidenteRef.current = incident.fecha_incidente;
     setFechaIncidente(new Date(incident.fecha_incidente));
-    
+
     fechaReporteRef.current = incident.fecha_reporte;
     setFechaReporte(new Date(incident.fecha_reporte));
-    
+
     nombreResponsableRef.current = incident.nombre_responsable;
-    
+
     clasificacionIdRef.current = incident.clasificacion.id;
     setSelectedClasificacion(incident.clasificacion.id);
-    
+
     descripcionRef.current = incident.descripcion;
-    
+
     try {
       const parsedInvolucrados = JSON.parse(incident.involucrados);
       setInvolucrados(parsedInvolucrados);
@@ -1253,7 +1253,7 @@ export default function IncidentsScreen() {
       setInvolucrados([{ codigo: '', nombre: '' }]);
       involucradosRef.current = [{ codigo: '', nombre: '' }];
     }
-    
+
     try {
       const parsedLibro = JSON.parse(incident.fecha_libro_novedades);
       libroNovedadesRef.current = parsedLibro;
@@ -1261,28 +1261,28 @@ export default function IncidentsScreen() {
     } catch {
       libroNovedadesRef.current = { numero: '', fecha: '' };
     }
-    
+
     nombreResponsableAtencionRef.current = incident.nombre_responsable_atencion;
-    
+
     solucionRef.current = incident.solucion || '';
     fechaSolucionRef.current = incident.fecha_solucion || '';
     if (incident.fecha_solucion) {
       setFechaSolucion(new Date(incident.fecha_solucion));
     }
-    
+
     fechaSolucionRealRef.current = incident.fecha_solucion_real || '';
     if (incident.fecha_solucion_real) {
       setFechaSolucionReal(new Date(incident.fecha_solucion_real));
     }
-    
+
     costoAsociadoRef.current = incident.costo_asociado || '';
     consecutivoInformeRef.current = incident.consecutivo_informe || '';
     linkInformeRef.current = incident.link_informe || '';
-    
+
     setIncidentImageBase64(null);
     setRecordedAudioUri(null);
     setRecordedAudioBase64(null);
-    
+
     // Cargar archivos adjuntos cuando se inicia la edición
     fetchEditingImage(incident.id);
     fetchEditingAudio(incident.id);
@@ -1299,6 +1299,19 @@ export default function IncidentsScreen() {
 
   const updateIncident = async (incidentId: number) => {
     // Validations for edit fields
+    const currentMarca = await AsyncStorage.getItem('current_marca');
+    if (!currentMarca) {
+      Alert.alert('Error', 'No se encontró la marca actual');
+      return;
+    }
+
+    const currentMarcaData = JSON.parse(currentMarca);
+
+    if (!currentMarcaData.id) {
+      Alert.alert('Error', 'No se encontró el ID de la marca');
+      return;
+    }
+
     if (!solucionRef.current.trim()) {
       Alert.alert('Error', 'Debe ingresar la solución propuesta');
       return;
@@ -1324,6 +1337,7 @@ export default function IncidentsScreen() {
           onPress: async () => {
             try {
               const requestBody = {
+                marca_id: currentMarcaData.id,
                 solucion: solucionRef.current,
                 fecha_solucion: fechaSolucionRef.current,
                 fecha_real_solucion: fechaSolucionRealRef.current,
@@ -1389,8 +1403,8 @@ export default function IncidentsScreen() {
                 // Actualizar incidents_cache
                 const cacheStr = await AsyncStorage.getItem('incidents_cache');
                 const cache = cacheStr ? JSON.parse(cacheStr) : [];
-                
-                const incidentIndex = cache.findIndex((inc: Incident) => 
+
+                const incidentIndex = cache.findIndex((inc: Incident) =>
                   incident.id_local !== '' ? inc.id_local === incident.id_local : inc.id === incidentId
                 );
 
@@ -1454,11 +1468,11 @@ export default function IncidentsScreen() {
 
   const fetchIncidentImage = async (incidentId: number) => {
     // Buscar el incidente en el estado para obtener la clave única
-    const incident = incidents.find(inc => 
-      inc.id === incidentId || 
+    const incident = incidents.find(inc =>
+      inc.id === incidentId ||
       (inc.id === 0 && inc.id_local && inc.id_local !== '' && inc.id_local === String(incidentId))
     );
-    
+
     if (!incident) {
       console.warn('Incidente no encontrado para cargar imagen:', incidentId);
       return;
@@ -1488,8 +1502,8 @@ export default function IncidentsScreen() {
       // Si tiene id_local y no hay conexión, usar base64 del cache
       if (incident.id_local !== '' && !hasConnection) {
         if (incident.base64_image && incident.base64_image.trim() !== '') {
-          const formattedImage = incident.base64_image.startsWith('data:') 
-            ? incident.base64_image 
+          const formattedImage = incident.base64_image.startsWith('data:')
+            ? incident.base64_image
             : `data:image/jpeg;base64,${incident.base64_image}`;
           setIncidentImages(prev => {
             const newMap = new Map(prev);
@@ -1606,11 +1620,11 @@ export default function IncidentsScreen() {
 
   const fetchIncidentAudio = async (incidentId: number) => {
     // Buscar el incidente en el estado para obtener la clave única
-    const incident = incidents.find(inc => 
-      inc.id === incidentId || 
+    const incident = incidents.find(inc =>
+      inc.id === incidentId ||
       (inc.id === 0 && inc.id_local && inc.id_local !== '' && inc.id_local === String(incidentId))
     );
-    
+
     if (!incident) {
       console.warn('Incidente no encontrado para cargar audio:', incidentId);
       return;
@@ -1640,8 +1654,8 @@ export default function IncidentsScreen() {
       // Si tiene id_local y no hay conexión, usar base64 del cache
       if (incident.id_local !== '' && !hasConnection) {
         if (incident.base64_audio && incident.base64_audio.trim() !== '') {
-          const formattedAudio = incident.base64_audio.startsWith('data:') 
-            ? incident.base64_audio 
+          const formattedAudio = incident.base64_audio.startsWith('data:')
+            ? incident.base64_audio
             : `data:audio/mp4;base64,${incident.base64_audio}`;
           setIncidentAudios(prev => {
             const newMap = new Map(prev);
@@ -1758,7 +1772,7 @@ export default function IncidentsScreen() {
 
   const toggleIncidentExpansion = (incident: Incident) => {
     const uniqueKey = getIncidentUniqueKey(incident);
-    
+
     setExpandedIncidents(prev => {
       const newSet = new Set(prev);
       if (newSet.has(uniqueKey)) {
@@ -1798,8 +1812,8 @@ export default function IncidentsScreen() {
       // Si tiene id_local y no hay conexión, usar base64 del cache
       if (incident.id_local !== '' && !hasConnection) {
         if (incident.base64_image && incident.base64_image.trim() !== '') {
-          const formattedImage = incident.base64_image.startsWith('data:') 
-            ? incident.base64_image 
+          const formattedImage = incident.base64_image.startsWith('data:')
+            ? incident.base64_image
             : `data:image/jpeg;base64,${incident.base64_image}`;
           setIncidentImages(prev => {
             const newMap = new Map(prev);
@@ -1954,8 +1968,8 @@ export default function IncidentsScreen() {
       // Si tiene id_local y no hay conexión, usar base64 del cache
       if (incident.id_local !== '' && !hasConnection) {
         if (incident.base64_audio && incident.base64_audio.trim() !== '') {
-          const formattedAudio = incident.base64_audio.startsWith('data:') 
-            ? incident.base64_audio 
+          const formattedAudio = incident.base64_audio.startsWith('data:')
+            ? incident.base64_audio
             : `data:audio/mp4;base64,${incident.base64_audio}`;
           setIncidentAudios(prev => {
             const newMap = new Map(prev);
@@ -2102,7 +2116,7 @@ export default function IncidentsScreen() {
               onValueChange={(value) => {
                 ejecutivoIdRef.current = value;
                 setSelectedEjecutivo(value);
-                
+
                 // Auto-fill nombre responsable atencion
                 const selectedExec = executives.find(e => e.id === value);
                 if (selectedExec) {
@@ -2295,33 +2309,33 @@ export default function IncidentsScreen() {
         {isCreating && (
           <ThemedView style={styles.formGroup}>
             <ThemedText style={styles.formLabel}>Adjuntar audio (opcional):</ThemedText>
-            
-             {!recordedAudioUri && (
-               <ThemedView style={styles.recordingControls}>
-                 {!recorderState.isRecording ? (
-                   <TouchableOpacity
-                     style={styles.recordButton}
-                     onPress={startRecording}
-                   >
-                     {getActionIcon('microphone')}
-                     <ThemedText style={styles.recordButtonText}>Iniciar Grabación</ThemedText>
-                   </TouchableOpacity>
-                 ) : (
-                   <ThemedView style={styles.recordingActiveContainer}>
-                     <TouchableOpacity
-                       style={styles.stopButton}
-                       onPress={stopRecording}
-                     >
-                       {getActionIcon('stop')}
-                       <ThemedText style={styles.stopButtonText}>Detener Grabación</ThemedText>
-                     </TouchableOpacity>
-                     <ThemedText style={styles.recordingTime}>
-                       {formatTime(Math.floor(recorderState.durationMillis / 1000))}
-                     </ThemedText>
-                   </ThemedView>
-                 )}
-               </ThemedView>
-             )}
+
+            {!recordedAudioUri && (
+              <ThemedView style={styles.recordingControls}>
+                {!recorderState.isRecording ? (
+                  <TouchableOpacity
+                    style={styles.recordButton}
+                    onPress={startRecording}
+                  >
+                    {getActionIcon('microphone')}
+                    <ThemedText style={styles.recordButtonText}>Iniciar Grabación</ThemedText>
+                  </TouchableOpacity>
+                ) : (
+                  <ThemedView style={styles.recordingActiveContainer}>
+                    <TouchableOpacity
+                      style={styles.stopButton}
+                      onPress={stopRecording}
+                    >
+                      {getActionIcon('stop')}
+                      <ThemedText style={styles.stopButtonText}>Detener Grabación</ThemedText>
+                    </TouchableOpacity>
+                    <ThemedText style={styles.recordingTime}>
+                      {formatTime(Math.floor(recorderState.durationMillis / 1000))}
+                    </ThemedText>
+                  </ThemedView>
+                )}
+              </ThemedView>
+            )}
 
             {recordedAudioUri && (
               <ThemedView style={styles.audioPreview}>
@@ -2374,7 +2388,7 @@ export default function IncidentsScreen() {
           <>
             <ThemedView style={styles.separator} />
             <ThemedText style={styles.sectionTitle}>Archivos Adjuntos</ThemedText>
-            
+
             {/* Imagen */}
             <ThemedView style={styles.formGroup}>
               <ThemedText style={styles.formLabel}>Imagen adjunta:</ThemedText>
@@ -2501,16 +2515,16 @@ export default function IncidentsScreen() {
 
         {/* Buttons */}
         <ThemedView style={styles.buttonRow}>
-          <TouchableOpacity 
-            style={styles.confirmButton} 
+          <TouchableOpacity
+            style={styles.confirmButton}
             onPress={isCreating ? createIncident : () => updateIncident(editingIncident!.id)}
           >
             <ThemedText style={styles.confirmButtonText}>
               {getActionIcon('confirm')}
             </ThemedText>
           </TouchableOpacity>
-          <TouchableOpacity 
-            style={styles.cancelButton} 
+          <TouchableOpacity
+            style={styles.cancelButton}
             onPress={isCreating ? cancelCreating : cancelEditing}
           >
             <ThemedText style={styles.cancelButtonText}>
@@ -2531,8 +2545,8 @@ export default function IncidentsScreen() {
           <ThemedText style={styles.loadingText}>Cargando incidentes...</ThemedText>
         </ThemedView>
         <AppFooter />
-        <SlideMenu 
-          isVisible={isMenuVisible} 
+        <SlideMenu
+          isVisible={isMenuVisible}
           onClose={handleMenuClose}
           onHomePress={handleHomePress}
           currentRoute="Incidents"
@@ -2551,7 +2565,7 @@ export default function IncidentsScreen() {
           <ThemedText style={styles.noMarcaMessage}>
             Debes registrar una marca de ingreso antes de acceder a incidentes.
           </ThemedText>
-          <TouchableOpacity 
+          <TouchableOpacity
             style={styles.goBackButton}
             onPress={() => navigation.goBack()}
           >
@@ -2560,8 +2574,8 @@ export default function IncidentsScreen() {
           </TouchableOpacity>
         </ThemedView>
         <AppFooter />
-        <SlideMenu 
-          isVisible={isMenuVisible} 
+        <SlideMenu
+          isVisible={isMenuVisible}
           onClose={handleMenuClose}
           onHomePress={handleHomePress}
           currentRoute="Incidents"
@@ -2573,7 +2587,7 @@ export default function IncidentsScreen() {
   return (
     <ThemedView style={styles.container}>
       <AppHeader onMenuPress={handleMenuPress} title="Incidentes" />
-      <ScrollView 
+      <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={true}
@@ -2627,27 +2641,27 @@ export default function IncidentsScreen() {
                         </ThemedText>
                       </ThemedView>
                     </ThemedView>
-                    
+
                     <ThemedText style={styles.incidentInfo}>
                       <ThemedText style={styles.incidentLabel}>Clasificación: </ThemedText>
                       {incident.clasificacion.name}
                     </ThemedText>
-                    
+
                     <ThemedText style={styles.incidentInfo}>
                       <ThemedText style={styles.incidentLabel}>Descripción: </ThemedText>
                       {incident.descripcion}
                     </ThemedText>
-                    
+
                     <ThemedText style={styles.incidentInfo}>
                       <ThemedText style={styles.incidentLabel}>Fecha incidente: </ThemedText>
                       {formatDateForDisplay(incident.fecha_incidente)}
                     </ThemedText>
-                    
+
                     <ThemedText style={styles.incidentInfo}>
                       <ThemedText style={styles.incidentLabel}>Fecha reporte: </ThemedText>
                       {formatDateForDisplay(incident.fecha_reporte)}
                     </ThemedText>
-                    
+
                     <ThemedText style={styles.incidentInfo}>
                       <ThemedText style={styles.incidentLabel}>Reportado por: </ThemedText>
                       {incident.nombre_responsable}
@@ -2717,7 +2731,7 @@ export default function IncidentsScreen() {
                         {/* Archivos adjuntos */}
                         <ThemedView style={styles.expandedItem}>
                           <ThemedText style={styles.expandedLabel}>Archivos adjuntos:</ThemedText>
-                          
+
                           {/* Imagen */}
                           <ThemedView style={styles.attachmentSection}>
                             <ThemedText style={styles.attachmentLabel}>Imagen:</ThemedText>
@@ -2804,8 +2818,8 @@ export default function IncidentsScreen() {
                           style={{ backgroundColor: '#fff' }}
                           onPress={async () => {
                             try {
-                              const url = incident.link_informe.startsWith('http') 
-                                ? incident.link_informe 
+                              const url = incident.link_informe.startsWith('http')
+                                ? incident.link_informe
                                 : `https://${incident.link_informe}`;
                               const canOpen = await Linking.canOpenURL(url);
                               if (canOpen) {
@@ -2824,18 +2838,18 @@ export default function IncidentsScreen() {
                         </TouchableOpacity>
                       </ThemedView>
                     )}
-                    
+
                     {!incident.estado && (
                       <ThemedView style={styles.buttonRow}>
-                      <TouchableOpacity 
-                        style={styles.editButton} 
-                        onPress={() => startEditing(incident)}
-                      >
-                        <ThemedText style={styles.editButtonText}>
-                          {getActionIcon('edit')} Editar
-                        </ThemedText>
-                      </TouchableOpacity>
-                    </ThemedView>
+                        <TouchableOpacity
+                          style={styles.editButton}
+                          onPress={() => startEditing(incident)}
+                        >
+                          <ThemedText style={styles.editButtonText}>
+                            {getActionIcon('edit')} Editar
+                          </ThemedText>
+                        </TouchableOpacity>
+                      </ThemedView>
                     )}
                   </ThemedView>
                 ))
@@ -2844,7 +2858,7 @@ export default function IncidentsScreen() {
           )}
         </ThemedView>
       </ScrollView>
-      
+
       {/* Camera Modal */}
       <Modal
         visible={isCameraVisible}
@@ -2863,7 +2877,7 @@ export default function IncidentsScreen() {
             >
               <Ionicons name="close" size={30} color="#000000" />
             </TouchableOpacity>
-            
+
             <TouchableOpacity
               style={styles.cameraCaptureButton}
               onPress={takePicture}
@@ -2949,10 +2963,10 @@ export default function IncidentsScreen() {
           }}
         />
       )}
-      
+
       <AppFooter />
-      <SlideMenu 
-        isVisible={isMenuVisible} 
+      <SlideMenu
+        isVisible={isMenuVisible}
         onClose={handleMenuClose}
         onHomePress={handleHomePress}
         currentRoute="Incidents"

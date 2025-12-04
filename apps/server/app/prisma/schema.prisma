@@ -634,6 +634,8 @@ model c_empleado {
   last_checked_update                                                       DateTime?                                   @db.DateTime(0)
   firma_manual                                                              String?                                     @db.LongText
   ingresado                                                                 Boolean                                     @default(false)
+  c_empleado_notification                                                   c_empleado_notification[]
+  e_empleado_visualizacion_manual_puesto                                    e_empleado_visualizacion_manual_puesto[]
   a_recovery_password_token                                                 a_recovery_password_token[]
   b_pago_excluido                                                           b_pago_excluido[]
   c_adendas                                                                 c_adendas[]
@@ -745,11 +747,24 @@ model c_empleado {
 }
 
 model c_notifications {
-  id                   Int                    @id @default(autoincrement())
-  title                String                 @db.LongText
-  description          String                 @db.LongText
-  created_at           DateTime               @default(now())
-  c_plaza_notification c_plaza_notification[]
+  id                      Int                       @id @default(autoincrement())
+  title                   String                    @db.LongText
+  description             String                    @db.LongText
+  created_at              DateTime                  @default(now())
+  c_plaza_notification    c_plaza_notification[]
+  c_empleado_notification c_empleado_notification[]
+}
+
+model c_empleado_notification {
+  id                  Int                 @id @default(autoincrement())
+  empleadoId          Int
+  notificationId      Int
+  watched             Boolean             @default(false)
+  c_notifications     c_notifications     @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  c_empleado          c_empleado          @relation(fields: [empleadoId], references: [id], onDelete: Cascade)
+
+  @@index([notificationId], map: "c_empleado_notification_notificationId_fkey")
+  @@index([empleadoId], map: "c_plaza_notification_empleadoId_fkey")
 }
 
 model c_plaza_notification {
@@ -3123,6 +3138,38 @@ model e_estructura_requerimiento_contrato {
 
   @@index([requerimiento_id], map: "IDX_D5DEDC5251DD0900")
   @@index([contrato_id], map: "IDX_D5DEDC5270AE7BF1")
+}
+
+model e_manual_puesto {
+  id                                     Int      @id @default(autoincrement())
+  title                                  String   @db.LongText
+  description                            String   @db.LongText
+  firma                                  String   @db.LongText
+  puesto_id                              Int
+  created_by                             String
+  created_at                             DateTime @db.DateTime(0)
+  e_archivos_manual_puesto               e_archivos_manual_puesto[]
+  e_empleado_visualizacion_manual_puesto e_empleado_visualizacion_manual_puesto[]
+}
+
+model e_archivos_manual_puesto {
+  id               Int      @id @default(autoincrement())
+  name             String   @db.LongText
+  type             String   @db.VarChar(25)
+  extension        String   @db.VarChar(25)
+  manual_puesto_id Int
+  e_manual_puesto e_manual_puesto @relation(fields: [manual_puesto_id], references: [id], onDelete: Cascade)
+}
+
+model e_empleado_visualizacion_manual_puesto {
+  id               Int             @id @default(autoincrement())
+  empleado_id      Int
+  manual_puesto_id Int
+  nombre_empleado  String          @db.LongText
+  firma_empleado   String          @db.LongText
+  created_at       DateTime        @db.DateTime(0)
+  e_manual_puesto  e_manual_puesto @relation(fields: [manual_puesto_id], references: [id], onDelete: Cascade)
+  c_empleado       c_empleado      @relation(fields: [empleado_id], references: [id], onDelete: Cascade)
 }
 
 model e_estructura_sucursal {

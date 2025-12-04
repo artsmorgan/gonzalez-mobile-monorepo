@@ -5,6 +5,7 @@ import { prisma } from "../../../utils/prismaClient";
 import path from "path";
 import fs from "fs";
 import { v4 as uuidv4 } from "uuid";
+import { sendNotificationByEmployee } from "../../../utils/sendNotification";
 
 export async function GET(req: NextRequest) {
     try {
@@ -146,9 +147,9 @@ export async function POST(req: NextRequest) {
             file_audio
         } = await req.json();
 
-        console.log(marca_id, ejecutivo_cuenta, fecha_incidente, fecha_reporte, nombre_responsable, clasificacion_id, descripcion, involucrados, fecha_libro_novedades, nombre_responsable_atencion, file_image, file_audio);
+        console.log(marca_id, fecha_incidente, fecha_reporte, nombre_responsable, clasificacion_id, descripcion, involucrados, fecha_libro_novedades, nombre_responsable_atencion, file_image, file_audio);
 
-        if (!marca_id || !ejecutivo_cuenta || !fecha_incidente || !fecha_reporte || !nombre_responsable || !clasificacion_id || !descripcion || !involucrados || !fecha_libro_novedades || !nombre_responsable_atencion) {
+        if (!marca_id || !fecha_incidente || !fecha_reporte || !nombre_responsable || !clasificacion_id || !descripcion || !involucrados || !fecha_libro_novedades || !nombre_responsable_atencion) {
             return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 200 });
         }
 
@@ -172,9 +173,12 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Sucursal no encontrada" }, { status: 200 });
         }
 
-        const ejecutivo = await prisma.n_ejecutivo_cuenta.findUnique({ where: { id: ejecutivo_cuenta } });
-        if (!ejecutivo) {
-            return NextResponse.json({ status: false, message: "Ejecutivo no encontrado" }, { status: 200 });
+        let ejecutivo = null;
+        if (sucursal.ejecutivoCuenta_id) {
+            ejecutivo = await prisma.n_ejecutivo_cuenta.findUnique({ where: { id: sucursal.ejecutivoCuenta_id } });
+            if (!ejecutivo) {
+                return NextResponse.json({ status: false, message: "Ejecutivo no encontrado" }, { status: 200 });
+            }
         }
 
         const clasificacion = await prisma.n_clasificacion_incidente.findUnique({ where: { id: clasificacion_id } });
@@ -187,7 +191,7 @@ export async function POST(req: NextRequest) {
                 empresa_id: empresa.id,
                 cliente_id: cliente.id,
                 corpo_id: sucursal.id,
-                ejecutivo_cuenta: ejecutivo.id,
+                ejecutivo_cuenta: ejecutivo?.id ?? 0,
                 fecha_incidente: new Date(fecha_incidente),
                 fecha_reporte: new Date(fecha_reporte),
                 nombre_responsable: nombre_responsable,
@@ -201,6 +205,15 @@ export async function POST(req: NextRequest) {
         });
 
         if (incident) {
+            if (ejecutivo) {
+                const empleado_supervisor = await prisma.c_empleado.findMany({ where: { supervisor_id: ejecutivo.id } });
+                if (empleado_supervisor.length > 0) {
+                    const fecha_incidente_string = fecha_incidente.toISOString().split('T')[0];
+                    const hora_incidente_string = fecha_incidente.toISOString().split('T')[1].split('.')[0];
+                    const desc_notification = `${nombre_responsable} ha reportado un incidente sucedido el ${fecha_incidente_string} a las ${hora_incidente_string} en la sucursal ${sucursal.nombre} de ${cliente.nombre} para la empresa ${empresa.nombre}. El incidente ha sido clasificado como "${clasificacion.nombre}" y consiste en "${descripcion}".`;
+                    await sendNotificationByEmployee(marca_id, "Un incidente ha ocurrido", desc_notification, empleado_supervisor.map((e) => e.id));
+                }
+            }
             if (file_image) {
                 const matches = file_image.match(/^data:(.+);base64,(.+)$/);
                 if (!matches) {

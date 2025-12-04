@@ -2,7 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import Constants from "expo-constants";
 
 interface MarkAsReadParams {
-    notificationIds: number[];
+    notificationIds: { id: number, is_plaza: boolean }[];
     refreshAccessToken?: () => Promise<boolean>;
     logout?: () => Promise<{ status: boolean; message: string }>;
 }
@@ -17,12 +17,12 @@ export async function markNotificationsAsRead({
         if (!apiUrl) {
             throw new Error('Server URL not configured');
         }
-        
+
         const token = await AsyncStorage.getItem('access_token');
         if (!token) {
             throw new Error('No authentication token found');
         }
-        
+
         const response = await fetch(`${apiUrl}/api/notification`, {
             method: 'POST',
             headers: {
@@ -32,7 +32,7 @@ export async function markNotificationsAsRead({
             },
             body: JSON.stringify({ notifications: notificationIds }),
         });
-    
+
         if (response.status === 401 || response.status === 403) {
             if (refreshAccessToken) {
                 const refreshed = await refreshAccessToken();
@@ -44,11 +44,11 @@ export async function markNotificationsAsRead({
                 }
             }
         }
-    
+
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
-    
+
         const data = await response.json();
         return data;
     } catch (error) {
