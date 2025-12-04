@@ -3,8 +3,13 @@ import { toZonedTime } from "date-fns-tz";
 
 const prisma = new PrismaClient();
 
-export async function getActivities(marcaDia: any) {
+export async function getActivities(id: number) {
     try {
+        const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id } });
+        if (!marcaDia) {
+            return { status: false, message: "Marca no encontrada" };
+        }
+
         const actividades_puesto_plaza = await prisma.e_actividad_puesto_plaza.findMany({
             where: {
                 OR: [
