@@ -77,7 +77,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                 const updated = await prisma.c_marca_dia.update({ where: { id: marcaDia.id }, data: marcaDia });
 
                 if (!updated) {
-                    return { status: false, message: "No se pudo actualizar la marca del dia" };
+                    return NextResponse.json({ status: false, message: "No se pudo actualizar la marca del dia" }, { status: 200 });
                 }
 
                 const empleado = await prisma.c_empleado.findUnique({ where: { id: marcaDia.empleadoFijo_id ?? 0 } });
