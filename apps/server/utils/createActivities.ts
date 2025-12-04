@@ -44,7 +44,12 @@ export async function getActivities(id: number) {
 
             if (is_today || pendiente) {
                 const fecha_inicio = new Date(marcaDia.fecha);
-                fecha_inicio.setHours(marcaDia.hora_inicio.getHours(), marcaDia.hora_inicio.getMinutes(), marcaDia.hora_inicio.getSeconds(), marcaDia.hora_inicio.getMilliseconds());
+                if (marcaDia.hora_inicio) {
+                    fecha_inicio.setHours(marcaDia.hora_inicio.getHours(), marcaDia.hora_inicio.getMinutes(), marcaDia.hora_inicio.getSeconds(), marcaDia.hora_inicio.getMilliseconds());
+                }
+                else {
+                    fecha_inicio.setHours(0, 0, 0, 0);
+                }
                 const fecha_fin = toZonedTime(new Date(), "America/Costa_Rica");
 
                 // Si es pendiente, debo obtener la actividad cuyo dato "marcada" sea false, y si no, la obtengo según el dato created_at
