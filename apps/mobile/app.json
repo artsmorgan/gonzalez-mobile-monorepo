@@ -3,7 +3,10 @@
     "name": "Gonzalez-Mobile-App",
     "slug": "Gonzalez-Mobile-App",
     "version": "1.0.0",
-    "platforms": ["android", "ios"],
+    "platforms": [
+      "android",
+      "ios"
+    ],
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "gonzalezmobileapp",
@@ -32,7 +35,9 @@
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
-      ["./plugins/react-native-picker-fix.js"],
+      [
+        "./plugins/react-native-picker-fix.js"
+      ],
       "expo-router",
       [
         "expo-splash-screen",
@@ -51,7 +56,8 @@
           "cameraPermission": "La aplicación necesita acceso a la cámara para escanear códigos QR."
         }
       ],
-      "expo-audio"
+      "expo-audio",
+      "expo-video"
     ],
     "experiments": {
       "typedRoutes": true

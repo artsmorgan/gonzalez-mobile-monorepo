@@ -4,6 +4,7 @@ import { toZonedTime, format } from "date-fns-tz";
 import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs';
 import path from 'path';
+import { sendNotificationByRole, sendNotificationByPlaza } from "../../../utils/sendNotification";
 
 import { prisma } from "../../../utils/prismaClient";
 
@@ -209,6 +210,21 @@ export async function POST(req: NextRequest) {
             fs.writeFileSync(filePath, buffer);
 
             await prisma.c_notas_voz.update({ where: { id: newVoiceNote.id }, data: { path: path_file } });
+
+            const empleado = await prisma.c_empleado.findUnique({ where: { id: payload.id } });
+            if (empleado) {
+                const fecha = created_at.toISOString().split("T")[0];
+                const hora = created_at.toISOString().split("T")[1].split(".")[0];
+                const desc = `El usuario ${empleado.nombre} ${empleado.primer_apellido} ha creado una nueva nota de voz llamada ${titulo} el día ${fecha} a las ${hora}`;
+                if (!setPuesto) {
+                    await sendNotificationByRole(marca.id, "Nota de voz creada", desc, ["ADMINISTRATIVO", "SUPERVISOR", "OPERATIVO"]);
+                } else {
+                    const plaza = await prisma.e_estructura_plazas.findMany({ where: { puesto_id: marca.puesto_id } });
+                    if (plaza.length > 0) {
+                        await sendNotificationByPlaza(marca.id, "Nota de voz creada", desc, plaza.map(p => p.id));
+                    }
+                }
+            }
         }
 
         return NextResponse.json({ status: true, message: "Nota de voz creada con éxito" }, { status: 200 });

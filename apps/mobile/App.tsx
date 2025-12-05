@@ -90,6 +90,8 @@ import saveMarca from './hooks/saveMarca';
 import saveAbsentReason from './hooks/saveAbsentReason';
 import getHoraAccion from './hooks/getHoraAccion';
 import updateServerTime, { setDisconnectedTime } from './hooks/updateServerTime';
+import JobManualsScreen from './screens/JobManualsScreen';
+import { createJobManual } from './hooks/jobManualsFunctions';
 
 export type RootStackParamList = {
   Home: undefined;
@@ -163,6 +165,7 @@ export type RootStackParamList = {
   ChangePlanning: undefined;
   ManagementPlanningControl: undefined;
   CommunicationPlanRequirements: undefined;
+  JobManuals: undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -236,6 +239,7 @@ function RootNavigator() {
       <Stack.Screen name="ChangePlanning" component={ChangePlanningScreen} />
       <Stack.Screen name="ManagementPlanningControl" component={ManagementPlanningControlScreen} />
       <Stack.Screen name="CommunicationPlanRequirements" component={CommunicationPlanRequirementsScreen} />
+      <Stack.Screen name="JobManuals" component={JobManualsScreen} />
     </Stack.Navigator>
   );
 }
@@ -301,6 +305,7 @@ function AppContent() {
           checkTrainingsActionsCache(),
           checkIncidentsActionsCache(),
           checkVoiceNotesActionsCache(),
+          checkJobManualsActionsCache(),
         ]);
         eventBus.emit('connectionRestored');
       }
@@ -340,6 +345,42 @@ function AppContent() {
       }
     }
   }
+
+  const checkJobManualsActionsCache = async () => {
+    if (!employee) return;
+
+    const actionsStr = await AsyncStorage.getItem('job_manuals_actions');
+    if (!actionsStr) return;
+
+    const actions = JSON.parse(actionsStr);
+    if (!actions || actions.length === 0) return;
+
+    console.log('Sincronizando acciones de manuales de trabajo:', actions.length);
+
+    // Procesar acciones una por una
+    for (const action of actions) {
+      try {
+        if (action.type === 'create') {
+          console.log('Creando manual de trabajo:', action.id);
+          const result = await createJobManual({
+            requestData: action.requestData,
+            marcaId: action.marcaId,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result.status) {
+            console.log('Manual de trabajo creado correctamente');
+            // Eliminar acción del array
+            const updatedActions = actions.filter((a: any) => a.id !== action.id || a.type !== 'create');
+            await AsyncStorage.setItem('job_manuals_actions', JSON.stringify(updatedActions));
+          }
+        }
+      } catch (error) {
+        console.error('Error procesando acción de manual de trabajo:', error);
+      }
+    }
+  } 
 
   const checkVisitorsActionsCache = async () => {
     if (!employee) return;
