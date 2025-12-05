@@ -12,18 +12,25 @@ export async function GET(req: NextRequest) {
             );
         }
 
-        // Get params from query || emp_id and pl_id
         const searchParams = req.nextUrl.searchParams;
-        const emp_id = searchParams.get("emp_id");
-        const pl_id = searchParams.get("pl_id");
+        const m = searchParams.get("m");
 
-        if (!emp_id || !pl_id) {
-            return NextResponse.json({ status: false, message: "Parámetros no especificados" }, { status: 200 });
+        if (!m) {
+            return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
         }
 
-        const plaza_notifications = await prisma.c_plaza_notification.findMany({ where: { plazaId: parseInt(pl_id) } });
+        const marca = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(m) } });
+        if (!marca) {
+            return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
+        }
 
-        const empleado_notifications = await prisma.c_empleado_notification.findMany({ where: { empleadoId: parseInt(emp_id) } });
+        if (!marca.plaza_id || !marca.empleadoFijo_id) {
+            return NextResponse.json({ status: false, message: "Plaza o empleado no encontrados" }, { status: 200 });
+        }
+
+        const plaza_notifications = await prisma.c_plaza_notification.findMany({ where: { plazaId: marca.plaza_id } });
+
+        const empleado_notifications = await prisma.c_empleado_notification.findMany({ where: { empleadoId: marca.empleadoFijo_id } });
 
         const notifications_return: { id: number, title: string, description: string, watched: boolean, is_plaza: boolean, created_at: string }[] = [];
 

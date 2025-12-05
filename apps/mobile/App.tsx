@@ -3226,7 +3226,7 @@ function AppContent() {
       return;
     }
     const current_marca_obj = JSON.parse(current_marca);
-    if (!current_marca_obj.plaza.id) {
+    if (!current_marca_obj.id) {
       return;
     }
 
@@ -3242,7 +3242,7 @@ function AppContent() {
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
-    const response = await fetch(`${apiUrl}/api/notification?emp_id=${employee?.id}&pl_id=${current_marca_obj.plaza.id}`, {
+    const response = await fetch(`${apiUrl}/api/notification?m=${current_marca_obj.id}`, {
       method: 'GET',
       headers: {
         'Authorization': `Bearer ${token}`,
