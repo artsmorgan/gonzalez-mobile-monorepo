@@ -243,7 +243,12 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
     onClose();
     navigation.navigate('VoiceNotes');
   };
-  
+
+  const handleJobManualsPress = () => {
+    onClose();
+    navigation.navigate('JobManuals');
+  };
+
   const isActiveRoute = (route: string) => {
     return currentRoute === route;
   };
@@ -268,6 +273,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
       case 'surveys': return <Ionicons name="document-text" size={20} color={isActive ? '#007AFF' : '#FFFFFF'} />;
       case 'trainings': return <Ionicons name="school" size={20} color={isActive ? '#007AFF' : '#FFFFFF'} />;
       case 'voice-notes': return <Ionicons name="mic" size={20} color={isActive ? '#007AFF' : '#FFFFFF'} />;
+      case 'job-manuals': return <Ionicons name="book" size={20} color={isActive ? '#007AFF' : '#FFFFFF'} />;
       case 'logout': return <Ionicons name="log-out" size={20} color={isActive ? '#007AFF' : '#FFFFFF'} />;
     }
   };
@@ -639,6 +645,31 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                 ]}
               >
                 Notas de Voz
+              </ThemedText>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.menuItem,
+                isActiveRoute('JobManuals') && styles.activeMenuItem
+              ]}
+              onPress={handleJobManualsPress}
+            >
+              <ThemedText 
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('JobManuals') && styles.activeMenuItemText
+                ]}
+              >
+                {getActionIcon('job-manuals', isActiveRoute('JobManuals'))}
+              </ThemedText>
+              <ThemedText 
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('JobManuals') && styles.activeMenuItemText
+                ]}
+              >
+                Manuales de Trabajo
               </ThemedText>
             </TouchableOpacity>
   

@@ -5,6 +5,7 @@ import { v4 as uuidv4 } from "uuid";
 import path from "path";
 import fs from "fs";
 import { prisma } from "../../../utils/prismaClient";
+import { sendNotificationByEmployee, sendNotificationByRole } from "../../../utils/sendNotification";
 
 export async function GET(req: NextRequest) {
     try {
@@ -255,6 +256,9 @@ export async function POST(req: NextRequest) {
             }
         });
 
+        const date = new_capacitacion.fecha.toISOString().split("T")[0];
+        const hour = new_capacitacion.fecha.toISOString().split("T")[1].split(".")[0];
+
         for (const emp of empleados) {
             const empleado_data = await prisma.c_empleado.findUnique({ where: { id: parseInt(emp) } });
             if (!empleado_data) {
@@ -266,6 +270,9 @@ export async function POST(req: NextRequest) {
                     empleado_id: parseInt(emp)
                 }
             });
+
+            const desc = `Has recibido la capacitación ${new_capacitacion.titulo} en la sucursal ${corpo.nombre} de ${cliente.nombre} el día ${date} a las ${hour}`;
+            await sendNotificationByEmployee(marca.id, "Capacitación recibida", desc, [parseInt(emp)]);
         }
 
         for (const puesto of puestos) {
@@ -306,6 +313,8 @@ export async function POST(req: NextRequest) {
             // Actualizar el file_name en la base de datos
             const updated_capacitacion = await prisma.e_registro_capacitaciones.update({ where: { id: new_capacitacion.id }, data: { file: file_name } });
         }
+
+        await sendNotificationByRole(marca.id, "Capacitación creada", `Se ha registrado la capacitación ${new_capacitacion.titulo} en la sucursal ${corpo.nombre} de ${cliente.nombre} el día ${date} a las ${hour}`, ["ADMINISTRATIVO", "SUPERVISOR"]);
 
         return NextResponse.json({ status: true, message: "Capacitación creada correctamente" }, { status: 200 });
     }
