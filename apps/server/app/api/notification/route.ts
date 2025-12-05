@@ -13,8 +13,9 @@ export async function GET(req: NextRequest) {
         }
 
         // Get params from query || emp_id and pl_id
-        const emp_id = req.nextUrl.searchParams.get("emp_id");
-        const pl_id = req.nextUrl.searchParams.get("pl_id");
+        const searchParams = req.nextUrl.searchParams;
+        const emp_id = searchParams.get("emp_id");
+        const pl_id = searchParams.get("pl_id");
 
         if (!emp_id || !pl_id) {
             return NextResponse.json({ status: false, message: "Parámetros no especificados" }, { status: 200 });
