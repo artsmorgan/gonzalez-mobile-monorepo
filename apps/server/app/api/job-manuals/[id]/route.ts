@@ -134,6 +134,7 @@ export async function PUT(
                         data: {
                             name: fileName,
                             type: file.type,
+                            original_name: fileName,
                             extension: file.extension,
                             manual_puesto_id: id
                         }
@@ -162,7 +163,7 @@ export async function DELETE(
     context: { params: Promise<{ id: string }> }
 ) {
     try {
-        const { valid, message } = verifyAccessToken(req);
+        const { valid, payload, message } = verifyAccessToken(req);
         if (!valid) {
             return NextResponse.json(
                 { status: false, message },
@@ -190,8 +191,37 @@ export async function DELETE(
             );
         }
 
-        await prisma.e_manual_puesto.delete({ where: { id } });
+        // Solo el creador puede eliminar
+        const requesterId = String(payload.id ?? "");
+        if (String(manual.created_by ?? "") !== requesterId) {
+            return NextResponse.json(
+                { status: false, message: "No tienes permiso para eliminar este manual" },
+                { status: 403 }
+            );
+        }
 
+        // Borrar archivos físicos y registros relacionados en una transacción
+        await prisma.$transaction(async (tx) => {
+            // Eliminar relaciones de firmas/visualizaciones
+            await (tx as any).e_empleado_visualizacion_manual_puesto.deleteMany({
+                where: { manual_puesto_id: id }
+            });
+
+            // Eliminar archivos de BD
+            await (tx as any).e_archivos_manual_puesto.deleteMany({
+                where: { manual_puesto_id: id }
+            });
+
+            // Eliminar relaciones de puestos
+            await (tx as any).e_puestos_manual_puesto.deleteMany({
+                where: { manual_puesto_id: id }
+            });
+
+            // Finalmente eliminar el manual
+            await tx.e_manual_puesto.delete({ where: { id } });
+        });
+
+        // Eliminar archivos del filesystem
         const dir = path.join(
             process.cwd(),
             "public",

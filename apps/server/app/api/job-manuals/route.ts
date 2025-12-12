@@ -5,10 +5,13 @@ import { toZonedTime } from "date-fns-tz";
 import { v4 as uuidv4 } from "uuid";
 import fs from "fs";
 import path from "path";
+import { getUserMarca } from "../../../utils/getUserMarca";
+import { sendNotificationByPlaza } from "../../../utils/sendNotification";
 
 type ManualFileInput = {
     type: string; // 'image' | 'audio' | 'video' | 'document' | etc
     extension: string; // e.g. 'png', 'mp4', 'pdf'
+    original_name?: string; // nombre original del archivo (para mostrar en app)
     file_base64: string;
 };
 
@@ -40,10 +43,14 @@ export async function GET(req: NextRequest) {
             );
         }
 
-        const lastMarca = await prisma.c_marca_dia.findFirst({
-            where: { empleadoFijo_id: marca.empleadoFijo_id },
-            orderBy: { id: "desc" }
-        });
+        if (!marca.empleadoFijo_id) {
+            return NextResponse.json(
+                { status: false, message: "Empleado no encontrado" },
+                { status: 200 }
+            );
+        }
+
+        const lastMarca = await getUserMarca(marca.empleadoFijo_id);
 
         if (!lastMarca) {
             return NextResponse.json(
@@ -72,12 +79,44 @@ export async function GET(req: NextRequest) {
 
         const employeeId = payload.id as number;
 
+        // Obtener manuales asociados al puesto mediante la tabla de relación
+        const manualLinks = await (prisma as any).e_puestos_manual_puesto.findMany({
+            where: { puesto_id: puesto.id }
+        });
+
+        const manualIdsSet = new Set<number>();
+        (manualLinks as any[]).forEach((link) => {
+            if (link.manual_puesto_id) {
+                manualIdsSet.add(link.manual_puesto_id);
+            }
+        });
+
+        // Compatibilidad hacia atrás: también incluir manuales que tengan puesto_id directamente
+        const directManuals = await (prisma as any).e_manual_puesto.findMany({
+            where: { puesto_id: puesto.id }
+        });
+        (directManuals as any[]).forEach((manual) => {
+            if (manual.id) {
+                manualIdsSet.add(manual.id);
+            }
+        });
+
+        const manualIds = Array.from(manualIdsSet);
+
+        if (manualIds.length === 0) {
+            return NextResponse.json(
+                { status: true, manuals: [] },
+                { status: 200 }
+            );
+        }
+
         const manuals = await (prisma as any).e_manual_puesto.findMany({
-            where: { puesto_id: puesto.id },
+            where: { id: { in: manualIds } },
             orderBy: { created_at: "desc" }
         });
 
-        const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "";
+        // Usar el origin de la petición para construir URLs absolutas accesibles desde el móvil
+        const baseUrl = req.nextUrl.origin;
 
         const manualsWithFiles = await Promise.all(
             (manuals as any[]).map(async (manual) => {
@@ -96,12 +135,25 @@ export async function GET(req: NextRequest) {
 
                 const filesMapped = (files as any[]).map((file) => {
                     const fileName = file.name;
-                    const urlPath = `/uploads/job-manuals/${manual.id}/${fileName}`;
-                    const url = baseUrl ? `${baseUrl}${urlPath}` : urlPath;
+
+                    // Construir URLs hacia las APIs específicas, similar a incidents
+                    let urlPath = `/uploads/job-manuals/${manual.id}/${fileName}`;
+                    if (file.type === 'image') {
+                        urlPath = `/api/job-manuals/${manual.id}/get-image/${fileName}`;
+                    } else if (file.type === 'audio') {
+                        urlPath = `/api/job-manuals/${manual.id}/get-audio/${fileName}`;
+                    } else if (file.type === 'video') {
+                        urlPath = `/api/job-manuals/${manual.id}/get-video/${fileName}`;
+                    } else {
+                        urlPath = `/api/job-manuals/${manual.id}/get-file/${fileName}`;
+                    }
+
+                    const url = `${baseUrl}${urlPath}`;
 
                     return {
                         id: file.id,
                         name: file.name,
+                        original_name: file.original_name,
                         type: file.type,
                         extension: file.extension,
                         url
@@ -113,6 +165,7 @@ export async function GET(req: NextRequest) {
                     title: manual.title,
                     description: manual.description,
                     firma: manual.firma,
+                    // Para el cliente móvil, mostramos el puesto actual del colaborador
                     puesto: {
                         id: puesto.id,
                         nombre: puesto.nombre
@@ -209,8 +262,8 @@ export async function POST(req: NextRequest) {
             }
         }
 
-        const createdManualIds: number[] = [];
-
+        const plazasIds: number[] = [];
+        // Validar que todos los puestos existen
         for (const puestoId of puestosParsed) {
             const puesto = await prisma.e_estructura_puesto.findUnique({
                 where: { id: puestoId }
@@ -221,66 +274,98 @@ export async function POST(req: NextRequest) {
                     { status: 200 }
                 );
             }
-
-            const manual = await (prisma as any).e_manual_puesto.create({
-                data: {
-                    title,
-                    description,
-                    firma: firma_responsable,
-                    puesto_id: puesto.id,
-                    created_by: String(payload.id),
-                    created_at
-                }
+            const plazas = await prisma.e_estructura_plazas.findMany({
+                where: { puesto_id: puestoId }
             });
-
-            createdManualIds.push(manual.id);
-
-            if (filesParsed.length > 0) {
-                const dir = path.join(
-                    process.cwd(),
-                    "public",
-                    "uploads",
-                    "job-manuals",
-                    `${manual.id}`
-                );
-                if (!fs.existsSync(dir)) {
-                    fs.mkdirSync(dir, { recursive: true });
-                }
-
-                for (const file of filesParsed) {
-                    if (!file.file_base64 || !file.extension || !file.type) {
-                        continue;
-                    }
-
-                    if (!/^[A-Za-z0-9+/=]+$/.test(file.file_base64)) {
-                        console.warn(
-                            "Formato de archivo inválido, se omite uno de los archivos"
-                        );
-                        continue;
-                    }
-
-                    const fileName = `${uuidv4()}.${file.extension}`;
-                    const buffer = Buffer.from(file.file_base64, "base64");
-                    const filePath = path.join(dir, fileName);
-                    fs.writeFileSync(filePath, buffer);
-
-                    await (prisma as any).e_archivos_manual_puesto.create({
-                        data: {
-                            name: fileName,
-                            type: file.type,
-                            extension: file.extension,
-                            manual_puesto_id: manual.id
-                        }
-                    });
-                }
+            for (const plaza of plazas) {
+                if (!plazasIds.includes(plaza.id)) plazasIds.push(plaza.id);
             }
         }
+
+        // Crear un único manual y luego asociarlo a múltiples puestos mediante e_puestos_manual_puesto
+        const primaryPuestoId = puestosParsed[0];
+
+        const manual = await (prisma as any).e_manual_puesto.create({
+            data: {
+                title,
+                description,
+                firma: firma_responsable,
+                // Se mantiene el campo puesto_id por compatibilidad, usando el primer puesto
+                puesto_id: primaryPuestoId,
+                created_by: String(payload.id),
+                created_at
+            }
+        });
+
+        // Crear relaciones en e_puestos_manual_puesto para cada puesto seleccionado
+        for (const puestoId of puestosParsed) {
+            await (prisma as any).e_puestos_manual_puesto.create({
+                data: {
+                    manual_puesto_id: manual.id,
+                    puesto_id: puestoId
+                }
+            });
+        }
+
+        // Guardar archivos una sola vez para el manual
+        if (filesParsed.length > 0) {
+            const dir = path.join(
+                process.cwd(),
+                "public",
+                "uploads",
+                "job-manuals",
+                `${manual.id}`
+            );
+            if (!fs.existsSync(dir)) {
+                fs.mkdirSync(dir, { recursive: true });
+            }
+
+            for (const file of filesParsed) {
+                if (!file.file_base64 || !file.extension || !file.type) {
+                    continue;
+                }
+
+                // Decodificar base64 directamente y capturar errores (evita regex/call stack con strings grandes)
+                let buffer: Buffer;
+                try {
+                    buffer = Buffer.from(file.file_base64, "base64");
+                } catch {
+                    console.warn("Formato de archivo inválido, se omite uno de los archivos");
+                    continue;
+                }
+
+                const fileName = `${uuidv4()}.${file.extension}`;
+                const filePath = path.join(dir, fileName);
+                fs.writeFileSync(filePath, buffer);
+
+                const originalName =
+                    (typeof file.original_name === "string" && file.original_name.trim().length > 0)
+                        ? file.original_name.trim()
+                        : fileName;
+                console.log(4);
+                await (prisma as any).e_archivos_manual_puesto.create({
+                    data: {
+                        name: fileName,
+                        original_name: originalName,
+                        type: file.type,
+                        extension: file.extension,
+                        manual_puesto_id: manual.id
+                    }
+                });
+                console.log(5);
+            }
+        }
+
+        const fecha_string = created_at.toISOString().split("T")[0];
+        const hora_string = created_at.toISOString().split("T")[1].split(".")[0];
+
+        sendNotificationByPlaza(marca.id, "Manual creado", `Se ha creado el manual ${title} para tu puesto el día ${fecha_string} a las ${hora_string}`, plazasIds);
 
         return NextResponse.json(
             {
                 status: true,
-                message: "Manual(es) creado(s) con éxito",
-                manualIds: createdManualIds
+                message: "Manual creado con éxito",
+                manualIds: [manual.id]
             },
             { status: 200 }
         );

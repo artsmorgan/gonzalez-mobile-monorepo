@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessToken } from "../../../../../utils/verifyToken";
 import { toZonedTime, format } from "date-fns-tz";
 import { prisma } from "../../../../../utils/prismaClient";
+import { getUserMarca } from "../../../../../utils/getUserMarca";
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
@@ -30,7 +31,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 200 });
         }
 
-        const marcaDia = await get_last_marca(empleado.id);
+        const marcaDia = await getUserMarca(empleado.id);
         if (!marcaDia) {
             return NextResponse.json({ status: false, message: "No se encontró la marca del dia" }, { status: 200 });
         }
@@ -223,87 +224,9 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             marca: marca_return
         }
 
-        console.log(data);
-
         return NextResponse.json(data, { status: 200 });
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
-}
-
-async function get_last_marca(id: number) {
-    const now = toZonedTime(new Date(), "America/Costa_Rica");
-    const nowPlus15 = new Date(now.getTime() + 15 * 60 * 1000);
-
-    // Paso 1: Buscar si existe un registro dentro de los próximos 15 minutos
-    const proximo = await prisma.c_marca_dia.findFirst({
-        where: {
-            empleadoFijo_id: id,
-            hora_salida_digitada: null,
-            // fecha + hora_inicio >= now
-            OR: [
-                {
-                    fecha: {
-                        gt: now, // fecha futura
-                    },
-                },
-                {
-                    fecha: {
-                        equals: now.toISOString().split("T")[0],
-                    },
-                    hora_inicio: {
-                        gte: now.toTimeString().slice(0, 8),
-                    },
-                },
-            ],
-        },
-        orderBy: [
-            { fecha: "asc" },
-            { hora_inicio: "asc" },
-        ],
-    });
-
-    // Si existe uno futuro, validar si está dentro del rango de 15 minutos
-    if (proximo) {
-        // Convertimos la fecha + hora_inicio en un solo Date
-        const proximoDateTime = new Date(`${proximo.fecha}T${proximo.hora_inicio}`);
-
-        if (proximoDateTime <= nowPlus15) {
-            return proximo;
-        }
-    }
-
-    // Paso 2: Si no hay ninguno dentro de 15 minutos, tomar el último anterior
-    const ultimo = await prisma.c_marca_dia.findFirst({
-        where: {
-            empleadoFijo_id: id,
-            hora_salida_digitada: null,
-            OR: [
-                {
-                    fecha: {
-                        lt: now, // fecha pasada
-                    },
-                },
-                {
-                    fecha: {
-                        equals: now.toISOString().split("T")[0],
-                    },
-                    hora_inicio: {
-                        lt: now.toTimeString().slice(0, 8),
-                    },
-                },
-            ],
-        },
-        orderBy: [
-            { fecha: "desc" },
-            { hora_inicio: "desc" },
-        ],
-    });
-
-    if (!ultimo) {
-        return null;
-    }
-
-    return ultimo;
 }

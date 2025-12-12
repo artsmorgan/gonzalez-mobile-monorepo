@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessToken } from "../../../../../utils/verifyToken";
 import { prisma } from "../../../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
+import { sendNotificationByEmployee, sendNotificationByRole } from "../../../../../utils/sendNotification";
 
 export async function POST(
     req: NextRequest,
@@ -36,15 +37,32 @@ export async function POST(
             );
         }
 
-        const { firma_empleado } = await req.json();
-        if (!firma_empleado) {
+        const { firma_empleado, marca_id } = await req.json();
+        if (!firma_empleado || !marca_id) {
             return NextResponse.json(
                 { status: false, message: "Firma del empleado requerida" },
                 { status: 200 }
             );
         }
 
-        const empleadoId = payload.id as number;
+        const marca = await prisma.c_marca_dia.findUnique({
+            where: { id: marca_id }
+        });
+        if (!marca) {
+            return NextResponse.json(
+                { status: false, message: "Marca no encontrada" },
+                { status: 200 }
+            );
+        }
+
+        const empleadoId = marca.empleadoFijo_id;
+        if (!empleadoId) {
+            return NextResponse.json(
+                { status: false, message: "Empleado no encontrado" },
+                { status: 200 }
+            );
+        }
+
         const empleado = await prisma.c_empleado.findUnique({
             where: { id: empleadoId }
         });
@@ -52,6 +70,26 @@ export async function POST(
         if (!empleado) {
             return NextResponse.json(
                 { status: false, message: "Empleado no encontrado" },
+                { status: 200 }
+            );
+        }
+
+        const puesto = await prisma.e_estructura_puesto.findUnique({
+            where: { id: manual.puesto_id }
+        });
+        if (!puesto) {
+            return NextResponse.json(
+                { status: false, message: "Puesto no encontrado" },
+                { status: 200 }
+            );
+        }
+
+        const corpo = await prisma.e_estructura_sucursal.findUnique({
+            where: { id: marca.corpo_id }
+        });
+        if (!corpo) {
+            return NextResponse.json(
+                { status: false, message: "Sucursal no encontrada" },
                 { status: 200 }
             );
         }
@@ -81,6 +119,20 @@ export async function POST(
                     created_at
                 }
             });
+            
+            const fecha_string = created_at.toISOString().split("T")[0];
+            const hora_string = created_at.toISOString().split("T")[1].split(".")[0];
+            const description = `El empleado ${empleado.nombre} ${empleado.primer_apellido} ${empleado.segundo_apellido} ha firmado el manual ${manual.title} desde el puesto ${puesto.nombre} en la sucursal ${corpo.nombre} el día ${fecha_string} a las ${hora_string}`;
+            await sendNotificationByRole(marca.id, "Firma de manual", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+
+            const creator = await prisma.c_empleado.findUnique({
+                where: { id: parseInt(manual.created_by) }
+            });
+            
+            if (creator) {
+                const description = `El empleado ${creator.nombre} ${creator.primer_apellido} ${creator.segundo_apellido} ha firmado el manual ${manual.title} desde el puesto ${puesto.nombre} en la sucursal ${corpo.nombre} el día ${fecha_string} a las ${hora_string}`;
+                await sendNotificationByEmployee(marca.id, "Firma de manual", description, [creator.id]);
+            }
         }
 
         return NextResponse.json(

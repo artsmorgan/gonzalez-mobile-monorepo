@@ -7,6 +7,7 @@ import path from 'path';
 import { sendNotificationByRole, sendNotificationByPlaza } from "../../../utils/sendNotification";
 
 import { prisma } from "../../../utils/prismaClient";
+import { getUserMarca } from "../../../utils/getUserMarca";
 
 export async function GET(req: NextRequest) {
     try {
@@ -28,7 +29,14 @@ export async function GET(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
         }
 
-        const lastMarca = await prisma.c_marca_dia.findFirst({ where: { empleadoFijo_id: marca.empleadoFijo_id }, orderBy: { id: "desc" } });
+        if (!marca.empleadoFijo_id) {
+            return NextResponse.json(
+                { status: false, message: "Empleado no encontrado" },
+                { status: 200 }
+            );
+        }
+
+        const lastMarca = await getUserMarca(marca.empleadoFijo_id);
         if (!lastMarca) {
             return NextResponse.json({ status: false, message: "No se encontró la última marca" }, { status: 200 });
         }

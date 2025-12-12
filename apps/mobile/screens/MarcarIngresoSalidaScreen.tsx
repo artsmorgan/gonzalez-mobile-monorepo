@@ -148,9 +148,9 @@ export default function MarcarIngresoSalidaScreen() {
   const fetchAttendanceStatus = async () => {
     try {
 
-      const horaAccion = await getHoraAccion();
-      if (horaAccion) {
-        setHoraAccion(horaAccion);
+      const horaAccionValue = await getHoraAccion();
+      if (horaAccionValue) {
+        setHoraAccion(horaAccionValue);
       }
 
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
@@ -245,13 +245,20 @@ export default function MarcarIngresoSalidaScreen() {
         }
       }
 
-      if (!response.ok) {
+      if (!response.ok) { 
         throw new Error(`HTTP error! status: ${response.status}`);
       }
 
+
         data = await response.json();
 
+        
+      console.log("Response got from the server");
+
         result = data.status;
+
+        console.log("Result", result);
+
         if (result) {
           marca_send = data.marca;
 
@@ -300,7 +307,7 @@ export default function MarcarIngresoSalidaScreen() {
       }
 
       if (result) {
-        setCurrentAttendanceData(marca_send);
+        await setCurrentAttendanceData(marca_send, horaAccionValue);
         } else {
         if (data && typeof data === 'object' && 'absent' in data && data.absent !== undefined && data.absent === true) {
             // Show absent reason form
@@ -318,7 +325,7 @@ export default function MarcarIngresoSalidaScreen() {
     }
   };
 
-  const setCurrentAttendanceData = async (data: any) => {
+  const setCurrentAttendanceData = async (data: any, horaAccionValue: number) => {
     const marca = data;
 
     const fecha = marca.fecha.split('-');
@@ -336,11 +343,7 @@ export default function MarcarIngresoSalidaScreen() {
     let change_available = true;
     let is_late = false;
     
-    if (!horaAccion) {
-      throw new Error('Hora de acción not found');
-    }
-
-    const now = horaAccion;
+    const now = horaAccionValue;
 
     if (estado == "No ingresado") {
       if (now < next_change_time.getTime()) { // Si la fecha del parámetro es menor a la fecha de la marca menos 15 menos minutos
@@ -500,7 +503,8 @@ export default function MarcarIngresoSalidaScreen() {
               getPuestosCorpo(attendanceData.marca.corpo.id),
               getTrainings(attendanceData.marca.id),
               getVoiceNotes(attendanceData.marca.id),
-              getArticulos()
+              getArticulos(),
+              getJobManuals(attendanceData.marca.id)
             ]);
           }
         }
@@ -527,6 +531,35 @@ export default function MarcarIngresoSalidaScreen() {
       );
     }
   };
+
+  const getJobManuals = async (marcaId: number) => {
+    // Eliminar actions
+    await AsyncStorage.removeItem('job_manuals_actions');
+    await AsyncStorage.removeItem('job_manuals_cache');
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+    const token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      throw new Error('No authentication token found');
+    }
+    const response = await fetch(`${apiUrl}/api/job-manuals?m=${marcaId}`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status} getJobManuals`);
+    }
+    const data = await response.json();
+    if (data.status) {
+      await AsyncStorage.setItem('job_manuals_cache', JSON.stringify(data.manuals));
+    }
+  }
 
   const getTrainings = async (marcaId: number) => {
     // Eliminar actions
@@ -674,10 +707,9 @@ export default function MarcarIngresoSalidaScreen() {
   }
 
   const getEvaluations = async (corpoId: number) => {
-    console.log("corpoId", corpoId);
     // Eliminar actions
-    await AsyncStorage.removeItem('evaluations_actions');
-    await AsyncStorage.removeItem('evaluations_cache');
+    await AsyncStorage.removeItem('evaluations_staff_actions');
+    await AsyncStorage.removeItem('evaluations_staff_cache');
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) {
       throw new Error('Server URL not configured');
@@ -699,7 +731,7 @@ export default function MarcarIngresoSalidaScreen() {
     }
     const data = await response.json();
     if (data.status) {
-      await AsyncStorage.setItem('evaluations_cache', JSON.stringify(data.evaluaciones));
+      await AsyncStorage.setItem('evaluations_staff_cache', JSON.stringify(data.evaluaciones));
     }
   }
 

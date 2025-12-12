@@ -8,6 +8,7 @@ import fs from "fs";
 import { v4 as uuidv4 } from "uuid";
 import { createVehicleImage } from "../../../utils/createVehicleImage";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
+import { getUserMarca } from "../../../utils/getUserMarca";
 
 export async function GET(req: NextRequest) {
     try {
@@ -31,7 +32,14 @@ export async function GET(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
         }
 
-        const lastMarca = await prisma.c_marca_dia.findFirst({ where: { empleadoFijo_id: marcaDia.empleadoFijo_id }, orderBy: { id: "desc" } });
+        if (!marcaDia.empleadoFijo_id) {
+            return NextResponse.json(
+                { status: false, message: "Empleado no encontrado" },
+                { status: 200 }
+            );
+        }
+
+        const lastMarca = await getUserMarca(marcaDia.empleadoFijo_id);
         if (!lastMarca) {
             return NextResponse.json({ status: false, message: "No se encontró la última marca" }, { status: 200 });
         }

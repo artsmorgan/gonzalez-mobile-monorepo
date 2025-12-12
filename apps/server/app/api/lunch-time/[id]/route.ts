@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessToken } from "../../../../utils/verifyToken";
 import { toZonedTime } from "date-fns-tz";
 import { prisma } from "../../../../utils/prismaClient";
+import { getUserMarca } from "../../../../utils/getUserMarca";
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
@@ -22,7 +23,14 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
         if (!marcaDia) return NextResponse.json({ message: "Marca no encontrada" }, { status: 404 });
 
-        const last_marca = await prisma.c_marca_dia.findFirst({ where: { empleadoFijo_id: marcaDia.empleadoFijo_id }, orderBy: { id: "desc" } });
+        if (!marcaDia.empleadoFijo_id) {
+            return NextResponse.json(
+                { status: false, message: "Empleado no encontrado" },
+                { status: 200 }
+            );
+        }
+
+        const last_marca = await getUserMarca(marcaDia.empleadoFijo_id);
         if (!last_marca) return NextResponse.json({ message: "No se encontró la última marca" }, { status: 404 });
         if (marcaDia.id !== last_marca.id) return NextResponse.json({ message: "Hay una nueva marca más reciente" }, { status: 400 });
 
