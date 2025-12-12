@@ -2,6 +2,7 @@ import { prisma } from "./prismaClient";
 import { toZonedTime } from "date-fns-tz";
 
 export async function sendNotificationByRole(marcaDiaId: number, title: string, description: string, roles: string[]) {
+    console.log("sendNotificationByRole", marcaDiaId, title, description, roles);
     const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: marcaDiaId } });
     if (!marcaDia) {
         return;
@@ -51,7 +52,10 @@ export async function sendNotificationByRole(marcaDiaId: number, title: string, 
                                     break;
                             }
 
+                            console.log("role", role);
+
                             if (roles.includes(role)) {
+                                console.log(8);
                                 receiver.push(plaza.id);
                             }
                         }
@@ -60,6 +64,7 @@ export async function sendNotificationByRole(marcaDiaId: number, title: string, 
             }
         }
     }
+
 
     if (receiver.length > 0) {
         const notification = await prisma.c_notifications.create({

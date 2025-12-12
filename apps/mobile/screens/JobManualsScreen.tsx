@@ -1,8 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Linking, Modal, ScrollView, StyleSheet, TextInput, TouchableOpacity, View, Image } from 'react-native';
+import { ActivityIndicator, Alert, Dimensions, Linking, Modal, ScrollView, StyleSheet, TextInput, TouchableOpacity, View, Image } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import * as Network from 'expo-network';
+import * as Location from 'expo-location';
+import * as DocumentPicker from 'expo-document-picker';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -14,7 +16,7 @@ import AppHeader from '../components/AppHeader';
 import AppFooter from '../components/AppFooter';
 import SlideMenu from '../components/SlideMenu';
 import { eventBus } from '../hooks/eventBus';
-import { createJobManual, listJobManualsByMarca } from '../hooks/jobManualsFunctions';
+import { createJobManual, listJobManualsByMarca, deleteJobManual, signJobManual } from '../hooks/jobManualsFunctions';
 import getHoraAccion from '../hooks/getHoraAccion';
 import { useQRScanner } from '../hooks/useQRScanner';
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
@@ -50,6 +52,8 @@ interface ManualFileLocal {
   name: string;
   extension: string;
   base64: string;
+  uri?: string;
+  mimeType?: string;
 }
 
 interface ManualFileRemote {
@@ -57,7 +61,12 @@ interface ManualFileRemote {
   type: string;
   extension: string;
   name: string;
+  original_name?: string;
   url: string;
+  base64?: string;
+  mimeType?: string;
+  id_local?: string;
+  synced?: boolean;
 }
 
 interface JobManualRemote {
@@ -82,6 +91,7 @@ interface JobManualRemote {
   }[];
   currentEmployeeSigned: boolean;
   id_local?: string;
+  synced?: boolean;
 }
 
 export default function JobManualsScreen() {
@@ -96,10 +106,14 @@ export default function JobManualsScreen() {
   const [puestoActualNombre, setPuestoActualNombre] = useState<string>('');
 
   const [isCreating, setIsCreating] = useState(false);
+  const [isCreatingManual, setIsCreatingManual] = useState(false);
+  const [isDeletingManual, setIsDeletingManual] = useState(false);
   const [manuals, setManuals] = useState<JobManualRemote[]>([]);
   const [isLoadingManuals, setIsLoadingManuals] = useState(false);
   const [selectedManual, setSelectedManual] = useState<JobManualRemote | null>(null);
   const [isViewerVisible, setIsViewerVisible] = useState(false);
+  const [viewSignature, setViewSignature] = useState<string | null>(null);
+  const [isSigningManual, setIsSigningManual] = useState(false);
 
   const tituloRef = useRef('');
   const descripcionRef = useRef('');
@@ -118,6 +132,54 @@ export default function JobManualsScreen() {
   const [location, setLocation] = useState<{ latitude: number; longitude: number } | null>(null);
 
   const { scanQR, QRScannerComponent } = useQRScanner();
+
+  // Helpers para construir URLs de archivos en el servidor (similar a IncidentsScreen)
+  const getManualImageUrl = (manualId: number, fileName: string) => {
+    console.log("Accediendo a la imagen: ", fileName);
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) return '';
+    return `${apiUrl}/api/job-manuals/${manualId}/get-image/${encodeURIComponent(fileName)}`;
+  };
+
+  const getManualAudioUrl = (manualId: number, fileName: string) => {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) return '';
+    return `${apiUrl}/api/job-manuals/${manualId}/get-audio/${encodeURIComponent(fileName)}`;
+  };
+
+  const getManualVideoUrl = (manualId: number, fileName: string) => {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) return '';
+    return `${apiUrl}/api/job-manuals/${manualId}/get-video/${encodeURIComponent(fileName)}`;
+  };
+
+  const buildFileUrl = (manualId: number | undefined, file: ManualFileRemote) => {
+    // Si es registro offline (tiene id_local no vacío), usamos base64
+    const hasLocalId = file.id_local !== undefined && file.id_local !== null && file.id_local !== '';
+    if (hasLocalId && file.base64) {
+      const mime = file.mimeType || (file.type ? `${file.type}/${file.extension || 'octet-stream'}` : `application/${file.extension || 'octet-stream'}`);
+      return `data:${mime};base64,${file.base64}`;
+    }
+
+    // Para registros sincronizados, preferir siempre la API
+    if (manualId) {
+      if (file.type === 'image') return getManualImageUrl(manualId, file.name);
+      if (file.type === 'audio') return getManualAudioUrl(manualId, file.name);
+      if (file.type === 'video') return getManualVideoUrl(manualId, file.name);
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (apiUrl) return `${apiUrl}/api/job-manuals/${manualId}/get-file/${encodeURIComponent(file.name)}`;
+    }
+
+    // Último recurso: URL ya provista
+    if (file.url) return file.url;
+
+    return '';
+  };
+
+  const getRemoteFileDisplayName = (file: ManualFileRemote) => {
+    const candidate = (file.original_name ?? '').trim();
+    return candidate.length > 0 ? candidate : file.name;
+  };
 
   const getConnectionStatus = async (): Promise<boolean> => {
     try {
@@ -282,9 +344,7 @@ export default function JobManualsScreen() {
   );
 
   useEffect(() => {
-    // Para el ejemplo del formulario, no obtenemos la localización real.
-    // Se puede integrar expo-location luego, como en TrainingsScreen.
-    setLocation(null);
+    // La ubicación se solicitará cuando se inicie la creación de un nuevo manual
   }, []);
 
   const handleMenuPress = () => {
@@ -309,10 +369,43 @@ export default function JobManualsScreen() {
     setAudioFiles([]);
     setVideoFiles([]);
     setFirmaResponsable(null);
+    setLocation(null);
+
+    // Solicitar permisos de ubicación y obtener la posición actual (similar a TrainingsScreen)
+    (async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') {
+          Alert.alert(
+            'Permiso de ubicación',
+            'Se necesita permiso de ubicación para generar la firma del responsable.'
+          );
+          return;
+        }
+        const currentLocation = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.High,
+        });
+        setLocation({
+          latitude: currentLocation.coords.latitude,
+          longitude: currentLocation.coords.longitude,
+        });
+      } catch (error) {
+        console.error('Error getting location for job manuals:', error);
+      }
+    })();
   };
 
   const cancelCreating = () => {
     setIsCreating(false);
+    // Limpiar formulario
+    tituloRef.current = '';
+    descripcionRef.current = '';
+    setSelectedPuestos([]);
+    setTextFiles([]);
+    setImageFiles([]);
+    setAudioFiles([]);
+    setVideoFiles([]);
+    setFirmaResponsable(null);
   };
 
   const togglePuestoSelection = (puestoId: number) => {
@@ -324,11 +417,118 @@ export default function JobManualsScreen() {
     });
   };
 
-  const handleAddFilePlaceholder = (type: ManualFileLocal['type']) => {
-    Alert.alert(
-      'Pendiente',
-      `La selección de archivos de tipo ${type} se implementará en el siguiente paso. Por ahora, el formulario está preparado para recibirlos.`
-    );
+  const handleAddFile = async (type: ManualFileLocal['type']) => {
+    try {
+      let pickerTypes: string | string[] | undefined;
+
+      switch (type) {
+        case 'image':
+          pickerTypes = ['image/*'];
+          break;
+        case 'audio':
+          pickerTypes = ['audio/*'];
+          break;
+        case 'video':
+          pickerTypes = ['video/*'];
+          break;
+        case 'document':
+          pickerTypes = [
+            'application/pdf',
+            'application/msword',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'application/vnd.ms-excel',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'text/plain',
+            'text/csv',
+          ];
+          break;
+        default:
+          pickerTypes = [
+            'application/pdf',
+            'application/msword',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'text/plain',
+          ];
+          break;
+      }
+
+      const result = await DocumentPicker.getDocumentAsync({
+        type: pickerTypes,
+        multiple: false,
+        copyToCacheDirectory: true,
+      });
+
+      if (result.canceled || !result.assets || result.assets.length === 0) {
+        return;
+      }
+
+      const asset = result.assets[0];
+      const response = await fetch(asset.uri);
+      const blob = await response.blob();
+      
+      // Convertir blob a base64 de forma segura
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const result = reader.result;
+          if (typeof result === 'string') {
+            const parts = result.split(',');
+            resolve(parts.length > 1 ? parts[1] : parts[0]);
+          } else {
+            reject(new Error('No se pudo leer el archivo seleccionado'));
+          }
+        };
+        reader.onerror = () => {
+          reject(reader.error ?? new Error('Error al leer el archivo seleccionado'));
+        };
+        reader.readAsDataURL(blob);
+      });
+      
+
+      let extension = '';
+      if (asset.name && asset.name.includes('.')) {
+        extension = asset.name.split('.').pop() || '';
+      } else if (asset.mimeType && asset.mimeType.includes('/')) {
+        extension = asset.mimeType.split('/').pop() || '';
+      }
+
+      const localId = `local_file_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+
+      const newFile: ManualFileLocal = {
+        id: localId,
+        type,
+        name: asset.name || `archivo.${extension || 'dat'}`,
+        extension: extension || 'dat',
+        base64,
+        uri: asset.uri,
+        mimeType: asset.mimeType,
+      };
+
+      if (type === 'image') {
+        setImageFiles(prev => [...prev, newFile]);
+      } else if (type === 'audio') {
+        setAudioFiles(prev => [...prev, newFile]);
+      } else if (type === 'video') {
+        setVideoFiles(prev => [...prev, newFile]);
+      } else {
+        setTextFiles(prev => [...prev, newFile]);
+      }
+    } catch (error) {
+      console.error('Error picking file for job manual:', error);
+      Alert.alert('Error', 'No se pudo seleccionar el archivo. Intenta nuevamente.');
+    }
+  };
+
+  const removeLocalFile = (type: ManualFileLocal['type'], id: string) => {
+    if (type === 'image') {
+      setImageFiles(prev => prev.filter(f => f.id !== id));
+    } else if (type === 'audio') {
+      setAudioFiles(prev => prev.filter(f => f.id !== id));
+    } else if (type === 'video') {
+      setVideoFiles(prev => prev.filter(f => f.id !== id));
+    } else {
+      setTextFiles(prev => prev.filter(f => f.id !== id));
+    }
   };
 
   const generateSignature = async () => {
@@ -338,7 +538,7 @@ export default function JobManualsScreen() {
     }
 
     if (!location) {
-      Alert.alert('Error', 'No se pudo obtener la ubicación (pendiente de implementar)');
+      Alert.alert('Error', 'No se pudo obtener la ubicación para generar la firma del responsable');
       return;
     }
 
@@ -420,9 +620,68 @@ export default function JobManualsScreen() {
 
   const handleScanQR = async () => {
     try {
-      const result = await scanQR();
-      if (!result) return;
-      Alert.alert('QR', 'Escaneo de QR para firma aún no implementado en este módulo.');
+      const qrData = await scanQR();
+      if (!qrData) {
+        return;
+      }
+
+      try {
+        const decodedHash = atob(qrData);
+        const parts = decodedHash.split(':');
+
+        if (parts.length !== 5) {
+          Alert.alert('Error', 'El QR no tiene la estructura esperada');
+          return;
+        }
+
+        const [sessionId, empleadoId, latitud, longitud, timestamp] = parts;
+
+        const hasConnection = await getConnectionStatus();
+        let empleadoDetalle: FirmaData['empleadoDetalle'] | undefined = undefined;
+
+        if (hasConnection) {
+          const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+          if (!apiUrl) {
+            throw new Error('Server URL not configured');
+          }
+
+          const token = await AsyncStorage.getItem('access_token');
+          if (!token) {
+            throw new Error('No authentication token found');
+          }
+
+          const response = await fetch(`${apiUrl}/api/empleados/${empleadoId}`, {
+            method: 'GET',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+              'ngrok-skip-browser-warning': '69420',
+            },
+          });
+
+          if (response.ok) {
+            const empleadoData = await response.json();
+            empleadoDetalle = {
+              nombre: empleadoData.nombre,
+              primer_apellido: empleadoData.primer_apellido,
+              segundo_apellido: empleadoData.segundo_apellido,
+              cedula_empleado: empleadoData.cedula,
+            };
+          }
+        }
+
+        setFirmaResponsable({
+          sessionId,
+          empleadoId,
+          latitud,
+          longitud,
+          timestamp,
+          empleadoDetalle,
+        });
+      } catch (error) {
+        console.error('Error decoding QR for job manual:', error);
+        Alert.alert('Error', 'El QR escaneado no es válido');
+      }
     } catch (error) {
       console.error('Error scanning QR for job manual:', error);
       Alert.alert('Error', 'No se pudo escanear el código QR');
@@ -470,11 +729,14 @@ export default function JobManualsScreen() {
         files: JSON.stringify(
           filesPayload.map(f => ({
             type: f.type,
+            original_name: f.name, // nombre real para mostrar en app (en el server se sigue usando name generado para serving)
             extension: f.extension,
             file_base64: f.base64,
           }))
         ),
       };
+
+      setIsCreatingManual(true);
 
       const isConnected = await getConnectionStatus();
 
@@ -487,8 +749,25 @@ export default function JobManualsScreen() {
         });
 
         if (result.status) {
-          Alert.alert('Éxito', result.message || 'Manual creado correctamente');
+          // Limpiar formulario
+          tituloRef.current = '';
+          descripcionRef.current = '';
+          setSelectedPuestos([]);
+          setTextFiles([]);
+          setImageFiles([]);
+          setAudioFiles([]);
+          setVideoFiles([]);
+          setFirmaResponsable(null);
+          
+          // Cerrar formulario
           setIsCreating(false);
+          
+          // Recargar lista de manuales
+          if (marcaId) {
+            await fetchManuals(marcaId);
+          }
+          
+          Alert.alert('Éxito', result.message || 'Manual creado correctamente');
         } else {
           Alert.alert('Error', result.message || 'No se pudo crear el manual');
         }
@@ -504,34 +783,86 @@ export default function JobManualsScreen() {
         });
         await AsyncStorage.setItem('job_manuals_actions', JSON.stringify(actions));
 
-        // Opcional: cache local de manuales
+        // Cache local de manuales con archivos en base64
         const cacheStr = await AsyncStorage.getItem('job_manuals_cache');
         const cache = cacheStr ? JSON.parse(cacheStr) : [];
+        const horaAccionUse = await getHoraAccion();
         cache.push({
           id: 0,
           id_local: localId,
           title: tituloRef.current,
           description: descripcionRef.current,
-          puestoActualNombre,
-          created_by: employee?.name || '-',
-          created_at: new Date().toISOString(),
+          puesto: { id: 0, nombre: puestoActualNombre },
+          created_by: employee?.id ? String(employee.id) : '-',
+          created_at: new Date(horaAccionUse).toISOString(),
+          files: filesPayload.map(f => ({
+            id: Date.now() + Math.random(),
+            id_local: `file_${localId}_${Math.random().toString(36).slice(2, 8)}`,
+            type: f.type,
+            extension: f.extension,
+            name: f.name || `archivo.${f.extension || 'dat'}`,
+            original_name: f.name,
+            base64: f.base64,
+            mimeType: f.mimeType,
+            url: '',
+          })),
+          visualizaciones: [],
+          currentEmployeeSigned: false,
+          synced: false,
         });
         await AsyncStorage.setItem('job_manuals_cache', JSON.stringify(cache));
 
         Alert.alert('Modo Offline', 'Manual registrado localmente. Se sincronizará cuando haya conexión.');
+        
+        // Limpiar formulario
+        tituloRef.current = '';
+        descripcionRef.current = '';
+        setSelectedPuestos([]);
+        setTextFiles([]);
+        setImageFiles([]);
+        setAudioFiles([]);
+        setVideoFiles([]);
+        setFirmaResponsable(null);
+        
+        // Cerrar formulario
         setIsCreating(false);
+        
+        // Recargar lista de manuales (desde cache)
+        if (marcaId) {
+          await fetchManuals(marcaId);
+        }
       }
     } catch (error) {
       console.error('Error creating job manual:', error);
       Alert.alert('Error', 'No se pudo crear el manual');
+    } finally {
+      setIsCreatingManual(false);
     }
+  };
+
+  const formatDateLabel = (iso: string) => {
+    if (!iso) return '';
+    const date_complete = new Date(Number(iso)).toISOString().split('T');
+    const date = date_complete[0];
+    const time = date_complete[1].split('.')[0];
+    return `${date} ${time}`;
   };
 
   if (isLoading) {
     return (
-      <ThemedView style={styles.container}>
-        <ActivityIndicator size="large" color="#007AFF" />
-        <ThemedText style={styles.loadingText}>Cargando...</ThemedText>
+      <ThemedView style={styles.fullContainer}>
+        <AppHeader onMenuPress={handleMenuPress} title="Manuales de puesto" />
+        <ThemedView style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#007AFF" />
+          <ThemedText style={styles.loadingText}>Cargando...</ThemedText>
+        </ThemedView>
+        <AppFooter />
+        <SlideMenu
+          isVisible={isMenuVisible}
+          onClose={handleMenuClose}
+          onHomePress={handleHomePress}
+          currentRoute="JobManuals"
+        />
       </ThemedView>
     );
   }
@@ -569,14 +900,14 @@ export default function JobManualsScreen() {
             <ThemedText style={styles.puestoName}>{puestoActualNombre || 'No disponible'}</ThemedText>
           </ThemedView>
 
-          {canCreate && !isCreating && (
+          {!isCreating && (
             <TouchableOpacity style={styles.createButton} onPress={startCreating}>
               <Ionicons name="add-circle" size={20} color="#FFFFFF" />
               <ThemedText style={styles.createButtonText}>Crear nuevo manual</ThemedText>
             </TouchableOpacity>
           )}
 
-          {canCreate && isCreating && (
+          {isCreating && (
             <ThemedView style={styles.formCard}>
               <ThemedText style={styles.formTitle}>Nuevo manual de puesto</ThemedText>
 
@@ -648,44 +979,110 @@ export default function JobManualsScreen() {
                 <ThemedText style={styles.formLabel}>Archivos de texto</ThemedText>
                 <TouchableOpacity
                   style={styles.addFileButton}
-                  onPress={() => handleAddFilePlaceholder('document')}
+                  onPress={() => handleAddFile('document')}
                 >
                   <Ionicons name="document-text-outline" size={18} color="#007AFF" />
                   <ThemedText style={styles.addFileButtonText}>Añadir archivo de texto</ThemedText>
                 </TouchableOpacity>
+                {textFiles.length > 0 && (
+                  <ThemedView style={styles.filesList}>
+                    {textFiles.map(file => (
+                      <ThemedView key={file.id} style={styles.fileRow}>
+                        <Ionicons name="document-text-outline" size={16} color="#007AFF" />
+                        <ThemedText numberOfLines={1} style={styles.fileName}>
+                          {file.name}
+                        </ThemedText>
+                        <TouchableOpacity onPress={() => removeLocalFile('document', file.id)}>
+                          <Ionicons name="trash" size={16} color="#FF3B30" />
+                        </TouchableOpacity>
+                      </ThemedView>
+                    ))}
+                  </ThemedView>
+                )}
               </ThemedView>
 
               <ThemedView style={styles.formGroup}>
                 <ThemedText style={styles.formLabel}>Imágenes</ThemedText>
                 <TouchableOpacity
                   style={styles.addFileButton}
-                  onPress={() => handleAddFilePlaceholder('image')}
+                  onPress={() => handleAddFile('image')}
                 >
                   <Ionicons name="image-outline" size={18} color="#007AFF" />
                   <ThemedText style={styles.addFileButtonText}>Añadir imagen</ThemedText>
                 </TouchableOpacity>
+                {imageFiles.length > 0 && (
+                  <ThemedView style={styles.filesList}>
+                    {imageFiles.map(file => (
+                      <ThemedView key={file.id} style={styles.fileRow}>
+                        <Image
+                          source={{
+                            uri: `data:image/${file.extension || 'jpeg'};base64,${file.base64}`,
+                          }}
+                          style={styles.filePreviewImage}
+                          resizeMode="cover"
+                        />
+                        <ThemedText numberOfLines={1} style={styles.fileName}>
+                          {file.name}
+                        </ThemedText>
+                        <TouchableOpacity onPress={() => removeLocalFile('image', file.id)}>
+                          <Ionicons name="trash" size={16} color="#FF3B30" />
+                        </TouchableOpacity>
+                      </ThemedView>
+                    ))}
+                  </ThemedView>
+                )}
               </ThemedView>
 
               <ThemedView style={styles.formGroup}>
                 <ThemedText style={styles.formLabel}>Audio</ThemedText>
                 <TouchableOpacity
                   style={styles.addFileButton}
-                  onPress={() => handleAddFilePlaceholder('audio')}
+                  onPress={() => handleAddFile('audio')}
                 >
                   <Ionicons name="mic-outline" size={18} color="#007AFF" />
                   <ThemedText style={styles.addFileButtonText}>Añadir audio</ThemedText>
                 </TouchableOpacity>
+                {audioFiles.length > 0 && (
+                  <ThemedView style={styles.filesList}>
+                    {audioFiles.map(file => (
+                      <ThemedView key={file.id} style={styles.fileRow}>
+                        <Ionicons name="musical-notes-outline" size={16} color="#007AFF" />
+                        <ThemedText numberOfLines={1} style={styles.fileName}>
+                          {file.name}
+                        </ThemedText>
+                        <TouchableOpacity onPress={() => removeLocalFile('audio', file.id)}>
+                          <Ionicons name="trash" size={16} color="#FF3B30" />
+                        </TouchableOpacity>
+                      </ThemedView>
+                    ))}
+                  </ThemedView>
+                )}
               </ThemedView>
 
               <ThemedView style={styles.formGroup}>
                 <ThemedText style={styles.formLabel}>Video</ThemedText>
                 <TouchableOpacity
                   style={styles.addFileButton}
-                  onPress={() => handleAddFilePlaceholder('video')}
+                  onPress={() => handleAddFile('video')}
                 >
                   <Ionicons name="videocam-outline" size={18} color="#007AFF" />
                   <ThemedText style={styles.addFileButtonText}>Añadir video</ThemedText>
                 </TouchableOpacity>
+                {videoFiles.length > 0 && (
+                  <ThemedView style={styles.filesList}>
+                    {videoFiles.map(file => (
+                      <ThemedView key={file.id} style={styles.fileRow}>
+                        <Ionicons name="videocam-outline" size={16} color="#007AFF" />
+                        <ThemedText numberOfLines={1} style={styles.fileName}>
+                          {file.name}
+                        </ThemedText>
+                        <TouchableOpacity onPress={() => removeLocalFile('video', file.id)}>
+                          <Ionicons name="trash" size={16} color="#FF3B30" />
+                        </TouchableOpacity>
+                      </ThemedView>
+                    ))}
+                  </ThemedView>
+                )}
               </ThemedView>
 
               {/* Firma responsable */}
@@ -732,7 +1129,7 @@ export default function JobManualsScreen() {
                     )}
                     <ThemedText style={styles.signatureInfoText}>Latitud: {firmaResponsable.latitud}</ThemedText>
                     <ThemedText style={styles.signatureInfoText}>Longitud: {firmaResponsable.longitud}</ThemedText>
-                    <ThemedText style={styles.signatureInfoText}>Hora actual: {firmaResponsable.timestamp}</ThemedText>
+                    <ThemedText style={styles.signatureInfoText}>Fecha y hora: {formatDateLabel(firmaResponsable.timestamp)}</ThemedText>
                     <TouchableOpacity
                       style={styles.clearSignatureButton}
                       onPress={() => setFirmaResponsable(null)}
@@ -752,10 +1149,18 @@ export default function JobManualsScreen() {
                   <ThemedText style={styles.formButtonText}>Cancelar</ThemedText>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[styles.formButton, styles.confirmButton]}
+                  style={[styles.formButton, styles.confirmButton, isCreatingManual && styles.formButtonDisabled]}
                   onPress={handleCreateManual}
+                  disabled={isCreatingManual}
                 >
-                  <ThemedText style={styles.formButtonText}>Guardar</ThemedText>
+                  {isCreatingManual ? (
+                    <>
+                      <ActivityIndicator size="small" color="#FFFFFF" style={{ marginRight: 8 }} />
+                      <ThemedText style={styles.formButtonText}>Creando manual...</ThemedText>
+                    </>
+                  ) : (
+                    <ThemedText style={styles.formButtonText}>Guardar</ThemedText>
+                  )}
                 </TouchableOpacity>
               </ThemedView>
             </ThemedView>
@@ -779,6 +1184,8 @@ export default function JobManualsScreen() {
                   style={styles.manualCard}
                   onPress={() => {
                     setSelectedManual(manual);
+                    setViewSignature(null);
+                    setIsSigningManual(false);
                     setIsViewerVisible(true);
                   }}
                 >
@@ -821,6 +1228,8 @@ export default function JobManualsScreen() {
         onRequestClose={() => {
           setIsViewerVisible(false);
           setSelectedManual(null);
+            setViewSignature(null);
+            setIsSigningManual(false);
         }}
       >
         <View style={styles.modalOverlay}>
@@ -829,42 +1238,172 @@ export default function JobManualsScreen() {
               <ThemedText style={styles.modalTitle} numberOfLines={2}>
                 {selectedManual?.title || 'Manual de puesto'}
               </ThemedText>
-              <TouchableOpacity
-                onPress={() => {
-                  setIsViewerVisible(false);
-                  setSelectedManual(null);
-                }}
-              >
-                <Ionicons name="close" size={24} color="#666666" />
-              </TouchableOpacity>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                {selectedManual &&
+                  String(selectedManual.created_by ?? '') === String(employee?.id ?? '') && (
+                    <TouchableOpacity
+                      style={styles.deleteButton}
+                      onPress={() => {
+                        if (!selectedManual) return;
+                        Alert.alert(
+                          'Eliminar manual',
+                          '¿Estás seguro de eliminar este manual?',
+                          [
+                            { text: 'Cancelar', style: 'cancel' },
+                            {
+                              text: 'Eliminar',
+                              style: 'destructive',
+                              onPress: async () => {
+                                try {
+                                  setIsDeletingManual(true);
+                                  const isConnected = await getConnectionStatus();
+
+                                  // Si es local sin sincronizar, solo limpiar cache y acciones
+                                  if (!selectedManual.id || selectedManual.id === 0 || selectedManual.id_local) {
+                                    const actionsStr = await AsyncStorage.getItem('job_manuals_actions');
+                                    const actions = actionsStr ? JSON.parse(actionsStr) : [];
+                                    const filtered = actions.filter((a: any) => !(a.id === selectedManual.id_local && a.type === 'create'));
+                                    await AsyncStorage.setItem('job_manuals_actions', JSON.stringify(filtered));
+
+                                    const cacheStr = await AsyncStorage.getItem('job_manuals_cache');
+                                    if (cacheStr) {
+                                      const cache = JSON.parse(cacheStr);
+                                      const updatedCache = cache.filter((m: any) => m.id_local !== selectedManual.id_local);
+                                      await AsyncStorage.setItem('job_manuals_cache', JSON.stringify(updatedCache));
+                                    }
+
+                                    Alert.alert('Modo Offline', 'Manual local eliminado.');
+                                    setIsViewerVisible(false);
+                                    setSelectedManual(null);
+                                    setViewSignature(null);
+                                    setIsSigningManual(false);
+                                    if (marcaId) {
+                                      await fetchManuals(marcaId);
+                                    }
+                                    return;
+                                  }
+
+                                  if (isConnected) {
+                                    const result = await deleteJobManual({
+                                      id: selectedManual.id,
+                                      refreshAccessToken,
+                                      logout,
+                                    });
+                                    if (!result.status) {
+                                      Alert.alert('Error', result.message || 'No se pudo eliminar el manual');
+                                    } else {
+                                      Alert.alert('Éxito', result.message || 'Manual eliminado');
+                                      setIsViewerVisible(false);
+                                      setSelectedManual(null);
+                                      setViewSignature(null);
+                                      setIsSigningManual(false);
+                                      if (marcaId) {
+                                        await fetchManuals(marcaId);
+                                      }
+                                    }
+                                  } else {
+                                    // Agendar acción de borrado
+                                    const actionsStr = await AsyncStorage.getItem('job_manuals_actions');
+                                    const actions = actionsStr ? JSON.parse(actionsStr) : [];
+                                    actions.push({
+                                      id: selectedManual.id,
+                                      type: 'delete',
+                                      marcaId,
+                                    });
+                                    await AsyncStorage.setItem('job_manuals_actions', JSON.stringify(actions));
+
+                                    // Remover de cache para que no aparezca
+                                    const cacheStr = await AsyncStorage.getItem('job_manuals_cache');
+                                    if (cacheStr) {
+                                      const cache = JSON.parse(cacheStr);
+                                      const updatedCache = cache.filter((m: any) => m.id !== selectedManual.id);
+                                      await AsyncStorage.setItem('job_manuals_cache', JSON.stringify(updatedCache));
+                                    }
+
+                                    Alert.alert('Modo Offline', 'Manual marcado para eliminación cuando haya conexión.');
+                                    setIsViewerVisible(false);
+                                    setSelectedManual(null);
+                                    setViewSignature(null);
+                                    setIsSigningManual(false);
+                                  }
+                                } catch (error) {
+                                  console.error('Error deleting manual:', error);
+                                  Alert.alert('Error', 'No se pudo eliminar el manual');
+                                } finally {
+                                  setIsDeletingManual(false);
+                                }
+                              },
+                            },
+                          ]
+                        );
+                      }}
+                      disabled={isDeletingManual}
+                    >
+                      {isDeletingManual ? (
+                        <ActivityIndicator size="small" color="#FF3B30" />
+                      ) : (
+                        <Ionicons name="trash" size={22} color="#FF3B30" />
+                      )}
+                    </TouchableOpacity>
+                  )}
+                <TouchableOpacity
+                  onPress={() => {
+                    setIsViewerVisible(false);
+                    setSelectedManual(null);
+                  }}
+                >
+                  <Ionicons name="close" size={24} color="#666666" />
+                </TouchableOpacity>
+              </View>
             </View>
 
-            <ScrollView style={styles.modalContent}>
+            <ScrollView 
+              style={styles.modalContent}
+              nestedScrollEnabled={true}
+              showsVerticalScrollIndicator={true}
+            >
               {selectedManual?.description ? (
                 <ThemedText style={styles.viewerDescription}>
                   {selectedManual.description}
                 </ThemedText>
               ) : null}
 
+              {/* Firmas registradas (solo supervisores / administrativos) */}
+              {(selectedManual?.visualizaciones?.length ?? 0) > 0 &&
+                (roleName === 'SUPERVISOR' || roleName === 'ADMINISTRATIVO') && (
+                  <ThemedView style={styles.viewerSection}>
+                    <ThemedText style={styles.viewerSectionTitle}>Firmas registradas</ThemedText>
+                    {selectedManual?.visualizaciones?.map(firma => (
+                      <ThemedView key={firma.id} style={styles.signatureListRow}>
+                        <Ionicons name="person-circle-outline" size={20} color="#007AFF" />
+                        <ThemedText style={styles.signatureListName}>
+                          {firma.nombre_empleado || 'Empleado'}
+                        </ThemedText>
+                        <ThemedText style={styles.signatureListDate}>
+                          {firma.created_at ? new Date(firma.created_at).toLocaleString() : ''}
+                        </ThemedText>
+                      </ThemedView>
+                    ))}
+                  </ThemedView>
+                )}
+
               {/* Imágenes */}
-              {selectedManual?.files?.some(f => f.type === 'image') && (
+              {selectedManual?.files?.some(f => f.type === 'image') && selectedManual && (
                 <ThemedView style={styles.viewerSection}>
                   <ThemedText style={styles.viewerSectionTitle}>Imágenes</ThemedText>
                   {selectedManual.files
                     .filter(f => f.type === 'image')
                     .map(file => (
-                      <Image
+                      <ManualImageViewer
                         key={file.id}
-                        source={{ uri: file.url }}
-                        style={styles.viewerImage}
-                        resizeMode="contain"
+                        imageUrl={buildFileUrl(selectedManual.id, file)}
                       />
                     ))}
                 </ThemedView>
               )}
 
               {/* Audio */}
-              {selectedManual?.files?.some(f => f.type === 'audio') && (
+              {selectedManual?.files?.some(f => f.type === 'audio') && selectedManual && (
                 <ThemedView style={styles.viewerSection}>
                   <ThemedText style={styles.viewerSectionTitle}>Audios</ThemedText>
                   {selectedManual.files
@@ -872,15 +1411,15 @@ export default function JobManualsScreen() {
                     .map(file => (
                       <ManualAudioPlayer
                         key={file.id}
-                        sourceUrl={file.url}
-                        label={file.name}
+                        sourceUrl={buildFileUrl(selectedManual.id, file)}
+                        label={getRemoteFileDisplayName(file)}
                       />
                     ))}
                 </ThemedView>
               )}
 
               {/* Video */}
-              {selectedManual?.files?.some(f => f.type === 'video') && (
+              {selectedManual?.files?.some(f => f.type === 'video') && selectedManual && (
                 <ThemedView style={styles.viewerSection}>
                   <ThemedText style={styles.viewerSectionTitle}>Videos</ThemedText>
                   {selectedManual.files
@@ -888,8 +1427,7 @@ export default function JobManualsScreen() {
                     .map(file => (
                       <ManualVideoPlayer
                         key={file.id}
-                        sourceUrl={file.url}
-                        label={file.name}
+                        sourceUrl={buildFileUrl(selectedManual.id, file)}
                       />
                     ))}
                 </ThemedView>
@@ -905,14 +1443,153 @@ export default function JobManualsScreen() {
                       <TouchableOpacity
                         key={file.id}
                         style={styles.documentRow}
-                        onPress={() => Linking.openURL(file.url)}
+                        onPress={() => {
+                          const url = buildFileUrl(selectedManual.id, file);
+                          if (url) {
+                            Linking.openURL(url);
+                          } else {
+                            Alert.alert('Error', 'URL inválida para descargar el archivo');
+                          }
+                        }}
                       >
                         <Ionicons name="document-text-outline" size={20} color="#007AFF" />
                         <ThemedText numberOfLines={1} style={styles.documentText}>
-                          {file.name}
+                          {getRemoteFileDisplayName(file)}
                         </ThemedText>
                       </TouchableOpacity>
                     ))}
+                </ThemedView>
+              )}
+
+              {/* Firma de visualización - al final de la lista */}
+              {selectedManual && !selectedManual.currentEmployeeSigned && (
+                <ThemedView style={styles.viewerSection}>
+                  <ThemedText style={styles.viewerSectionTitle}>Confirmar visualización</ThemedText>
+                  {!viewSignature ? (
+                    <TouchableOpacity
+                      style={styles.signatureActionButton}
+                      onPress={async () => {
+                        const horaAccionUse = await getHoraAccion();
+                        const timestamp = new Date(horaAccionUse).toISOString();
+                        const hash = btoa(`${employee?.id || 'emp'}:${timestamp}`);
+                        setViewSignature(hash);
+                      }}
+                    >
+                      <Ionicons name="finger-print" size={18} color="#FFFFFF" />
+                      <ThemedText style={styles.signatureActionText}>Generar firma</ThemedText>
+                    </TouchableOpacity>
+                  ) : (
+                    <ThemedView style={styles.signatureRow}>
+                      <ThemedText style={styles.signatureText}>Firma lista</ThemedText>
+                      <TouchableOpacity
+                        style={[styles.signatureActionButton, isSigningManual && styles.formButtonDisabled]}
+                        onPress={async () => {
+                          if (!selectedManual || !viewSignature) return;
+                          const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+                          if (!apiUrl) {
+                            Alert.alert('Error', 'URL del servidor no configurada');
+                            return;
+                          }
+                          try {
+                            setIsSigningManual(true);
+                            // Si el manual no tiene ID de servidor, no se puede firmar
+                            if (!selectedManual.id || selectedManual.id === 0) {
+                              Alert.alert('Offline', 'Primero sincroniza el manual para poder firmarlo.');
+                              return;
+                            }
+
+                            if (!marcaId) {
+                              Alert.alert('Error', 'No se encontró la marca actual');
+                              return;
+                            }
+
+                            const isConnected = await getConnectionStatus();
+
+                            if (isConnected) {
+                              const result = await signJobManual({
+                                id: selectedManual.id,
+                                firma: viewSignature,
+                                refreshAccessToken,
+                                logout,
+                                marcaId,
+                              });
+
+                              if (!result.status) {
+                                throw new Error(result.message || 'No se pudo firmar el manual');
+                              }
+                            } else {
+                              // Guardar acción offline
+                              const actionsStr = await AsyncStorage.getItem('job_manuals_actions');
+                              const actions = actionsStr ? JSON.parse(actionsStr) : [];
+                              actions.push({
+                                id: selectedManual.id,
+                                type: 'sign',
+                                firma: viewSignature,
+                                marcaId,
+                              });
+                              await AsyncStorage.setItem('job_manuals_actions', JSON.stringify(actions));
+                            }
+
+                            const horaAccionUse = await getHoraAccion();
+
+                            // Actualizar estado local y cache
+                            const newVisualizacion = {
+                              id: Date.now(),
+                              empleado_id: typeof employee?.id === 'number' ? employee.id : Number(employee?.id || 0),
+                              manual_puesto_id: selectedManual.id,
+                              nombre_empleado: employee?.name || 'Empleado',
+                              firma_empleado: viewSignature,
+                              created_at: new Date(horaAccionUse).toISOString(),
+                            };
+
+                            setSelectedManual(prev => {
+                              if (!prev) return prev;
+                              return {
+                                ...prev,
+                                currentEmployeeSigned: true,
+                                visualizaciones: [...(prev.visualizaciones || []), newVisualizacion],
+                              };
+                            });
+
+                            const cacheStr = await AsyncStorage.getItem('job_manuals_cache');
+                            if (cacheStr) {
+                              const cache = JSON.parse(cacheStr);
+                              const updatedCache = cache.map((item: any) => {
+                                if (item.id === selectedManual.id) {
+                                  const visualizaciones = item.visualizaciones || [];
+                                  return {
+                                    ...item,
+                                    currentEmployeeSigned: true,
+                                    visualizaciones: [...visualizaciones, newVisualizacion],
+                                  };
+                                }
+                                return item;
+                              });
+                              await AsyncStorage.setItem('job_manuals_cache', JSON.stringify(updatedCache));
+                            }
+
+                            Alert.alert('Éxito', isConnected ? 'Manual firmado correctamente' : 'Firma registrada en modo offline');
+                          } catch (error) {
+                            console.error('Error signing manual:', error);
+                            Alert.alert('Error', 'No se pudo firmar el manual');
+                          } finally {
+                            setIsSigningManual(false);
+                            setViewSignature(null);
+                          }
+                        }}
+                        disabled={isSigningManual}
+                      >
+                        {isSigningManual ? (
+                          <ActivityIndicator size="small" color="#FFFFFF" />
+                        ) : (
+                          <Ionicons name="checkmark" size={18} color="#FFFFFF" />
+                        )}
+                        <ThemedText style={styles.signatureActionText}>
+                          {isSigningManual ? 'Firmando...' : 'Confirmar visualización'}
+                        </ThemedText>
+                      </TouchableOpacity>
+                    </ThemedView>
+                  )}
                 </ThemedView>
               )}
             </ScrollView>
@@ -932,6 +1609,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     padding: 20,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   scrollView: {
     flex: 1,
@@ -1093,6 +1775,26 @@ const styles = StyleSheet.create({
     color: '#007AFF',
     fontWeight: '500',
   },
+  filesList: {
+    marginTop: 8,
+    gap: 6,
+  },
+  fileRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  fileName: {
+    flex: 1,
+    fontSize: 13,
+    color: '#333333',
+  },
+  filePreviewImage: {
+    width: 40,
+    height: 40,
+    borderRadius: 4,
+    backgroundColor: '#F0F0F0',
+  },
   signatureButtons: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -1158,6 +1860,9 @@ const styles = StyleSheet.create({
   },
   cancelButton: {
     backgroundColor: '#FF3B30',
+  },
+  formButtonDisabled: {
+    opacity: 0.6,
   },
   confirmButton: {
     backgroundColor: '#34C759',
@@ -1249,6 +1954,7 @@ const styles = StyleSheet.create({
   viewerSection: {
     marginTop: 12,
     marginBottom: 8,
+    overflow: 'hidden',
   },
   viewerSectionTitle: {
     fontSize: 15,
@@ -1273,9 +1979,91 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#007AFF',
   },
+  signatureActionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#007AFF',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    marginTop: 6,
+  },
+  signatureActionText: {
+    color: '#FFFFFF',
+    fontWeight: '600',
+    fontSize: 13,
+  },
+  signatureRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginTop: 6,
+  },
+  signatureText: {
+    flex: 1,
+    fontSize: 13,
+    color: '#333333',
+  },
+  signatureListRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 4,
+  },
+  signatureListName: {
+    flex: 1,
+    fontSize: 13,
+    color: '#333333',
+  },
+  signatureListDate: {
+    fontSize: 12,
+    color: '#777777',
+  },
+  deleteButton: {
+    padding: 6,
+  },
+  audioPlayerContainer: {
+    marginVertical: 12,
+    backgroundColor: '#fff',
+  },
+  audioLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 8,
+    color: '#000000',
+  },
+  audioPlayer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: '#FFF',
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#DDD',
+  },
+  playButton: {
+    padding: 8,
+  },
+  audioTime: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#007AFF',
+    flex: 1,
+  },
+  resetAudioButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 8,
+    borderRadius: 8,
+    backgroundColor: '#007AFF',
+  },
 });
 
-// Audio player for manuals (progress bar + timer)
+// Audio player for manuals (similar to VoiceNotesScreen)
 function ManualAudioPlayer({ sourceUrl, label }: { sourceUrl: string; label?: string }) {
   const player = useAudioPlayer(sourceUrl);
   const status = useAudioPlayerStatus(player);
@@ -1283,7 +2071,6 @@ function ManualAudioPlayer({ sourceUrl, label }: { sourceUrl: string; label?: st
 
   const duration = status.duration ?? 0;
   const position = status.currentTime ?? 0;
-  const progress = duration > 0 ? position / duration : 0;
 
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -1306,188 +2093,148 @@ function ManualAudioPlayer({ sourceUrl, label }: { sourceUrl: string; label?: st
     }
   };
 
+  const resetAudio = () => {
+    if (!player) return;
+    try {
+      player.seekTo(0);
+      player.pause();
+      setIsPlaying(false);
+    } catch (error) {
+      console.error('Error resetting audio player:', error);
+    }
+  };
+
   useEffect(() => {
     if (!status.playing && isPlaying && position >= duration && duration > 0) {
       setIsPlaying(false);
     }
   }, [status.playing, position, duration, isPlaying]);
 
+  useEffect(() => {
+    // Sincronizar estado de reproducción con el estado del player
+    if (status.playing !== isPlaying) {
+      setIsPlaying(status.playing);
+    }
+  }, [status.playing]);
+
   return (
-    <ThemedView style={{ marginBottom: 12 }}>
+    <ThemedView style={styles.audioPlayerContainer}>
       {label ? (
-        <ThemedText style={{ fontSize: 13, marginBottom: 4 }}>{label}</ThemedText>
+        <ThemedText style={styles.audioLabel}>{label}</ThemedText>
       ) : null}
-      <View
-        style={{
-          flexDirection: 'row',
-          alignItems: 'center',
-          gap: 8,
-        }}
-      >
+      <ThemedView style={styles.audioPlayer}>
         <TouchableOpacity
-          style={{
-            width: 36,
-            height: 36,
-            borderRadius: 18,
-            backgroundColor: '#007AFF',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}
+          style={styles.playButton}
           onPress={togglePlayPause}
         >
           <Ionicons
             name={isPlaying ? 'pause' : 'play'}
-            size={18}
+            size={24}
+            color="#007AFF"
+          />
+        </TouchableOpacity>
+        <ThemedText style={styles.audioTime}>
+          {formatTime(position)} / {formatTime(duration)}
+        </ThemedText>
+        <TouchableOpacity
+          style={styles.resetAudioButton}
+          onPress={resetAudio}
+        >
+          <Ionicons
+            name="refresh"
+            size={24}
             color="#FFFFFF"
           />
         </TouchableOpacity>
-        <View style={{ flex: 1 }}>
-          <View
-            style={{
-              height: 4,
-              borderRadius: 2,
-              backgroundColor: '#E0E0E0',
-              overflow: 'hidden',
-            }}
-          >
-            <View
-              style={{
-                width: `${Math.min(progress * 100, 100)}%`,
-                height: '100%',
-                backgroundColor: '#007AFF',
-              }}
-            />
-          </View>
-          <View
-            style={{
-              flexDirection: 'row',
-              justifyContent: 'space-between',
-              marginTop: 4,
-            }}
-          >
-            <ThemedText style={{ fontSize: 11, color: '#555555' }}>
-              {formatTime(position)}
-            </ThemedText>
-            <ThemedText style={{ fontSize: 11, color: '#555555' }}>
-              {formatTime(duration)}
-            </ThemedText>
-          </View>
-        </View>
-      </View>
+      </ThemedView>
     </ThemedView>
   );
 }
 
-// Video player for manuals using expo-video (progress bar + timer)
-function ManualVideoPlayer({ sourceUrl, label }: { sourceUrl: string; label?: string }) {
-  const player = useVideoPlayer(sourceUrl);
-  const status: any = (player as any)?.status || {};
-  const [isPlaying, setIsPlaying] = useState(false);
+// Image viewer that adjusts container based on image dimensions
+function ManualImageViewer({ imageUrl }: { imageUrl: string }) {
+  const [containerStyle, setContainerStyle] = useState<any>(styles.viewerImage);
+  const maxContainerWidth = Dimensions.get('window').width - 64; // Ancho máximo del contenedor (pantalla - padding del modal)
 
-  const duration = status.duration ?? 0;
-  const position = status.currentTime ?? 0;
-  const progress = duration > 0 ? position / duration : 0;
+  const handleImageLoad = (event: any) => {
+    const { width, height } = event.nativeEvent.source;
+    if (width && height) {
+      const aspectRatio = width / height;
+      let containerWidth = maxContainerWidth;
+      let containerHeight: number;
 
-  const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-  };
-
-  const togglePlayPause = () => {
-    if (!player) return;
-    try {
-      if (!isPlaying) {
-        player.play();
-        setIsPlaying(true);
+      // Calcular dimensiones del contenedor basándose en las dimensiones reales de la imagen
+      if (height > width) {
+        // Imagen vertical: usar ancho completo disponible y calcular altura proporcional
+        containerHeight = (maxContainerWidth / aspectRatio);
+        // Limitar altura máxima
+        if (containerHeight > 600) {
+          containerHeight = 600;
+          containerWidth = containerHeight * aspectRatio;
+        }
       } else {
-        player.pause();
-        setIsPlaying(false);
+        // Imagen horizontal: ajustar ancho al tamaño real de la imagen (sin exceder el máximo)
+        containerWidth = Math.min(maxContainerWidth, width);
+        containerHeight = containerWidth / aspectRatio;
+        // Si la altura calculada es muy pequeña, usar altura mínima y ajustar ancho
+        if (containerHeight < 180) {
+          containerHeight = 180;
+          containerWidth = containerHeight * aspectRatio;
+        }
       }
-    } catch (error) {
-      console.error('Error controlling video player:', error);
+
+      setContainerStyle({
+        width: containerWidth,
+        height: containerHeight,
+        borderRadius: 8,
+        marginBottom: 8,
+        backgroundColor: '#F0F0F0',
+        alignSelf: 'center', // Centrar el contenedor
+      });
     }
   };
-
-  useEffect(() => {
-    if (!status.playing && isPlaying && position >= duration && duration > 0) {
-      setIsPlaying(false);
-    }
-  }, [status.playing, position, duration, isPlaying]);
 
   return (
-    <ThemedView style={{ marginBottom: 16 }}>
-      {label ? (
-        <ThemedText style={{ fontSize: 13, marginBottom: 4 }}>{label}</ThemedText>
-      ) : null}
+    <Image
+      source={{ uri: imageUrl }}
+      style={containerStyle}
+      resizeMode="contain"
+      onLoad={handleImageLoad}
+    />
+  );
+}
+
+// Video player for manuals using expo-video (sin controles externos, solo VideoView con controles nativos)
+function ManualVideoPlayer({ sourceUrl }: { sourceUrl: string }) {
+  const player = useVideoPlayer(sourceUrl);
+  const maxContainerWidth = Dimensions.get('window').width - 64; // Ancho máximo del contenedor (pantalla - padding del modal)
+
+  return (
+    <View 
+      style={{
+        marginBottom: 8,
+        overflow: 'hidden',
+        borderRadius: 8,
+        backgroundColor: '#000000',
+        width: maxContainerWidth,
+        maxWidth: '100%',
+        alignSelf: 'center',
+        position: 'relative',
+      }}
+    >
       <VideoView
         player={player}
         style={{
           width: '100%',
           aspectRatio: 16 / 9,
           backgroundColor: '#000000',
-          borderRadius: 8,
-          marginBottom: 6,
         }}
+        contentFit="contain"
+        nativeControls={true}
+        allowsFullscreen={false}
+        allowsPictureInPicture={false}
       />
-      <View
-        style={{
-          flexDirection: 'row',
-          alignItems: 'center',
-          gap: 8,
-        }}
-      >
-        <TouchableOpacity
-          style={{
-            width: 36,
-            height: 36,
-            borderRadius: 18,
-            backgroundColor: '#007AFF',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}
-          onPress={togglePlayPause}
-        >
-          <Ionicons
-            name={isPlaying ? 'pause' : 'play'}
-            size={18}
-            color="#FFFFFF"
-          />
-        </TouchableOpacity>
-        <View style={{ flex: 1 }}>
-          <View
-            style={{
-              height: 4,
-              borderRadius: 2,
-              backgroundColor: '#E0E0E0',
-              overflow: 'hidden',
-            }}
-          >
-            <View
-              style={{
-                width: `${Math.min(progress * 100, 100)}%`,
-                height: '100%',
-                backgroundColor: '#007AFF',
-              }}
-            />
-          </View>
-          <View
-            style={{
-              flexDirection: 'row',
-              justifyContent: 'space-between',
-              marginTop: 4,
-            }}
-          >
-            <ThemedText style={{ fontSize: 11, color: '#555555' }}>
-              {formatTime(position)}
-            </ThemedText>
-            <ThemedText style={{ fontSize: 11, color: '#555555' }}>
-              {formatTime(duration)}
-            </ThemedText>
-          </View>
-        </View>
-      </View>
-    </ThemedView>
+    </View>
   );
 }
 

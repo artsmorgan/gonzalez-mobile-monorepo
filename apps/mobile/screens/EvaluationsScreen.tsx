@@ -58,6 +58,14 @@ export default function EvaluationsScreen() {
           <ThemedView style={styles.buttonsContainer}>
             <TouchableOpacity
               style={styles.navButton}
+              onPress={() => navigation.navigate('StaffEvaluations' as never)}
+            >
+              <ThemedText style={styles.navButtonText}>
+                <Ionicons name="clipboard" size={24} color="#FFFFFF" /> Evaluaciones de personal
+              </ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.navButton, styles.navButtonSecondary]}
               onPress={() => navigation.navigate('MileageControl' as never)}
             >
               <ThemedText style={styles.navButtonText}>
@@ -65,7 +73,7 @@ export default function EvaluationsScreen() {
               </ThemedText>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.navButton, styles.navButtonSecondary]}
+              style={[styles.navButton, styles.navButtonTertiary]}
               onPress={() => navigation.navigate('UniformRequest' as never)}
             >
               <ThemedText style={styles.navButtonText}>
@@ -73,7 +81,7 @@ export default function EvaluationsScreen() {
               </ThemedText>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.navButton, styles.navButtonTertiary]}
+              style={[styles.navButton, styles.navButtonQuaternary]}
               onPress={() => navigation.navigate('RoutesAndTours' as never)}
             >
               <ThemedText style={styles.navButtonText}>

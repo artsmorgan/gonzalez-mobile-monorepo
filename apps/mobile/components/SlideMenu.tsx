@@ -221,7 +221,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
 
   const handleEvaluationsPress = () => {
     onClose();
-    navigation.navigate('Evaluations');
+    navigation.navigate('StaffEvaluations');
   };
 
   const handleIncidentsPress = () => {
@@ -259,22 +259,22 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
 
   const getActionIcon = (action: string, isActive: boolean) => {
     switch (action.toLowerCase()) {
-      case 'home': return <Ionicons name="home-sharp" size={20} color={isActive ? '#007AFF' : '#FFFFFF'} />;
-      case 'profile': return <Ionicons name="person" size={20} color={isActive ? '#007AFF' : '#FFFFFF'} />;
-      case 'lunch-time': return <Ionicons name="hourglass" size={20} color={isActive ? '#007AFF' : '#FFFFFF'} />;
-      case 'digital-signature': return <Ionicons name="finger-print" size={20} color={isActive ? '#007AFF' : '#FFFFFF'} />;
-      case 'marcar-ingreso-salida': return <Ionicons name="time" size={20} color={isActive ? '#007AFF' : '#FFFFFF'} />;
-      case 'notes': return <Ionicons name="document" size={20} color={isActive ? '#007AFF' : '#FFFFFF'} />;
-      case 'activities': return <Ionicons name="list" size={20} color={isActive ? '#007AFF' : '#FFFFFF'} />;
-      case 'vehicles': return <Ionicons name="car" size={20} color={isActive ? '#007AFF' : '#FFFFFF'} />;
-      case 'visitors': return <Ionicons name="people" size={20} color={isActive ? '#007AFF' : '#FFFFFF'} />;
-      case 'evaluations': return <Ionicons name="clipboard" size={20} color={isActive ? '#007AFF' : '#FFFFFF'} />;
-      case 'incidents': return <Ionicons name="warning" size={20} color={isActive ? '#007AFF' : '#FFFFFF'} />;
-      case 'surveys': return <Ionicons name="document-text" size={20} color={isActive ? '#007AFF' : '#FFFFFF'} />;
-      case 'trainings': return <Ionicons name="school" size={20} color={isActive ? '#007AFF' : '#FFFFFF'} />;
-      case 'voice-notes': return <Ionicons name="mic" size={20} color={isActive ? '#007AFF' : '#FFFFFF'} />;
-      case 'job-manuals': return <Ionicons name="book" size={20} color={isActive ? '#007AFF' : '#FFFFFF'} />;
-      case 'logout': return <Ionicons name="log-out" size={20} color={isActive ? '#007AFF' : '#FFFFFF'} />;
+      case 'home': return <Ionicons name="home-sharp" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'profile': return <Ionicons name="person" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'lunch-time': return <Ionicons name="hourglass" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'digital-signature': return <Ionicons name="finger-print" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'marcar-ingreso-salida': return <Ionicons name="time" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'notes': return <Ionicons name="document" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'activities': return <Ionicons name="list" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'vehicles': return <Ionicons name="car" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'visitors': return <Ionicons name="people" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'staffevaluations': return <Ionicons name="clipboard" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'incidents': return <Ionicons name="warning" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'surveys': return <Ionicons name="document-text" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'trainings': return <Ionicons name="school" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'voice-notes': return <Ionicons name="mic" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'job-manuals': return <Ionicons name="book" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'logout': return <Ionicons name="log-out" size={20} color={isActive ? '#007AFF' : '#ffffff'} />;
     }
   };
 
@@ -318,6 +318,14 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               ]} 
               onPress={handleHomePress}
             >
+              <ThemedText 
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('home') && styles.activeMenuItemText
+                ]}
+              >
+                {getActionIcon('home', isActiveRoute('home'))}
+              </ThemedText>
               <ThemedText 
                 style={[
                   styles.menuItemText,
@@ -526,25 +534,25 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
             <TouchableOpacity 
               style={[
                 styles.menuItem, 
-                isActiveRoute('Evaluations') && styles.activeMenuItem
+                isActiveRoute('StaffEvaluations') && styles.activeMenuItem
               ]} 
               onPress={handleEvaluationsPress}
             >
               <ThemedText 
                 style={[
                   styles.menuItemText,
-                  isActiveRoute('Evaluations') && styles.activeMenuItemText
+                  isActiveRoute('StaffEvaluations') && styles.activeMenuItemText
                 ]}
               >
-                {getActionIcon('evaluations', isActiveRoute('Evaluations'))}
+                {getActionIcon('staffEvaluations', isActiveRoute('StaffEvaluations'))}
               </ThemedText>
               <ThemedText 
                 style={[
                   styles.menuItemText,
-                  isActiveRoute('Evaluations') && styles.activeMenuItemText
+                  isActiveRoute('StaffEvaluations') && styles.activeMenuItemText
                 ]}
               >
-                Evaluaciones
+                Evaluación de personal
               </ThemedText>
             </TouchableOpacity>
 
@@ -673,7 +681,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </ThemedText>
             </TouchableOpacity>
   
-            {/* Collapsible Sections */}
+            {false && (
             <ThemedView style={styles.collapsibleSection}>
               {/* Configuraciones Section */}
               <TouchableOpacity 
@@ -723,6 +731,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                 </ThemedView>
               )*/}
             </ThemedView>
+            )}	
           </ScrollView>
 
           {/* Logout Section at Bottom */}
@@ -810,7 +819,6 @@ const styles = StyleSheet.create({
     gap: 10,
     paddingHorizontal: 20,
     paddingVertical: 16,
-    borderBottomWidth: 1
   },
   menuItemText: {
     fontSize: 16,

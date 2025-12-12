@@ -91,7 +91,9 @@ import saveAbsentReason from './hooks/saveAbsentReason';
 import getHoraAccion from './hooks/getHoraAccion';
 import updateServerTime, { setDisconnectedTime } from './hooks/updateServerTime';
 import JobManualsScreen from './screens/JobManualsScreen';
-import { createJobManual } from './hooks/jobManualsFunctions';
+import { createJobManual, deleteJobManual, signJobManual } from './hooks/jobManualsFunctions';
+import StaffEvaluationsScreen from './screens/StaffEvaluationsScreen';
+import { createStaffEvaluation, deleteStaffEvaluation } from './hooks/staffEvaluationsFunctions';
 
 export type RootStackParamList = {
   Home: undefined;
@@ -166,6 +168,7 @@ export type RootStackParamList = {
   ManagementPlanningControl: undefined;
   CommunicationPlanRequirements: undefined;
   JobManuals: undefined;
+  StaffEvaluations: undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -240,6 +243,7 @@ function RootNavigator() {
       <Stack.Screen name="ManagementPlanningControl" component={ManagementPlanningControlScreen} />
       <Stack.Screen name="CommunicationPlanRequirements" component={CommunicationPlanRequirementsScreen} />
       <Stack.Screen name="JobManuals" component={JobManualsScreen} />
+      <Stack.Screen name="StaffEvaluations" component={StaffEvaluationsScreen} />
     </Stack.Navigator>
   );
 }
@@ -256,7 +260,7 @@ function AppContent() {
   // 🆕 Variable de estado para conexión a internet
   const [isConnected, setIsConnected] = React.useState<boolean | null>(null);
 
-  const FORCE_OFFLINE = false;
+  const FORCE_OFFLINE = false; 
 
   // 🆕 useEffect para escuchar el estado de conexión en tiempo real
   useEffect(() => {
@@ -305,6 +309,7 @@ function AppContent() {
           checkTrainingsActionsCache(),
           checkIncidentsActionsCache(),
           checkVoiceNotesActionsCache(),
+          checkStaffEvaluationsActionsCache(),
           checkJobManualsActionsCache(),
         ]);
         eventBus.emit('connectionRestored');
@@ -372,8 +377,85 @@ function AppContent() {
           if (result.status) {
             console.log('Manual de trabajo creado correctamente');
             // Eliminar acción del array
-            const updatedActions = actions.filter((a: any) => a.id !== action.id || a.type !== 'create');
+            let updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'create'));
             await AsyncStorage.setItem('job_manuals_actions', JSON.stringify(updatedActions));
+
+            // Actualizar cache: reemplazar id_local por id real
+            const cacheStr = await AsyncStorage.getItem('job_manuals_cache');
+            if (cacheStr) {
+              const cache = JSON.parse(cacheStr);
+              const updatedCache = cache.map((item: any) => {
+                if (item.id_local === action.id) {
+                  return {
+                    ...item,
+                    id: result.manualIds ? result.manualIds[0] : item.id,
+                    synced: true,
+                  };
+                }
+                return item;
+              });
+              await AsyncStorage.setItem('job_manuals_cache', JSON.stringify(updatedCache));
+            }
+          }
+        } else if (action.type === 'delete') {
+          console.log('Eliminando manual de trabajo:', action.id);
+          const result = await deleteJobManual({
+            id: action.id,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result.status) {
+            let updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'delete'));
+            await AsyncStorage.setItem('job_manuals_actions', JSON.stringify(updatedActions));
+
+            // Sacar de cache si existiera
+            const cacheStr = await AsyncStorage.getItem('job_manuals_cache');
+            if (cacheStr) {
+              const cache = JSON.parse(cacheStr);
+              const updatedCache = cache.filter((item: any) => item.id !== action.id);
+              await AsyncStorage.setItem('job_manuals_cache', JSON.stringify(updatedCache));
+            }
+          }
+        } else if (action.type === 'sign') {
+          console.log('Firmando manual de trabajo:', action.id);
+          const result = await signJobManual({
+            id: action.id,
+            firma: action.firma,
+            refreshAccessToken,
+            logout,
+            marcaId: action.marcaId,
+          });
+
+          if (result.status) {
+            let updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'sign'));
+            await AsyncStorage.setItem('job_manuals_actions', JSON.stringify(updatedActions));
+
+            // Actualizar cache: marcar como firmado y agregar visualización
+            const cacheStr = await AsyncStorage.getItem('job_manuals_cache');
+            if (cacheStr) {
+              const cache = JSON.parse(cacheStr);
+              const updatedCache = cache.map((item: any) => {
+                if (item.id === action.id) {
+                  const visualizaciones = item.visualizaciones || [];
+                  const newVis = {
+                    id: Date.now(),
+                    empleado_id: employee?.id || 0,
+                    manual_puesto_id: action.id,
+                    nombre_empleado: employee?.name || 'Empleado',
+                    firma_empleado: action.firma,
+                    created_at: new Date().toISOString(),
+                  };
+                  return {
+                    ...item,
+                    currentEmployeeSigned: true,
+                    visualizaciones: [...visualizaciones, newVis],
+                  };
+                }
+                return item;
+              });
+              await AsyncStorage.setItem('job_manuals_cache', JSON.stringify(updatedCache));
+            }
           }
         }
       } catch (error) {
@@ -3034,6 +3116,71 @@ function AppContent() {
         }
       } catch (error) {
         console.error('Error procesando acción de capacitación:', error);
+      }
+    }
+  }
+
+  const checkStaffEvaluationsActionsCache = async () => {
+    if (!employee) return;
+
+    const actionsStr = await AsyncStorage.getItem('evaluations_staff_actions');
+    if (!actionsStr) return;
+
+    const actions = JSON.parse(actionsStr);
+    if (!actions || actions.length === 0) return;
+
+    console.log('Sincronizando acciones de evaluaciones de personal:', actions.length);
+
+    for (const action of actions) {
+      try {
+        if (action.type === 'create') {
+          console.log('Creando evaluación de personal:', action.id);
+          const result = await createStaffEvaluation({
+            requestData: action.requestData,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result.status) {
+            console.log('Evaluación de personal creada correctamente');
+            const updatedActions = actions.filter(
+              (a: any) => !(a.id === action.id && a.type === 'create')
+            );
+            await AsyncStorage.setItem('evaluations_staff_actions', JSON.stringify(updatedActions));
+
+            // Limpiar del cache local por id_local si existe
+            const cacheStr = await AsyncStorage.getItem('evaluations_staff_cache');
+            if (cacheStr) {
+              const cache = JSON.parse(cacheStr);
+              const updatedCache = cache.filter((e: any) => e.id_local !== action.id);
+              await AsyncStorage.setItem('evaluations_staff_cache', JSON.stringify(updatedCache));
+            }
+          }
+        } else if (action.type === 'delete') {
+          console.log('Eliminando evaluación de personal:', action.id);
+          const result = await deleteStaffEvaluation({
+            id: action.id,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result.status) {
+            console.log('Evaluación de personal eliminada correctamente');
+            const updatedActions = actions.filter(
+              (a: any) => !(a.id === action.id && a.type === 'delete')
+            );
+            await AsyncStorage.setItem('evaluations_staff_actions', JSON.stringify(updatedActions));
+
+            const cacheStr = await AsyncStorage.getItem('evaluations_staff_cache');
+            if (cacheStr) {
+              const cache = JSON.parse(cacheStr);
+              const updatedCache = cache.filter((e: any) => e.id !== action.id);
+              await AsyncStorage.setItem('evaluations_staff_cache', JSON.stringify(updatedCache));
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error procesando acción de evaluación de personal:', error);
       }
     }
   }

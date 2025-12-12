@@ -837,23 +837,28 @@ model c_incidente {
   @@index([empresa_id], map: "c_incidente_empresa_id_fkey")
 }
 
-model c_evaluacion {
-  id                    Int                   @id @default(autoincrement())
-  corpo_id              Int
-  puesto_id             Int
-  plaza_id              Int
-  tipo                  String                @db.LongText
-  evaluation            String                @db.LongText
-  firma_evaluador       String                @db.LongText
-  created_at            DateTime              @db.DateTime(0)
-  created_by            Int
+model c_evaluacion_empleado {
+  id               Int        @id @default(autoincrement())
+  nombre_empleado  String     @db.VarChar(45)
+  cedula_empleado  String     @db.VarChar(45)
+  corpo_id         Int
+  puesto_id        Int
+  plaza_id         Int
+  empleado_id      Int
+  evaluador_id     Int
+  tipo             String     @db.VarChar(25)
+  fecha_ingreso    DateTime   @db.Date
+  fecha_evaluacion DateTime   @db.Date
+  evaluacion       String     @db.LongText
+  comentarios      String     @db.LongText
+  nombre_evaluador String     @db.VarChar(45)
+  firma_evaluador  String     @db.LongText
+  firma_empleado   String     @db.LongText
+  created_at       DateTime   @db.DateTime
+  
   e_estructura_sucursal e_estructura_sucursal @relation(fields: [corpo_id], references: [id], onDelete: NoAction)
-  e_estructura_plazas   e_estructura_plazas   @relation(fields: [plaza_id], references: [id], onDelete: NoAction)
-  e_estructura_puesto   e_estructura_puesto   @relation(fields: [puesto_id], references: [id], onDelete: NoAction)
-
-  @@index([corpo_id], map: "c_evaluacion_corpo_id_fkey")
-  @@index([plaza_id], map: "c_evaluacion_plaza_id_fkey")
-  @@index([puesto_id], map: "c_evaluacion_puesto_id_fkey")
+  e_estructura_puesto e_estructura_puesto @relation(fields: [puesto_id], references: [id], onDelete: NoAction)
+  e_estructura_plazas e_estructura_plazas @relation(fields: [plaza_id], references: [id], onDelete: NoAction)
 }
 
 model c_control_kilometraje {
@@ -3047,7 +3052,7 @@ model e_estructura_plazas {
   c_cambio_guardia_c_cambio_guardia_plazaAusente_idToe_estructura_plazas      c_cambio_guardia[]                     @relation("c_cambio_guardia_plazaAusente_idToe_estructura_plazas")
   c_cambio_guardia_c_cambio_guardia_plazaReemplaza_idToe_estructura_plazas    c_cambio_guardia[]                     @relation("c_cambio_guardia_plazaReemplaza_idToe_estructura_plazas")
   c_empleado_plaza_c_empleado_plaza_plaza_idToe_estructura_plazas             c_empleado_plaza[]                     @relation("c_empleado_plaza_plaza_idToe_estructura_plazas")
-  c_evaluacion                                                                c_evaluacion[]
+  c_evaluacion_empleado                                                       c_evaluacion_empleado[]
   c_horario_dia                                                               c_horario_dia[]
   c_induccion_dia                                                             c_induccion_dia[]
   c_inducciones_c_inducciones_plazaDestino_idToe_estructura_plazas            c_inducciones[]                        @relation("c_inducciones_plazaDestino_idToe_estructura_plazas")
@@ -3103,7 +3108,7 @@ model e_estructura_puesto {
   es_cubrevacaciones                         Boolean?
   c_empleado_plaza                           c_empleado_plaza[]
   c_encuesta_cliente                         c_encuesta_cliente[]
-  c_evaluacion                               c_evaluacion[]
+  c_evaluacion_empleado                      c_evaluacion_empleado[]
   c_induccion                                c_induccion[]
   c_puesto_notas                             c_puesto_notas[]
   e_actividad_corpo                          e_actividad_corpo[]
@@ -3119,6 +3124,7 @@ model e_estructura_puesto {
   n_horas_extras                             n_horas_extras?                              @relation(fields: [tipoHoraExtra_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "FK_5C9F9D20EB6A1B22")
   e_registro_personas                        e_registro_personas[]
   e_registro_vehiculos                       e_registro_vehiculos[]
+  e_puestos_manual_puesto                    e_puestos_manual_puesto[]
   m_reposicion_de_horas                      m_reposicion_de_horas[]
 
   @@index([sucursal_id], map: "IDX_5C9F9D20279A5D5E")
@@ -3150,11 +3156,21 @@ model e_manual_puesto {
   created_at                             DateTime @db.DateTime(0)
   e_archivos_manual_puesto               e_archivos_manual_puesto[]
   e_empleado_visualizacion_manual_puesto e_empleado_visualizacion_manual_puesto[]
+  e_puestos_manual_puesto                e_puestos_manual_puesto[]
+}
+
+model e_puestos_manual_puesto {
+  id                  Int                 @id @default(autoincrement())
+  manual_puesto_id    Int
+  puesto_id           Int
+  e_manual_puesto     e_manual_puesto     @relation(fields: [manual_puesto_id], references: [id], onDelete: Cascade)
+  e_estructura_puesto e_estructura_puesto @relation(fields: [puesto_id], references: [id], onDelete: Cascade)
 }
 
 model e_archivos_manual_puesto {
   id               Int      @id @default(autoincrement())
   name             String   @db.LongText
+  original_name    String   @db.LongText
   type             String   @db.VarChar(25)
   extension        String   @db.VarChar(25)
   manual_puesto_id Int
@@ -3198,7 +3214,7 @@ model e_estructura_sucursal {
   usuario_inactivacion                       String?                                      @db.VarChar(255)
   c_empleado_plaza                           c_empleado_plaza[]
   c_encuesta_cliente                         c_encuesta_cliente[]
-  c_evaluacion                               c_evaluacion[]
+  c_evaluacion_empleado                      c_evaluacion_empleado[]
   c_extra_tarifa_corpo                       c_extra_tarifa_corpo[]
   c_incidente                                c_incidente[]
   c_notas_voz                                c_notas_voz[]
