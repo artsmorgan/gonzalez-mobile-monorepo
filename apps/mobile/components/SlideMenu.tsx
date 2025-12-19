@@ -249,6 +249,36 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
     navigation.navigate('JobManuals');
   };
 
+  const handleComplaintsMasterPress = () => {
+    onClose();
+    navigation.navigate('ComplaintsMaster');
+  };
+
+  const handleInductionTourRecordPress = () => {
+    onClose();
+    navigation.navigate('InductionTourRecord');
+  };
+
+  const handlePermitRequestPress = () => {
+    onClose();
+    navigation.navigate('PermitRequest');
+  };
+
+  const handleAttendanceControlPress = () => {
+    onClose();
+    navigation.navigate('AttendanceControl');
+  };
+
+  const handleOpeningClosingPositionPress = () => {
+    onClose();
+    navigation.navigate('OpeningClosingPosition');
+  };
+
+  const handleActaEntregaProductosPress = () => {
+    onClose();
+    navigation.navigate('ActaEntregaProductos');
+  };
+
   const isActiveRoute = (route: string) => {
     return currentRoute === route;
   };
@@ -274,6 +304,12 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
       case 'trainings': return <Ionicons name="school" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'voice-notes': return <Ionicons name="mic" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'job-manuals': return <Ionicons name="book" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'complaints-master': return <Ionicons name="chatbubbles" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'induction-tour-record': return <Ionicons name="document-text" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'attendance-control': return <Ionicons name="people" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'permit-request': return <Ionicons name="document-text" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'opening-closing-position': return <Ionicons name="business" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'acta-entrega-productos': return <Ionicons name="clipboard" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'logout': return <Ionicons name="log-out" size={20} color={isActive ? '#007AFF' : '#ffffff'} />;
     }
   };
@@ -678,6 +714,157 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                 ]}
               >
                 Manuales de Trabajo
+              </ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.menuItem,
+                isActiveRoute('ComplaintsMaster') && styles.activeMenuItem
+              ]}
+              onPress={handleComplaintsMasterPress}
+            >
+              <ThemedText 
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('ComplaintsMaster') && styles.activeMenuItemText
+                ]}
+              >
+                {getActionIcon('complaints-master', isActiveRoute('ComplaintsMaster'))}
+              </ThemedText>
+              <ThemedText 
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('ComplaintsMaster') && styles.activeMenuItemText
+                ]}
+              >
+                Maestro de Quejas y reclamos
+              </ThemedText>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={[
+                styles.menuItem,
+                isActiveRoute('InductionTourRecord') && styles.activeMenuItem
+              ]}
+              onPress={handleInductionTourRecordPress}
+            >
+              <ThemedText 
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('InductionTourRecord') && styles.activeMenuItemText
+                ]}
+              >
+                {getActionIcon('induction-tour-record', isActiveRoute('InductionTourRecord'))}
+              </ThemedText>
+              <ThemedText 
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('InductionTourRecord') && styles.activeMenuItemText
+                ]}
+              >
+                Registro de Induc. y Recorrd.
+              </ThemedText>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={[
+                styles.menuItem,
+                isActiveRoute('AttendanceControl') && styles.activeMenuItem
+              ]}
+              onPress={handleAttendanceControlPress}
+            >
+              <ThemedText 
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('AttendanceControl') && styles.activeMenuItemText
+                ]}
+              >
+                {getActionIcon('attendance-control', isActiveRoute('AttendanceControl'))}
+              </ThemedText>
+              <ThemedText 
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('AttendanceControl') && styles.activeMenuItemText
+                ]}
+              >
+                Control de Asistencia
+              </ThemedText>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={[
+                styles.menuItem,
+                isActiveRoute('PermitRequest') && styles.activeMenuItem
+              ]}
+              onPress={handlePermitRequestPress}
+            >
+              <ThemedText 
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('PermitRequest') && styles.activeMenuItemText
+                ]}
+              >
+                {getActionIcon('permit-request', isActiveRoute('PermitRequest'))}
+              </ThemedText>
+              <ThemedText 
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('PermitRequest') && styles.activeMenuItemText
+                ]}
+              >
+                Solicitud de permiso
+              </ThemedText>
+            </TouchableOpacity>
+            
+            {false && (
+            <TouchableOpacity
+              style={[
+                styles.menuItem,
+                isActiveRoute('OpeningClosingPosition') && styles.activeMenuItem
+              ]}
+              onPress={handleOpeningClosingPositionPress}
+            >
+              <ThemedText 
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('OpeningClosingPosition') && styles.activeMenuItemText
+                ]}
+              >
+                {getActionIcon('opening-closing-position', isActiveRoute('OpeningClosingPosition'))}
+              </ThemedText>
+              <ThemedText 
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('OpeningClosingPosition') && styles.activeMenuItemText
+                ]}
+              >
+                Apertura-Cierre de Puesto
+              </ThemedText>
+            </TouchableOpacity>
+            )}
+
+            <TouchableOpacity
+              style={[
+                styles.menuItem,
+                isActiveRoute('ActaEntregaProductos') && styles.activeMenuItem
+              ]}
+              onPress={handleActaEntregaProductosPress}
+            >
+              <ThemedText
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('ActaEntregaProductos') && styles.activeMenuItemText
+                ]}
+              >
+                {getActionIcon('acta-entrega-productos', isActiveRoute('ActaEntregaProductos'))}
+              </ThemedText>
+              <ThemedText
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('ActaEntregaProductos') && styles.activeMenuItemText
+                ]}
+              >
+                Acta de entrega de productos
               </ThemedText>
             </TouchableOpacity>
   

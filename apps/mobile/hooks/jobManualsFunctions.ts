@@ -23,9 +23,19 @@ type DeleteJobManualParams = {
 type SignJobManualParams = {
   id: number;
   firma: string;
+  quizAnswear?: string | null;
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
   marcaId: number;
+};
+
+type PutQuizResultParams = {
+  id: number; // manual id
+  marcaId: number;
+  empleadoId: number;
+  approved: boolean;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
 };
 
 export const createJobManual = async ({
@@ -162,6 +172,7 @@ export const deleteJobManual = async ({
 export const signJobManual = async ({
   id,
   firma,
+  quizAnswear,
   refreshAccessToken,
   logout,
   marcaId,
@@ -187,13 +198,59 @@ export const signJobManual = async ({
       'Content-Type': 'application/json',
       'ngrok-skip-browser-warning': '69420',
     },
-    body: JSON.stringify({ firma_empleado: firma, marca_id: marcaId }),
+    body: JSON.stringify({ firma_empleado: firma, marca_id: marcaId, quiz_answear: quizAnswear ?? null }),
   });
 
   if (response.status === 401 || response.status === 403) {
     const refreshed = await refreshAccessToken();
     if (refreshed) {
       return signJobManual({ id, firma, refreshAccessToken, logout, marcaId });
+    } else {
+      await logout();
+      return { status: false, message: 'Sesión expirada' };
+    }
+  }
+
+  const data = await response.json();
+  return data;
+};
+
+export const putJobManualQuizResult = async ({
+  id,
+  marcaId,
+  empleadoId,
+  approved,
+  refreshAccessToken,
+  logout,
+}: PutQuizResultParams): Promise<any> => {
+  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  if (!apiUrl) {
+    throw new Error('Server URL not configured');
+  }
+
+  let token = await AsyncStorage.getItem('access_token');
+  if (!token) {
+    const refreshed = await refreshAccessToken();
+    if (!refreshed) {
+      throw new Error('No authentication token found');
+    }
+    token = await AsyncStorage.getItem('access_token');
+  }
+
+  const response = await fetch(`${apiUrl}/api/job-manuals/${id}/quiz-result`, {
+    method: 'PUT',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      'ngrok-skip-browser-warning': '69420',
+    },
+    body: JSON.stringify({ empleado_id: empleadoId, approved, marca_id: marcaId }),
+  });
+
+  if (response.status === 401 || response.status === 403) {
+    const refreshed = await refreshAccessToken();
+    if (refreshed) {
+      return putJobManualQuizResult({ id, marcaId, empleadoId, approved, refreshAccessToken, logout });
     } else {
       await logout();
       return { status: false, message: 'Sesión expirada' };

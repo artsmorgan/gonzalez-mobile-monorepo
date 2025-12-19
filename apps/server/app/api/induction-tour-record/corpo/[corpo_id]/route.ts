@@ -18,10 +18,14 @@ export async function GET(
 
         const resolvedParams = await context.params;
         const { corpo_id } = resolvedParams;
+        const corpoIdNum = parseInt(String(corpo_id), 10);
+        if (Number.isNaN(corpoIdNum)) {
+            return NextResponse.json({ status: false, message: "Corpo inválido", data: [] }, { status: 400 });
+        }
 
         const records = await prisma.c_registro_induccion_recorrido.findMany({
             where: {
-                corpo_id: corpo_id
+                corpo_id: corpoIdNum
             },
             orderBy: {
                 created_at: 'desc'

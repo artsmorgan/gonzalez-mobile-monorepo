@@ -16,7 +16,7 @@ import AppHeader from '../components/AppHeader';
 import AppFooter from '../components/AppFooter';
 import SlideMenu from '../components/SlideMenu';
 import { eventBus } from '../hooks/eventBus';
-import { createJobManual, listJobManualsByMarca, deleteJobManual, signJobManual } from '../hooks/jobManualsFunctions';
+import { createJobManual, listJobManualsByMarca, deleteJobManual, signJobManual, putJobManualQuizResult } from '../hooks/jobManualsFunctions';
 import getHoraAccion from '../hooks/getHoraAccion';
 import { useQRScanner } from '../hooks/useQRScanner';
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
@@ -73,6 +73,7 @@ interface JobManualRemote {
   id: number;
   title: string;
   description: string;
+  quiz?: string | null;
   firma: string;
   puesto: {
     id: number;
@@ -87,7 +88,11 @@ interface JobManualRemote {
     manual_puesto_id: number;
     nombre_empleado: string;
     firma_empleado: string;
+    quiz_answear?: string | null;
+    approved?: boolean | null;
     created_at: string;
+    updated_at?: string;
+    approved_pending?: boolean; // solo para UI offline (no viene del server)
   }[];
   currentEmployeeSigned: boolean;
   id_local?: string;
@@ -115,6 +120,14 @@ export default function JobManualsScreen() {
   const [viewSignature, setViewSignature] = useState<string | null>(null);
   const [isSigningManual, setIsSigningManual] = useState(false);
 
+  // ----------------------
+  // Quiz (visualización / respuestas)
+  // ----------------------
+  const [quizUserAnswers, setQuizUserAnswers] = useState<Record<string, string | string[]>>({});
+  const [openListQuestionId, setOpenListQuestionId] = useState<string | null>(null);
+  const [retakeAllowed, setRetakeAllowed] = useState(false);
+  const [updatingQuizResultByEmployee, setUpdatingQuizResultByEmployee] = useState<Record<number, boolean>>({});
+
   const tituloRef = useRef('');
   const descripcionRef = useRef('');
 
@@ -132,6 +145,28 @@ export default function JobManualsScreen() {
   const [location, setLocation] = useState<{ latitude: number; longitude: number } | null>(null);
 
   const { scanQR, QRScannerComponent } = useQRScanner();
+
+  // ----------------------
+  // Quiz (creación)
+  // ----------------------
+  type QuizQuestionType = 'short' | 'paragraph' | 'multiple_choice' | 'multiple_select' | 'list';
+  type QuizQuestion = {
+    id: string;
+    title: string;
+    type: QuizQuestionType;
+    options?: string[];
+    answer?: string;
+    answers?: string[];
+  };
+
+  const [quizQuestions, setQuizQuestions] = useState<QuizQuestion[]>([]);
+  const [isQuizModalVisible, setIsQuizModalVisible] = useState(false);
+  const [quizTempTitle, setQuizTempTitle] = useState('');
+  const [quizTempType, setQuizTempType] = useState<QuizQuestionType>('short');
+  const [quizTempOptions, setQuizTempOptions] = useState<string[]>([]);
+  const [quizTempOptionInput, setQuizTempOptionInput] = useState('');
+  const [quizTempAnswer, setQuizTempAnswer] = useState('');
+  const [quizTempAnswers, setQuizTempAnswers] = useState<string[]>([]);
 
   // Helpers para construir URLs de archivos en el servidor (similar a IncidentsScreen)
   const getManualImageUrl = (manualId: number, fileName: string) => {
@@ -370,6 +405,7 @@ export default function JobManualsScreen() {
     setVideoFiles([]);
     setFirmaResponsable(null);
     setLocation(null);
+    setQuizQuestions([]);
 
     // Solicitar permisos de ubicación y obtener la posición actual (similar a TrainingsScreen)
     (async () => {
@@ -394,6 +430,233 @@ export default function JobManualsScreen() {
       }
     })();
   };
+
+  const parseQuizFromManual = (quizStr: any): QuizQuestion[] => {
+    if (!quizStr || typeof quizStr !== 'string') return [];
+    try {
+      const parsed = JSON.parse(quizStr);
+      if (!Array.isArray(parsed)) return [];
+      return parsed
+        .map((q: any) => ({
+          id: String(q?.id ?? ''),
+          title: String(q?.title ?? ''),
+          type: q?.type as QuizQuestionType,
+          options: Array.isArray(q?.options) ? q.options.map((o: any) => String(o)) : undefined,
+          answer: typeof q?.answer === 'string' ? q.answer : undefined,
+          answers: Array.isArray(q?.answers) ? q.answers.map((o: any) => String(o)) : undefined,
+        }))
+        .filter((q: any) => q.id && q.title && q.type);
+    } catch {
+      return [];
+    }
+  };
+
+  type QuizAnswerPayloadItem = {
+    question_id: string;
+    type?: QuizQuestionType;
+    correct_answer?: string | null;
+    correct_answers?: string[] | null;
+    user_answer?: string | null;
+    user_answers?: string[] | null;
+  };
+
+  const parseQuizAnswersFromVisualization = (quizAnswerStr: any): QuizAnswerPayloadItem[] => {
+    if (!quizAnswerStr || typeof quizAnswerStr !== 'string') return [];
+    try {
+      const parsed = JSON.parse(quizAnswerStr);
+      if (!Array.isArray(parsed)) return [];
+      return parsed
+        .map((x: any) => ({
+          question_id: String(x?.question_id ?? ''),
+          type: x?.type as QuizQuestionType,
+          correct_answer: typeof x?.correct_answer === 'string' ? x.correct_answer : (x?.correct_answer ?? null),
+          correct_answers: Array.isArray(x?.correct_answers) ? x.correct_answers.map((o: any) => String(o)) : (x?.correct_answers ?? null),
+          user_answer: typeof x?.user_answer === 'string' ? x.user_answer : (x?.user_answer ?? null),
+          user_answers: Array.isArray(x?.user_answers) ? x.user_answers.map((o: any) => String(o)) : (x?.user_answers ?? null),
+        }))
+        .filter((x: any) => x.question_id);
+    } catch {
+      return [];
+    }
+  };
+
+  const getQuizTypeLabel = (t: QuizQuestionType) => {
+    switch (t) {
+      case 'short': return 'Respuesta corta';
+      case 'paragraph': return 'Párrafo';
+      case 'multiple_choice': return 'Múltiples opciones';
+      case 'multiple_select': return 'Selección múltiple';
+      case 'list': return 'Lista';
+      default: return t;
+    }
+  };
+
+  const handleSetQuizResult = async (manualId: number, empleadoId: number, approved: boolean) => {
+    try {
+
+      const marca = await AsyncStorage.getItem('current_marca');
+      if (!marca) {
+        Alert.alert('Error', 'No se encontró la marca');
+        return;
+      }
+      const marcaId = JSON.parse(marca).id;
+      if (!marcaId) {
+        Alert.alert('Error', 'No se encontró el ID de la marca');
+        return;
+      }
+      
+      if (!manualId || !empleadoId) return;
+
+      // Evitar cambios si ya hay una acción pending offline (para no "cambiar la respuesta" mientras se sincroniza)
+      const currentVis = (selectedManual?.visualizaciones || []).find(v => v.empleado_id === empleadoId);
+      if ((currentVis as any)?.approved_pending) {
+        Alert.alert('Pendiente', 'Ya hay un cambio pendiente de sincronización para este quiz.');
+        return;
+      }
+
+      setUpdatingQuizResultByEmployee(prev => ({ ...prev, [empleadoId]: true }));
+
+      const isConnected = await getConnectionStatus();
+      if (isConnected) {
+        const result = await putJobManualQuizResult({
+          id: manualId,
+          marcaId,
+          empleadoId,
+          approved,
+          refreshAccessToken,
+          logout,
+        });
+        if (!result?.status) {
+          throw new Error(result?.message || 'No se pudo actualizar el resultado del quiz');
+        }
+      } else {
+        // Guardar acción offline
+        const actionsStr = await AsyncStorage.getItem('job_manuals_actions');
+        const actions = actionsStr ? JSON.parse(actionsStr) : [];
+        actions.push({
+          id: manualId,
+          type: 'quiz_result',
+          empleadoId,
+          approved,
+        });
+        await AsyncStorage.setItem('job_manuals_actions', JSON.stringify(actions));
+      }
+
+      const horaAccionUse = await getHoraAccion();
+      const updatedIso = new Date(horaAccionUse).toISOString();
+
+      // Reflejar cambio en UI (selectedManual + manuals + cache)
+      setSelectedManual(prev => {
+        if (!prev) return prev;
+        if (prev.id !== manualId) return prev;
+        const visualizaciones = (prev.visualizaciones || []).map(v => {
+          if (v.empleado_id === empleadoId) {
+            return {
+              ...v,
+              approved,
+              approved_pending: !isConnected,
+              updated_at: updatedIso,
+            };
+          }
+          return v;
+        });
+        return { ...prev, visualizaciones };
+      });
+
+      setManuals(prev => prev.map(m => {
+        if (m.id !== manualId) return m;
+        const visualizaciones = (m.visualizaciones || []).map(v => {
+          if (v.empleado_id === empleadoId) {
+            return {
+              ...v,
+              approved,
+              approved_pending: !isConnected,
+              updated_at: updatedIso,
+            };
+          }
+          return v;
+        });
+        return { ...m, visualizaciones };
+      }));
+
+      const cacheStr = await AsyncStorage.getItem('job_manuals_cache');
+      if (cacheStr) {
+        const cache = JSON.parse(cacheStr);
+        const updatedCache = cache.map((m: any) => {
+          if (m.id !== manualId) return m;
+          const visualizaciones = (m.visualizaciones || []).map((v: any) => {
+            if (v.empleado_id === empleadoId) {
+              return {
+                ...v,
+                approved,
+                approved_pending: !isConnected,
+                updated_at: updatedIso,
+              };
+            }
+            return v;
+          });
+          return { ...m, visualizaciones };
+        });
+        await AsyncStorage.setItem('job_manuals_cache', JSON.stringify(updatedCache));
+      }
+
+      Alert.alert('Éxito', isConnected ? 'Resultado del quiz actualizado' : 'Resultado guardado offline para sincronizarse');
+    } catch (error) {
+      console.error('Error updating quiz result:', error);
+      Alert.alert('Error', 'No se pudo actualizar el resultado del quiz');
+    } finally {
+      setUpdatingQuizResultByEmployee(prev => ({ ...prev, [empleadoId]: false }));
+    }
+  };
+
+  useEffect(() => {
+    // Reset respuestas al cambiar manual seleccionado
+    if (!selectedManual) {
+      setQuizUserAnswers({});
+      setOpenListQuestionId(null);
+      setRetakeAllowed(false);
+      return;
+    }
+    setQuizUserAnswers({});
+    setOpenListQuestionId(null);
+  }, [selectedManual?.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      try {
+        if (!selectedManual) {
+          if (!cancelled) setRetakeAllowed(false);
+          return;
+        }
+        const empId = typeof employee?.id === 'number' ? employee.id : Number(employee?.id || 0);
+        const myVis = (selectedManual.visualizaciones || []).find(v => v.empleado_id === empId);
+        const approved = myVis?.approved ?? null;
+        const updatedAtIso = (myVis as any)?.updated_at || myVis?.created_at;
+
+        if (!(approved !== null && approved === false && updatedAtIso)) {
+          if (!cancelled) setRetakeAllowed(false);
+          return;
+        }
+
+        const updatedMs = Date.parse(String(updatedAtIso));
+        if (Number.isNaN(updatedMs)) {
+          if (!cancelled) setRetakeAllowed(false);
+          return;
+        }
+
+        const nowMs = await getHoraAccion();
+        const sevenDays = 7 * 24 * 60 * 60 * 1000;
+        if (!cancelled) setRetakeAllowed(nowMs > updatedMs + sevenDays);
+      } catch {
+        if (!cancelled) setRetakeAllowed(false);
+      }
+    };
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedManual?.id, employee?.id, selectedManual?.visualizaciones]);
 
   const cancelCreating = () => {
     setIsCreating(false);
@@ -726,6 +989,7 @@ export default function JobManualsScreen() {
         description: descripcionRef.current,
         firma_responsable: signatureHash,
         puestos: JSON.stringify(puestosArray),
+        quiz: quizQuestions.length > 0 ? JSON.stringify(quizQuestions) : null,
         files: JSON.stringify(
           filesPayload.map(f => ({
             type: f.type,
@@ -758,6 +1022,7 @@ export default function JobManualsScreen() {
           setAudioFiles([]);
           setVideoFiles([]);
           setFirmaResponsable(null);
+          setQuizQuestions([]);
           
           // Cerrar formulario
           setIsCreating(false);
@@ -787,11 +1052,13 @@ export default function JobManualsScreen() {
         const cacheStr = await AsyncStorage.getItem('job_manuals_cache');
         const cache = cacheStr ? JSON.parse(cacheStr) : [];
         const horaAccionUse = await getHoraAccion();
+        const quizStrToStore = quizQuestions.length > 0 ? JSON.stringify(quizQuestions) : null;
         cache.push({
           id: 0,
           id_local: localId,
           title: tituloRef.current,
           description: descripcionRef.current,
+          quiz: quizStrToStore,
           puesto: { id: 0, nombre: puestoActualNombre },
           created_by: employee?.id ? String(employee.id) : '-',
           created_at: new Date(horaAccionUse).toISOString(),
@@ -823,6 +1090,7 @@ export default function JobManualsScreen() {
         setAudioFiles([]);
         setVideoFiles([]);
         setFirmaResponsable(null);
+        setQuizQuestions([]);
         
         // Cerrar formulario
         setIsCreating(false);
@@ -938,6 +1206,254 @@ export default function JobManualsScreen() {
                   numberOfLines={4}
                 />
               </ThemedView>
+
+              {/* Modal Agregar Pregunta */}
+              <Modal
+                visible={isQuizModalVisible}
+                transparent={true}
+                animationType="fade"
+                onRequestClose={() => setIsQuizModalVisible(false)}
+              >
+                <View style={styles.modalOverlay}>
+                  <ThemedView style={styles.viewerModalContainer}>
+                    <View style={styles.modalHeader}>
+                      <ThemedText style={styles.modalTitle}>Agregar pregunta</ThemedText>
+                      <TouchableOpacity onPress={() => setIsQuizModalVisible(false)}>
+                        <Ionicons name="close" size={24} color="#666666" />
+                      </TouchableOpacity>
+                    </View>
+
+                    <ScrollView style={styles.modalContent}>
+                      <ThemedView style={styles.formGroup}>
+                        <ThemedText style={styles.formLabel}>Título de la pregunta *</ThemedText>
+                        <TextInput
+                          style={styles.formInput}
+                          value={quizTempTitle}
+                          onChangeText={setQuizTempTitle}
+                          placeholder="Ej: ¿Cuál es el procedimiento...?"
+                          placeholderTextColor="#999"
+                        />
+                      </ThemedView>
+
+                      <ThemedView style={styles.formGroup}>
+                        <ThemedText style={styles.formLabel}>Tipo *</ThemedText>
+                        <ThemedView style={styles.quizTypeList}>
+                          {([
+                            { key: 'short', label: 'Respuesta corta' },
+                            { key: 'paragraph', label: 'Párrafo' },
+                            { key: 'multiple_choice', label: 'Múltiples opciones' },
+                            { key: 'multiple_select', label: 'Selección múltiple' },
+                            { key: 'list', label: 'Lista' },
+                          ] as { key: QuizQuestionType; label: string }[]).map((t) => {
+                            const active = quizTempType === t.key;
+                            return (
+                              <TouchableOpacity
+                                key={t.key}
+                                style={[styles.quizTypePill, active && styles.quizTypePillActive]}
+                                onPress={() => {
+                                  setQuizTempType(t.key);
+                                  setQuizTempOptions([]);
+                                  setQuizTempOptionInput('');
+                                  setQuizTempAnswer('');
+                                  setQuizTempAnswers([]);
+                                }}
+                              >
+                                <ThemedText style={[styles.quizTypePillText, active && styles.quizTypePillTextActive]}>
+                                  {t.label}
+                                </ThemedText>
+                              </TouchableOpacity>
+                            );
+                          })}
+                        </ThemedView>
+                      </ThemedView>
+
+                      {/* Opciones (cuando aplica) */}
+                      {(quizTempType === 'multiple_choice' || quizTempType === 'multiple_select' || quizTempType === 'list') && (
+                        <ThemedView style={styles.formGroup}>
+                          <ThemedText style={styles.formLabel}>Opciones *</ThemedText>
+                          <ThemedView style={styles.quizOptionRow}>
+                            <TextInput
+                              style={[styles.formInput, { flex: 1 }]}
+                              value={quizTempOptionInput}
+                              onChangeText={setQuizTempOptionInput}
+                              placeholder="Agregar opción"
+                              placeholderTextColor="#999"
+                            />
+                            <TouchableOpacity
+                              style={styles.quizOptionAddBtn}
+                              onPress={() => {
+                                const v = quizTempOptionInput.trim();
+                                if (!v) return;
+                                if (quizTempOptions.includes(v)) {
+                                  setQuizTempOptionInput('');
+                                  return;
+                                }
+                                setQuizTempOptions(prev => [...prev, v]);
+                                setQuizTempOptionInput('');
+                              }}
+                            >
+                              <Ionicons name="add" size={18} color="#FFFFFF" />
+                            </TouchableOpacity>
+                          </ThemedView>
+
+                          {quizTempOptions.length === 0 ? (
+                            <ThemedText style={styles.quizEmptyText}>Aún no hay opciones</ThemedText>
+                          ) : (
+                            <ThemedView style={styles.quizOptionsList}>
+                              {quizTempOptions.map((opt) => (
+                                <ThemedView key={opt} style={styles.quizOptionItem}>
+                                  <ThemedText style={styles.quizOptionText}>{opt}</ThemedText>
+                                  <TouchableOpacity
+                                    onPress={() => {
+                                      setQuizTempOptions(prev => prev.filter(o => o !== opt));
+                                      setQuizTempAnswer(prev => (prev === opt ? '' : prev));
+                                      setQuizTempAnswers(prev => prev.filter(o => o !== opt));
+                                    }}
+                                  >
+                                    <Ionicons name="close-circle" size={18} color="#FF3B30" />
+                                  </TouchableOpacity>
+                                </ThemedView>
+                              ))}
+                            </ThemedView>
+                          )}
+                        </ThemedView>
+                      )}
+
+                      {/* Respuesta correcta (según tipo) */}
+                      {(quizTempType === 'short' || quizTempType === 'paragraph') && (
+                        <ThemedView style={styles.formGroup}>
+                          <ThemedText style={styles.formLabel}>Respuesta correcta *</ThemedText>
+                          <TextInput
+                            style={styles.formInput}
+                            value={quizTempAnswer}
+                            onChangeText={setQuizTempAnswer}
+                            placeholder="Escribe la respuesta correcta"
+                            placeholderTextColor="#999"
+                          />
+                        </ThemedView>
+                      )}
+
+                      {(quizTempType === 'multiple_choice' || quizTempType === 'list') && (
+                        <ThemedView style={styles.formGroup}>
+                          <ThemedText style={styles.formLabel}>Respuesta correcta *</ThemedText>
+                          {quizTempOptions.length === 0 ? (
+                            <ThemedText style={styles.quizEmptyText}>Primero agrega opciones</ThemedText>
+                          ) : (
+                            <ThemedView style={styles.quizSelectList}>
+                              {quizTempOptions.map((opt) => {
+                                const selected = quizTempAnswer === opt;
+                                return (
+                                  <TouchableOpacity
+                                    key={opt}
+                                    style={styles.quizSelectItem}
+                                    onPress={() => setQuizTempAnswer(opt)}
+                                  >
+                                    <Ionicons
+                                      name={selected ? "radio-button-on" : "radio-button-off"}
+                                      size={18}
+                                      color={selected ? "#007AFF" : "#999"}
+                                    />
+                                    <ThemedText style={styles.quizSelectText}>{opt}</ThemedText>
+                                  </TouchableOpacity>
+                                );
+                              })}
+                            </ThemedView>
+                          )}
+                        </ThemedView>
+                      )}
+
+                      {quizTempType === 'multiple_select' && (
+                        <ThemedView style={styles.formGroup}>
+                          <ThemedText style={styles.formLabel}>Respuestas correctas *</ThemedText>
+                          {quizTempOptions.length === 0 ? (
+                            <ThemedText style={styles.quizEmptyText}>Primero agrega opciones</ThemedText>
+                          ) : (
+                            <ThemedView style={styles.quizSelectList}>
+                              {quizTempOptions.map((opt) => {
+                                const selected = quizTempAnswers.includes(opt);
+                                return (
+                                  <TouchableOpacity
+                                    key={opt}
+                                    style={styles.quizSelectItem}
+                                    onPress={() => {
+                                      setQuizTempAnswers(prev => {
+                                        if (prev.includes(opt)) return prev.filter(x => x !== opt);
+                                        return [...prev, opt];
+                                      });
+                                    }}
+                                  >
+                                    <Ionicons
+                                      name={selected ? "checkbox" : "square-outline"}
+                                      size={18}
+                                      color={selected ? "#007AFF" : "#999"}
+                                    />
+                                    <ThemedText style={styles.quizSelectText}>{opt}</ThemedText>
+                                  </TouchableOpacity>
+                                );
+                              })}
+                            </ThemedView>
+                          )}
+                        </ThemedView>
+                      )}
+
+                      <TouchableOpacity
+                        style={styles.signatureActionButton}
+                        onPress={() => {
+                          const title = quizTempTitle.trim();
+                          if (!title) {
+                            Alert.alert('Error', 'El título de la pregunta es obligatorio');
+                            return;
+                          }
+
+                          const needsOptions = quizTempType === 'multiple_choice' || quizTempType === 'multiple_select' || quizTempType === 'list';
+                          if (needsOptions && quizTempOptions.length === 0) {
+                            Alert.alert('Error', 'Debes agregar al menos una opción');
+                            return;
+                          }
+
+                          if ((quizTempType === 'short' || quizTempType === 'paragraph') && !quizTempAnswer.trim()) {
+                            Alert.alert('Error', 'Debes indicar la respuesta correcta');
+                            return;
+                          }
+
+                          if ((quizTempType === 'multiple_choice' || quizTempType === 'list') && !quizTempAnswer) {
+                            Alert.alert('Error', 'Selecciona la respuesta correcta');
+                            return;
+                          }
+
+                          if (quizTempType === 'multiple_select' && quizTempAnswers.length === 0) {
+                            Alert.alert('Error', 'Selecciona al menos una respuesta correcta');
+                            return;
+                          }
+
+                          const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+                          let id = 'q_';
+                          for (let i = 0; i < 8; i++) id += chars.charAt(Math.floor(Math.random() * chars.length));
+
+                          const newQuestion: QuizQuestion = {
+                            id,
+                            title,
+                            type: quizTempType,
+                            options: needsOptions ? quizTempOptions : undefined,
+                            answer: (quizTempType === 'short' || quizTempType === 'paragraph' || quizTempType === 'multiple_choice' || quizTempType === 'list')
+                              ? (quizTempAnswer.trim() || undefined)
+                              : undefined,
+                            answers: quizTempType === 'multiple_select' ? quizTempAnswers : undefined,
+                          };
+
+                          setQuizQuestions(prev => [...prev, newQuestion]);
+                          setIsQuizModalVisible(false);
+                        }}
+                      >
+                        <Ionicons name="checkmark" size={18} color="#FFFFFF" />
+                        <ThemedText style={styles.signatureActionText}>Confirmar</ThemedText>
+                      </TouchableOpacity>
+
+                      <ThemedView style={{ height: 16 }} />
+                    </ScrollView>
+                  </ThemedView>
+                </View>
+              </Modal>
 
               {/* Selección de puestos */}
               <ThemedView style={styles.formGroup}>
@@ -1085,6 +1601,53 @@ export default function JobManualsScreen() {
                 )}
               </ThemedView>
 
+              {/* Quiz (opcional) */}
+              <ThemedView style={styles.formGroup}>
+                <ThemedView style={styles.quizHeaderRow}>
+                  <ThemedText style={styles.formLabel}>Quiz (Opcional)</ThemedText>
+                  <TouchableOpacity
+                    style={styles.quizAddButton}
+                    onPress={() => {
+                      setQuizTempTitle('');
+                      setQuizTempType('short');
+                      setQuizTempOptions([]);
+                      setQuizTempOptionInput('');
+                      setQuizTempAnswer('');
+                      setQuizTempAnswers([]);
+                      setIsQuizModalVisible(true);
+                    }}
+                  >
+                    <Ionicons name="add-circle-outline" size={18} color="#007AFF" />
+                    <ThemedText style={styles.quizAddButtonText}>Agregar pregunta</ThemedText>
+                  </TouchableOpacity>
+                </ThemedView>
+
+                {quizQuestions.length === 0 ? (
+                  <ThemedText style={styles.quizEmptyText}>Sin preguntas configuradas</ThemedText>
+                ) : (
+                  <ThemedView style={styles.quizList}>
+                    {quizQuestions.map((q) => (
+                      <ThemedView key={q.id} style={styles.quizQuestionCard}>
+                        <ThemedView style={styles.quizQuestionHeader}>
+                          <ThemedText style={styles.quizQuestionTitle} numberOfLines={2}>
+                            {q.title}
+                          </ThemedText>
+                          <TouchableOpacity
+                            onPress={() => setQuizQuestions(prev => prev.filter(x => x.id !== q.id))}
+                            style={styles.quizRemoveButton}
+                          >
+                            <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                          </TouchableOpacity>
+                        </ThemedView>
+                        <ThemedText style={styles.quizQuestionMeta}>
+                          Tipo: {q.type}
+                        </ThemedText>
+                      </ThemedView>
+                    ))}
+                  </ThemedView>
+                )}
+              </ThemedView>
+
               {/* Firma responsable */}
               <ThemedView style={styles.formGroup}>
                 <ThemedText style={styles.formLabel}>Firma del responsable *</ThemedText>
@@ -1198,7 +1761,7 @@ export default function JobManualsScreen() {
                       {manual.puesto?.nombre || puestoActualNombre}
                     </ThemedText>
                     <ThemedText style={styles.manualMetaText}>
-                      {manual.files?.length || 0} archivo(s)
+                      {manual.files?.length || 0} archivo (s)
                     </ThemedText>
                   </ThemedView>
                 </TouchableOpacity>
@@ -1370,20 +1933,133 @@ export default function JobManualsScreen() {
 
               {/* Firmas registradas (solo supervisores / administrativos) */}
               {(selectedManual?.visualizaciones?.length ?? 0) > 0 &&
-                (roleName === 'SUPERVISOR' || roleName === 'ADMINISTRATIVO') && (
+                (roleName !== 'SUPERVISOR' && roleName !== 'ADMINISTRATIVO') && (
                   <ThemedView style={styles.viewerSection}>
                     <ThemedText style={styles.viewerSectionTitle}>Firmas registradas</ThemedText>
-                    {selectedManual?.visualizaciones?.map(firma => (
-                      <ThemedView key={firma.id} style={styles.signatureListRow}>
-                        <Ionicons name="person-circle-outline" size={20} color="#007AFF" />
-                        <ThemedText style={styles.signatureListName}>
-                          {firma.nombre_empleado || 'Empleado'}
-                        </ThemedText>
-                        <ThemedText style={styles.signatureListDate}>
-                          {firma.created_at ? new Date(firma.created_at).toLocaleString() : ''}
-                        </ThemedText>
-                      </ThemedView>
-                    ))}
+                    {(() => {
+                      const quizCfg = parseQuizFromManual(selectedManual?.quiz);
+                      const hasQuizConfigured = quizCfg.length > 0;
+
+                      return (selectedManual?.visualizaciones || []).map((firma) => {
+                        const quizAnswers = parseQuizAnswersFromVisualization((firma as any)?.quiz_answear);
+                        const hasQuizAnswers = quizAnswers.length > 0;
+
+                        const approved = firma.approved ?? null;
+                        const approvedPending = !!(firma as any)?.approved_pending;
+                        const statusLabel =
+                          approvedPending ? 'Pendiente de sincronización'
+                            : approved === true ? 'Aprobado'
+                            : approved === false ? 'Reprobado'
+                            : hasQuizConfigured ? 'Pendiente de revisión'
+                            : '—';
+
+                        return (
+                          <ThemedView key={firma.id} style={styles.quizReviewCard}>
+                            <ThemedView style={styles.signatureListRow}>
+                              <Ionicons name="person-circle-outline" size={20} color="#007AFF" />
+                              <ThemedText style={styles.signatureListName}>
+                                {firma.nombre_empleado || 'Empleado'}
+                              </ThemedText>
+                              <ThemedText style={styles.signatureListDate}>
+                                {firma.created_at ? new Date(firma.created_at).toLocaleString() : ''}
+                              </ThemedText>
+                            </ThemedView>
+
+                            {hasQuizConfigured && (
+                              <ThemedText style={styles.quizReviewStatusText}>
+                                Estado del quiz: {statusLabel}
+                              </ThemedText>
+                            )}
+
+                            {hasQuizConfigured && (
+                              <ThemedView style={{ marginTop: 8 }}>
+                                {!hasQuizAnswers ? (
+                                  <ThemedText style={styles.quizEmptyText}>
+                                    {firma.quiz_answear ? 'Respuestas inválidas' : 'Sin respuestas de quiz'}
+                                  </ThemedText>
+                                ) : (
+                                  <ThemedView style={styles.quizReviewList}>
+                                    {quizCfg.map((q) => {
+                                      const ans = quizAnswers.find(a => String(a.question_id) === String(q.id));
+                                      const userAnswer =
+                                        (ans?.user_answer && String(ans.user_answer)) ||
+                                        (Array.isArray(ans?.user_answers) ? ans?.user_answers?.join(', ') : '') ||
+                                        '';
+                                      const correctAnswer =
+                                        (q.answer && String(q.answer)) ||
+                                        (Array.isArray(q.answers) ? q.answers.join(', ') : '') ||
+                                        '';
+
+                                      return (
+                                        <ThemedView key={q.id} style={styles.quizReviewItem}>
+                                          <ThemedText style={styles.quizReviewQuestionTitle} numberOfLines={3}>
+                                            {q.title}
+                                          </ThemedText>
+                                          <ThemedText style={styles.quizQuestionMeta}>
+                                            • {getQuizTypeLabel(q.type)}
+                                          </ThemedText>
+
+                                          <ThemedView style={styles.quizReviewRow}>
+                                            <ThemedText style={styles.quizReviewLabel}>Respuesta del usuario</ThemedText>
+                                            <ThemedText style={styles.quizReviewValue}>{userAnswer || '—'}</ThemedText>
+                                          </ThemedView>
+                                          <ThemedView style={styles.quizReviewRow}>
+                                            <ThemedText style={styles.quizReviewLabel}>Respuesta correcta</ThemedText>
+                                            <ThemedText style={styles.quizReviewValue}>{correctAnswer || '—'}</ThemedText>
+                                          </ThemedView>
+                                        </ThemedView>
+                                      );
+                                    })}
+                                  </ThemedView>
+                                )}
+
+                                {hasQuizAnswers && (
+                                  <ThemedView style={styles.quizReviewActionsRow}>
+                                    <TouchableOpacity
+                                      style={[
+                                        styles.quizReviewActionBtn,
+                                        styles.quizReviewApproveBtn,
+                                        (updatingQuizResultByEmployee[firma.empleado_id] || approvedPending) && styles.formButtonDisabled,
+                                      ]}
+                                      disabled={updatingQuizResultByEmployee[firma.empleado_id] || approvedPending}
+                                      onPress={() => handleSetQuizResult(selectedManual?.id ?? 0, firma.empleado_id, true)}
+                                    >
+                                      {updatingQuizResultByEmployee[firma.empleado_id] ? (
+                                        <ActivityIndicator size="small" color="#FFFFFF" />
+                                      ) : (
+                                        <>
+                                          <Ionicons name="checkmark-circle" size={18} color="#FFFFFF" />
+                                          <ThemedText style={styles.quizReviewActionText}>Aprobar</ThemedText>
+                                        </>
+                                      )}
+                                    </TouchableOpacity>
+
+                                    <TouchableOpacity
+                                      style={[
+                                        styles.quizReviewActionBtn,
+                                        styles.quizReviewRejectBtn,
+                                        (updatingQuizResultByEmployee[firma.empleado_id] || approvedPending) && styles.formButtonDisabled,
+                                      ]}
+                                      disabled={updatingQuizResultByEmployee[firma.empleado_id] || approvedPending}
+                                      onPress={() => handleSetQuizResult(selectedManual?.id ?? 0, firma.empleado_id, false)}
+                                    >
+                                      {updatingQuizResultByEmployee[firma.empleado_id] ? (
+                                        <ActivityIndicator size="small" color="#FFFFFF" />
+                                      ) : (
+                                        <>
+                                          <Ionicons name="close-circle" size={18} color="#FFFFFF" />
+                                          <ThemedText style={styles.quizReviewActionText}>Reprobar</ThemedText>
+                                        </>
+                                      )}
+                                    </TouchableOpacity>
+                                  </ThemedView>
+                                )}
+                              </ThemedView>
+                            )}
+                          </ThemedView>
+                        );
+                      });
+                    })()}
                   </ThemedView>
                 )}
 
@@ -1461,8 +2137,155 @@ export default function JobManualsScreen() {
                 </ThemedView>
               )}
 
+              {/* Quiz (responder) */}
+              {(() => {
+                if (!selectedManual) return null;
+                const quizCfg = parseQuizFromManual(selectedManual.quiz);
+                if (!quizCfg || quizCfg.length === 0) return null;
+
+                // Regla: mostrar si no ha firmado o si puede reintentar por reprobación
+                const canAnswer = !selectedManual.currentEmployeeSigned || retakeAllowed;
+                if (!canAnswer) {
+                  return (
+                    <ThemedView style={styles.viewerSection}>
+                      <ThemedText style={styles.viewerSectionTitle}>Quiz</ThemedText>
+                      <ThemedText style={styles.quizEmptyText}>
+                        Ya has respondido este quiz.
+                      </ThemedText>
+                    </ThemedView>
+                  );
+                }
+
+                return (
+                  <ThemedView style={styles.viewerSection}>
+                    <ThemedText style={styles.viewerSectionTitle}>Quiz (Obligatorio)</ThemedText>
+                    {quizCfg.map((q) => {
+                      const value = quizUserAnswers[q.id];
+                      const options = q.options || [];
+
+                      const setValue = (v: string | string[]) => {
+                        setQuizUserAnswers(prev => ({ ...prev, [q.id]: v }));
+                      };
+
+                      return (
+                        <ThemedView key={q.id} style={styles.quizQuestionCard}>
+                          <ThemedText style={styles.quizQuestionTitle}>
+                            {q.title}
+                          </ThemedText>
+                          <ThemedText style={styles.quizQuestionMeta}>
+                            {getQuizTypeLabel(q.type)}
+                          </ThemedText>
+
+                          {q.type === 'short' && (
+                            <TextInput
+                              style={styles.formInput}
+                              value={typeof value === 'string' ? value : ''}
+                              onChangeText={(t) => setValue(t)}
+                              placeholder="Tu respuesta"
+                              placeholderTextColor="#999"
+                            />
+                          )}
+
+                          {q.type === 'paragraph' && (
+                            <TextInput
+                              style={[styles.formInput, { height: 90, textAlignVertical: 'top' }]}
+                              multiline
+                              value={typeof value === 'string' ? value : ''}
+                              onChangeText={(t) => setValue(t)}
+                              placeholder="Tu respuesta"
+                              placeholderTextColor="#999"
+                            />
+                          )}
+
+                          {(q.type === 'multiple_choice') && (
+                            <ThemedView style={styles.quizSelectList}>
+                              {options.map((opt) => {
+                                const selected = value === opt;
+                                return (
+                                  <TouchableOpacity
+                                    key={opt}
+                                    style={styles.quizSelectItem}
+                                    onPress={() => setValue(opt)}
+                                  >
+                                    <Ionicons
+                                      name={selected ? "radio-button-on" : "radio-button-off"}
+                                      size={18}
+                                      color={selected ? "#007AFF" : "#999"}
+                                    />
+                                    <ThemedText style={styles.quizSelectText}>{opt}</ThemedText>
+                                  </TouchableOpacity>
+                                );
+                              })}
+                            </ThemedView>
+                          )}
+
+                          {(q.type === 'multiple_select') && (
+                            <ThemedView style={styles.quizSelectList}>
+                              {options.map((opt) => {
+                                const selectedArr = Array.isArray(value) ? value : [];
+                                const selected = selectedArr.includes(opt);
+                                return (
+                                  <TouchableOpacity
+                                    key={opt}
+                                    style={styles.quizSelectItem}
+                                    onPress={() => {
+                                      const next = selected
+                                        ? selectedArr.filter(x => x !== opt)
+                                        : [...selectedArr, opt];
+                                      setValue(next);
+                                    }}
+                                  >
+                                    <Ionicons
+                                      name={selected ? "checkbox" : "square-outline"}
+                                      size={18}
+                                      color={selected ? "#007AFF" : "#999"}
+                                    />
+                                    <ThemedText style={styles.quizSelectText}>{opt}</ThemedText>
+                                  </TouchableOpacity>
+                                );
+                              })}
+                            </ThemedView>
+                          )}
+
+                          {(q.type === 'list') && (
+                            <ThemedView style={{ marginTop: 6 }}>
+                              <TouchableOpacity
+                                style={styles.quizSelectItem}
+                                onPress={() => setOpenListQuestionId(prev => prev === q.id ? null : q.id)}
+                              >
+                                <Ionicons name="chevron-down" size={18} color="#999" />
+                                <ThemedText style={styles.quizSelectText}>
+                                  {typeof value === 'string' && value ? value : 'Selecciona una opción'}
+                                </ThemedText>
+                              </TouchableOpacity>
+                              {openListQuestionId === q.id && (
+                                <ThemedView style={[styles.quizSelectList, { marginTop: 8 }]}>
+                                  {options.map((opt) => (
+                                    <TouchableOpacity
+                                      key={opt}
+                                      style={styles.quizSelectItem}
+                                      onPress={() => {
+                                        setValue(opt);
+                                        setOpenListQuestionId(null);
+                                      }}
+                                    >
+                                      <Ionicons name="list" size={18} color="#999" />
+                                      <ThemedText style={styles.quizSelectText}>{opt}</ThemedText>
+                                    </TouchableOpacity>
+                                  ))}
+                                </ThemedView>
+                              )}
+                            </ThemedView>
+                          )}
+                        </ThemedView>
+                      );
+                    })}
+                  </ThemedView>
+                );
+              })()}
+
               {/* Firma de visualización - al final de la lista */}
-              {selectedManual && !selectedManual.currentEmployeeSigned && (
+              {selectedManual && (!selectedManual.currentEmployeeSigned || retakeAllowed) && (
                 <ThemedView style={styles.viewerSection}>
                   <ThemedText style={styles.viewerSectionTitle}>Confirmar visualización</ThemedText>
                   {!viewSignature ? (
@@ -1503,12 +2326,59 @@ export default function JobManualsScreen() {
                               return;
                             }
 
+                            const quizCfg = parseQuizFromManual(selectedManual.quiz);
+                            const hasQuiz = quizCfg.length > 0;
+
+                            // Validar quiz (obligatorio si existe)
+                            if (hasQuiz) {
+                              for (const q of quizCfg) {
+                                const v = quizUserAnswers[q.id];
+                                const isEmptyString = typeof v === 'string' && v.trim().length === 0;
+                                const isEmptyArray = Array.isArray(v) && v.length === 0;
+                                const missing = v === undefined || v === null || isEmptyString || isEmptyArray;
+                                if (missing) {
+                                  Alert.alert('Error', 'Debes responder todas las preguntas del quiz antes de firmar.');
+                                  return;
+                                }
+                              }
+                            }
+
+                            // Construir payload de respuestas (incluye respuestas correctas + del usuario)
+                            const quizAnswearStr = hasQuiz
+                              ? JSON.stringify(
+                                  quizCfg.map((q) => {
+                                    const userV = quizUserAnswers[q.id];
+                                    return {
+                                      question_id: q.id,
+                                      type: q.type,
+                                      correct_answer: q.answer ?? null,
+                                      correct_answers: q.answers ?? null,
+                                      user_answer: typeof userV === 'string' ? userV : null,
+                                      user_answers: Array.isArray(userV) ? userV : null,
+                                    };
+                                  })
+                                )
+                              : null;
+
                             const isConnected = await getConnectionStatus();
 
                             if (isConnected) {
+                              const proceed = await new Promise<boolean>((resolve) => {
+                                Alert.alert(
+                                  'Confirmar',
+                                  'Vas a firmar el manual y enviar tus respuestas del quiz (si aplica). ¿Deseas continuar?',
+                                  [
+                                    { text: 'Cancelar', style: 'cancel', onPress: () => resolve(false) },
+                                    { text: 'Aceptar', onPress: () => resolve(true) },
+                                  ]
+                                );
+                              });
+                              if (!proceed) return;
+
                               const result = await signJobManual({
                                 id: selectedManual.id,
                                 firma: viewSignature,
+                                quizAnswear: quizAnswearStr,
                                 refreshAccessToken,
                                 logout,
                                 marcaId,
@@ -1518,6 +2388,18 @@ export default function JobManualsScreen() {
                                 throw new Error(result.message || 'No se pudo firmar el manual');
                               }
                             } else {
+                              const proceed = await new Promise<boolean>((resolve) => {
+                                Alert.alert(
+                                  'Modo Offline',
+                                  'Se registrará tu firma y respuestas localmente para sincronizarse cuando haya conexión. ¿Deseas continuar?',
+                                  [
+                                    { text: 'Cancelar', style: 'cancel', onPress: () => resolve(false) },
+                                    { text: 'Aceptar', onPress: () => resolve(true) },
+                                  ]
+                                );
+                              });
+                              if (!proceed) return;
+
                               // Guardar acción offline
                               const actionsStr = await AsyncStorage.getItem('job_manuals_actions');
                               const actions = actionsStr ? JSON.parse(actionsStr) : [];
@@ -1525,6 +2407,7 @@ export default function JobManualsScreen() {
                                 id: selectedManual.id,
                                 type: 'sign',
                                 firma: viewSignature,
+                                quizAnswear: quizAnswearStr,
                                 marcaId,
                               });
                               await AsyncStorage.setItem('job_manuals_actions', JSON.stringify(actions));
@@ -1539,15 +2422,19 @@ export default function JobManualsScreen() {
                               manual_puesto_id: selectedManual.id,
                               nombre_empleado: employee?.name || 'Empleado',
                               firma_empleado: viewSignature,
+                              quiz_answear: quizAnswearStr,
+                              approved: null,
                               created_at: new Date(horaAccionUse).toISOString(),
+                              updated_at: new Date(horaAccionUse).toISOString(),
                             };
 
                             setSelectedManual(prev => {
                               if (!prev) return prev;
+                              const filtered = (prev.visualizaciones || []).filter(v => v.empleado_id !== newVisualizacion.empleado_id);
                               return {
                                 ...prev,
                                 currentEmployeeSigned: true,
-                                visualizaciones: [...(prev.visualizaciones || []), newVisualizacion],
+                                visualizaciones: [...filtered, newVisualizacion],
                               };
                             });
 
@@ -1556,7 +2443,7 @@ export default function JobManualsScreen() {
                               const cache = JSON.parse(cacheStr);
                               const updatedCache = cache.map((item: any) => {
                                 if (item.id === selectedManual.id) {
-                                  const visualizaciones = item.visualizaciones || [];
+                                  const visualizaciones = (item.visualizaciones || []).filter((v: any) => v.empleado_id !== newVisualizacion.empleado_id);
                                   return {
                                     ...item,
                                     currentEmployeeSigned: true,
@@ -1719,6 +2606,145 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginBottom: 6,
     color: '#000000',
+  },
+  // Quiz UI
+  quizHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  quizAddButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#D6E6FF',
+    backgroundColor: '#F3F8FF',
+  },
+  quizAddButtonText: {
+    color: '#007AFF',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  quizEmptyText: {
+    marginTop: 8,
+    fontSize: 13,
+    color: '#777777',
+  },
+  quizList: {
+    marginTop: 10,
+    gap: 10,
+  },
+  quizQuestionCard: {
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    backgroundColor: '#FFFFFF',
+    padding: 12,
+    marginBottom: 10,
+  },
+  quizQuestionHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  quizQuestionTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#111111',
+    flex: 1,
+  },
+  quizRemoveButton: {
+    padding: 4,
+  },
+  quizQuestionMeta: {
+    marginTop: 4,
+    fontSize: 12,
+    color: '#666666',
+  },
+  quizTypeList: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  quizTypePill: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    backgroundColor: '#FFFFFF',
+  },
+  quizTypePillActive: {
+    borderColor: '#007AFF',
+    backgroundColor: '#EAF3FF',
+  },
+  quizTypePillText: {
+    fontSize: 12,
+    color: '#444444',
+    fontWeight: '600',
+  },
+  quizTypePillTextActive: {
+    color: '#007AFF',
+  },
+  quizOptionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  quizOptionAddBtn: {
+    backgroundColor: '#007AFF',
+    borderRadius: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  quizOptionsList: {
+    marginTop: 10,
+    gap: 8,
+  },
+  quizOptionItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    backgroundColor: '#FFFFFF',
+  },
+  quizOptionText: {
+    flex: 1,
+    marginRight: 12,
+    fontSize: 13,
+    color: '#222222',
+  },
+  quizSelectList: {
+    gap: 8,
+    marginTop: 6,
+  },
+  quizSelectItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    backgroundColor: '#FFFFFF',
+  },
+  quizSelectText: {
+    fontSize: 13,
+    color: '#222222',
+    flex: 1,
   },
   formInput: {
     borderWidth: 1,
@@ -2011,6 +3037,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
     paddingVertical: 4,
+    width: '100%',
   },
   signatureListName: {
     flex: 1,
@@ -2020,6 +3047,80 @@ const styles = StyleSheet.create({
   signatureListDate: {
     fontSize: 12,
     color: '#777777',
+    marginLeft: 'auto',
+  },
+  quizReviewCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#E5E5E5',
+    marginTop: 10,
+  },
+  quizReviewStatusText: {
+    marginTop: 6,
+    fontSize: 12,
+    color: '#666666',
+  },
+  quizReviewList: {
+    marginTop: 8,
+    gap: 10,
+  },
+  quizReviewItem: {
+    backgroundColor: '#F8F9FA',
+    borderRadius: 10,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+  },
+  quizReviewQuestionTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#000000',
+  },
+  quizReviewRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 6,
+    gap: 12,
+    backgroundColor: '#F8F9FA',
+  },
+  quizReviewLabel: {
+    fontSize: 12,
+    color: '#666666',
+    flex: 1,
+  },
+  quizReviewValue: {
+    fontSize: 12,
+    color: '#111111',
+    flex: 1,
+    textAlign: 'right',
+  },
+  quizReviewActionsRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 12,
+  },
+  quizReviewActionBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 8,
+  },
+  quizReviewApproveBtn: {
+    backgroundColor: '#34C759',
+  },
+  quizReviewRejectBtn: {
+    backgroundColor: '#FF3B30',
+  },
+  quizReviewActionText: {
+    color: '#FFFFFF',
+    fontWeight: '600',
+    fontSize: 13,
   },
   deleteButton: {
     padding: 6,

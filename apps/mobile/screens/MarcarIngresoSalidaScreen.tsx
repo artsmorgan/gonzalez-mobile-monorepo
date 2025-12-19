@@ -3,13 +3,14 @@ import AppFooter from '../components/AppFooter';
 import SlideMenu from '../components/SlideMenu';
 import { ThemedText } from '../components/ThemedText';
 import { ThemedView } from '../components/ThemedView';
+import { Collapsible } from '../components/Collapsible';
 import { useAuth } from '../contexts/AuthContext';
 import * as Location from 'expo-location';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../App';
 import React, { useEffect, useState, useRef } from 'react';
-import { ActivityIndicator, Alert, StyleSheet, TouchableOpacity, ScrollView, Modal, TextInput } from 'react-native';
+import { ActivityIndicator, Alert, StyleSheet, TouchableOpacity, ScrollView, Modal, TextInput, View } from 'react-native';
 import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
@@ -107,6 +108,9 @@ export default function MarcarIngresoSalidaScreen() {
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const navigation = useNavigation<MarcarIngresoSalidaScreenNavigationProp>();
   const [horaAccion, setHoraAccion] = useState<number | null>(null);
+  const [isMarksModalVisible, setIsMarksModalVisible] = useState(false);
+  const [futureMarks, setFutureMarks] = useState<any[]>([]);
+  const [isLoadingFutureMarks, setIsLoadingFutureMarks] = useState(false);
   useEffect(() => {
     const handler = () => {
       fetchAttendanceStatus();
@@ -1239,6 +1243,282 @@ export default function MarcarIngresoSalidaScreen() {
     }
   }
 
+  const handleOpenFutureMarksModal = async () => {
+    if (!employee?.id) {
+      Alert.alert('Error', 'No se encontró el ID del empleado.');
+      return;
+    }
+    setIsMarksModalVisible(true);
+    await fetchFutureMarks();
+  };
+
+  const fetchFutureMarks = async () => {
+    if (!employee?.id) return;
+    
+    try {
+      setIsLoadingFutureMarks(true);
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) {
+        throw new Error('Server URL not configured');
+      }
+
+      let token = await AsyncStorage.getItem('access_token');
+      if (!token) {
+        const refreshed = await refreshAccessToken();
+        if (!refreshed) {
+          throw new Error('No authentication token found');
+        }
+        token = await AsyncStorage.getItem('access_token');
+      }
+
+      const response = await fetch(`${apiUrl}/api/attendance/user/${employee.id}/next`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': '69420',
+        },
+      });
+
+      if (response.status === 401 || response.status === 403) {
+        const refreshed = await refreshAccessToken();
+        if (refreshed) {
+          return fetchFutureMarks();
+        } else {
+          await logout();
+          return;
+        }
+      }
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      if (data.status && data.data) {
+        setFutureMarks(data.data);
+      } else {
+        setFutureMarks([]);
+        Alert.alert('Error', data.message || 'No se pudieron cargar las marcas futuras');
+      }
+    } catch (error: any) {
+      console.error('Error fetching future marks:', error);
+      Alert.alert('Error', error.message || 'No se pudieron cargar las marcas futuras');
+      setFutureMarks([]);
+    } finally {
+      setIsLoadingFutureMarks(false);
+    }
+  };
+
+  const renderFutureMarks = () => {
+    try {
+      // Agrupar marcas por día
+      const groupedByDay: { [key: string]: any[] } = {};
+      futureMarks.forEach((mark) => {
+        try {
+          let fecha: Date;
+          if (mark.fecha instanceof Date) {
+            fecha = mark.fecha;
+          } else if (typeof mark.fecha === 'string') {
+            fecha = new Date(mark.fecha);
+          } else {
+            console.warn('Fecha inválida:', mark.fecha);
+            return;
+          }
+          
+          if (isNaN(fecha.getTime())) {
+            console.warn('Fecha inválida (NaN):', mark.fecha);
+            return;
+          }
+          
+          const dayKey = fecha.toISOString().split('T')[0];
+          if (!groupedByDay[dayKey]) {
+            groupedByDay[dayKey] = [];
+          }
+          groupedByDay[dayKey].push(mark);
+        } catch (err) {
+          console.error('Error procesando marca:', err, mark);
+        }
+      });
+
+      // Ordenar días
+      const sortedDays = Object.keys(groupedByDay).sort();
+
+      if (sortedDays.length === 0) {
+        return (
+          <ThemedView style={styles.marksEmptyContainer}>
+            <ThemedText style={styles.marksEmptyText}>
+              No se encontraron marcas válidas
+            </ThemedText>
+          </ThemedView>
+        );
+      }
+
+      const formatHora = (hora: any): string => {
+        if (!hora) return '';
+        try {
+          if (hora instanceof Date) {
+            return format(hora, 'HH:mm');
+          }
+          const horaStr = typeof hora === 'string' ? hora : String(hora);
+          // Manejar formato HH:mm:ss o HH:mm
+          const timeMatch = horaStr.match(/(\d{2}):(\d{2})(?::(\d{2}))?/);
+          if (timeMatch) {
+            const [, hours, minutes] = timeMatch;
+            return `${hours}:${minutes}`;
+          }
+          return horaStr;
+        } catch {
+          return '';
+        }
+      };
+
+      return sortedDays.map((dayKey) => {
+        const dayMarks = groupedByDay[dayKey]
+          .sort((a, b) => {
+            const getHoraTime = (hora: any) => {
+              if (!hora) return 0;
+              try {
+                if (hora instanceof Date) {
+                  return hora.getTime();
+                }
+                const horaStr = typeof hora === 'string' ? hora : String(hora);
+                // Manejar formato HH:mm:ss o HH:mm
+                const timeMatch = horaStr.match(/(\d{2}):(\d{2})(?::(\d{2}))?/);
+                if (timeMatch) {
+                  const [, hours, minutes] = timeMatch;
+                  return parseInt(hours) * 60 + parseInt(minutes);
+                }
+                return 0;
+              } catch {
+                return 0;
+              }
+            };
+            return getHoraTime(a.hora_inicio) - getHoraTime(b.hora_inicio);
+          });
+
+        let dayLabel = dayKey;
+
+        return (
+          <Collapsible key={dayKey} title={dayLabel}>
+            <ThemedView style={styles.marksDayContainer}>
+              {dayMarks.map((mark, index) => {
+                const horaInicioStr = formatHora(mark.hora_inicio);
+                const horaFinStr = formatHora(mark.hora_fin);
+                
+                let tipoTurno = 'Desconocido';
+                if (mark.tipo_turno) {
+                  switch (mark.tipo_turno) {
+                    case 'D':
+                      tipoTurno = 'Diurno';
+                      break;
+                    case 'N':
+                      tipoTurno = 'Nocturno';
+                      break;
+                    case 'M':
+                      tipoTurno = 'Mixto';
+                      break;
+                  }
+                }
+
+                return (
+                  <ThemedView key={mark.id || index} style={styles.markItem}>
+                    <ThemedView style={styles.markItemHeader}>
+                      <Ionicons name="time-outline" size={18} color="#007AFF" />
+                      <ThemedText style={styles.markItemTime}>
+                        {horaInicioStr || 'Sin hora'}
+                        {horaFinStr ? ` - ${horaFinStr}` : ''}
+                      </ThemedText>
+                    </ThemedView>
+                    <ThemedView style={styles.markItemDetails}>
+                      {mark.empresa && mark.empresa.nombre && (
+                        <ThemedView style={styles.markItemRow}>
+                          <ThemedText style={styles.markItemTitle}>
+                            Empresa
+                          </ThemedText>
+                          <ThemedText style={styles.markItemValue}>
+                            {mark.empresa.nombre}
+                          </ThemedText>
+                        </ThemedView>
+                      )}
+                      {mark.cliente && mark.cliente.nombre && (
+                        <ThemedView style={styles.markItemRow}>
+                          <ThemedText style={styles.markItemTitle}>
+                            Cliente
+                          </ThemedText>
+                          <ThemedText style={styles.markItemValue}>
+                            {mark.cliente.nombre}
+                          </ThemedText>
+                        </ThemedView>
+                      )}
+                      {mark.contrato && mark.contrato.nombre && (
+                        <ThemedView style={styles.markItemRow}>
+                          <ThemedText style={styles.markItemTitle}>
+                            Contrato
+                          </ThemedText>
+                          <ThemedText style={styles.markItemValue}>
+                            {mark.contrato.nombre}
+                          </ThemedText>
+                        </ThemedView>
+                      )}
+                      {mark.corpo && mark.corpo.nombre && (
+                        <ThemedView style={styles.markItemRow}>
+                          <ThemedText style={styles.markItemTitle}>
+                            Corpo
+                          </ThemedText>
+                          <ThemedText style={styles.markItemValue}>
+                            {mark.corpo.nombre}
+                          </ThemedText>
+                        </ThemedView>
+                      )}
+                      {mark.puesto && mark.puesto.nombre && (
+                        <ThemedView style={styles.markItemRow}>
+                          <ThemedText style={styles.markItemTitle}>
+                            Puesto
+                          </ThemedText>
+                          <ThemedText style={styles.markItemValue}>
+                            {mark.puesto.nombre}
+                          </ThemedText>
+                        </ThemedView>
+                      )}
+                      {mark.plaza && mark.plaza.nombre && (
+                        <ThemedView style={styles.markItemRow}>
+                          <ThemedText style={styles.markItemTitle}>
+                            Plaza
+                          </ThemedText>
+                          <ThemedText style={styles.markItemValue}>
+                            {mark.plaza.nombre}
+                          </ThemedText>
+                        </ThemedView>
+                      )}
+                      <ThemedView style={styles.markItemRow}>
+                        <ThemedText style={styles.markItemTitle}>
+                          Turno
+                        </ThemedText>
+                        <ThemedText style={styles.markItemValue}>
+                          {tipoTurno}
+                        </ThemedText>
+                      </ThemedView>
+                    </ThemedView>
+                  </ThemedView>
+                );
+              })}
+            </ThemedView>
+          </Collapsible>
+        );
+      });
+    } catch (error) {
+      console.error('Error renderizando marcas:', error);
+      return (
+        <ThemedView style={styles.marksEmptyContainer}>
+          <ThemedText style={styles.marksEmptyText}>
+            Error al procesar las marcas. Por favor, intenta nuevamente.
+          </ThemedText>
+        </ThemedView>
+      );
+    }
+  };
+
   const handleCreateTestMarca = () => {
     if (!employee?.id) {
       Alert.alert('Error', 'No se encontró el ID del empleado.');
@@ -1349,6 +1629,18 @@ export default function MarcarIngresoSalidaScreen() {
             <ThemedText style={styles.subtitle}>
               Control de asistencia
             </ThemedText>
+          </ThemedView>
+          {/* Future Marks Button */}
+          <ThemedView style={styles.testButtonContainer}>
+            <TouchableOpacity
+              style={styles.futureMarksButton}
+              onPress={handleOpenFutureMarksModal}
+            >
+              <Ionicons name="calendar-outline" size={20} color="#FFFFFF" />
+              <ThemedText style={styles.futureMarksButtonText}>
+                Ver marcas futuras
+              </ThemedText>
+            </TouchableOpacity>
           </ThemedView>
           {/* Test Button - Always Visible */}
           <ThemedView style={styles.testButtonContainer}>
@@ -1644,7 +1936,51 @@ export default function MarcarIngresoSalidaScreen() {
           </ThemedView>
         </ThemedView>
       </Modal>
-      
+
+      {/* Modal de marcas futuras */}
+      <Modal
+        visible={isMarksModalVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setIsMarksModalVisible(false)}
+      >
+        <View style={styles.marksModalOverlay}>
+          <ThemedView style={styles.marksModalContainer}>
+            <View style={styles.marksModalHeader}>
+              <ThemedText style={styles.marksModalTitle}>
+                Marcas Futuras (30 días)
+              </ThemedText>
+              <TouchableOpacity
+                onPress={() => setIsMarksModalVisible(false)}
+              >
+                <Ionicons name="close" size={24} color="#666666" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView 
+              style={styles.marksModalContent}
+              contentContainerStyle={styles.marksModalContentContainer}
+              nestedScrollEnabled={true}
+              showsVerticalScrollIndicator={true}
+            >
+              {isLoadingFutureMarks ? (
+                <ThemedView style={styles.marksLoadingContainer}>
+                  <ActivityIndicator size="large" color="#007AFF" />
+                  <ThemedText style={styles.marksLoadingText}>
+                    Cargando marcas...
+                  </ThemedText>
+                </ThemedView>
+              ) : futureMarks.length === 0 ? (
+                <ThemedView style={styles.marksEmptyContainer}>
+                  <ThemedText style={styles.marksEmptyText}>
+                    No hay marcas programadas para los próximos 30 días
+                  </ThemedText>
+                </ThemedView>
+              ) : renderFutureMarks()}
+            </ScrollView>
+          </ThemedView>
+        </View>
+      </Modal>
       
       <AppFooter />
     </ThemedView>
@@ -1764,7 +2100,6 @@ const styles = StyleSheet.create({
   },
   infoRow: {
     display: 'flex',
-    paddingVertical: 8,
     borderBottomWidth: 1,
     borderBottomColor: '#E0E0E0',
     backgroundColor: '#F8F9FA',
@@ -2084,6 +2419,158 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 14,
     fontWeight: '600',
+  },
+  futureMarksButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#007AFF',
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 8,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  futureMarksButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  marksModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 16,
+  },
+  marksModalContainer: {
+    width: '100%',
+    maxWidth: 600,
+    height: '90%',
+    maxHeight: '90%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    overflow: 'hidden',
+    flexDirection: 'column',
+  },
+  marksModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+  },
+  marksModalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    flex: 1,
+    marginRight: 8,
+  },
+  marksModalContent: {
+    flex: 1,
+  },
+  marksModalContentContainer: {
+    padding: 16,
+  },
+  marksLoadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 40,
+  },
+  marksLoadingText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: '#666666',
+  },
+  marksEmptyContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 40,
+  },
+  marksEmptyText: {
+    fontSize: 14,
+    color: '#666666',
+    textAlign: 'center',
+  },
+  marksDayContainer: {
+    marginTop: 8,
+    gap: 12,
+  },
+  markItem: {
+    width: '100%',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    backgroundColor: '#FFFFFF',
+    padding: 12,
+    marginBottom: 8,
+  },
+  markItemHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+  },
+  markItemTime: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#000000',
+  },
+  markItemDetails: {
+    marginTop: 8,
+    gap: 6,
+  },
+  markItemRow: {
+    flexDirection: 'column',
+    justifyContent: 'flex-start',
+    alignItems: 'flex-start',
+    marginBottom: 4,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+    paddingBottom: 4,
+  },
+  markItemTitle: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#777777',
+  },
+  markItemValue: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: '#333333',
+    flex: 1,
+    textAlign: 'left',
+  },
+  markItemPlaza: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333333',
+    marginTop: 4,
+  },
+  markItemPuesto: {
+    fontSize: 12,
+    color: '#666666',
+    marginTop: 2,
+  },
+  markItemHorario: {
+    fontSize: 12,
+    color: '#666666',
+    marginTop: 2,
+  },
+  markItemTurno: {
+    fontSize: 12,
+    color: '#666666',
+    marginTop: 2,
   },
 });
 

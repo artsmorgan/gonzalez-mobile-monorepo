@@ -14,6 +14,8 @@ import {
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Picker } from '@react-native-picker/picker';
 import SignatureScreen from "react-native-signature-canvas";
+import * as Location from 'expo-location';
+import { jwtDecode } from 'jwt-decode';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import { useAuth } from '@/contexts/AuthContext';
@@ -27,6 +29,7 @@ import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import * as Network from 'expo-network';
+import getHoraAccion from '@/hooks/getHoraAccion';
 import {
   createInductionTourRecord,
   updateInductionTourRecord,
@@ -34,6 +37,7 @@ import {
   listInductionTourRecordByCorpo,
 } from '@/hooks/evaluationFunctions';
 import { eventBus } from '@/hooks/eventBus';
+import { useQRScanner } from '@/hooks/useQRScanner';
 
 type InductionTourRecordScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'InductionTourRecord'>;
 
@@ -56,9 +60,10 @@ interface Participante {
 }
 
 interface InductionTourRecord {
-  id: string;
+  id: number | string;
   id_local: string;
   fecha: string | null;
+  division?: string | null;
   renglon_edificio: string | null;
   supervisor_cliente: string | null;
   supervisor_corporacion: string | null;
@@ -66,6 +71,7 @@ interface InductionTourRecord {
   aspectos_especificos: string | null;
   participantes: string | null;
   firma_supervisor: string | null;
+  firma_responsable?: string | null;
   created_at: string;
   synced?: boolean;
 }
@@ -74,6 +80,7 @@ interface EditingInductionTourRecord {
   id: string | null;
   id_local: string;
   fecha: string;
+  division: string;
   renglon_edificio: string;
   supervisor_cliente: string;
   supervisor_corporacion: string;
@@ -81,6 +88,7 @@ interface EditingInductionTourRecord {
   aspectos_especificos: AspectoEspecifico[];
   participantes: Participante[];
   firma_supervisor: string;
+  firma_responsable: string;
 }
 
 const TEMAS_PREDEFINIDOS = [
@@ -111,6 +119,7 @@ export default function InductionTourRecordScreen() {
   const { employee, refreshAccessToken, logout } = useAuth();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const navigation = useNavigation<InductionTourRecordScreenNavigationProp>();
+  const { scanQR, QRScannerComponent } = useQRScanner();
 
   // Data states
   const [records, setRecords] = useState<InductionTourRecord[]>([]);
@@ -125,6 +134,7 @@ export default function InductionTourRecordScreen() {
   // Form states
   const [fecha, setFecha] = useState<Date>(new Date());
   const [showDatePicker, setShowDatePicker] = useState(false);
+  const [division, setDivision] = useState<string>('Otros');
   const [renglonEdificio, setRenglonEdificio] = useState('');
   const [supervisorCliente, setSupervisorCliente] = useState('');
   const [supervisorCorporacion, setSupervisorCorporacion] = useState('');
@@ -132,11 +142,16 @@ export default function InductionTourRecordScreen() {
   const [aspectosEspecificos, setAspectosEspecificos] = useState<AspectoEspecifico[]>([]);
   const [participantes, setParticipantes] = useState<Participante[]>([]);
   const [firmaSupervisor, setFirmaSupervisor] = useState<string | null>(null);
+  const [firmaResponsableHash, setFirmaResponsableHash] = useState<string>('');
+  const [isGeneratingFirmaResponsable, setIsGeneratingFirmaResponsable] = useState(false);
 
   // Expanded states
   const [expandedTemaIndices, setExpandedTemaIndices] = useState<number[]>([]);
   const [expandedAspectoIndices, setExpandedAspectoIndices] = useState<number[]>([]);
   const [expandedParticipanteIndices, setExpandedParticipanteIndices] = useState<number[]>([]);
+  const [expandedFirmaResponsableIds, setExpandedFirmaResponsableIds] = useState<string[]>([]);
+  const [expandedTemasListIds, setExpandedTemasListIds] = useState<string[]>([]);
+  const [expandedAspectosListIds, setExpandedAspectosListIds] = useState<string[]>([]);
 
   // Signature modal states
   const [isSignatureModalVisible, setIsSignatureModalVisible] = useState(false);
@@ -199,6 +214,17 @@ export default function InductionTourRecordScreen() {
     return `${day}/${month}/${year}`;
   };
 
+  const formatDateForRequest = (date: Date): string => {
+    // ISO date only for API stability
+    return date.toISOString().split('T')[0];
+  };
+
+  const formatDateForDisplay = (value?: string | null): string => {
+    if (!value) return 'N/A';
+    if (String(value).includes('/')) return String(value);
+    return String(value).split('T')[0];
+  };
+
   // Helper para extraer solo el base64 de las firmas
   const getBase64Only = (signature: string | null): string | null => {
     if (!signature) return null;
@@ -218,6 +244,93 @@ export default function InductionTourRecordScreen() {
     return `data:image/png;base64,${signature}`;
   };
 
+  const decodeFirmaHash = (hash?: string | null) => {
+    try {
+      if (!hash || String(hash).trim().length === 0) return null;
+      const decoded = atob(String(hash));
+      const parts = decoded.split(':');
+      if (parts.length !== 5) return null;
+      const [sessionId, empleadoId, latitud, longitud, timestamp] = parts;
+      return { sessionId, empleadoId, latitud, longitud, timestamp };
+    } catch {
+      return null;
+    }
+  };
+
+  const generateFirmaHashForCurrentUser = async (): Promise<string | null> => {
+    try {
+      if (!employee) {
+        Alert.alert('Error', 'No se pudo obtener la información del empleado');
+        return null;
+      }
+
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permiso denegado', 'Se necesita permiso de ubicación para generar la firma');
+        return null;
+      }
+
+      const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      const token = await AsyncStorage.getItem('access_token');
+      if (!token) {
+        Alert.alert('Error', 'No se pudo obtener el token de sesión');
+        return null;
+      }
+
+      const decoded: any = jwtDecode(token);
+      const sessionId = decoded.sessionId || 'unknown';
+      const timestamp = await getHoraAccion();
+      if (!timestamp) {
+        Alert.alert('Error', 'No se pudo obtener la hora');
+        return null;
+      }
+
+      const { latitude, longitude } = location.coords;
+      const empleadoId = String(employee.id);
+      return btoa(`${sessionId}:${empleadoId}:${latitude}:${longitude}:${timestamp}`);
+    } catch (e) {
+      console.error('Error generating firma_responsable:', e);
+      return null;
+    }
+  };
+
+  const handleGenerateFirmaResponsable = async () => {
+    try {
+      setIsGeneratingFirmaResponsable(true);
+      const hash = await generateFirmaHashForCurrentUser();
+      if (!hash) return;
+      setFirmaResponsableHash(hash);
+    } finally {
+      setIsGeneratingFirmaResponsable(false);
+    }
+  };
+
+  const handleScanFirmaResponsable = async () => {
+    try {
+      const qrData = await scanQR();
+      if (!qrData) return;
+      const decoded = decodeFirmaHash(qrData);
+      if (!decoded) {
+        Alert.alert('Error', 'El QR escaneado no tiene el formato correcto');
+        return;
+      }
+      setFirmaResponsableHash(qrData);
+    } catch (e) {
+      console.error('Error scanning firma_responsable:', e);
+      Alert.alert('Error', 'No se pudo escanear el código QR');
+    }
+  };
+
+  const safeParseJsonArray = <T,>(value?: string | null): T[] => {
+    if (!value) return [];
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? (parsed as T[]) : [];
+    } catch {
+      return [];
+    }
+  };
+
   const fetchRecords = useCallback(async () => {
     try {
       setIsLoading(true);
@@ -232,7 +345,7 @@ export default function InductionTourRecordScreen() {
 
       setHasCurrentMarca(true);
       const currentMarcaData = JSON.parse(currentMarca);
-      const corpoId = currentMarcaData.corpo?.id?.toString();
+      const corpoId = currentMarcaData.corpo?.id?.toString?.() || currentMarcaData.corpo_id?.toString?.();
 
       if (!corpoId) {
         setError('No se encontró el ID del corpo');
@@ -242,6 +355,11 @@ export default function InductionTourRecordScreen() {
 
       const isConnected = await getConnectionStatus();
 
+      // cache local (siempre)
+      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+      const cache = cacheStr ? JSON.parse(cacheStr) : [];
+      const localRecords: InductionTourRecord[] = (cache || []).filter((item: any) => item.type === 'induction_tour_record');
+
       if (isConnected) {
         const result = await listInductionTourRecordByCorpo({
           corpo_id: corpoId,
@@ -250,19 +368,17 @@ export default function InductionTourRecordScreen() {
         });
 
         if (result.status && result.data) {
-          setRecords(result.data as InductionTourRecord[]);
+          const serverRecords = result.data as InductionTourRecord[];
+          const unsynced = (localRecords || []).filter((r) => r.synced === false);
+          const unsyncedIds = new Set(unsynced.map((r) => String(r.id || r.id_local || '')));
+          const filteredServer = (serverRecords || []).filter((r) => !unsyncedIds.has(String(r.id || r.id_local || '')));
+          setRecords([...unsynced, ...filteredServer]);
         } else {
-          setRecords([]);
+          const unsynced = (localRecords || []).filter((r) => r.synced === false);
+          setRecords(unsynced);
         }
       } else {
-        const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-        if (cacheStr) {
-          const cache = JSON.parse(cacheStr);
-          const recordsCache = cache.filter((item: any) => item.type === 'induction_tour_record');
-          setRecords(recordsCache);
-        } else {
-          setRecords([]);
-        }
+        setRecords(localRecords || []);
       }
     } catch (err) {
       console.error('Error fetching records:', err);
@@ -294,6 +410,7 @@ export default function InductionTourRecordScreen() {
 
   const resetForm = () => {
     setFecha(new Date());
+    setDivision('Otros');
     setRenglonEdificio('');
     setSupervisorCliente('');
     setSupervisorCorporacion('');
@@ -315,7 +432,9 @@ export default function InductionTourRecordScreen() {
     setExpandedAspectoIndices(aspectosPredefinidos.map((_, i) => i));
     setParticipantes([]);
     setFirmaSupervisor(null);
+    setFirmaResponsableHash('');
     setExpandedParticipanteIndices([]);
+    setExpandedFirmaResponsableIds([]);
   };
 
   const startCreating = () => {
@@ -363,9 +482,10 @@ export default function InductionTourRecordScreen() {
     }
 
     setEditingRecord({
-      id: record.id,
+      id: record.id ? String(record.id) : null,
       id_local: record.id_local,
       fecha: record.fecha || '',
+      division: record.division || 'Otros',
       renglon_edificio: record.renglon_edificio || '',
       supervisor_cliente: record.supervisor_cliente || '',
       supervisor_corporacion: record.supervisor_corporacion || '',
@@ -373,21 +493,30 @@ export default function InductionTourRecordScreen() {
       aspectos_especificos: aspectosArray,
       participantes: participantesArray,
       firma_supervisor: record.firma_supervisor || '',
+      firma_responsable: record.firma_responsable || '',
     });
 
     setRenglonEdificio(record.renglon_edificio || '');
     setSupervisorCliente(record.supervisor_cliente || '');
     setSupervisorCorporacion(record.supervisor_corporacion || '');
     if (record.fecha) {
-      const dateParts = record.fecha.split('/');
-      if (dateParts.length === 3) {
-        setFecha(new Date(parseInt(dateParts[2]), parseInt(dateParts[1]) - 1, parseInt(dateParts[0])));
+      const fechaStr = String(record.fecha);
+      if (fechaStr.includes('/')) {
+        const dateParts = fechaStr.split('/');
+        if (dateParts.length === 3) {
+          setFecha(new Date(parseInt(dateParts[2]), parseInt(dateParts[1]) - 1, parseInt(dateParts[0])));
+        }
+      } else {
+        const d = new Date(fechaStr);
+        if (!Number.isNaN(d.getTime())) setFecha(d);
       }
     }
+    setDivision(record.division || 'Otros');
     setTemasDesarrollados(temasArray);
     setAspectosEspecificos(aspectosArray);
     setParticipantes(participantesArray);
     setFirmaSupervisor(formatSignatureForDisplay(record.firma_supervisor));
+    setFirmaResponsableHash(record.firma_responsable || '');
     setExpandedTemaIndices(temasArray.map((_, i) => i));
     setExpandedAspectoIndices(aspectosArray.map((_, i) => i));
     setExpandedParticipanteIndices(participantesArray.map((_, i) => i));
@@ -588,6 +717,16 @@ export default function InductionTourRecordScreen() {
       return;
     }
 
+    if (!division || !division.trim()) {
+      Alert.alert('Error', 'División es obligatoria');
+      return;
+    }
+
+    if (!firmaResponsableHash || !firmaResponsableHash.trim()) {
+      Alert.alert('Error', 'Firma responsable (QR/Generar) es obligatoria');
+      return;
+    }
+
     const currentMarcaData = JSON.parse(currentMarca);
 
     Alert.alert(
@@ -601,7 +740,8 @@ export default function InductionTourRecordScreen() {
             try {
               const requestData = {
                 marca_id: currentMarcaData.id,
-                fecha: formatDate(fecha) || null,
+                fecha: formatDateForRequest(fecha) || null,
+                division: division.trim(),
                 renglon_edificio: renglonEdificio.trim() || null,
                 supervisor_cliente: supervisorCliente.trim() || null,
                 supervisor_corporacion: supervisorCorporacion.trim() || null,
@@ -612,6 +752,7 @@ export default function InductionTourRecordScreen() {
                   firma: getBase64Only(p.firma),
                 }))) : null,
                 firma_supervisor: getBase64Only(firmaSupervisor),
+                firma_responsable: firmaResponsableHash.trim(),
               };
 
               const isConnected = await getConnectionStatus();
@@ -650,7 +791,8 @@ export default function InductionTourRecordScreen() {
                 const newRecordCache: InductionTourRecord = {
                   id: '',
                   id_local: localId,
-                  fecha: formatDate(fecha) || null,
+                  fecha: formatDateForRequest(fecha) || null,
+                  division: division.trim(),
                   renglon_edificio: renglonEdificio.trim() || null,
                   supervisor_cliente: supervisorCliente.trim() || null,
                   supervisor_corporacion: supervisorCorporacion.trim() || null,
@@ -661,6 +803,7 @@ export default function InductionTourRecordScreen() {
                     firma: getBase64Only(p.firma),
                   }))) : null,
                   firma_supervisor: getBase64Only(firmaSupervisor),
+                  firma_responsable: firmaResponsableHash.trim(),
                   created_at: new Date().toISOString(),
                   synced: false,
                 };
@@ -691,6 +834,16 @@ export default function InductionTourRecordScreen() {
       return;
     }
 
+    if (!division || !division.trim()) {
+      Alert.alert('Error', 'División es obligatoria');
+      return;
+    }
+
+    if (!firmaResponsableHash || !firmaResponsableHash.trim()) {
+      Alert.alert('Error', 'Firma responsable (QR/Generar) es obligatoria');
+      return;
+    }
+
     Alert.alert(
       'Confirmar',
       '¿Estás seguro de que deseas actualizar este registro de inducción y recorrido?',
@@ -701,7 +854,8 @@ export default function InductionTourRecordScreen() {
           onPress: async () => {
             try {
               const requestData = {
-                fecha: formatDate(fecha) || null,
+                fecha: formatDateForRequest(fecha) || null,
+                division: division.trim(),
                 renglon_edificio: renglonEdificio.trim() || null,
                 supervisor_cliente: supervisorCliente.trim() || null,
                 supervisor_corporacion: supervisorCorporacion.trim() || null,
@@ -712,6 +866,7 @@ export default function InductionTourRecordScreen() {
                   firma: getBase64Only(p.firma),
                 }))) : null,
                 firma_supervisor: getBase64Only(firmaSupervisor),
+                firma_responsable: firmaResponsableHash.trim(),
               };
 
               const isConnected = await getConnectionStatus();
@@ -734,14 +889,40 @@ export default function InductionTourRecordScreen() {
               } else {
                 const actionsStr = await AsyncStorage.getItem('evaluations_actions');
                 const actions = actionsStr ? JSON.parse(actionsStr) : [];
-                actions.push({
-                  id: recordId,
-                  action: 'update',
-                  type: 'induction_tour_record',
-                  payload: requestData,
-                  synced: false,
-                });
-                await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+
+                const isLocal = String(editingRecord.id_local || '').startsWith('local-') && String(recordId).startsWith('local-');
+                if (isLocal) {
+                  // If it's a local (create pending) record, update the create action payload instead of adding an update
+                  const idx = actions.findIndex((a: any) => a.id === editingRecord.id_local && a.action === 'create' && a.type === 'induction_tour_record');
+                  if (idx !== -1) {
+                    actions[idx] = {
+                      ...actions[idx],
+                      payload: { ...(actions[idx].payload || {}), ...requestData },
+                      synced: false,
+                    };
+                    await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+                  } else {
+                    actions.push({
+                      id: recordId,
+                      action: 'update',
+                      type: 'induction_tour_record',
+                      payload: requestData,
+                      synced: false,
+                    });
+                    await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+                  }
+                } else {
+                  // Deduplicate updates for server records
+                  const filtered = actions.filter((a: any) => !(a.id === recordId && a.action === 'update' && a.type === 'induction_tour_record'));
+                  filtered.push({
+                    id: recordId,
+                    action: 'update',
+                    type: 'induction_tour_record',
+                    payload: requestData,
+                    synced: false,
+                  });
+                  await AsyncStorage.setItem('evaluations_actions', JSON.stringify(filtered));
+                }
 
                 const cacheStr = await AsyncStorage.getItem('evaluations_cache');
                 if (cacheStr) {
@@ -793,7 +974,7 @@ export default function InductionTourRecordScreen() {
 
               if (isConnected) {
                 const result = await deleteInductionTourRecord({
-                  id: recordId,
+                  id: String(recordId),
                   refreshAccessToken,
                   logout,
                 });
@@ -807,14 +988,23 @@ export default function InductionTourRecordScreen() {
               } else {
                 const actionsStr = await AsyncStorage.getItem('evaluations_actions');
                 const actions = actionsStr ? JSON.parse(actionsStr) : [];
-                actions.push({
-                  id: recordId,
-                  action: 'delete',
-                  type: 'induction_tour_record',
-                  payload: {},
-                  synced: false,
-                });
-                await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+
+                const isLocal = String(record.id_local || '').startsWith('local-') && String(recordId).startsWith('local-');
+                if (isLocal) {
+                  // Remove pending create/update actions for local record instead of queuing a delete
+                  const filteredActions = actions.filter((a: any) => !(a.id === record.id_local && a.type === 'induction_tour_record'));
+                  await AsyncStorage.setItem('evaluations_actions', JSON.stringify(filteredActions));
+                } else {
+                  const filtered = actions.filter((a: any) => !(a.id === recordId && a.action === 'delete' && a.type === 'induction_tour_record'));
+                  filtered.push({
+                    id: recordId,
+                    action: 'delete',
+                    type: 'induction_tour_record',
+                    payload: {},
+                    synced: false,
+                  });
+                  await AsyncStorage.setItem('evaluations_actions', JSON.stringify(filtered));
+                }
 
                 const cacheStr = await AsyncStorage.getItem('evaluations_cache');
                 if (cacheStr) {
@@ -860,6 +1050,114 @@ export default function InductionTourRecordScreen() {
     }
   };
 
+  const toggleFirmaResponsableExpand = (recordId: string) => {
+    setExpandedFirmaResponsableIds((prev) => (prev.includes(recordId) ? prev.filter((id) => id !== recordId) : [...prev, recordId]));
+  };
+
+  const toggleTemasListExpand = (recordId: string) => {
+    setExpandedTemasListIds((prev) => (prev.includes(recordId) ? prev.filter((id) => id !== recordId) : [...prev, recordId]));
+  };
+
+  const toggleAspectosListExpand = (recordId: string) => {
+    setExpandedAspectosListIds((prev) => (prev.includes(recordId) ? prev.filter((id) => id !== recordId) : [...prev, recordId]));
+  };
+
+  const renderTemasDesarrolladosPreview = (record: InductionTourRecord) => {
+    const temas = safeParseJsonArray<TemaDesarrollado>(record.temas_desarrollados);
+    if (!temas.length) return null;
+
+    const recordId = String(record.id || record.id_local || '');
+    const expanded = expandedTemasListIds.includes(recordId);
+
+    return (
+      <ThemedView style={styles.resultsCollapsableCard}>
+        <TouchableOpacity style={styles.resultsCollapsableHeader} onPress={() => toggleTemasListExpand(recordId)}>
+          <ThemedText style={styles.resultsCollapsableHeaderText}>Temas desarrollados ({temas.length})</ThemedText>
+          <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={18} color="#007AFF" />
+        </TouchableOpacity>
+
+        {expanded && (
+          <ThemedView style={styles.resultsCollapsableBody}>
+            {temas.map((t, idx) => (
+              <ThemedView key={`${recordId}-tema-${idx}`} style={styles.resultItem}>
+                <ThemedText style={styles.resultItemTitle}>{`Tema ${idx + 1}`}</ThemedText>
+                <ThemedText style={styles.resultItemText}>{t.tema || 'N/A'}</ThemedText>
+                <ThemedText style={styles.resultItemMeta}>Respuesta: {t.respuesta || 'N/A'}</ThemedText>
+                {!!t.comentarios && <ThemedText style={styles.resultItemMeta}>Comentarios: {t.comentarios}</ThemedText>}
+              </ThemedView>
+            ))}
+          </ThemedView>
+        )}
+      </ThemedView>
+    );
+  };
+
+  const renderAspectosEspecificosPreview = (record: InductionTourRecord) => {
+    const aspectos = safeParseJsonArray<AspectoEspecifico>(record.aspectos_especificos);
+    if (!aspectos.length) return null;
+
+    const recordId = String(record.id || record.id_local || '');
+    const expanded = expandedAspectosListIds.includes(recordId);
+
+    return (
+      <ThemedView style={styles.resultsCollapsableCard}>
+        <TouchableOpacity style={styles.resultsCollapsableHeader} onPress={() => toggleAspectosListExpand(recordId)}>
+          <ThemedText style={styles.resultsCollapsableHeaderText}>Aspectos específicos ({aspectos.length})</ThemedText>
+          <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={18} color="#007AFF" />
+        </TouchableOpacity>
+
+        {expanded && (
+          <ThemedView style={styles.resultsCollapsableBody}>
+            {aspectos.map((a, idx) => (
+              <ThemedView key={`${recordId}-aspecto-${idx}`} style={styles.resultItem}>
+                <ThemedText style={styles.resultItemTitle}>{`Aspecto ${idx + 1}`}</ThemedText>
+                <ThemedText style={styles.resultItemText}>{a.aspecto || 'N/A'}</ThemedText>
+                <ThemedText style={styles.resultItemMeta}>Respuesta: {a.respuesta || 'N/A'}</ThemedText>
+                {!!a.comentarios && <ThemedText style={styles.resultItemMeta}>Comentarios: {a.comentarios}</ThemedText>}
+              </ThemedView>
+            ))}
+          </ThemedView>
+        )}
+      </ThemedView>
+    );
+  };
+
+  const renderFirmaResponsablePreview = (record: InductionTourRecord) => {
+    const hash = record.firma_responsable || '';
+    if (!hash) return null;
+
+    const recordId = String(record.id || record.id_local || '');
+    const expanded = expandedFirmaResponsableIds.includes(recordId);
+
+    return (
+      <ThemedView style={styles.signatureCollapsableCard}>
+        <TouchableOpacity style={styles.signatureCollapsableHeader} onPress={() => toggleFirmaResponsableExpand(recordId)}>
+          <ThemedText style={styles.signatureCollapsableHeaderText}>Firma responsable</ThemedText>
+          <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={18} color="#007AFF" />
+        </TouchableOpacity>
+
+        {expanded && (
+          <ThemedView style={styles.signatureCollapsableBody}>
+            {(() => {
+              const info = decodeFirmaHash(hash);
+              if (!info) {
+                return <ThemedText style={styles.signatureInfoValue}>Formato no decodificable</ThemedText>;
+              }
+              return (
+                <>
+                  <ThemedText style={styles.signatureInfoValue}>Sesión: {info.sessionId || 'N/A'}</ThemedText>
+                  <ThemedText style={styles.signatureInfoValue}>Empleado: {info.empleadoId || 'N/A'}</ThemedText>
+                  <ThemedText style={styles.signatureInfoValue}>Lat: {info.latitud || 'N/A'} | Long: {info.longitud || 'N/A'}</ThemedText>
+                  <ThemedText style={styles.signatureInfoValue}>Hora: {info.timestamp || 'N/A'}</ThemedText>
+                </>
+              );
+            })()}
+          </ThemedView>
+        )}
+      </ThemedView>
+    );
+  };
+
   const renderRecordList = () => {
     if (isLoading) {
       return (
@@ -893,20 +1191,28 @@ export default function InductionTourRecordScreen() {
             <ThemedView style={styles.listItemHeader}>
               <ThemedView style={styles.listItemContent}>
                 <ThemedText style={styles.listItemTitle}>
-                  Registro de Inducción y Recorrido
+                  {record.renglon_edificio || 'N/A'}
                 </ThemedText>
                 <ThemedText style={styles.listItemSubtitle}>
-                  Fecha: {record.fecha || 'N/A'} | Renglón/Edificio: {record.renglon_edificio || 'N/A'}
+                  División: {record.division || 'N/A'}
+                </ThemedText>
+                <ThemedText style={styles.listItemSubtitle}>
+                  Supervisor (Cliente): {record.supervisor_cliente || 'N/A'}
+                </ThemedText>
+                <ThemedText style={styles.listItemSubtitle}>
+                  Supervisor (Corporación): {record.supervisor_corporacion || 'N/A'}
+                </ThemedText>
+                <ThemedText style={styles.listItemSubtitle}>
+                  Fecha: {formatDateForDisplay(record.fecha)}
                 </ThemedText>
               </ThemedView>
               <ThemedView style={styles.listItemActions}>
-                {!record.synced && (
-                  <ThemedView style={styles.offlineBadge}>
-                    <ThemedText style={styles.offlineBadgeText}>Offline</ThemedText>
-                  </ThemedView>
-                )}
               </ThemedView>
             </ThemedView>
+
+            {renderFirmaResponsablePreview(record)}
+            {renderTemasDesarrolladosPreview(record)}
+            {renderAspectosEspecificosPreview(record)}
 
             <ThemedView style={styles.listItemDetails}>
               <ThemedView style={styles.listItemButtons}>
@@ -915,14 +1221,12 @@ export default function InductionTourRecordScreen() {
                   onPress={() => startEditing(record)}
                 >
                   {getActionIcon('edit')}
-                  <ThemedText style={styles.listItemButtonText}>Editar</ThemedText>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.listItemButton, styles.deleteButton]}
                   onPress={() => deleteRecordHandler(record)}
                 >
                   {getActionIcon('delete')}
-                  <ThemedText style={styles.listItemButtonText}>Eliminar</ThemedText>
                 </TouchableOpacity>
               </ThemedView>
             </ThemedView>
@@ -1198,16 +1502,21 @@ export default function InductionTourRecordScreen() {
 
   return (
     <ThemedView style={styles.container}>
-      <AppHeader onMenuPress={handleMenuPress} title="Registro de Inducción y Recorrido" />
+      <AppHeader onMenuPress={handleMenuPress} title="Induc. y Recorr. Misc" />
 
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
       >
         <ThemedView style={styles.contentContainer}>
-          <ThemedText type="title" style={styles.screenTitle}>
-            {getActionIcon('record')} Registro de Inducción y Recorrido
-          </ThemedText>
+          <ThemedView style={styles.titleContainer}>
+            <ThemedText type="title" style={styles.title}>
+              {getActionIcon('record')} Inducción y Recorrido (Misceláneo)
+            </ThemedText>
+            <ThemedText style={styles.subtitle}>
+              Gestiona los registros de inducción y recorrido
+            </ThemedText>
+          </ThemedView>
 
           {!hasCurrentMarca && (
             <ThemedView style={styles.noMarcaContainer}>
@@ -1240,6 +1549,23 @@ export default function InductionTourRecordScreen() {
                     onChange={handleDateChange}
                   />
                 )}
+              </ThemedView>
+
+              {/* División */}
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formLabel}>División *</ThemedText>
+                <View style={styles.pickerContainer}>
+                  <Picker
+                    selectedValue={division}
+                    onValueChange={(value) => setDivision(value)}
+                    style={styles.picker}
+                  >
+                    <Picker.Item label="Seleccionar..." value="" />
+                    <Picker.Item label="Seguridad" value="Seguridad" />
+                    <Picker.Item label="Aseo y limpieza" value="Aseo y limpieza" />
+                    <Picker.Item label="Otros" value="Otros" />
+                  </Picker>
+                </View>
               </ThemedView>
 
               {/* Renglón o Edificio */}
@@ -1345,30 +1671,77 @@ export default function InductionTourRecordScreen() {
                 )}
               </ThemedView>
 
+              {/* Firma responsable (QR) */}
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formLabel}>Firma responsable (QR) *</ThemedText>
+                {!firmaResponsableHash ? (
+                  <ThemedView style={styles.signatureButtonsRow}>
+                    <TouchableOpacity
+                      style={[styles.signatureQRButton, isGeneratingFirmaResponsable && styles.signatureQRButtonDisabled]}
+                      onPress={handleGenerateFirmaResponsable}
+                      disabled={isGeneratingFirmaResponsable}
+                    >
+                      {isGeneratingFirmaResponsable ? (
+                        <ActivityIndicator size="small" color="#FFFFFF" />
+                      ) : (
+                        <>
+                          <Ionicons name="finger-print" size={22} color="#FFFFFF" />
+                          <ThemedText style={styles.signatureQRButtonText}>Generar</ThemedText>
+                        </>
+                      )}
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.signatureQRButton} onPress={handleScanFirmaResponsable}>
+                      <Ionicons name="qr-code" size={18} color="#FFFFFF" />
+                      <ThemedText style={styles.signatureQRButtonText}>Escanear QR</ThemedText>
+                    </TouchableOpacity>
+                  </ThemedView>
+                ) : (
+                  <ThemedView style={styles.signatureInfoBox}>
+                    <ThemedView style={{ flex: 1, paddingRight: 10 }}>
+                      <ThemedText style={styles.signatureInfoTitle}>Información de la firma:</ThemedText>
+                      {(() => {
+                        const info = decodeFirmaHash(firmaResponsableHash);
+                        if (!info) {
+                          return <ThemedText style={styles.signatureInfoValue}>Formato no decodificable</ThemedText>;
+                        }
+                        return (
+                          <>
+                            <ThemedText style={styles.signatureInfoValue}>Sesión: {info.sessionId || 'N/A'}</ThemedText>
+                            <ThemedText style={styles.signatureInfoValue}>Empleado: {info.empleadoId || 'N/A'}</ThemedText>
+                            <ThemedText style={styles.signatureInfoValue}>Lat: {info.latitud || 'N/A'} | Long: {info.longitud || 'N/A'}</ThemedText>
+                            <ThemedText style={styles.signatureInfoValue}>Hora: {info.timestamp || 'N/A'}</ThemedText>
+                          </>
+                        );
+                      })()}
+                    </ThemedView>
+                    <TouchableOpacity style={styles.clearSignatureButtonTiny} onPress={() => setFirmaResponsableHash('')}>
+                      <Ionicons name="trash" size={18} color="#FFFFFF" />
+                    </TouchableOpacity>
+                  </ThemedView>
+                )}
+              </ThemedView>
+
               <ThemedView style={styles.actionButtons}>
                 <TouchableOpacity
                   style={[styles.actionButton, styles.cancelButton]}
                   onPress={editingRecord ? cancelEditing : cancelCreating}
                 >
                   {getActionIcon('cancel')}
-                  <ThemedText style={styles.actionButtonText}>Cancelar</ThemedText>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.actionButton, styles.saveButton]}
                   onPress={editingRecord ? updateRecordHandler : saveRecordHandler}
                 >
                   {getActionIcon('confirm')}
-                  <ThemedText style={styles.actionButtonText}>
-                    {editingRecord ? 'Actualizar' : 'Guardar'}
-                  </ThemedText>
                 </TouchableOpacity>
               </ThemedView>
             </ThemedView>
           ) : (
             <ThemedView style={styles.listSection}>
               <TouchableOpacity style={styles.createButton} onPress={startCreating}>
-                <Ionicons name="add-circle" size={24} color="#FFFFFF" />
-                <ThemedText style={styles.createButtonText}>Crear Nuevo Registro de Inducción y Recorrido</ThemedText>
+                <ThemedText style={styles.createButtonText}>
+                  <Ionicons name="add" size={20} color="#FFFFFF" />
+                </ThemedText>
               </TouchableOpacity>
               {renderRecordList()}
             </ThemedView>
@@ -1421,6 +1794,8 @@ export default function InductionTourRecordScreen() {
         </ThemedView>
       </Modal>
 
+      {QRScannerComponent}
+
       <AppFooter />
       <SlideMenu
         isVisible={isMenuVisible}
@@ -1435,6 +1810,7 @@ export default function InductionTourRecordScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: '#ffffff',
   },
   scrollView: {
     flex: 1,
@@ -1442,21 +1818,35 @@ const styles = StyleSheet.create({
   scrollContent: {
     alignItems: 'center',
     padding: 20,
+    backgroundColor: '#ffffff',
   },
   contentContainer: {
     width: '100%',
     maxWidth: 600,
+    backgroundColor: '#FFFFFF',
   },
-  screenTitle: {
+  titleContainer: {
+    alignItems: 'center',
+    marginBottom: 30,
+    paddingBottom: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+    width: '100%',
+  },
+  title: {
     fontSize: 24,
     fontWeight: 'bold',
-    marginBottom: 20,
-    color: '#000000',
     textAlign: 'center',
+    marginBottom: 8,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 10,
+  },
+  subtitle: {
+    fontSize: 16,
+    opacity: 0.7,
+    textAlign: 'center',
   },
   noMarcaContainer: {
     padding: 20,
@@ -1480,13 +1870,11 @@ const styles = StyleSheet.create({
   },
   createButton: {
     backgroundColor: '#007AFF',
-    padding: 15,
+    padding: 16,
     borderRadius: 8,
     alignItems: 'center',
     marginBottom: 20,
-    flexDirection: 'row',
     justifyContent: 'center',
-    gap: 10,
   },
   createButtonText: {
     color: '#FFFFFF',
@@ -1582,6 +1970,7 @@ const styles = StyleSheet.create({
   temaHeaderContent: {
     flex: 1,
     marginRight: 10,
+    backgroundColor: '#F5F5F5',
   },
   temaHeaderText: {
     fontSize: 16,
@@ -1592,6 +1981,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
+    backgroundColor: '#F5F5F5',
   },
   removeTemaButton: {
     padding: 4,
@@ -1617,6 +2007,7 @@ const styles = StyleSheet.create({
   aspectoHeaderContent: {
     flex: 1,
     marginRight: 10,
+    backgroundColor: '#F5F5F5',
   },
   aspectoHeaderText: {
     fontSize: 16,
@@ -1627,6 +2018,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
+    backgroundColor: '#F5F5F5',
   },
   removeAspectoButton: {
     padding: 4,
@@ -1728,6 +2120,91 @@ const styles = StyleSheet.create({
     color: '#FF3B30',
     fontWeight: '600',
   },
+
+  // Firma responsable (QR)
+  signatureButtonsRow: { flexDirection: 'row', gap: 12 },
+  signatureQRButton: {
+    flex: 1,
+    backgroundColor: '#007AFF',
+    borderRadius: 8,
+    padding: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 8,
+  },
+  signatureQRButtonDisabled: { opacity: 0.6 },
+  signatureQRButtonText: { color: '#FFFFFF', fontSize: 14, fontWeight: '600' },
+  signatureInfoBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    backgroundColor: '#F9F9F9',
+  },
+  signatureInfoTitle: { fontSize: 14, fontWeight: '700', marginBottom: 8, color: '#333' },
+  signatureInfoValue: { fontSize: 13, color: '#333', marginBottom: 4 },
+  clearSignatureButtonTiny: {
+    width: 38,
+    height: 38,
+    borderRadius: 8,
+    backgroundColor: '#FF3B30',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  // Collapsable firma responsable (lista)
+  signatureCollapsableCard: {
+    marginHorizontal: 16,
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    backgroundColor: '#F9F9F9',
+    overflow: 'hidden',
+  },
+  signatureCollapsableHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 12,
+    backgroundColor: '#F0F0F0',
+  },
+  signatureCollapsableHeaderText: { fontSize: 14, fontWeight: '600', color: '#007AFF', flex: 1, paddingRight: 8 },
+  signatureCollapsableBody: { padding: 12, backgroundColor: '#F9F9F9' },
+
+  // Collapsables (lista): temas / aspectos
+  resultsCollapsableCard: {
+    marginHorizontal: 16,
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    backgroundColor: '#F9F9F9',
+    overflow: 'hidden',
+  },
+  resultsCollapsableHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 12,
+    backgroundColor: '#F0F0F0',
+  },
+  resultsCollapsableHeaderText: { fontSize: 14, fontWeight: '600', color: '#007AFF', flex: 1, paddingRight: 8 },
+  resultsCollapsableBody: { padding: 12, backgroundColor: '#F9F9F9', gap: 12 },
+  resultItem: {
+    padding: 12,
+    borderRadius: 8,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#EAEAEA',
+    gap: 6,
+  },
+  resultItemTitle: { fontSize: 14, fontWeight: '700', color: '#333' },
+  resultItemText: { fontSize: 13, color: '#333' },
+  resultItemMeta: { fontSize: 12, color: '#666' },
   actionButtons: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -1747,7 +2224,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#CCCCCC',
   },
   saveButton: {
-    backgroundColor: '#FF9500',
+    backgroundColor: '#007AFF',
   },
   actionButtonText: {
     color: '#FFFFFF',
@@ -1777,10 +2254,11 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     padding: 15,
-    backgroundColor: '#F0F0F0',
+    backgroundColor: '#ffffff',
   },
   listItemContent: {
     flex: 1,
+    backgroundColor: '#ffffff',
   },
   listItemTitle: {
     fontSize: 16,

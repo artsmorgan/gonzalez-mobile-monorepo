@@ -13,6 +13,7 @@ import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Picker } from '@react-native-picker/picker';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import * as Network from 'expo-network';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { createVehicle as createVehicleAPI, updateVehicle as updateVehicleAPI, deleteVehicle as deleteVehicleAPI } from '@/hooks/vehiclesFunctions';
@@ -112,8 +113,82 @@ export default function VehiclesScreen() {
   const horaSalidaMRef = useRef('');
   const razonVisitaRef = useRef('');
   
+  const syncTimeFields = (
+    entradaH: string,
+    entradaM: string,
+    salidaH: string,
+    salidaM: string,
+  ) => {
+    horaEntradaHRef.current = entradaH || '';
+    horaEntradaMRef.current = entradaM || '';
+    horaSalidaHRef.current = salidaH || '';
+    horaSalidaMRef.current = salidaM || '';
+    setHoraEntradaDisplay(
+      entradaH && entradaM ? `${entradaH.padStart(2, '0')}:${entradaM.padStart(2, '0')}` : ''
+    );
+    setHoraSalidaDisplay(
+      salidaH && salidaM ? `${salidaH.padStart(2, '0')}:${salidaM.padStart(2, '0')}` : ''
+    );
+  };
+
+  const buildDateFromParts = (hours: string, minutes: string) => {
+    const baseDate = new Date();
+    const h = parseInt(hours || '0', 10);
+    const m = parseInt(minutes || '0', 10);
+    baseDate.setHours(isNaN(h) ? 0 : h, isNaN(m) ? 0 : m, 0, 0);
+    return baseDate;
+  };
+
+  const openHoraEntradaPicker = () => {
+    const baseDate = buildDateFromParts(horaEntradaHRef.current, horaEntradaMRef.current);
+    setHoraEntradaPickerValue(baseDate);
+    setShowHoraEntradaPicker(true);
+  };
+
+  const handleHoraEntradaPickerChange = (event: any, selectedTime?: Date) => {
+    if (Platform.OS === 'android') {
+      setShowHoraEntradaPicker(false);
+    }
+    if (!selectedTime) return;
+    setHoraEntradaPickerValue(selectedTime);
+    const hours = selectedTime.getHours().toString().padStart(2, '0');
+    const minutes = selectedTime.getMinutes().toString().padStart(2, '0');
+    syncTimeFields(hours, minutes, horaSalidaHRef.current, horaSalidaMRef.current);
+  };
+
+  const openHoraSalidaPicker = () => {
+    const baseDate = buildDateFromParts(horaSalidaHRef.current, horaSalidaMRef.current);
+    setHoraSalidaPickerValue(baseDate);
+    setShowHoraSalidaPicker(true);
+  };
+
+  const handleHoraSalidaPickerChange = (event: any, selectedTime?: Date) => {
+    if (Platform.OS === 'android') {
+      setShowHoraSalidaPicker(false);
+    }
+    if (!selectedTime) return;
+    setHoraSalidaPickerValue(selectedTime);
+    const hours = selectedTime.getHours().toString().padStart(2, '0');
+    const minutes = selectedTime.getMinutes().toString().padStart(2, '0');
+    syncTimeFields(horaEntradaHRef.current, horaEntradaMRef.current, hours, minutes);
+  };
+
+  const clearHoraSalida = () => {
+    syncTimeFields(horaEntradaHRef.current, horaEntradaMRef.current, '', '');
+    setHoraSalidaPickerValue(buildDateFromParts('', ''));
+    setShowHoraSalidaPicker(false);
+  };
+  
   // Minimal state for Picker (needs controlled value)
   const [vehicleTipo, setVehicleTipo] = useState<'Particular' | 'Institucional'>('Particular');
+  
+  // Time picker state
+  const [showHoraEntradaPicker, setShowHoraEntradaPicker] = useState(false);
+  const [horaEntradaPickerValue, setHoraEntradaPickerValue] = useState(new Date());
+  const [horaEntradaDisplay, setHoraEntradaDisplay] = useState('');
+  const [showHoraSalidaPicker, setShowHoraSalidaPicker] = useState(false);
+  const [horaSalidaPickerValue, setHoraSalidaPickerValue] = useState(new Date());
+  const [horaSalidaDisplay, setHoraSalidaDisplay] = useState('');
   
   // Filters state
   const [searchText, setSearchText] = useState('');
@@ -429,6 +504,11 @@ export default function VehiclesScreen() {
                     razon_visita: '',
                     base64_image: '',
                   });
+                  syncTimeFields('', '', '', '');
+                  setHoraEntradaPickerValue(buildDateFromParts('', ''));
+                  setHoraSalidaPickerValue(buildDateFromParts('', ''));
+                  setShowHoraEntradaPicker(false);
+                  setShowHoraSalidaPicker(false);
                   setVehicleImageBase64(null);
                   fetchVehicles();
                 } else {
@@ -491,6 +571,11 @@ export default function VehiclesScreen() {
                   razon_visita: '',
                   base64_image: '',
                 });
+                syncTimeFields('', '', '', '');
+                setHoraEntradaPickerValue(buildDateFromParts('', ''));
+                setHoraSalidaPickerValue(buildDateFromParts('', ''));
+                setShowHoraEntradaPicker(false);
+                setShowHoraSalidaPicker(false);
                 setVehicleImageBase64(null);
                 fetchVehicles();
               }
@@ -855,58 +940,52 @@ export default function VehiclesScreen() {
 
         {/* Hora Entrada */}
         <ThemedView style={styles.formGroup}>
-          <ThemedText style={styles.formLabel}>Hora de Entrada (HH:MM):</ThemedText>
-          <ThemedView style={styles.timeInputContainer}>
-            <TextInput
-              style={[styles.timeInput, styles.timeInputHour]}
-              defaultValue={vehicle.hora_entrada_h}
-              onChangeText={(text) => { horaEntradaHRef.current = text; }}
-              placeholder="00"
-              placeholderTextColor="#999"
-              keyboardType="numeric"
-              maxLength={2}
-              key={`hora-entrada-h-${isCreating ? 'create' : vehicle.id}`}
-            />
-            <ThemedText style={styles.timeSeparator}>:</ThemedText>
-            <TextInput
-              style={[styles.timeInput, styles.timeInputMinute]}
-              defaultValue={vehicle.hora_entrada_m}
-              onChangeText={(text) => { horaEntradaMRef.current = text; }}
-              placeholder="00"
-              placeholderTextColor="#999"
-              keyboardType="numeric"
-              maxLength={2}
-              key={`hora-entrada-m-${isCreating ? 'create' : vehicle.id}`}
-            />
-          </ThemedView>
+          <ThemedText style={styles.formLabel}>Hora de Entrada:</ThemedText>
+          <TouchableOpacity style={styles.timePickerButton} onPress={openHoraEntradaPicker}>
+            <ThemedText style={styles.timePickerButtonText}>
+              {horaEntradaDisplay || 'Seleccionar hora'}
+            </ThemedText>
+            <Ionicons name="time-outline" size={20} color="#007AFF" />
+          </TouchableOpacity>
+          {showHoraEntradaPicker && (
+            <View style={styles.inlinePickerContainer}>
+              <DateTimePicker
+                value={horaEntradaPickerValue}
+                mode="time"
+                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                onChange={handleHoraEntradaPickerChange}
+              />
+            </View>
+          )}
         </ThemedView>
 
         {/* Hora Salida */}
         <ThemedView style={styles.formGroup}>
-          <ThemedText style={styles.formLabel}>Hora de Salida (HH:MM) - Opcional:</ThemedText>
-          <ThemedView style={styles.timeInputContainer}>
-            <TextInput
-              style={[styles.timeInput, styles.timeInputHour]}
-              defaultValue={vehicle.hora_salida_h}
-              onChangeText={(text) => { horaSalidaHRef.current = text; }}
-              placeholder="00"
-              placeholderTextColor="#999"
-              keyboardType="numeric"
-              maxLength={2}
-              key={`hora-salida-h-${isCreating ? 'create' : vehicle.id}`}
-            />
-            <ThemedText style={styles.timeSeparator}>:</ThemedText>
-            <TextInput
-              style={[styles.timeInput, styles.timeInputMinute]}
-              defaultValue={vehicle.hora_salida_m}
-              onChangeText={(text) => { horaSalidaMRef.current = text; }}
-              placeholder="00"
-              placeholderTextColor="#999"
-              keyboardType="numeric"
-              maxLength={2}
-              key={`hora-salida-m-${isCreating ? 'create' : vehicle.id}`}
-            />
-          </ThemedView>
+          <ThemedText style={styles.formLabel}>Hora de Salida (opcional):</ThemedText>
+          <View style={styles.timePickerRow}>
+            <TouchableOpacity style={styles.timePickerButton} onPress={openHoraSalidaPicker}>
+              <ThemedText style={styles.timePickerButtonText}>
+                {horaSalidaDisplay || 'Seleccionar hora'}
+              </ThemedText>
+              <Ionicons name="time-outline" size={20} color="#007AFF" />
+            </TouchableOpacity>
+            {horaSalidaDisplay !== '' && (
+              <TouchableOpacity style={styles.clearTimeButton} onPress={clearHoraSalida}>
+                <Ionicons name="close-circle" size={18} color="#FF3B30" />
+                <ThemedText style={styles.clearTimeText}>Limpiar</ThemedText>
+              </TouchableOpacity>
+            )}
+          </View>
+          {showHoraSalidaPicker && (
+            <View style={styles.inlinePickerContainer}>
+              <DateTimePicker
+                value={horaSalidaPickerValue}
+                mode="time"
+                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                onChange={handleHoraSalidaPickerChange}
+              />
+            </View>
+          )}
         </ThemedView>
 
         {/* Razón Visita */}
@@ -1055,6 +1134,11 @@ export default function VehiclesScreen() {
       razon_visita: vehicle.razon_visita,
       base64_image: vehicle.base64_image || '',
     });
+    syncTimeFields(hours, minutes, exitHours, exitMinutes);
+    setHoraEntradaPickerValue(buildDateFromParts(hours, minutes));
+    setHoraSalidaPickerValue(buildDateFromParts(exitHours, exitMinutes));
+    setShowHoraEntradaPicker(false);
+    setShowHoraSalidaPicker(false);
     
     // Initialize refs with vehicle values
     tipoRef.current = vehicle.tipo;
@@ -1162,6 +1246,11 @@ export default function VehiclesScreen() {
   };
 
   const startCreating = () => {
+    syncTimeFields('', '', '', '');
+    setHoraEntradaPickerValue(buildDateFromParts('', ''));
+    setHoraSalidaPickerValue(buildDateFromParts('', ''));
+    setShowHoraEntradaPicker(false);
+    setShowHoraSalidaPicker(false);
     setIsCreating(true);
     setNewVehicle({
       id: null,
@@ -1954,6 +2043,44 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: 'bold',
     color: '#333',
+  },
+  timePickerButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    backgroundColor: '#F9F9F9',
+  },
+  timePickerButtonText: {
+    fontSize: 16,
+    color: '#000000',
+  },
+  timePickerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  clearTimeButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 8,
+    marginLeft: 8,
+  },
+  clearTimeText: {
+    color: '#FF3B30',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  inlinePickerContainer: {
+    marginTop: 8,
+    borderRadius: 8,
+    backgroundColor: '#FFFFFF',
   },
   confirmButton: {
     flex: 1,

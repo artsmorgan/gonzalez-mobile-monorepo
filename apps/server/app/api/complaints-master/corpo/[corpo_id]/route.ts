@@ -21,16 +21,26 @@ export async function GET(
 
         const records = await prisma.c_maestro_quejas.findMany({
             where: {
-                corpo_id: corpo_id
+                corpo_id: parseInt(corpo_id)
             },
             orderBy: {
                 created_at: 'desc'
-            }
+            },
+            include: {
+                c_anexos_quejas: true,
+            },
         });
 
         const recordsWithIdLocal = records.map(record => ({
             ...record,
-            id_local: ""
+            id_local: "",
+            files: (record.c_anexos_quejas || []).map((f) => ({
+                id: f.id,
+                name: f.name,
+                original_name: f.original_name,
+                type: f.type,
+                extension: f.extension,
+            })),
         }));
 
         return NextResponse.json({
