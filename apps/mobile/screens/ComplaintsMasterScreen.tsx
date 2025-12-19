@@ -8,6 +8,9 @@ import {
   ActivityIndicator,
   View,
   Platform,
+  Image,
+  Dimensions,
+  Linking,
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { ThemedText } from '@/components/ThemedText';
@@ -24,14 +27,22 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Picker } from '@react-native-picker/picker';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import * as Network from 'expo-network';
-import { createComplaintsMaster, updateComplaintsMaster, deleteComplaintsMaster, listComplaintsMasterByCorpo } from '@/hooks/evaluationFunctions';
+import * as DocumentPicker from 'expo-document-picker';
+import * as Location from 'expo-location';
+import { jwtDecode } from 'jwt-decode';
+import { useQRScanner } from '@/hooks/useQRScanner';
+import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
+import { useVideoPlayer, VideoView } from 'expo-video';
+import { createComplaintsMaster, updateComplaintsMaster, deleteComplaintsMaster, deleteComplaintsMasterFile, listComplaintsMasterByCorpo } from '@/hooks/evaluationFunctions';
 import { eventBus } from '@/hooks/eventBus';
+import getHoraAccion from '@/hooks/getHoraAccion';
 
 type ComplaintsMasterScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'ComplaintsMaster'>;
 
 interface Complaint {
-  id: string;
+  id: string | number;
   id_local: string;
+  files?: ComplaintFile[];
   sociedad: string | null;
   nombre_realiza_queja: string | null;
   cliente: string | null;
@@ -47,18 +58,17 @@ interface Complaint {
   fecha_inicio: string | null;
   fecha_revision: string | null;
   resolucion_queja: string | null;
-  mes_queja: string | null;
-  ano_queja: string | null;
   estado: string | null;
   accion_correctiva_preventiva: string | null;
-  anexo_evidencia: string | null;
+  firma_responsable?: string | null;
   created_at: string;
   synced?: boolean;
 }
 
 interface EditingComplaint {
-  id: string | null;
+  id: string | number | null;
   id_local: string;
+  files?: ComplaintFile[];
   sociedad: string;
   nombre_realiza_queja: string;
   cliente: string;
@@ -74,24 +84,65 @@ interface EditingComplaint {
   fecha_inicio: string;
   fecha_revision: string;
   resolucion_queja: string;
-  mes_queja: string;
-  ano_queja: string;
   estado: string;
   accion_correctiva_preventiva: string;
-  anexo_evidencia: string;
+  firma_responsable: string;
 }
 
-const MONTHS = [
-  'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
-  'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'
-];
+type ComplaintFile = {
+  id: number;
+  name: string;
+  original_name: string;
+  type: 'image' | 'audio' | 'video' | 'document' | string;
+  extension: string;
+};
 
-const YEARS = Array.from({ length: 10 }, (_, i) => (new Date().getFullYear() - 5 + i).toString());
+type LocalFile = {
+  id: string;
+  type: 'image' | 'audio' | 'video' | 'document';
+  name: string;
+  extension: string;
+  base64: string;
+  uri?: string;
+  mimeType?: string;
+  server_file_id?: number; // para archivos existentes precargados (c_anexos_quejas.id)
+};
+
+interface FirmaData {
+  sessionId: string;
+  empleadoId: string;
+  latitud: string;
+  longitud: string;
+  timestamp: string;
+  empleadoDetalle?: {
+    nombre: string;
+    primer_apellido: string;
+    segundo_apellido: string;
+  };
+}
+
+const buildComplaintFileUrl = (complaintId: string | number, file: ComplaintFile) => {
+  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  if (!apiUrl) return '';
+  const idNum = typeof complaintId === 'number' ? complaintId : parseInt(String(complaintId), 10);
+  if (!idNum) return '';
+
+  if (file.type === 'image') return `${apiUrl}/api/complaints-master/${idNum}/get-image/${encodeURIComponent(file.name)}`;
+  if (file.type === 'audio') return `${apiUrl}/api/complaints-master/${idNum}/get-audio/${encodeURIComponent(file.name)}`;
+  if (file.type === 'video') return `${apiUrl}/api/complaints-master/${idNum}/get-video/${encodeURIComponent(file.name)}`;
+  return `${apiUrl}/api/complaints-master/${idNum}/get-file/${encodeURIComponent(file.name)}`;
+};
+
+const getComplaintFileDisplayName = (file: ComplaintFile) => {
+  if (file.original_name && String(file.original_name).trim().length > 0) return String(file.original_name);
+  return file.name;
+};
 
 export default function ComplaintsMasterScreen() {
   const { employee, refreshAccessToken, logout } = useAuth();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const navigation = useNavigation<ComplaintsMasterScreenNavigationProp>();
+  const { scanQR, QRScannerComponent } = useQRScanner();
 
   // Data states
   const [complaints, setComplaints] = useState<Complaint[]>([]);
@@ -121,11 +172,17 @@ export default function ComplaintsMasterScreen() {
   const [fechaInicio, setFechaInicio] = useState('');
   const [fechaRevision, setFechaRevision] = useState('');
   const [resolucionQueja, setResolucionQueja] = useState('');
-  const [mesQueja, setMesQueja] = useState('');
-  const [anoQueja, setAnoQueja] = useState('');
   const [estado, setEstado] = useState('');
   const [accionCorrectivaPreventiva, setAccionCorrectivaPreventiva] = useState('');
-  const [anexoEvidencia, setAnexoEvidencia] = useState('');
+  const [imageFiles, setImageFiles] = useState<LocalFile[]>([]);
+  const [audioFiles, setAudioFiles] = useState<LocalFile[]>([]);
+  const [videoFiles, setVideoFiles] = useState<LocalFile[]>([]);
+  const [documentFiles, setDocumentFiles] = useState<LocalFile[]>([]);
+  const [isPreloadingEditFiles, setIsPreloadingEditFiles] = useState(false);
+
+  // Firma responsable (requerida por Prisma)
+  const [firmaResponsable, setFirmaResponsable] = useState<FirmaData | null>(null);
+  const [isGeneratingFirma, setIsGeneratingFirma] = useState(false);
 
   // Date picker states
   const [showDatePickerQueja, setShowDatePickerQueja] = useState(false);
@@ -149,6 +206,387 @@ export default function ComplaintsMasterScreen() {
     const month = (date.getMonth() + 1).toString().padStart(2, '0');
     const year = date.getFullYear();
     return `${day}/${month}/${year}`;
+  };
+
+  const handleAddFile = async (type: LocalFile['type']) => {
+    try {
+      let pickerTypes: string | string[] | undefined;
+      switch (type) {
+        case 'image':
+          pickerTypes = ['image/*']; break;
+        case 'audio':
+          pickerTypes = ['audio/*']; break;
+        case 'video':
+          pickerTypes = ['video/*']; break;
+        case 'document':
+        default:
+          pickerTypes = [
+            'application/pdf',
+            'application/msword',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'application/vnd.ms-excel',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'text/plain',
+            'text/csv',
+          ];
+          break;
+      }
+
+      const result = await DocumentPicker.getDocumentAsync({
+        type: pickerTypes,
+        multiple: false,
+        copyToCacheDirectory: true,
+      });
+
+      if (result.canceled || !result.assets || result.assets.length === 0) return;
+
+      const asset = result.assets[0];
+      const response = await fetch(asset.uri);
+      const blob = await response.blob();
+
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const res = reader.result;
+          if (typeof res === 'string') {
+            const parts = res.split(',');
+            resolve(parts.length > 1 ? parts[1] : parts[0]);
+          } else {
+            reject(new Error('No se pudo leer el archivo seleccionado'));
+          }
+        };
+        reader.onerror = () => reject(reader.error ?? new Error('Error al leer el archivo seleccionado'));
+        reader.readAsDataURL(blob);
+      });
+
+      let extension = '';
+      if (asset.name && asset.name.includes('.')) extension = asset.name.split('.').pop() || '';
+      else if (asset.mimeType && asset.mimeType.includes('/')) extension = asset.mimeType.split('/').pop() || '';
+
+      const localId = `local_file_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      const file: LocalFile = {
+        id: localId,
+        type,
+        name: asset.name || `archivo.${extension || 'dat'}`,
+        extension: extension || 'dat',
+        base64,
+        uri: asset.uri,
+        mimeType: asset.mimeType,
+      };
+
+      if (type === 'image') setImageFiles(prev => [...prev, file]);
+      else if (type === 'audio') setAudioFiles(prev => [...prev, file]);
+      else if (type === 'video') setVideoFiles(prev => [...prev, file]);
+      else setDocumentFiles(prev => [...prev, file]);
+    } catch (e) {
+      console.error('Error picking file for complaint:', e);
+      Alert.alert('Error', 'No se pudo seleccionar el archivo. Intenta nuevamente.');
+    }
+  };
+
+  const blobToBase64 = async (blob: Blob): Promise<string> => {
+    return await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const res = reader.result;
+        if (typeof res === 'string') {
+          const parts = res.split(',');
+          resolve(parts.length > 1 ? parts[1] : parts[0]);
+        } else {
+          reject(new Error('No se pudo leer el archivo'));
+        }
+      };
+      reader.onerror = () => reject(reader.error ?? new Error('Error al leer el archivo'));
+      reader.readAsDataURL(blob);
+    });
+  };
+
+  const preloadExistingFilesForEdit = async (record: Complaint) => {
+    try {
+      const complaintId = parseInt(String(record.id), 10);
+      if (!complaintId) return;
+      const existingFiles: ComplaintFile[] = Array.isArray(record.files) ? record.files : [];
+      if (existingFiles.length === 0) return;
+
+      setIsPreloadingEditFiles(true);
+
+      const nextImages: LocalFile[] = [];
+      const nextAudios: LocalFile[] = [];
+      const nextVideos: LocalFile[] = [];
+      const nextDocs: LocalFile[] = [];
+
+      for (const f of existingFiles) {
+        const url = buildComplaintFileUrl(complaintId, f);
+        if (!url) continue;
+
+        const resp = await fetch(url);
+        if (!resp.ok) continue;
+
+        const blob = await resp.blob();
+        const base64 = await blobToBase64(blob);
+
+        const lf: LocalFile = {
+          id: `server_${f.id}`,
+          type: (f.type as any) || 'document',
+          name: f.original_name || f.name,
+          extension: f.extension || (f.name.includes('.') ? (f.name.split('.').pop() || 'dat') : 'dat'),
+          base64,
+          server_file_id: f.id,
+        };
+
+        if (lf.type === 'image') nextImages.push(lf);
+        else if (lf.type === 'audio') nextAudios.push(lf);
+        else if (lf.type === 'video') nextVideos.push(lf);
+        else nextDocs.push(lf);
+      }
+
+      // Estos arrays representan “todos los adjuntos” que se reenviarán al PUT (replace)
+      setImageFiles(nextImages);
+      setAudioFiles(nextAudios);
+      setVideoFiles(nextVideos);
+      setDocumentFiles(nextDocs);
+    } catch (err) {
+      console.error('Error preloading complaint files:', err);
+      Alert.alert('Error', 'No se pudieron cargar los archivos adjuntos para edición');
+    } finally {
+      setIsPreloadingEditFiles(false);
+    }
+  };
+
+  const removeLocalFile = (type: LocalFile['type'], id: string) => {
+    if (type === 'image') setImageFiles(prev => prev.filter(f => f.id !== id));
+    else if (type === 'audio') setAudioFiles(prev => prev.filter(f => f.id !== id));
+    else if (type === 'video') setVideoFiles(prev => prev.filter(f => f.id !== id));
+    else setDocumentFiles(prev => prev.filter(f => f.id !== id));
+  };
+
+  const generateSignature = async () => {
+    try {
+      setIsGeneratingFirma(true);
+
+      if (!employee?.id) {
+        Alert.alert('Error', 'No se pudo obtener el ID del empleado');
+        return;
+      }
+
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permisos requeridos', 'Se necesita acceso a la ubicación para generar la firma');
+        return;
+      }
+
+      const location = await Location.getCurrentPositionAsync({});
+      const token = await AsyncStorage.getItem('access_token');
+      if (!token) {
+        Alert.alert('Error', 'No se pudo obtener el token de sesión');
+        return;
+      }
+
+      const decoded: any = jwtDecode(token);
+      const sessionId = decoded.sessionId || 'unknown';
+
+      const timestamp = await getHoraAccion();
+      if (!timestamp) {
+        Alert.alert('Error', 'No se pudo obtener la hora');
+        return;
+      }
+
+      const { latitude, longitude } = location.coords;
+      const empleadoId = employee.id.toString();
+
+      // Fetch employee details (opcional)
+      let empleadoDetalle = undefined;
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (apiUrl) {
+        try {
+          const empleadoResponse = await fetch(`${apiUrl}/api/empleados/${empleadoId}`, {
+            method: 'GET',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+              'ngrok-skip-browser-warning': '69420',
+            },
+          });
+          if (empleadoResponse.ok) {
+            const empleadoData = await empleadoResponse.json();
+            empleadoDetalle = {
+              nombre: empleadoData.nombre,
+              primer_apellido: empleadoData.primer_apellido,
+              segundo_apellido: empleadoData.segundo_apellido,
+            };
+          }
+        } catch (err) {
+          console.error('Error fetching empleado details:', err);
+        }
+      }
+
+      setFirmaResponsable({
+        sessionId,
+        empleadoId,
+        latitud: latitude.toString(),
+        longitud: longitude.toString(),
+        timestamp: timestamp.toString(),
+        empleadoDetalle,
+      });
+    } catch (error) {
+      console.error('Error generating signature:', error);
+      Alert.alert('Error', 'No se pudo generar la firma digital');
+    } finally {
+      setIsGeneratingFirma(false);
+    }
+  };
+
+  const setFirmaFromHashIfPossible = async (firmaHash?: string | null) => {
+    try {
+      if (!firmaHash || String(firmaHash).trim().length === 0) return;
+      const decodedData = atob(String(firmaHash));
+      const parts = decodedData.split(':');
+      if (parts.length !== 5) return;
+      const [sessionId, empleadoId, latitud, longitud, timestamp] = parts;
+
+      setFirmaResponsable({
+        sessionId,
+        empleadoId,
+        latitud,
+        longitud,
+        timestamp,
+      });
+    } catch {
+      // ignore decode errors (firma podría venir en otro formato)
+    }
+  };
+
+  const handleScanQR = async () => {
+    try {
+      const qrData = await scanQR();
+      if (!qrData) return;
+
+      const decodedData = atob(qrData);
+      const parts = decodedData.split(':');
+      if (parts.length !== 5) {
+        Alert.alert('Error', 'El QR escaneado no tiene el formato correcto');
+        return;
+      }
+
+      const [sessionId, empleadoId, latitud, longitud, timestamp] = parts;
+
+      let empleadoDetalle = undefined;
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const token = await AsyncStorage.getItem('access_token');
+      if (apiUrl && token) {
+        try {
+          const empleadoResponse = await fetch(`${apiUrl}/api/empleados/${empleadoId}`, {
+            method: 'GET',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+              'ngrok-skip-browser-warning': '69420',
+            },
+          });
+          if (empleadoResponse.ok) {
+            const empleadoData = await empleadoResponse.json();
+            empleadoDetalle = {
+              nombre: empleadoData.nombre,
+              primer_apellido: empleadoData.primer_apellido,
+              segundo_apellido: empleadoData.segundo_apellido,
+            };
+          }
+        } catch (err) {
+          console.error('Error fetching empleado details:', err);
+        }
+      }
+
+      setFirmaResponsable({ sessionId, empleadoId, latitud, longitud, timestamp, empleadoDetalle });
+    } catch (error) {
+      console.error('Error scanning QR:', error);
+      Alert.alert('Error', 'No se pudo escanear el código QR');
+    }
+  };
+
+  const deleteAttachedFile = async (file: ComplaintFile) => {
+    if (!editingRecord) return;
+    const recordId = editingRecord.id || editingRecord.id_local;
+    if (!recordId || !file?.id) return;
+
+    Alert.alert(
+      'Confirmar',
+      '¿Deseas eliminar este archivo adjunto?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Eliminar',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const isConnected = await getConnectionStatus();
+
+              // Online: borrar en server
+              if (isConnected && editingRecord.id && !String(editingRecord.id).startsWith('local-')) {
+                const res = await deleteComplaintsMasterFile({
+                  id: String(editingRecord.id),
+                  fileId: file.id,
+                  refreshAccessToken,
+                  logout,
+                });
+                if (!res.status) {
+                  Alert.alert('Error', res.message || 'No se pudo eliminar el archivo');
+                  return;
+                }
+              } else {
+                // Offline: encolar acción
+                const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+                const actions = actionsStr ? JSON.parse(actionsStr) : [];
+                actions.push({
+                  id: recordId,
+                  action: 'delete_file',
+                  type: 'complaints_master',
+                  payload: { fileId: file.id },
+                  synced: false,
+                });
+                await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+              }
+
+              // Importante: removerlo de los arrays locales (porque el PUT hará replace)
+              setImageFiles(prev => prev.filter(f => f.server_file_id !== file.id));
+              setAudioFiles(prev => prev.filter(f => f.server_file_id !== file.id));
+              setVideoFiles(prev => prev.filter(f => f.server_file_id !== file.id));
+              setDocumentFiles(prev => prev.filter(f => f.server_file_id !== file.id));
+
+              // Actualizar estado local (registro en edición)
+              const nextFiles = (editingRecord.files || []).filter(f => f.id !== file.id);
+              setEditingRecord(prev => prev ? ({ ...prev, files: nextFiles }) : prev);
+
+              // Actualizar lista visible (complaints)
+              setComplaints(prev => prev.map((c) => {
+                const cid = c.id || c.id_local;
+                if (String(cid) === String(recordId)) {
+                  const currentFiles = Array.isArray(c.files) ? c.files : [];
+                  return { ...c, files: currentFiles.filter((f2: any) => f2.id !== file.id) };
+                }
+                return c;
+              }));
+
+              // Actualizar cache
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if ((String(item.id) === String(recordId) || String(item.id_local) === String(recordId)) && item.type === 'complaints_master') {
+                    const currentFiles = Array.isArray(item.files) ? item.files : [];
+                    return { ...item, files: currentFiles.filter((f: any) => f.id !== file.id) };
+                  }
+                  return item;
+                });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            } catch (err) {
+              console.error('Error deleting attached file:', err);
+              Alert.alert('Error', 'No se pudo eliminar el archivo');
+            }
+          },
+        },
+      ]
+    );
   };
 
   useFocusEffect(
@@ -200,7 +638,22 @@ export default function ComplaintsMasterScreen() {
         });
 
         if (result.status && result.data) {
-          setComplaints(result.data as Complaint[]);
+          const serverRecords = (result.data as any[]).map((r) => ({
+            ...r,
+            id_local: r?.id_local || '',
+            synced: true,
+            type: 'complaints_master',
+            files: Array.isArray(r?.files) ? r.files : [],
+          }));
+
+          setComplaints(serverRecords as any);
+
+          // Overwrite cache "complaints_master" synced items, keep offline pending items
+          const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+          const cache = cacheStr ? JSON.parse(cacheStr) : [];
+          const nonComplaints = cache.filter((item: any) => item.type !== 'complaints_master');
+          const pendingComplaints = cache.filter((item: any) => item.type === 'complaints_master' && (item.synced === false || (item.id_local && String(item.id_local).startsWith('local-'))));
+          await AsyncStorage.setItem('evaluations_cache', JSON.stringify([...nonComplaints, ...pendingComplaints, ...serverRecords]));
         } else {
           setComplaints([]);
         }
@@ -249,11 +702,13 @@ export default function ComplaintsMasterScreen() {
     setFechaInicio('');
     setFechaRevision('');
     setResolucionQueja('');
-    setMesQueja('');
-    setAnoQueja('');
     setEstado('');
     setAccionCorrectivaPreventiva('');
-    setAnexoEvidencia('');
+    setImageFiles([]);
+    setAudioFiles([]);
+    setVideoFiles([]);
+    setDocumentFiles([]);
+    setFirmaResponsable(null);
   };
 
   const cancelCreating = () => {
@@ -261,9 +716,17 @@ export default function ComplaintsMasterScreen() {
   };
 
   const startEditing = (record: Complaint) => {
+    // Reset first (avoid leaking previous form state between records)
+    setImageFiles([]);
+    setAudioFiles([]);
+    setVideoFiles([]);
+    setDocumentFiles([]);
+    setFirmaResponsable(null);
+
     setEditingRecord({
       id: record.id,
       id_local: record.id_local,
+      files: record.files || [],
       sociedad: record.sociedad || '',
       nombre_realiza_queja: record.nombre_realiza_queja || '',
       cliente: record.cliente || '',
@@ -279,11 +742,9 @@ export default function ComplaintsMasterScreen() {
       fecha_inicio: record.fecha_inicio || '',
       fecha_revision: record.fecha_revision || '',
       resolucion_queja: record.resolucion_queja || '',
-      mes_queja: record.mes_queja || '',
-      ano_queja: record.ano_queja || '',
       estado: record.estado || '',
       accion_correctiva_preventiva: record.accion_correctiva_preventiva || '',
-      anexo_evidencia: record.anexo_evidencia || '',
+      firma_responsable: record.firma_responsable || '',
     });
     setSociedad(record.sociedad || '');
     setNombreRealizaQueja(record.nombre_realiza_queja || '');
@@ -300,11 +761,17 @@ export default function ComplaintsMasterScreen() {
     setFechaInicio(record.fecha_inicio || '');
     setFechaRevision(record.fecha_revision || '');
     setResolucionQueja(record.resolucion_queja || '');
-    setMesQueja(record.mes_queja || '');
-    setAnoQueja(record.ano_queja || '');
     setEstado(record.estado || '');
     setAccionCorrectivaPreventiva(record.accion_correctiva_preventiva || '');
-    setAnexoEvidencia(record.anexo_evidencia || '');
+
+    // Si ya existe firma guardada, mostrarla en el UI
+    setFirmaFromHashIfPossible(record.firma_responsable || null);
+
+    // Precargar adjuntos existentes como si se hubiesen “adjuntado” para reenviarlos al PUT
+    // (requerimiento: en update se borran y se vuelven a cargar).
+    if (record.id && !String(record.id).startsWith('local-')) {
+      preloadExistingFilesForEdit(record);
+    }
   };
 
   const cancelEditing = () => {
@@ -356,28 +823,39 @@ export default function ComplaintsMasterScreen() {
           text: 'Confirmar',
           onPress: async () => {
             try {
+              if (!firmaResponsable) {
+                Alert.alert('Error', 'La firma del responsable es requerida');
+                return;
+              }
+
               const requestData = {
                 marca_id: currentMarcaData.id,
-                sociedad: sociedad.trim() || null,
-                nombre_realiza_queja: nombreRealizaQueja.trim() || null,
-                cliente: cliente.trim() || null,
-                empresa_presenta_queja: empresaPresentaQueja.trim() || null,
-                persona_presenta_queja: personaPresentaQueja.trim() || null,
-                medio_recepcion_queja: medioRecepcionQueja.trim() || null,
-                tipo_queja: tipoQueja.trim() || null,
-                ubicacion: ubicacion.trim() || null,
-                nivel_queja: nivelQueja.trim() || null,
-                fecha_queja: fechaQueja.trim() || null,
-                motivo_queja: motivoQueja.trim() || null,
-                descripcion_queja: descripcionQueja.trim() || null,
-                fecha_inicio: fechaInicio.trim() || null,
-                fecha_revision: fechaRevision.trim() || null,
-                resolucion_queja: resolucionQueja.trim() || null,
-                mes_queja: mesQueja.trim() || null,
-                ano_queja: anoQueja.trim() || null,
-                estado: estado.trim() || null,
-                accion_correctiva_preventiva: accionCorrectivaPreventiva.trim() || null,
-                anexo_evidencia: anexoEvidencia.trim() || null,
+                sociedad: sociedad.trim(),
+                nombre_realiza_queja: nombreRealizaQueja.trim(),
+                cliente: cliente.trim(),
+                empresa_presenta_queja: empresaPresentaQueja.trim(),
+                persona_presenta_queja: personaPresentaQueja.trim(),
+                medio_recepcion_queja: medioRecepcionQueja.trim(),
+                tipo_queja: tipoQueja.trim(),
+                ubicacion: ubicacion.trim(),
+                nivel_queja: nivelQueja.trim(),
+                fecha_queja: fechaQueja.trim(),
+                motivo_queja: motivoQueja.trim(),
+                descripcion_queja: descripcionQueja.trim(),
+                fecha_inicio: fechaInicio.trim(),
+                fecha_revision: fechaRevision.trim(),
+                resolucion_queja: resolucionQueja.trim(),
+                estado: estado.trim(),
+                accion_correctiva_preventiva: accionCorrectivaPreventiva.trim(),
+                firma_responsable: firmaResponsable
+                  ? btoa(`${firmaResponsable.sessionId}:${firmaResponsable.empleadoId}:${firmaResponsable.latitud}:${firmaResponsable.longitud}:${firmaResponsable.timestamp}`)
+                  : '',
+                archivos: [
+                  ...imageFiles.map(f => ({ type: 'image', extension: f.extension, original_name: f.name, file_base64: f.base64 })),
+                  ...audioFiles.map(f => ({ type: 'audio', extension: f.extension, original_name: f.name, file_base64: f.base64 })),
+                  ...videoFiles.map(f => ({ type: 'video', extension: f.extension, original_name: f.name, file_base64: f.base64 })),
+                  ...documentFiles.map(f => ({ type: 'document', extension: f.extension, original_name: f.name, file_base64: f.base64 })),
+                ],
               };
 
               const isConnected = await getConnectionStatus();
@@ -416,6 +894,7 @@ export default function ComplaintsMasterScreen() {
                 const newRecordCache: Complaint = {
                   id: '',
                   id_local: localId,
+                  files: [],
                   sociedad: sociedad.trim() || null,
                   nombre_realiza_queja: nombreRealizaQueja.trim() || null,
                   cliente: cliente.trim() || null,
@@ -431,11 +910,9 @@ export default function ComplaintsMasterScreen() {
                   fecha_inicio: fechaInicio.trim() || null,
                   fecha_revision: fechaRevision.trim() || null,
                   resolucion_queja: resolucionQueja.trim() || null,
-                  mes_queja: mesQueja.trim() || null,
-                  ano_queja: anoQueja.trim() || null,
                   estado: estado.trim() || null,
                   accion_correctiva_preventiva: accionCorrectivaPreventiva.trim() || null,
-                  anexo_evidencia: anexoEvidencia.trim() || null,
+                  firma_responsable: requestData.firma_responsable || null,
                   created_at: new Date().toISOString(),
                   synced: false,
                 };
@@ -469,35 +946,46 @@ export default function ComplaintsMasterScreen() {
           text: 'Confirmar',
           onPress: async () => {
             try {
+              if (!firmaResponsable && (!editingRecord.firma_responsable || editingRecord.firma_responsable.trim().length === 0)) {
+                Alert.alert('Error', 'La firma del responsable es requerida');
+                return;
+              }
+
               const requestData = {
-                sociedad: sociedad.trim() || null,
-                nombre_realiza_queja: nombreRealizaQueja.trim() || null,
-                cliente: cliente.trim() || null,
-                empresa_presenta_queja: empresaPresentaQueja.trim() || null,
-                persona_presenta_queja: personaPresentaQueja.trim() || null,
-                medio_recepcion_queja: medioRecepcionQueja.trim() || null,
-                tipo_queja: tipoQueja.trim() || null,
-                ubicacion: ubicacion.trim() || null,
-                nivel_queja: nivelQueja.trim() || null,
-                fecha_queja: fechaQueja.trim() || null,
-                motivo_queja: motivoQueja.trim() || null,
-                descripcion_queja: descripcionQueja.trim() || null,
-                fecha_inicio: fechaInicio.trim() || null,
-                fecha_revision: fechaRevision.trim() || null,
-                resolucion_queja: resolucionQueja.trim() || null,
-                mes_queja: mesQueja.trim() || null,
-                ano_queja: anoQueja.trim() || null,
-                estado: estado.trim() || null,
-                accion_correctiva_preventiva: accionCorrectivaPreventiva.trim() || null,
-                anexo_evidencia: anexoEvidencia.trim() || null,
+                sociedad: sociedad.trim(),
+                nombre_realiza_queja: nombreRealizaQueja.trim(),
+                cliente: cliente.trim(),
+                empresa_presenta_queja: empresaPresentaQueja.trim(),
+                persona_presenta_queja: personaPresentaQueja.trim(),
+                medio_recepcion_queja: medioRecepcionQueja.trim(),
+                tipo_queja: tipoQueja.trim(),
+                ubicacion: ubicacion.trim(),
+                nivel_queja: nivelQueja.trim(),
+                fecha_queja: fechaQueja.trim(),
+                motivo_queja: motivoQueja.trim(),
+                descripcion_queja: descripcionQueja.trim(),
+                fecha_inicio: fechaInicio.trim(),
+                fecha_revision: fechaRevision.trim(),
+                resolucion_queja: resolucionQueja.trim(),
+                estado: estado.trim(),
+                accion_correctiva_preventiva: accionCorrectivaPreventiva.trim(),
+                firma_responsable: firmaResponsable
+                  ? btoa(`${firmaResponsable.sessionId}:${firmaResponsable.empleadoId}:${firmaResponsable.latitud}:${firmaResponsable.longitud}:${firmaResponsable.timestamp}`)
+                  : (editingRecord.firma_responsable || ''),
+                archivos: [
+                  ...imageFiles.map(f => ({ type: 'image', extension: f.extension, original_name: f.name, file_base64: f.base64 })),
+                  ...audioFiles.map(f => ({ type: 'audio', extension: f.extension, original_name: f.name, file_base64: f.base64 })),
+                  ...videoFiles.map(f => ({ type: 'video', extension: f.extension, original_name: f.name, file_base64: f.base64 })),
+                  ...documentFiles.map(f => ({ type: 'document', extension: f.extension, original_name: f.name, file_base64: f.base64 })),
+                ],
               };
 
               const isConnected = await getConnectionStatus();
               const recordId = editingRecord.id || editingRecord.id_local;
 
-              if (isConnected && editingRecord.id && !editingRecord.id.startsWith('local-')) {
+              if (isConnected && editingRecord.id && !String(editingRecord.id).startsWith('local-')) {
                 const result = await updateComplaintsMaster({
-                  id: editingRecord.id,
+                  id: String(editingRecord.id),
                   requestData,
                   refreshAccessToken,
                   logout,
@@ -544,11 +1032,9 @@ export default function ComplaintsMasterScreen() {
                         fecha_inicio: fechaInicio.trim() || null,
                         fecha_revision: fechaRevision.trim() || null,
                         resolucion_queja: resolucionQueja.trim() || null,
-                        mes_queja: mesQueja.trim() || null,
-                        ano_queja: anoQueja.trim() || null,
                         estado: estado.trim() || null,
                         accion_correctiva_preventiva: accionCorrectivaPreventiva.trim() || null,
-                        anexo_evidencia: anexoEvidencia.trim() || null,
+                        firma_responsable: requestData.firma_responsable || item.firma_responsable,
                       };
                     }
                     return item;
@@ -584,9 +1070,9 @@ export default function ComplaintsMasterScreen() {
               const isConnected = await getConnectionStatus();
               const recordId = record.id || record.id_local;
 
-              if (isConnected && record.id && !record.id.startsWith('local-')) {
+              if (isConnected && record.id && !String(record.id).startsWith('local-')) {
                 const result = await deleteComplaintsMaster({
-                  id: record.id,
+                  id: String(record.id),
                   refreshAccessToken,
                   logout,
                 });
@@ -876,40 +1362,6 @@ export default function ComplaintsMasterScreen() {
           />
         </ThemedView>
 
-        {/* Mes de la Queja */}
-        <ThemedView style={styles.formGroup}>
-          <ThemedText style={styles.formLabel}>Mes de la Queja</ThemedText>
-          <ThemedView style={styles.pickerContainer}>
-            <Picker
-              selectedValue={mesQueja}
-              onValueChange={setMesQueja}
-              style={styles.picker}
-            >
-              <Picker.Item label="Seleccionar" value="" />
-              {MONTHS.map((month) => (
-                <Picker.Item key={month} label={month} value={month} />
-              ))}
-            </Picker>
-          </ThemedView>
-        </ThemedView>
-
-        {/* Año de la Queja */}
-        <ThemedView style={styles.formGroup}>
-          <ThemedText style={styles.formLabel}>Año de la Queja</ThemedText>
-          <ThemedView style={styles.pickerContainer}>
-            <Picker
-              selectedValue={anoQueja}
-              onValueChange={setAnoQueja}
-              style={styles.picker}
-            >
-              <Picker.Item label="Seleccionar" value="" />
-              {YEARS.map((year) => (
-                <Picker.Item key={year} label={year} value={year} />
-              ))}
-            </Picker>
-          </ThemedView>
-        </ThemedView>
-
         {/* Estado */}
         <ThemedView style={styles.formGroup}>
           <ThemedText style={styles.formLabel}>Estado</ThemedText>
@@ -940,19 +1392,133 @@ export default function ComplaintsMasterScreen() {
           />
         </ThemedView>
 
-        {/* Anexo de Adjuntar Evidencia */}
-        <ThemedView style={styles.formGroup}>
-          <ThemedText style={styles.formLabel}>Anexo de Adjuntar Evidencia</ThemedText>
-          <TextInput
-            style={[styles.formInput, styles.textArea]}
-            placeholder="Aqui se adjuntan pdf, word, correos"
-            placeholderTextColor="#999"
-            multiline
-            numberOfLines={4}
-            textAlignVertical="top"
-            value={anexoEvidencia}
-            onChangeText={setAnexoEvidencia}
+        {/* Archivos adjuntos (miniaturas en creación; visor en edición) */}
+        {isEditing && editingRecord?.files && (editingRecord.files.length > 0) && (
+          <ComplaintFilesViewer
+            complaintId={editingRecord.id || editingRecord.id_local}
+            files={editingRecord.files}
+            onDeleteFile={deleteAttachedFile}
           />
+        )}
+
+        <ThemedView style={styles.formGroup}>
+          <ThemedText style={styles.formLabel}>Agregar archivos</ThemedText>
+
+          <ThemedView style={styles.fileIconButtonsRow}>
+            <TouchableOpacity style={styles.fileIconButton} onPress={() => handleAddFile('image')}>
+              <Ionicons name="image-outline" size={20} color="#007AFF" />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.fileIconButton} onPress={() => handleAddFile('audio')}>
+              <Ionicons name="mic-outline" size={20} color="#007AFF" />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.fileIconButton} onPress={() => handleAddFile('video')}>
+              <Ionicons name="videocam-outline" size={20} color="#007AFF" />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.fileIconButton} onPress={() => handleAddFile('document')}>
+              <Ionicons name="document-text-outline" size={20} color="#007AFF" />
+            </TouchableOpacity>
+          </ThemedView>
+
+          {(imageFiles.length + audioFiles.length + videoFiles.length + documentFiles.length) > 0 && (
+            <ThemedView style={styles.filesList}>
+              {imageFiles.map(file => (
+                <ThemedView key={file.id} style={styles.fileRow}>
+                  <Image
+                    source={{ uri: `data:image/${file.extension || 'jpeg'};base64,${file.base64}` }}
+                    style={styles.filePreviewImage}
+                    resizeMode="cover"
+                  />
+                  <ThemedText numberOfLines={1} style={styles.fileName}>{file.name}</ThemedText>
+                  <TouchableOpacity onPress={() => removeLocalFile('image', file.id)}>
+                    <Ionicons name="trash" size={16} color="#FF3B30" />
+                  </TouchableOpacity>
+                </ThemedView>
+              ))}
+
+              {audioFiles.map(file => (
+                <ThemedView key={file.id} style={styles.fileRow}>
+                  <Ionicons name="musical-notes-outline" size={16} color="#007AFF" />
+                  <ThemedText numberOfLines={1} style={styles.fileName}>{file.name}</ThemedText>
+                  <TouchableOpacity onPress={() => removeLocalFile('audio', file.id)}>
+                    <Ionicons name="trash" size={16} color="#FF3B30" />
+                  </TouchableOpacity>
+                </ThemedView>
+              ))}
+
+              {videoFiles.map(file => (
+                <ThemedView key={file.id} style={styles.fileRow}>
+                  <Ionicons name="videocam-outline" size={16} color="#007AFF" />
+                  <ThemedText numberOfLines={1} style={styles.fileName}>{file.name}</ThemedText>
+                  <TouchableOpacity onPress={() => removeLocalFile('video', file.id)}>
+                    <Ionicons name="trash" size={16} color="#FF3B30" />
+                  </TouchableOpacity>
+                </ThemedView>
+              ))}
+
+              {documentFiles.map(file => (
+                <ThemedView key={file.id} style={styles.fileRow}>
+                  <Ionicons name="document-text-outline" size={16} color="#007AFF" />
+                  <ThemedText numberOfLines={1} style={styles.fileName}>{file.name}</ThemedText>
+                  <TouchableOpacity onPress={() => removeLocalFile('document', file.id)}>
+                    <Ionicons name="trash" size={16} color="#FF3B30" />
+                  </TouchableOpacity>
+                </ThemedView>
+              ))}
+            </ThemedView>
+          )}
+        </ThemedView>
+
+        {/* Firma del responsable (requerida) */}
+        <ThemedView style={styles.formGroup}>
+          <ThemedText style={styles.formLabel}>Firma del Responsable *</ThemedText>
+
+          {!firmaResponsable ? (
+            <ThemedView style={styles.signatureButtons}>
+              <TouchableOpacity
+                style={[styles.signatureButton, isGeneratingFirma && styles.signatureButtonDisabled]}
+                onPress={generateSignature}
+                disabled={isGeneratingFirma}
+              >
+                {isGeneratingFirma ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <>
+                    <Ionicons name="finger-print" size={24} color="#FFFFFF" />
+                    <ThemedText style={styles.signatureButtonText}>Generar</ThemedText>
+                  </>
+                )}
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.signatureButton}
+                onPress={handleScanQR}
+              >
+                <Ionicons name="qr-code" size={20} color="#FFFFFF" />
+                <ThemedText style={styles.signatureButtonText}>Escanear QR</ThemedText>
+              </TouchableOpacity>
+            </ThemedView>
+          ) : (
+            <ThemedView style={styles.signatureInfo}>
+              <ThemedText style={styles.signatureInfoTitle}>Información de la firma:</ThemedText>
+              <ThemedText style={styles.signatureInfoText}>ID de sesión: {firmaResponsable.sessionId}</ThemedText>
+              <ThemedText style={styles.signatureInfoText}>ID del empleado: {firmaResponsable.empleadoId}</ThemedText>
+              {firmaResponsable.empleadoDetalle && (
+                <ThemedView style={styles.signatureInfoDetail}>
+                  <ThemedText style={styles.signatureInfoDetailText}>
+                    {firmaResponsable.empleadoDetalle.nombre} {firmaResponsable.empleadoDetalle.primer_apellido} {firmaResponsable.empleadoDetalle.segundo_apellido}
+                  </ThemedText>
+                </ThemedView>
+              )}
+              <ThemedText style={styles.signatureInfoText}>Latitud: {firmaResponsable.latitud}</ThemedText>
+              <ThemedText style={styles.signatureInfoText}>Longitud: {firmaResponsable.longitud}</ThemedText>
+              <ThemedText style={styles.signatureInfoText}>Timestamp: {firmaResponsable.timestamp}</ThemedText>
+              <TouchableOpacity
+                style={styles.clearSignatureButton}
+                onPress={() => setFirmaResponsable(null)}
+              >
+                <Ionicons name="trash" size={18} color="#FFFFFF" />
+              </TouchableOpacity>
+            </ThemedView>
+          )}
         </ThemedView>
 
         {/* Action Buttons */}
@@ -961,13 +1527,18 @@ export default function ComplaintsMasterScreen() {
             style={[styles.actionButton, styles.cancelButton]}
             onPress={isEditing ? cancelEditing : cancelCreating}
           >
-            <ThemedText style={styles.actionButtonText}>Cancelar</ThemedText>
+            <Ionicons name="close" size={24} color="#FFFFFF" />
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.actionButton, styles.saveButton]}
             onPress={isEditing ? updateComplaintHandler : saveComplaint}
+            disabled={isPreloadingEditFiles}
           >
-            <ThemedText style={styles.actionButtonText}>Guardar</ThemedText>
+            {isPreloadingEditFiles ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <Ionicons name="checkmark" size={24} color="#FFFFFF" />
+            )}
           </TouchableOpacity>
         </ThemedView>
       </ThemedView>
@@ -978,7 +1549,7 @@ export default function ComplaintsMasterScreen() {
     if (isLoading) {
       return (
         <ThemedView style={styles.centerContainer}>
-          <ActivityIndicator size="large" color="#FF9500" />
+          <ActivityIndicator size="large" color="#007AFF" />
           <ThemedText style={styles.loadingText}>Cargando quejas...</ThemedText>
         </ThemedView>
       );
@@ -1003,7 +1574,7 @@ export default function ComplaintsMasterScreen() {
     return (
       <ThemedView style={styles.listContainer}>
         {complaints.map((record) => {
-          const recordId = record.id || record.id_local;
+          const recordId = String(record.id || record.id_local);
           const isExpanded = expandedRecordIds.includes(recordId);
           const isOffline = !record.synced || record.id_local;
 
@@ -1098,14 +1669,6 @@ export default function ComplaintsMasterScreen() {
                     </ThemedText>
                   )}
                   <ThemedText style={styles.detailText}>
-                    <ThemedText style={styles.detailLabel}>Mes de la Queja: </ThemedText>
-                    {record.mes_queja || 'No especificado'}
-                  </ThemedText>
-                  <ThemedText style={styles.detailText}>
-                    <ThemedText style={styles.detailLabel}>Año de la Queja: </ThemedText>
-                    {record.ano_queja || 'No especificado'}
-                  </ThemedText>
-                  <ThemedText style={styles.detailText}>
                     <ThemedText style={styles.detailLabel}>Estado: </ThemedText>
                     {record.estado || 'No especificado'}
                   </ThemedText>
@@ -1115,11 +1678,9 @@ export default function ComplaintsMasterScreen() {
                       {record.accion_correctiva_preventiva}
                     </ThemedText>
                   )}
-                  {record.anexo_evidencia && (
-                    <ThemedText style={styles.detailText}>
-                      <ThemedText style={styles.detailLabel}>Anexo de Evidencia: </ThemedText>
-                      {record.anexo_evidencia}
-                    </ThemedText>
+
+                  {Array.isArray(record.files) && record.files.length > 0 && (
+                    <ComplaintFilesViewer complaintId={record.id || record.id_local} files={record.files} />
                   )}
                   <ThemedText style={styles.detailText}>
                     <ThemedText style={styles.detailLabel}>Fecha: </ThemedText>
@@ -1151,11 +1712,38 @@ export default function ComplaintsMasterScreen() {
     );
   };
 
+  const getActionIcon = (action: string) => {
+    switch (action.toLowerCase()) {
+      case 'complaints': return <Ionicons name="document-text" size={25} color='#000000' />;
+      case 'add': return <Ionicons name="add-sharp" size={20} color='#000000' />;
+      case 'edit': return <Ionicons name="pencil" size={20} color='#FFFFFF' />;
+      case 'delete': return <Ionicons name="trash" size={20} color='#FFFFFF' />;
+      case 'cancel': return <Ionicons name="close-sharp" size={20} color='#FFFFFF' />;
+      case 'confirm': return <Ionicons name="checkmark-sharp" size={20} color='#FFFFFF' />;
+      default: return <Ionicons name="close-sharp" size={20} color='#FFFFFF' />;
+    }
+  };
+
   return (
     <ThemedView style={styles.container}>
       <AppHeader onMenuPress={() => setIsMenuVisible(true)} title="Maestro de Quejas" />
 
-      <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
+      <ScrollView 
+        style={styles.scrollView}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={true}
+      >
+        <ThemedView style={styles.contentContainer}>
+          {/* Module Title */}
+          <ThemedView style={styles.titleContainer}>
+            <ThemedText type="title" style={styles.title}>
+              {getActionIcon('complaints')} Maestro de Quejas
+            </ThemedText>
+            <ThemedText style={styles.subtitle}>
+              Gestiona el registro de quejas
+            </ThemedText>
+          </ThemedView>
+
         {!hasCurrentMarca && (
           <ThemedView style={styles.warningContainer}>
             <ThemedText style={styles.warningText}>
@@ -1168,8 +1756,7 @@ export default function ComplaintsMasterScreen() {
           <>
             {!isCreating && !editingRecord && (
               <TouchableOpacity style={styles.createButton} onPress={startCreating}>
-                <Ionicons name="add-circle" size={24} color="#FFFFFF" />
-                <ThemedText style={styles.createButtonText}>Nueva Queja</ThemedText>
+                <Ionicons name="add" size={24} color="#FFFFFF" />
               </TouchableOpacity>
             )}
 
@@ -1178,6 +1765,7 @@ export default function ComplaintsMasterScreen() {
             {!isCreating && !editingRecord && renderList()}
           </>
         )}
+        </ThemedView>
       </ScrollView>
 
       <AppFooter />
@@ -1187,6 +1775,7 @@ export default function ComplaintsMasterScreen() {
         onHomePress={() => navigation.navigate('Home')}
         currentRoute="ComplaintsMaster"
       />
+      {QRScannerComponent}
     </ThemedView>
   );
 }
@@ -1199,7 +1788,31 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContent: {
-    padding: 16,
+    alignItems: 'center',
+    padding: 20,
+  },
+  contentContainer: {
+    width: '100%',
+    maxWidth: 600,
+  },
+  titleContainer: {
+    alignItems: 'center',
+    marginBottom: 30,
+    paddingBottom: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+    width: '100%',
+  },
+  title: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  subtitle: {
+    fontSize: 16,
+    opacity: 0.7,
+    textAlign: 'center',
   },
   warningContainer: {
     backgroundColor: '#FFE5E5',
@@ -1213,13 +1826,13 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   createButton: {
-    backgroundColor: '#FF9500',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
+    backgroundColor: '#007AFF',
     padding: 16,
     borderRadius: 8,
-    marginBottom: 16,
+    alignItems: 'center',
+    marginBottom: 20,
+    flexDirection: 'row',
+    justifyContent: 'center',
     gap: 8,
   },
   createButtonText: {
@@ -1228,16 +1841,21 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   formCard: {
-    backgroundColor: '#FFFFFF',
+    width: '100%',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
     borderRadius: 8,
+    backgroundColor: '#fff',
     padding: 16,
-    marginBottom: 16,
+    gap: 8,
+    marginBottom: 20,
   },
   formTitle: {
     fontSize: 20,
     fontWeight: 'bold',
+    color: '#007AFF',
     marginBottom: 16,
-    color: '#000000',
+    textAlign: 'center',
   },
   formGroup: {
     marginBottom: 16,
@@ -1291,15 +1909,16 @@ const styles = StyleSheet.create({
   },
   actionButton: {
     flex: 1,
-    padding: 16,
+    padding: 14,
     borderRadius: 8,
     alignItems: 'center',
+    justifyContent: 'center',
   },
   cancelButton: {
-    backgroundColor: '#CCCCCC',
+    backgroundColor: '#8E8E93',
   },
   saveButton: {
-    backgroundColor: '#FF9500',
+    backgroundColor: '#007AFF',
   },
   actionButtonText: {
     color: '#FFFFFF',
@@ -1307,26 +1926,34 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   listContainer: {
-    gap: 12,
+    width: '100%',
+    gap: 16,
   },
   listItem: {
-    backgroundColor: '#FFFFFF',
+    width: '100%',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
     borderRadius: 8,
+    backgroundColor: '#fff',
+    padding: 16,
+    gap: 8,
+    marginBottom: 16,
     overflow: 'hidden',
   },
   listItemHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 16,
+    marginBottom: 8,
+    backgroundColor: '#fff',
   },
   listItemHeaderContent: {
     flex: 1,
   },
   listItemTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#000000',
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#007AFF',
     marginBottom: 4,
   },
   listItemSubtitle: {
@@ -1350,9 +1977,10 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   listItemDetails: {
-    padding: 16,
     borderTopWidth: 1,
     borderTopColor: '#EEE',
+    paddingTop: 12,
+    marginTop: 8,
   },
   detailText: {
     fontSize: 14,
@@ -1409,5 +2037,549 @@ const styles = StyleSheet.create({
     color: '#666',
     textAlign: 'center',
   },
+
+  // Adjuntos (miniaturas)
+  fileIconButtonsRow: {
+    flexDirection: 'row',
+    gap: 10,
+    flexWrap: 'wrap',
+  },
+  fileIconButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#007AFF',
+    backgroundColor: '#E3F2FD',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  filesList: {
+    marginTop: 10,
+    gap: 8,
+  },
+  fileRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 10,
+    backgroundColor: '#FFFFFF',
+  },
+  fileName: {
+    flex: 1,
+    fontSize: 13,
+    color: '#000000',
+  },
+  filePreviewImage: {
+    width: 40,
+    height: 40,
+    borderRadius: 8,
+    backgroundColor: '#F0F0F0',
+  },
+
+  // Files viewer (edición / detalle)
+  collapsableSection: {
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    backgroundColor: '#F9F9F9',
+    overflow: 'hidden',
+  },
+  collapsableHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 12,
+    backgroundColor: '#F0F0F0',
+  },
+  collapsableHeaderText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#007AFF',
+  },
+  collapsableContent: {
+    padding: 12,
+    backgroundColor: '#F9F9F9',
+  },
+  viewerSection: {
+    marginBottom: 16,
+    backgroundColor: '#F9F9F9',
+  },
+  viewerSectionTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 12,
+    color: '#333',
+  },
+  viewerImage: {
+    width: '100%',
+    height: 200,
+    borderRadius: 8,
+    marginBottom: 8,
+    backgroundColor: '#F0F0F0',
+  },
+  documentRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    backgroundColor: '#fff',
+    marginBottom: 8,
+  },
+  documentText: {
+    flex: 1,
+    fontSize: 14,
+    color: '#333',
+  },
+  audioPlayerContainer: {
+    marginBottom: 16,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    backgroundColor: '#fff',
+  },
+  audioLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 8,
+    color: '#333',
+  },
+  audioPlayer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  playButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#007AFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  audioTime: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#007AFF',
+    flex: 1,
+  },
+  resetAudioButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 8,
+    borderRadius: 8,
+    backgroundColor: '#007AFF',
+  },
+
+  // Firma
+  signatureButtons: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    backgroundColor: '#fff',
+  },
+  signatureButton: {
+    backgroundColor: '#007AFF',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flex: 1,
+    minWidth: '45%',
+  },
+  signatureButtonDisabled: {
+    backgroundColor: '#999',
+  },
+  signatureButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
+    marginLeft: 8,
+  },
+  signatureInfo: {
+    backgroundColor: '#F5F5F5',
+    borderRadius: 8,
+    padding: 12,
+    marginTop: 8,
+  },
+  signatureInfoTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginBottom: 8,
+    color: '#000000',
+  },
+  signatureInfoText: {
+    fontSize: 14,
+    marginBottom: 4,
+    color: '#000000',
+  },
+  signatureInfoDetail: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    backgroundColor: '#BDE4FF',
+    borderRadius: 8,
+    marginBottom: 4,
+  },
+  signatureInfoDetailText: {
+    fontSize: 12,
+    color: '#000000',
+  },
+  clearSignatureButton: {
+    marginTop: 10,
+    backgroundColor: '#FF3B30',
+    borderRadius: 8,
+    paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 });
+
+function ComplaintFilesViewer({
+  complaintId,
+  files,
+  onDeleteFile,
+}: {
+  complaintId: string | number;
+  files: ComplaintFile[];
+  onDeleteFile?: (file: ComplaintFile) => void;
+}) {
+  const [isExpanded, setIsExpanded] = useState(false);
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return null;
+
+  const imageFiles = list.filter(f => f.type === 'image');
+  const audioFiles = list.filter(f => f.type === 'audio');
+  const videoFiles = list.filter(f => f.type === 'video');
+  const documentFiles = list.filter(f => f.type === 'document' || (!f.type && f.extension));
+
+  return (
+    <ThemedView style={styles.collapsableSection}>
+      <TouchableOpacity
+        style={styles.collapsableHeader}
+        onPress={() => setIsExpanded(!isExpanded)}
+      >
+        <ThemedText style={styles.collapsableHeaderText}>
+          Archivos ({list.length})
+        </ThemedText>
+        <Ionicons
+          name={isExpanded ? "chevron-up" : "chevron-down"}
+          size={20}
+          color="#007AFF"
+        />
+      </TouchableOpacity>
+
+      {isExpanded && (
+        <ThemedView style={styles.collapsableContent}>
+          {imageFiles.length > 0 && (
+            <ThemedView style={styles.viewerSection}>
+              <ThemedText style={styles.viewerSectionTitle}>Imágenes</ThemedText>
+              {imageFiles.map(file => (
+                <ThemedView key={file.id} style={{ backgroundColor: 'transparent' }}>
+                  <ComplaintImageViewer 
+                    imageUrl={buildComplaintFileUrl(complaintId, file)} 
+                    onDeleteFile={onDeleteFile ? () => onDeleteFile(file) : undefined}
+                  />
+                </ThemedView>
+              ))}
+            </ThemedView>
+          )}
+
+          {audioFiles.length > 0 && (
+            <ThemedView style={styles.viewerSection}>
+              <ThemedText style={styles.viewerSectionTitle}>Audios</ThemedText>
+              {audioFiles.map(file => (
+                <ThemedView key={file.id} style={{ backgroundColor: 'transparent' }}>
+                  <ComplaintAudioPlayer
+                    sourceUrl={buildComplaintFileUrl(complaintId, file)}
+                    label={getComplaintFileDisplayName(file)}
+                    onDeleteFile={onDeleteFile ? () => onDeleteFile(file) : undefined}
+                  />
+                </ThemedView>
+              ))}
+            </ThemedView>
+          )}
+
+          {videoFiles.length > 0 && (
+            <ThemedView style={styles.viewerSection}>
+              <ThemedText style={styles.viewerSectionTitle}>Videos</ThemedText>
+              {videoFiles.map(file => (
+                <ThemedView key={file.id} style={{ backgroundColor: 'transparent' }}>
+                  <ComplaintVideoPlayer 
+                    sourceUrl={buildComplaintFileUrl(complaintId, file)} 
+                    onDeleteFile={onDeleteFile ? () => onDeleteFile(file) : undefined}
+                  />
+                </ThemedView>
+              ))}
+            </ThemedView>
+          )}
+
+          {documentFiles.length > 0 && (
+            <ThemedView style={styles.viewerSection}>
+              <ThemedText style={styles.viewerSectionTitle}>Documentos</ThemedText>
+              {documentFiles.map(file => (
+                <TouchableOpacity
+                  key={file.id}
+                  style={styles.documentRow}
+                  onPress={() => {
+                    const url = buildComplaintFileUrl(complaintId, file);
+                    if (url) Linking.openURL(url);
+                    else Alert.alert('Error', 'URL inválida para descargar el archivo');
+                  }}
+                >
+                  <Ionicons name="document-text-outline" size={20} color="#007AFF" />
+                  <ThemedText numberOfLines={1} style={styles.documentText}>
+                    {getComplaintFileDisplayName(file)}
+                  </ThemedText>
+                  <Ionicons name="download-outline" size={20} color="#007AFF" />
+                  {onDeleteFile && (
+                    <TouchableOpacity onPress={() => onDeleteFile(file)}>
+                      <Ionicons name="trash-outline" size={20} color="#FF3B30" />
+                    </TouchableOpacity>
+                  )}
+                </TouchableOpacity>
+              ))}
+            </ThemedView>
+          )}
+        </ThemedView>
+      )}
+    </ThemedView>
+  );
+}
+
+function ComplaintImageViewer({ 
+  imageUrl, 
+  onDeleteFile 
+}: { 
+  imageUrl: string; 
+  onDeleteFile?: () => void;
+}) {
+  const [containerStyle, setContainerStyle] = useState<any>(styles.viewerImage);
+  const maxContainerWidth = Dimensions.get('window').width - 64;
+
+  const handleImageLoad = (event: any) => {
+    const { width, height } = event.nativeEvent.source;
+    if (width && height) {
+      const aspectRatio = width / height;
+      let containerWidth = maxContainerWidth;
+      let containerHeight: number;
+
+      if (height > width) {
+        containerHeight = (maxContainerWidth / aspectRatio);
+        if (containerHeight > 600) {
+          containerHeight = 600;
+          containerWidth = containerHeight * aspectRatio;
+        }
+      } else {
+        containerWidth = Math.min(maxContainerWidth, width);
+        containerHeight = containerWidth / aspectRatio;
+        if (containerHeight < 180) {
+          containerHeight = 180;
+          containerWidth = containerHeight * aspectRatio;
+        }
+      }
+
+      setContainerStyle({
+        width: containerWidth,
+        height: containerHeight,
+        borderRadius: 8,
+        marginBottom: 8,
+        backgroundColor: '#F0F0F0',
+        alignSelf: 'center',
+      });
+    }
+  };
+
+  return (
+    <ThemedView style={{ position: 'relative', backgroundColor: 'transparent' }}>
+      <Image
+        source={{ uri: imageUrl }}
+        style={containerStyle}
+        resizeMode="contain"
+        onLoad={handleImageLoad}
+      />
+      {onDeleteFile && (
+        <TouchableOpacity
+          style={{
+            position: 'absolute',
+            top: 8,
+            right: 8,
+            backgroundColor: 'rgba(255, 59, 48, 0.9)',
+            borderRadius: 20,
+            width: 36,
+            height: 36,
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+          onPress={onDeleteFile}
+        >
+          <Ionicons name="trash-outline" size={20} color="#FFFFFF" />
+        </TouchableOpacity>
+      )}
+    </ThemedView>
+  );
+}
+
+function ComplaintAudioPlayer({ 
+  sourceUrl, 
+  label,
+  onDeleteFile 
+}: { 
+  sourceUrl: string; 
+  label?: string;
+  onDeleteFile?: () => void;
+}) {
+  const player = useAudioPlayer(sourceUrl);
+  const status = useAudioPlayerStatus(player);
+  const [isPlaying, setIsPlaying] = useState(false);
+
+  const duration = status.duration ?? 0;
+  const position = status.currentTime ?? 0;
+
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const togglePlayPause = () => {
+    if (!player) return;
+    try {
+      if (!isPlaying) {
+        player.play();
+        setIsPlaying(true);
+      } else {
+        player.pause();
+        setIsPlaying(false);
+      }
+    } catch (error) {
+      console.error('Error controlling audio player:', error);
+    }
+  };
+
+  const resetAudio = () => {
+    if (!player) return;
+    try {
+      player.seekTo(0);
+      player.pause();
+      setIsPlaying(false);
+    } catch (error) {
+      console.error('Error resetting audio player:', error);
+    }
+  };
+
+  useEffect(() => {
+    if (!status.playing && isPlaying && position >= duration && duration > 0) {
+      setIsPlaying(false);
+    }
+  }, [status.playing, position, duration, isPlaying]);
+
+  useEffect(() => {
+    if (status.playing !== isPlaying) {
+      setIsPlaying(status.playing);
+    }
+  }, [status.playing]);
+
+  return (
+    <ThemedView style={styles.audioPlayerContainer}>
+      <ThemedView style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: label ? 8 : 0 }}>
+        {label ? <ThemedText style={styles.audioLabel}>{label}</ThemedText> : <ThemedView />}
+        {onDeleteFile && (
+          <TouchableOpacity
+            style={{
+              backgroundColor: '#FF3B30',
+              borderRadius: 20,
+              width: 36,
+              height: 36,
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+            onPress={onDeleteFile}
+          >
+            <Ionicons name="trash-outline" size={20} color="#FFFFFF" />
+          </TouchableOpacity>
+        )}
+      </ThemedView>
+      <ThemedView style={styles.audioPlayer}>
+        <TouchableOpacity style={styles.playButton} onPress={togglePlayPause}>
+          <Ionicons name={isPlaying ? 'pause' : 'play'} size={24} color="#FFFFFF" />
+        </TouchableOpacity>
+        <ThemedText style={styles.audioTime}>
+          {formatTime(position)} / {formatTime(duration)}
+        </ThemedText>
+        <TouchableOpacity style={styles.resetAudioButton} onPress={resetAudio}>
+          <Ionicons name="refresh" size={20} color="#FFFFFF" />
+        </TouchableOpacity>
+      </ThemedView>
+    </ThemedView>
+  );
+}
+
+function ComplaintVideoPlayer({ 
+  sourceUrl, 
+  onDeleteFile 
+}: { 
+  sourceUrl: string; 
+  onDeleteFile?: () => void;
+}) {
+  const player = useVideoPlayer(sourceUrl);
+  const maxContainerWidth = Dimensions.get('window').width - 64;
+
+  return (
+    <View
+      style={{
+        marginBottom: 8,
+        overflow: 'hidden',
+        borderRadius: 8,
+        backgroundColor: '#000000',
+        width: maxContainerWidth,
+        maxWidth: '100%',
+        alignSelf: 'center',
+        position: 'relative',
+      }}
+    >
+      <VideoView
+        player={player}
+        style={{
+          width: '100%',
+          aspectRatio: 16 / 9,
+          backgroundColor: '#000000',
+        }}
+        contentFit="contain"
+        nativeControls={true}
+        allowsFullscreen={true}
+        allowsPictureInPicture={false}
+      />
+      {onDeleteFile && (
+        <TouchableOpacity
+          style={{
+            position: 'absolute',
+            top: 8,
+            right: 8,
+            backgroundColor: 'rgba(255, 59, 48, 0.9)',
+            borderRadius: 20,
+            width: 36,
+            height: 36,
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 10,
+          }}
+          onPress={onDeleteFile}
+        >
+          <Ionicons name="trash-outline" size={20} color="#FFFFFF" />
+        </TouchableOpacity>
+      )}
+    </View>
+  );
+}
 

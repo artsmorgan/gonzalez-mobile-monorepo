@@ -70,6 +70,7 @@ import MonthlyWorkRoleScreen from './screens/MonthlyWorkRoleScreen';
 import PermitRequestScreen from './screens/PermitRequestScreen';
 import AttendanceControlScreen from './screens/AttendanceControlScreen';
 import OpeningClosingPositionScreen from './screens/OpeningClosingPositionScreen';
+import ActaEntregaProductosScreen from './screens/ActaEntregaProductosScreen';
 import InductionTourRecordScreen from './screens/InductionTourRecordScreen';
 import SupervisionReportScreen from './screens/SupervisionReportScreen';
 import ElectricBrushGuideScreen from './screens/ElectricBrushGuideScreen';
@@ -91,7 +92,7 @@ import saveAbsentReason from './hooks/saveAbsentReason';
 import getHoraAccion from './hooks/getHoraAccion';
 import updateServerTime, { setDisconnectedTime } from './hooks/updateServerTime';
 import JobManualsScreen from './screens/JobManualsScreen';
-import { createJobManual, deleteJobManual, signJobManual } from './hooks/jobManualsFunctions';
+import { createJobManual, deleteJobManual, signJobManual, putJobManualQuizResult } from './hooks/jobManualsFunctions';
 import StaffEvaluationsScreen from './screens/StaffEvaluationsScreen';
 import { createStaffEvaluation, deleteStaffEvaluation } from './hooks/staffEvaluationsFunctions';
 
@@ -154,6 +155,7 @@ export type RootStackParamList = {
   PermitRequest: undefined;
   AttendanceControl: undefined;
   OpeningClosingPosition: undefined;
+  ActaEntregaProductos: undefined;
   InductionTourRecord: undefined;
   SupervisionReport: undefined;
   ElectricBrushGuide: undefined;
@@ -229,6 +231,7 @@ function RootNavigator() {
       <Stack.Screen name="PermitRequest" component={PermitRequestScreen} />
       <Stack.Screen name="AttendanceControl" component={AttendanceControlScreen} />
       <Stack.Screen name="OpeningClosingPosition" component={OpeningClosingPositionScreen} />
+      <Stack.Screen name="ActaEntregaProductos" component={ActaEntregaProductosScreen} />
       <Stack.Screen name="InductionTourRecord" component={InductionTourRecordScreen} />
       <Stack.Screen name="SupervisionReport" component={SupervisionReportScreen} />
       <Stack.Screen name="ElectricBrushGuide" component={ElectricBrushGuideScreen} />
@@ -308,6 +311,7 @@ function AppContent() {
           checkSurveysActionsCache(),
           checkTrainingsActionsCache(),
           checkIncidentsActionsCache(),
+          checkIncidentContributionsActionsCache(),
           checkVoiceNotesActionsCache(),
           checkStaffEvaluationsActionsCache(),
           checkJobManualsActionsCache(),
@@ -422,6 +426,7 @@ function AppContent() {
           const result = await signJobManual({
             id: action.id,
             firma: action.firma,
+            quizAnswear: action.quizAnswear ?? null,
             refreshAccessToken,
             logout,
             marcaId: action.marcaId,
@@ -444,13 +449,55 @@ function AppContent() {
                     manual_puesto_id: action.id,
                     nombre_empleado: employee?.name || 'Empleado',
                     firma_empleado: action.firma,
+                    quiz_answear: action.quizAnswear ?? null,
+                    approved: null,
                     created_at: new Date().toISOString(),
+                    updated_at: new Date().toISOString(),
                   };
                   return {
                     ...item,
                     currentEmployeeSigned: true,
                     visualizaciones: [...visualizaciones, newVis],
                   };
+                }
+                return item;
+              });
+              await AsyncStorage.setItem('job_manuals_cache', JSON.stringify(updatedCache));
+            }
+          }
+        } else if (action.type === 'quiz_result') {
+          console.log('Actualizando resultado de quiz (manual):', action.id, action.empleadoId, action.approved);
+          const result = await putJobManualQuizResult({
+            id: action.id,
+            marcaId: action.marcaId,
+            empleadoId: action.empleadoId,
+            approved: action.approved,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result.status) {
+            let updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'quiz_result' && a.empleadoId === action.empleadoId));
+            await AsyncStorage.setItem('job_manuals_actions', JSON.stringify(updatedActions));
+
+            // Actualizar cache (si aún no estaba reflejado por UI)
+            const cacheStr = await AsyncStorage.getItem('job_manuals_cache');
+            if (cacheStr) {
+              const cache = JSON.parse(cacheStr);
+              const updatedCache = cache.map((item: any) => {
+                if (item.id === action.id) {
+                  const visualizaciones = (item.visualizaciones || []).map((v: any) => {
+                    if (v.empleado_id === action.empleadoId) {
+                      return {
+                        ...v,
+                        approved: action.approved,
+                        approved_pending: false,
+                        updated_at: new Date().toISOString(),
+                      };
+                    }
+                    return v;
+                  });
+                  return { ...item, visualizaciones };
                 }
                 return item;
               });
@@ -964,7 +1011,12 @@ function AppContent() {
                 const cache = JSON.parse(cacheStr);
                 const updatedCache = cache.map((item: any) => {
                   if (item.id_local === action.id && item.type === 'complaints_master') {
-                    return { ...item, synced: true, id: result.data?.id || item.id };
+                    return {
+                      ...item,
+                      synced: true,
+                      id: result.data?.id || item.id,
+                      files: result.data?.files || item.files || [],
+                    };
                   }
                   return item;
                 });
@@ -1338,8 +1390,13 @@ function AppContent() {
           } else if (action.type === 'permit_request') {
             console.log('Creando solicitud de permiso:', action.id);
             const { createPermitRequest } = await import('@/hooks/evaluationFunctions');
+            const payloadWithDefaults = {
+              ...action.payload,
+              // Backward-compatible default for old queued actions
+              division: action.payload?.division || 'Otros',
+            };
             const result = await createPermitRequest({
-              requestData: action.payload,
+              requestData: payloadWithDefaults,
               refreshAccessToken,
               logout,
             });
@@ -1355,6 +1412,37 @@ function AppContent() {
                 const updatedCache = cache.map((item: any) => {
                   if (item.id_local === action.id && item.type === 'permit_request') {
                     return { ...item, synced: true, id: result.data?.id || item.id };
+                  }
+                  return item;
+                });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'acta_entrega_producto') {
+            console.log('Creando acta de entrega de productos:', action.id);
+            const { createActaEntregaProducto } = await import('@/hooks/evaluationFunctions');
+            const result = await createActaEntregaProducto({
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
+
+            if (result.status) {
+              console.log('Acta creada correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'acta_entrega_producto'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if (item.id_local === action.id && item.type === 'acta_entrega_producto') {
+                    return {
+                      ...item,
+                      synced: true,
+                      id: result.data?.id || item.id,
+                      images: result.data?.images || item.images || [],
+                    };
                   }
                   return item;
                 });
@@ -1416,8 +1504,14 @@ function AppContent() {
           } else if (action.type === 'induction_tour_record') {
             console.log('Creando registro de inducción y recorrido:', action.id);
             const { createInductionTourRecord } = await import('@/hooks/evaluationFunctions');
+            // Backward compatibility for older offline actions
+            const payload = {
+              division: 'Otros',
+              firma_responsable: '',
+              ...action.payload,
+            };
             const result = await createInductionTourRecord({
-              requestData: action.payload,
+              requestData: payload,
               refreshAccessToken,
               logout,
             });
@@ -1740,8 +1834,37 @@ function AppContent() {
             if (result.status) {
               console.log('Evaluación creada correctamente');
               // Eliminar acción del array
-              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && (!a.type || (a.type !== 'mileage_control' && a.type !== 'uniform_request' && a.type !== 'routes_and_tours' && a.type !== 'employee_satisfaction' && a.type !== 'vehicle_maintenance' && a.type !== 'non_conforming_product' && a.type !== 'complaints_master' && a.type !== 'cleaners_control' && a.type !== 'physical_minute_agenda' && a.type !== 'action_plan' && a.type !== 'work_role' && a.type !== 'contract_basic_data' && a.type !== 'delivery_schedule' && a.type !== 'environmental_management_plan' && a.type !== 'cleaning_work_plan' && a.type !== 'special_situations_plan' && a.type !== 'cleaning_tasks_activities' && a.type !== 'risk_matrix' && a.type !== 'opportunity_matrix' && a.type !== 'process_indicator_matrix' && a.type !== 'monthly_work_role' && a.type !== 'permit_request' && a.type !== 'attendance_control' && a.type !== 'opening_closing_position' && a.type !== 'induction_tour_record' && a.type !== 'supervision_report' && a.type !== 'electric_brush_guide'))));
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && (!a.type || (a.type !== 'mileage_control' && a.type !== 'uniform_request' && a.type !== 'routes_and_tours' && a.type !== 'employee_satisfaction' && a.type !== 'vehicle_maintenance' && a.type !== 'non_conforming_product' && a.type !== 'complaints_master' && a.type !== 'cleaners_control' && a.type !== 'physical_minute_agenda' && a.type !== 'action_plan' && a.type !== 'work_role' && a.type !== 'contract_basic_data' && a.type !== 'delivery_schedule' && a.type !== 'environmental_management_plan' && a.type !== 'cleaning_work_plan' && a.type !== 'special_situations_plan' && a.type !== 'cleaning_tasks_activities' && a.type !== 'risk_matrix' && a.type !== 'opportunity_matrix' && a.type !== 'process_indicator_matrix' && a.type !== 'monthly_work_role' && a.type !== 'permit_request' && a.type !== 'attendance_control' && a.type !== 'opening_closing_position' && a.type !== 'acta_entrega_producto' && a.type !== 'induction_tour_record' && a.type !== 'supervision_report' && a.type !== 'electric_brush_guide'))));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            }
+          }
+        } else if (action.action === 'delete_file') {
+          if (action.type === 'complaints_master') {
+            console.log('Eliminando archivo de queja:', action.id, action.payload?.fileId);
+            const { deleteComplaintsMasterFile } = await import('@/hooks/evaluationFunctions');
+            const result = await deleteComplaintsMasterFile({
+              id: String(action.id),
+              fileId: action.payload?.fileId,
+              refreshAccessToken,
+              logout,
+            });
+
+            if (result.status) {
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete_file' && a.type === 'complaints_master' && a.payload?.fileId === action.payload?.fileId));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if ((item.id === action.id || item.id_local === action.id) && item.type === 'complaints_master') {
+                    const currentFiles = Array.isArray(item.files) ? item.files : [];
+                    return { ...item, files: currentFiles.filter((f: any) => f.id !== action.payload?.fileId) };
+                  }
+                  return item;
+                });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
             }
           }
         } else if (action.action === 'update') {
@@ -2065,9 +2188,13 @@ function AppContent() {
           } else if (action.type === 'permit_request') {
             console.log('Actualizando solicitud de permiso:', action.id);
             const { updatePermitRequest } = await import('@/hooks/evaluationFunctions');
+            const payloadWithDefaults = {
+              ...action.payload,
+              division: action.payload?.division || 'Otros',
+            };
             const result = await updatePermitRequest({
               id: action.id,
-              requestData: action.payload,
+              requestData: payloadWithDefaults,
               refreshAccessToken,
               logout,
             });
@@ -2075,6 +2202,21 @@ function AppContent() {
             if (result.status) {
               console.log('Solicitud de permiso actualizada correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'permit_request'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            }
+          } else if (action.type === 'acta_entrega_producto') {
+            console.log('Actualizando acta de entrega de productos:', action.id);
+            const { updateActaEntregaProducto } = await import('@/hooks/evaluationFunctions');
+            const result = await updateActaEntregaProducto({
+              id: action.id,
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
+
+            if (result.status) {
+              console.log('Acta actualizada correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'acta_entrega_producto'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
             }
           } else if (action.type === 'attendance_control') {
@@ -2110,9 +2252,15 @@ function AppContent() {
           } else if (action.type === 'induction_tour_record') {
             console.log('Actualizando registro de inducción y recorrido:', action.id);
             const { updateInductionTourRecord } = await import('@/hooks/evaluationFunctions');
+            // Backward compatibility for older offline actions
+            const payload = {
+              division: 'Otros',
+              firma_responsable: '',
+              ...action.payload,
+            };
             const result = await updateInductionTourRecord({
               id: action.id,
-              requestData: action.payload,
+              requestData: payload,
               refreshAccessToken,
               logout,
             });
@@ -2735,6 +2883,27 @@ function AppContent() {
                 await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
               }
             }
+          } else if (action.type === 'acta_entrega_producto') {
+            console.log('Eliminando acta de entrega de productos:', action.id);
+            const { deleteActaEntregaProducto } = await import('@/hooks/evaluationFunctions');
+            const result = await deleteActaEntregaProducto({
+              id: action.id,
+              refreshAccessToken,
+              logout,
+            });
+
+            if (result.status) {
+              console.log('Acta eliminada correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'acta_entrega_producto'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'acta_entrega_producto'));
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
           } else if (action.type === 'attendance_control') {
             console.log('Eliminando control de asistencia:', action.id);
             const { deleteAttendanceControl } = await import('@/hooks/evaluationFunctions');
@@ -3212,6 +3381,27 @@ function AppContent() {
             // Remove action from queue
             const updatedActions = actions.filter((a: any) => a.id !== action.id || a.type !== 'create');
             await AsyncStorage.setItem('incidents_actions', JSON.stringify(updatedActions));
+
+            // Actualizar cache: reemplazar id_local por id real (si el server lo devuelve)
+            // También necesitamos recargar desde el servidor para obtener el valor correcto de 'owned'
+            if (result.incidentId) {
+              const cacheStr = await AsyncStorage.getItem('incidents_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((i: any) => {
+                  if (i.id_local && i.id_local === action.id) {
+                    return {
+                      ...i,
+                      id: result.incidentId,
+                      id_local: '',
+                      owned: true, // Temporalmente true hasta que se recargue desde el servidor
+                    };
+                  }
+                  return i;
+                });
+                await AsyncStorage.setItem('incidents_cache', JSON.stringify(updatedCache));
+              }
+            }
           }
         } else if (action.type === 'update') {
           console.log('Actualizando incidente:', action.id);
@@ -3229,12 +3419,162 @@ function AppContent() {
             const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'update'));
             await AsyncStorage.setItem('incidents_actions', JSON.stringify(updatedActions));
           }
+        } else if (action.type === 'delete') {
+          console.log('Eliminando incidente:', action.id);
+          const { deleteIncident } = await import('@/hooks/incidentsFunctions');
+          const result = await deleteIncident({
+            incidentId: action.id,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result.status) {
+            console.log('Incidente eliminado correctamente');
+            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'delete'));
+            await AsyncStorage.setItem('incidents_actions', JSON.stringify(updatedActions));
+
+            const cacheStr = await AsyncStorage.getItem('incidents_cache');
+            if (cacheStr) {
+              const cache = JSON.parse(cacheStr);
+              const updatedCache = cache.filter((i: any) => i.id !== action.id);
+              await AsyncStorage.setItem('incidents_cache', JSON.stringify(updatedCache));
+            }
+          }
         }
       } catch (error) {
         console.error('Error procesando acción de incidente:', error);
       }
     }
   }
+
+  const checkIncidentContributionsActionsCache = async () => {
+    if (!employee) return;
+
+    const actionsStr = await AsyncStorage.getItem('incident_contributions_actions');
+    if (!actionsStr) return;
+
+    let actions = JSON.parse(actionsStr);
+    if (!actions || !Array.isArray(actions) || actions.length === 0) return;
+
+    console.log('Sincronizando acciones de aportes:', actions.length);
+
+    const actionsToProcess = [...actions];
+    for (const action of actionsToProcess) {
+      try {
+        if (action.type === 'create') {
+          const { createIncidentContribution } = await import('@/hooks/incidentsFunctions');
+          const result = await createIncidentContribution({
+            incidentId: action.incidentId,
+            requestData: action.requestData,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result?.status) {
+            actions = actions.filter((a: any) => !(a.type === 'create' && a.id === action.id));
+            await AsyncStorage.setItem('incident_contributions_actions', JSON.stringify(actions));
+
+            // reemplazar id_local en incidents_cache -> incidente.aportes (si existe)
+            if (result.contributionId) {
+              const cacheStr = await AsyncStorage.getItem('incidents_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updated = Array.isArray(cache)
+                  ? cache.map((inc: any) => {
+                      if (inc?.id !== action.incidentId) return inc;
+                      const aportes = Array.isArray(inc?.aportes) ? inc.aportes : [];
+                      const updatedAportes = aportes.map((a: any) => {
+                        if (a?.id_local && a.id_local === action.id) {
+                          return { ...a, id: result.contributionId, id_local: '' };
+                        }
+                        return a;
+                      });
+                      return { ...inc, aportes: updatedAportes };
+                    })
+                  : cache;
+                await AsyncStorage.setItem('incidents_cache', JSON.stringify(updated));
+              }
+            }
+          }
+        } else if (action.type === 'update') {
+          const { updateIncidentContribution } = await import('@/hooks/incidentsFunctions');
+          const result = await updateIncidentContribution({
+            incidentId: action.incidentId,
+            contributionId: action.contributionId,
+            requestData: action.requestData,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result?.status) {
+            actions = actions.filter((a: any) => !(a.type === 'update' && a.incidentId === action.incidentId && a.contributionId === action.contributionId));
+            await AsyncStorage.setItem('incident_contributions_actions', JSON.stringify(actions));
+          }
+        } else if (action.type === 'delete') {
+          const { deleteIncidentContribution } = await import('@/hooks/incidentsFunctions');
+          const result = await deleteIncidentContribution({
+            incidentId: action.incidentId,
+            contributionId: action.contributionId,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result?.status) {
+            actions = actions.filter((a: any) => !(a.type === 'delete' && a.incidentId === action.incidentId && a.contributionId === action.contributionId));
+            await AsyncStorage.setItem('incident_contributions_actions', JSON.stringify(actions));
+
+            const cacheStr = await AsyncStorage.getItem('incidents_cache');
+            if (cacheStr) {
+              const cache = JSON.parse(cacheStr);
+              const updated = Array.isArray(cache)
+                ? cache.map((inc: any) => {
+                    if (inc?.id !== action.incidentId) return inc;
+                    const aportes = Array.isArray(inc?.aportes) ? inc.aportes : [];
+                    const updatedAportes = aportes.filter((a: any) => a?.id !== action.contributionId);
+                    return { ...inc, aportes: updatedAportes };
+                  })
+                : cache;
+              await AsyncStorage.setItem('incidents_cache', JSON.stringify(updated));
+            }
+          }
+        } else if (action.type === 'delete_file') {
+          const { deleteIncidentContributionFile } = await import('@/hooks/incidentsFunctions');
+          const result = await deleteIncidentContributionFile({
+            incidentId: action.incidentId,
+            contributionId: action.contributionId,
+            fileId: action.fileId,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result?.status) {
+            actions = actions.filter((a: any) => !(a.type === 'delete_file' && a.incidentId === action.incidentId && a.contributionId === action.contributionId && a.fileId === action.fileId));
+            await AsyncStorage.setItem('incident_contributions_actions', JSON.stringify(actions));
+
+            const cacheStr = await AsyncStorage.getItem('incidents_cache');
+            if (cacheStr) {
+              const cache = JSON.parse(cacheStr);
+              const updated = Array.isArray(cache)
+                ? cache.map((inc: any) => {
+                    if (inc?.id !== action.incidentId) return inc;
+                    const aportes = Array.isArray(inc?.aportes) ? inc.aportes : [];
+                    const updatedAportes = aportes.map((ap: any) => {
+                      if (ap?.id !== action.contributionId) return ap;
+                      const files = Array.isArray(ap?.files) ? ap.files : [];
+                      return { ...ap, files: files.filter((f: any) => f?.id !== action.fileId) };
+                    });
+                    return { ...inc, aportes: updatedAportes };
+                  })
+                : cache;
+              await AsyncStorage.setItem('incidents_cache', JSON.stringify(updated));
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error procesando acción de aporte:', error);
+      }
+    }
+  };
 
   const checkVoiceNotesActionsCache = async () => {
     if (!employee) return;
@@ -3372,7 +3712,7 @@ function AppContent() {
         return;
       }
       console.log(5);
-      const horaAccion = await getUpdatedHoraAccion();
+      const horaAccion = await getUpdatedHoraAccion();  
       if (new Date(temp_state.currentTimestamp + temp_state.remainingSeconds).getTime() > horaAccion) {
         return;
       }
@@ -3439,6 +3779,18 @@ function AppContent() {
       },
     });
     const data = await response.json();
+    
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        return get_notifications();
+      } else {
+        Alert.alert('Error', 'Sesión expirada. Por favor inicie sesión nuevamente.');
+        await logout();
+        return;
+      }
+    }
+
     if (data.status) {
 
       await AsyncStorage.setItem('notifications', JSON.stringify(data.notifications));

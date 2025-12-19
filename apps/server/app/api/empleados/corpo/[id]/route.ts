@@ -20,7 +20,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         const corpo = await prisma.e_estructura_sucursal.findFirst({ where: { id } });
         if (!corpo) return NextResponse.json({ message: "Corpo no encontrado" }, { status: 404 });
 
-        const empleados_return: { id: number, nombre: string, cedula: string, fecha_contratacion: string }[] = [];
+        const empleados_return: { id: number, nombre: string, cedula: string, codigo: string, fecha_contratacion: string }[] = [];
         const puestos = await prisma.e_estructura_puesto.findMany({ where: { sucursal_id: corpo.id } });
         for (const puesto of puestos) {
             const plazas = await prisma.e_estructura_plazas.findMany({ where: { puesto_id: puesto.id } });
@@ -36,7 +36,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                             const empleado_duplicado = empleados_return.find((e) => e.id === empleado.id);
                             if (!empleado_duplicado) {
                                 const nombre = (empleado.nombre || "") + " " + (empleado.primer_apellido || "") + " " + (empleado.segundo_apellido || "");
-                                empleados_return.push({ id: empleado.id, nombre: nombre, cedula: empleado.cedula || "", fecha_contratacion: empleado.fecha_contratacion.toISOString() || "" });
+                                empleados_return.push({ id: empleado.id, nombre: nombre, cedula: empleado.cedula || "", codigo: empleado.codigo || "", fecha_contratacion: empleado.fecha_contratacion.toISOString() || "" });
                             }
                         }
                     }

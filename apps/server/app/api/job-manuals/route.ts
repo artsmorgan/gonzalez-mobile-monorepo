@@ -164,6 +164,7 @@ export async function GET(req: NextRequest) {
                     id: manual.id,
                     title: manual.title,
                     description: manual.description,
+                    quiz: manual.quiz ?? null,
                     firma: manual.firma,
                     // Para el cliente móvil, mostramos el puesto actual del colaborador
                     puesto: {
@@ -179,7 +180,10 @@ export async function GET(req: NextRequest) {
                         manual_puesto_id: v.manual_puesto_id,
                         nombre_empleado: v.nombre_empleado,
                         firma_empleado: v.firma_empleado,
-                        created_at: v.created_at
+                        quiz_answear: v.quiz_answear ?? null,
+                        approved: v.approved ?? null,
+                        created_at: v.created_at,
+                        updated_at: v.updated_at
                     })),
                     currentEmployeeSigned
                 };
@@ -217,7 +221,8 @@ export async function POST(req: NextRequest) {
             description,
             firma_responsable,
             puestos,
-            files
+            files,
+            quiz
         } = await req.json();
 
         if (!marca_id || !title || !description || !firma_responsable) {
@@ -225,6 +230,25 @@ export async function POST(req: NextRequest) {
                 { status: false, message: "Datos incompletos" },
                 { status: 200 }
             );
+        }
+
+        // Quiz: almacenar como string (array de objetos). Si viene vacío o inválido, guardar null.
+        let quizToStore: string | null = null;
+        if (typeof quiz === "string") {
+            const trimmed = quiz.trim();
+            if (trimmed.length > 0) {
+                try {
+                    const parsed = JSON.parse(trimmed);
+                    if (Array.isArray(parsed) && parsed.length > 0) {
+                        quizToStore = trimmed;
+                    } else {
+                        quizToStore = null;
+                    }
+                } catch {
+                    // Si no es JSON válido, no rompemos creación: guardamos null
+                    quizToStore = null;
+                }
+            }
         }
 
         const marca = await prisma.c_marca_dia.findUnique({
@@ -289,6 +313,7 @@ export async function POST(req: NextRequest) {
             data: {
                 title,
                 description,
+                quiz: quizToStore,
                 firma: firma_responsable,
                 // Se mantiene el campo puesto_id por compatibilidad, usando el primer puesto
                 puesto_id: primaryPuestoId,

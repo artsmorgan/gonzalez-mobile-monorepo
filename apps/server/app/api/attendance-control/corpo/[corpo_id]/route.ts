@@ -21,7 +21,7 @@ export async function GET(
 
         const records = await prisma.c_control_asistencia.findMany({
             where: {
-                corpo_id: corpo_id
+                corpo_id: parseInt(corpo_id)
             },
             orderBy: {
                 created_at: 'desc'

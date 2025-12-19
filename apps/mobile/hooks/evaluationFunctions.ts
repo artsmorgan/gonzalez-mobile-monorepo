@@ -1717,26 +1717,25 @@ export const listNonConformingProductByCorpo = async ({
 interface CreateComplaintsMasterParams {
   requestData: {
     marca_id: number;
-    sociedad: string | null;
-    nombre_realiza_queja: string | null;
-    cliente: string | null;
-    empresa_presenta_queja: string | null;
-    persona_presenta_queja: string | null;
-    medio_recepcion_queja: string | null;
-    tipo_queja: string | null;
-    ubicacion: string | null;
-    nivel_queja: string | null;
-    fecha_queja: string | null;
-    motivo_queja: string | null;
-    descripcion_queja: string | null;
-    fecha_inicio: string | null;
-    fecha_revision: string | null;
-    resolucion_queja: string | null;
-    mes_queja: string | null;
-    ano_queja: string | null;
-    estado: string | null;
-    accion_correctiva_preventiva: string | null;
-    anexo_evidencia: string | null;
+    sociedad: string;
+    nombre_realiza_queja: string;
+    cliente: string;
+    empresa_presenta_queja: string;
+    persona_presenta_queja: string;
+    medio_recepcion_queja: string;
+    tipo_queja: string;
+    ubicacion: string;
+    nivel_queja: string;
+    fecha_queja: string;
+    motivo_queja: string;
+    descripcion_queja: string;
+    fecha_inicio: string;
+    fecha_revision: string;
+    resolucion_queja: string;
+    estado: string;
+    accion_correctiva_preventiva: string;
+    firma_responsable: string;
+    archivos?: any; // array o JSON string [{type, extension, original_name, file_base64}]
   };
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
@@ -1745,26 +1744,25 @@ interface CreateComplaintsMasterParams {
 interface UpdateComplaintsMasterParams {
   id: string;
   requestData: {
-    sociedad?: string | null;
-    nombre_realiza_queja?: string | null;
-    cliente?: string | null;
-    empresa_presenta_queja?: string | null;
-    persona_presenta_queja?: string | null;
-    medio_recepcion_queja?: string | null;
-    tipo_queja?: string | null;
-    ubicacion?: string | null;
-    nivel_queja?: string | null;
-    fecha_queja?: string | null;
-    motivo_queja?: string | null;
-    descripcion_queja?: string | null;
-    fecha_inicio?: string | null;
-    fecha_revision?: string | null;
-    resolucion_queja?: string | null;
-    mes_queja?: string | null;
-    ano_queja?: string | null;
-    estado?: string | null;
-    accion_correctiva_preventiva?: string | null;
-    anexo_evidencia?: string | null;
+    sociedad?: string;
+    nombre_realiza_queja?: string;
+    cliente?: string;
+    empresa_presenta_queja?: string;
+    persona_presenta_queja?: string;
+    medio_recepcion_queja?: string;
+    tipo_queja?: string;
+    ubicacion?: string;
+    nivel_queja?: string;
+    fecha_queja?: string;
+    motivo_queja?: string;
+    descripcion_queja?: string;
+    fecha_inicio?: string;
+    fecha_revision?: string;
+    resolucion_queja?: string;
+    estado?: string;
+    accion_correctiva_preventiva?: string;
+    firma_responsable?: string;
+    archivos?: any;
   };
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
@@ -1772,6 +1770,13 @@ interface UpdateComplaintsMasterParams {
 
 interface DeleteComplaintsMasterParams {
   id: string;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+interface DeleteComplaintsMasterFileParams {
+  id: string;
+  fileId: string | number;
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }
@@ -1946,6 +1951,62 @@ export const deleteComplaintsMaster = async ({
     return {
       status: false,
       message: error instanceof Error ? error.message : 'Error al eliminar la queja',
+    };
+  }
+};
+
+export const deleteComplaintsMasterFile = async ({
+  id,
+  fileId,
+  refreshAccessToken,
+  logout,
+}: DeleteComplaintsMasterFileParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        throw new Error('No authentication token found');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/complaints-master/${id}/files/${fileId}`, {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        return deleteComplaintsMasterFile({ id, fileId, refreshAccessToken, logout });
+      } else {
+        await logout();
+        throw new Error('Sesión expirada');
+      }
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error deleting complaint file:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al eliminar el archivo de la queja',
     };
   }
 };
@@ -5774,25 +5835,28 @@ export const listMonthlyWorkRoleByCorpo = async ({
 interface CreatePermitRequestParams {
   requestData: {
     marca_id: number;
-    persona_solicita?: string | null;
-    codigo?: string | null;
-    contrato?: string | null;
-    horario?: string | null;
-    fecha_solicitud?: string | null;
-    motivo_permiso?: string | null;
-    permiso_sustituido_por?: string | null;
-    codigo_sustituto?: string | null;
-    firma_gerente?: string | null;
-    firma_encargado_monitoreo?: string | null;
-    permiso_coordinado_por?: string | null;
+    division: string;
+    persona_solicita: string;
+    codigo: string;
+    contrato: string;
+    horario: string;
+    fecha_solicitud: string; // dd/mm/yyyy (server lo convierte a DateTime)
+    motivo_permiso: string;
+    permiso_sustituido_por: string;
+    codigo_sustituto: string;
+    firma_gerente: string;
+    firma_encargado_monitoreo: string;
+    permiso_coordinado_por: string;
+    firma_responsables: string;
   };
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }
 
 interface UpdatePermitRequestParams {
-  id: string;
+  id: string | number;
   requestData: {
+    division?: string | null;
     persona_solicita?: string | null;
     codigo?: string | null;
     contrato?: string | null;
@@ -5804,13 +5868,14 @@ interface UpdatePermitRequestParams {
     firma_gerente?: string | null;
     firma_encargado_monitoreo?: string | null;
     permiso_coordinado_por?: string | null;
+    firma_responsables?: string | null;
   };
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }
 
 interface DeletePermitRequestParams {
-  id: string;
+  id: string | number;
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }
@@ -6045,6 +6110,271 @@ export const listPermitRequestByCorpo = async ({
   }
 };
 
+// =========================
+// Acta de entrega de productos
+// =========================
+
+interface ActaEntregaProductoImageInput {
+  file_base64: string; // base64 o dataURL
+  extension?: string; // jpg | png | etc
+}
+
+interface CreateActaEntregaProductoParams {
+  requestData: {
+    marca_id: number;
+    tipo_entrega: string;
+    cliente: string;
+    mensual: string;
+    division: string;
+    detalle: string; // JSON string
+    observaciones: string;
+    nombre_entrega: string;
+    cedula_entrega: string;
+    fecha_entrega: string; // ISO string
+    firma_entrega: string; // dataURL/base64
+    nombre_recibe: string;
+    cedula_recibe: string;
+    fecha_recibe: string; // ISO string
+    firma_recibe: string; // dataURL/base64
+    firma_responsable: string; // hash base64 (QR)
+    imagenes?: string; // JSON string (ActaEntregaProductoImageInput[])
+  };
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+interface UpdateActaEntregaProductoParams {
+  id: string | number;
+  requestData: {
+    tipo_entrega?: string | null;
+    cliente?: string | null;
+    mensual?: string | null;
+    division?: string | null;
+    detalle?: string | null;
+    observaciones?: string | null;
+    nombre_entrega?: string | null;
+    cedula_entrega?: string | null;
+    fecha_entrega?: string | null;
+    firma_entrega?: string | null;
+    nombre_recibe?: string | null;
+    cedula_recibe?: string | null;
+    fecha_recibe?: string | null;
+    firma_recibe?: string | null;
+    firma_responsable?: string | null;
+    imagenes?: string | null; // JSON string (ActaEntregaProductoImageInput[])
+  };
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+interface DeleteActaEntregaProductoParams {
+  id: string | number;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+interface ListActaEntregaProductoByCorpoParams {
+  corpo_id: string;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+export const createActaEntregaProducto = async ({
+  requestData,
+  refreshAccessToken,
+  logout,
+}: CreateActaEntregaProductoParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) throw new Error('Server URL not configured');
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) throw new Error('No authentication token found');
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/acta-entrega-productos`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+      body: JSON.stringify(requestData),
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) return createActaEntregaProducto({ requestData, refreshAccessToken, logout });
+      await logout();
+      throw new Error('Sesión expirada');
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error creating acta entrega producto:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al crear el acta de entrega de productos',
+    };
+  }
+};
+
+export const updateActaEntregaProducto = async ({
+  id,
+  requestData,
+  refreshAccessToken,
+  logout,
+}: UpdateActaEntregaProductoParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) throw new Error('Server URL not configured');
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) throw new Error('No authentication token found');
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/acta-entrega-productos/${id}`, {
+      method: 'PUT',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+      body: JSON.stringify(requestData),
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) return updateActaEntregaProducto({ id, requestData, refreshAccessToken, logout });
+      await logout();
+      throw new Error('Sesión expirada');
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error updating acta entrega producto:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al actualizar el acta de entrega de productos',
+    };
+  }
+};
+
+export const deleteActaEntregaProducto = async ({
+  id,
+  refreshAccessToken,
+  logout,
+}: DeleteActaEntregaProductoParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) throw new Error('Server URL not configured');
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) throw new Error('No authentication token found');
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/acta-entrega-productos/${id}`, {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) return deleteActaEntregaProducto({ id, refreshAccessToken, logout });
+      await logout();
+      throw new Error('Sesión expirada');
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error deleting acta entrega producto:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al eliminar el acta de entrega de productos',
+    };
+  }
+};
+
+export const listActaEntregaProductoByCorpo = async ({
+  corpo_id,
+  refreshAccessToken,
+  logout,
+}: ListActaEntregaProductoByCorpoParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) throw new Error('Server URL not configured');
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) throw new Error('No authentication token found');
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/acta-entrega-productos/corpo/${corpo_id}`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) return listActaEntregaProductoByCorpo({ corpo_id, refreshAccessToken, logout });
+      await logout();
+      throw new Error('Sesión expirada');
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error listing actas entrega producto:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al listar actas de entrega de productos',
+      data: [],
+    };
+  }
+};
+
 interface CreateAttendanceControlParams {
   requestData: {
     marca_id: number;
@@ -6055,6 +6385,7 @@ interface CreateAttendanceControlParams {
     total_presentes?: string | null;
     fijos?: string | null;
     colaboradores?: string | null;
+    firma_responsable?: string | null;
   };
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
@@ -6070,6 +6401,7 @@ interface UpdateAttendanceControlParams {
     total_presentes?: string | null;
     fijos?: string | null;
     colaboradores?: string | null;
+    firma_responsable?: string | null;
   };
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
@@ -6591,6 +6923,7 @@ interface CreateInductionTourRecordParams {
   requestData: {
     marca_id: number;
     fecha?: string | null;
+    division?: string | null;
     renglon_edificio?: string | null;
     supervisor_cliente?: string | null;
     supervisor_corporacion?: string | null;
@@ -6598,6 +6931,7 @@ interface CreateInductionTourRecordParams {
     aspectos_especificos?: string | null;
     participantes?: string | null;
     firma_supervisor?: string | null;
+    firma_responsable?: string | null;
   };
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
@@ -6607,6 +6941,7 @@ interface UpdateInductionTourRecordParams {
   id: string;
   requestData: {
     fecha?: string | null;
+    division?: string | null;
     renglon_edificio?: string | null;
     supervisor_cliente?: string | null;
     supervisor_corporacion?: string | null;
@@ -6614,6 +6949,7 @@ interface UpdateInductionTourRecordParams {
     aspectos_especificos?: string | null;
     participantes?: string | null;
     firma_supervisor?: string | null;
+    firma_responsable?: string | null;
   };
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;

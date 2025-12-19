@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   StyleSheet,
   ScrollView,
@@ -7,12 +7,9 @@ import {
   Alert,
   ActivityIndicator,
   Platform,
-  Modal,
-  View,
-  Image,
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import SignatureScreen from "react-native-signature-canvas";
+import { Picker } from '@react-native-picker/picker';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import { useAuth } from '@/contexts/AuthContext';
@@ -26,6 +23,9 @@ import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import * as Network from 'expo-network';
+import * as Location from 'expo-location';
+import { jwtDecode } from 'jwt-decode';
+import { useQRScanner } from '@/hooks/useQRScanner';
 import {
   createPermitRequest,
   updatePermitRequest,
@@ -33,12 +33,14 @@ import {
   listPermitRequestByCorpo,
 } from '@/hooks/evaluationFunctions';
 import { eventBus } from '@/hooks/eventBus';
+import getHoraAccion from '@/hooks/getHoraAccion';
 
 type PermitRequestScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'PermitRequest'>;
 
 interface PermitRequest {
-  id: string;
+  id: string | number;
   id_local: string;
+  division?: string | null;
   persona_solicita: string | null;
   codigo: string | null;
   contrato: string | null;
@@ -50,13 +52,15 @@ interface PermitRequest {
   firma_gerente: string | null;
   firma_encargado_monitoreo: string | null;
   permiso_coordinado_por: string | null;
+  firma_responsables: string | null;
   created_at: string;
   synced?: boolean;
 }
 
 interface EditingPermitRequest {
-  id: string | null;
+  id: string | number | null;
   id_local: string;
+  division: string;
   persona_solicita: string;
   codigo: string;
   contrato: string;
@@ -68,12 +72,36 @@ interface EditingPermitRequest {
   firma_gerente: string;
   firma_encargado_monitoreo: string;
   permiso_coordinado_por: string;
+  firma_responsables: string;
 }
+
+interface FirmaData {
+  sessionId: string;
+  empleadoId: string;
+  latitud: string;
+  longitud: string;
+  timestamp: string;
+  empleadoDetalle?: {
+    nombre: string;
+    primer_apellido: string;
+    segundo_apellido: string;
+    cedula_empleado?: string;
+  };
+}
+
+type CorpoEmpleado = {
+  id: number;
+  nombre: string;
+  cedula: string;
+  codigo: string;
+  fecha_contratacion: string;
+};
 
 export default function PermitRequestScreen() {
   const { employee, refreshAccessToken, logout } = useAuth();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const navigation = useNavigation<PermitRequestScreenNavigationProp>();
+  const { scanQR, QRScannerComponent } = useQRScanner();
 
   // Data states
   const [permits, setPermits] = useState<PermitRequest[]>([]);
@@ -86,6 +114,7 @@ export default function PermitRequestScreen() {
   const [isCreating, setIsCreating] = useState(false);
 
   // Form states
+  const [division, setDivision] = useState<'Seguridad' | 'Aseo y limpieza' | 'Otros' | ''>('');
   const [personaSolicita, setPersonaSolicita] = useState('');
   const [codigo, setCodigo] = useState('');
   const [contrato, setContrato] = useState('');
@@ -95,55 +124,23 @@ export default function PermitRequestScreen() {
   const [motivoPermiso, setMotivoPermiso] = useState('');
   const [permisoSustituidoPor, setPermisoSustituidoPor] = useState('');
   const [codigoSustituto, setCodigoSustituto] = useState('');
-  const [firmaGerente, setFirmaGerente] = useState<string | null>(null);
-  const [firmaEncargadoMonitoreo, setFirmaEncargadoMonitoreo] = useState<string | null>(null);
   const [permisoCoordinadoPor, setPermisoCoordinadoPor] = useState('');
 
-  // Signature modal states
-  const [isSignatureModalVisible, setIsSignatureModalVisible] = useState(false);
-  const [currentSignatureType, setCurrentSignatureType] = useState<'gerente' | 'encargado' | null>(null);
-  const signatureRef = useRef<any>(null);
-  const [signatureKey, setSignatureKey] = useState(0);
-  const [tempSignature, setTempSignature] = useState<string | null>(null);
+  // Dropdown empleados corpo
+  const [empleadosCorpo, setEmpleadosCorpo] = useState<CorpoEmpleado[]>([]);
+  const [selectedEmpleadoId, setSelectedEmpleadoId] = useState<string>('');
+  const [selectedSustitutoId, setSelectedSustitutoId] = useState<string>('');
 
-  const signatureWebStyle = `
-    body, html {
-      margin: 0;
-      padding: 0;
-      height: 100%;
-      width: 100%;
-    }
-    .m-signature-pad {
-      position: absolute;
-      top: 0;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      margin: 0;
-      padding: 0;
-      box-shadow: none;
-      border: none;
-      background-color: #FFFFFF;
-    }
-    .m-signature-pad--body {
-      position: absolute;
-      top: 0;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      border: none;
-      margin: 0;
-      padding: 0;
-    }
-    .m-signature-pad--body canvas {
-      width: 100% !important;
-      height: 100% !important;
-      touch-action: none;
-    }
-    .m-signature-pad--footer {
-      display: none;
-    }
-  `;
+  // Firmas (hash base64) + info decodificada (si aplica)
+  const [firmaGerenteHash, setFirmaGerenteHash] = useState<string>('');
+  const [firmaEncargadoHash, setFirmaEncargadoHash] = useState<string>('');
+  const [firmaResponsablesHash, setFirmaResponsablesHash] = useState<string>('');
+  const [firmaGerenteInfo, setFirmaGerenteInfo] = useState<FirmaData | null>(null);
+  const [firmaEncargadoInfo, setFirmaEncargadoInfo] = useState<FirmaData | null>(null);
+  const [firmaResponsablesInfo, setFirmaResponsablesInfo] = useState<FirmaData | null>(null);
+  const [isGeneratingFirmaGerente, setIsGeneratingFirmaGerente] = useState(false);
+  const [isGeneratingFirmaEncargado, setIsGeneratingFirmaEncargado] = useState(false);
+  const [isGeneratingFirmaResponsables, setIsGeneratingFirmaResponsables] = useState(false);
 
   const getConnectionStatus = async (): Promise<boolean> => {
     const networkState = await Network.getNetworkStateAsync();
@@ -161,23 +158,176 @@ export default function PermitRequestScreen() {
     return `${day}/${month}/${year}`;
   };
 
-  // Helper para extraer solo el base64 de las firmas (sin el prefijo data:)
-  const getBase64Only = (signature: string | null): string | null => {
-    if (!signature) return null;
-    if (signature.startsWith('data:')) {
-      const parts = signature.split(',');
-      return parts.length > 1 ? parts[1] : signature;
+  const parseDateStringToDate = (value: string): Date | null => {
+    const s = String(value || '').trim();
+    if (!s) return null;
+
+    // dd/mm/yyyy
+    if (s.includes('/')) {
+      const parts = s.split('/');
+      if (parts.length === 3) {
+        const [dd, mm, yyyy] = parts;
+        const d = new Date(parseInt(yyyy, 10), parseInt(mm, 10) - 1, parseInt(dd, 10));
+        return isNaN(d.getTime()) ? null : d;
+      }
     }
-    return signature;
+
+    // ISO
+    const d = new Date(s);
+    return isNaN(d.getTime()) ? null : d;
   };
 
-  // Helper para formatear la firma para mostrar (agregar prefijo si no lo tiene)
-  const formatSignatureForDisplay = (signature: string | null): string | null => {
-    if (!signature) return null;
-    if (signature.startsWith('data:')) {
-      return signature;
+  const decodeFirmaHash = (hash: string): FirmaData | null => {
+    try {
+      if (!hash || String(hash).trim().length === 0) return null;
+      const decoded = atob(String(hash));
+      const parts = decoded.split(':');
+      if (parts.length !== 5) return null;
+      const [sessionId, empleadoId, latitud, longitud, timestamp] = parts;
+      return { sessionId, empleadoId, latitud, longitud, timestamp };
+    } catch {
+      return null;
     }
-    return `data:image/png;base64,${signature}`;
+  };
+
+  const fetchEmpleadoDetalleIfPossible = async (empleadoId: string): Promise<FirmaData['empleadoDetalle'] | undefined> => {
+    try {
+      const isConnected = await getConnectionStatus();
+      if (!isConnected) return undefined;
+
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) return undefined;
+
+      const token = await AsyncStorage.getItem('access_token');
+      if (!token) return undefined;
+
+      const resp = await fetch(`${apiUrl}/api/empleados/${empleadoId}`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': '69420',
+        },
+      });
+
+      if (!resp.ok) return undefined;
+      const data = await resp.json();
+      return {
+        nombre: data.nombre,
+        primer_apellido: data.primer_apellido,
+        segundo_apellido: data.segundo_apellido,
+        cedula_empleado: data.cedula,
+      };
+    } catch {
+      return undefined;
+    }
+  };
+
+  const generateFirmaHashForCurrentUser = async (): Promise<{ hash: string; info: FirmaData } | null> => {
+    if (!employee?.id) {
+      Alert.alert('Error', 'No se pudo obtener la información del empleado');
+      return null;
+    }
+
+    const { status } = await Location.requestForegroundPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permisos requeridos', 'Se necesita acceso a la ubicación para generar la firma');
+      return null;
+    }
+
+    const location = await Location.getCurrentPositionAsync({});
+    const token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      Alert.alert('Error', 'No se pudo obtener el token de sesión');
+      return null;
+    }
+
+    const decoded: any = jwtDecode(token);
+    const sessionId = decoded.sessionId || 'unknown';
+
+    const timestamp = await getHoraAccion();
+    if (!timestamp) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return null;
+    }
+
+    const { latitude, longitude } = location.coords;
+    const empleadoId = String(employee.id);
+
+    const signatureString = `${sessionId}:${empleadoId}:${latitude}:${longitude}:${timestamp}`;
+    const hash = btoa(signatureString);
+
+    const info: FirmaData = {
+      sessionId: String(sessionId),
+      empleadoId,
+      latitud: String(latitude),
+      longitud: String(longitude),
+      timestamp: String(timestamp),
+    };
+
+    const detalle = await fetchEmpleadoDetalleIfPossible(empleadoId);
+    if (detalle) info.empleadoDetalle = detalle;
+
+    return { hash, info };
+  };
+
+  const handleGenerateFirma = async (type: 'gerente' | 'encargado' | 'responsables') => {
+    try {
+      if (type === 'gerente') setIsGeneratingFirmaGerente(true);
+      if (type === 'encargado') setIsGeneratingFirmaEncargado(true);
+      if (type === 'responsables') setIsGeneratingFirmaResponsables(true);
+
+      const result = await generateFirmaHashForCurrentUser();
+      if (!result) return;
+
+      if (type === 'gerente') {
+        setFirmaGerenteHash(result.hash);
+        setFirmaGerenteInfo(result.info);
+      } else if (type === 'encargado') {
+        setFirmaEncargadoHash(result.hash);
+        setFirmaEncargadoInfo(result.info);
+      } else {
+        setFirmaResponsablesHash(result.hash);
+        setFirmaResponsablesInfo(result.info);
+      }
+    } catch (e) {
+      console.error('Error generating signature:', e);
+      Alert.alert('Error', 'No se pudo generar la firma digital');
+    } finally {
+      if (type === 'gerente') setIsGeneratingFirmaGerente(false);
+      if (type === 'encargado') setIsGeneratingFirmaEncargado(false);
+      if (type === 'responsables') setIsGeneratingFirmaResponsables(false);
+    }
+  };
+
+  const handleScanFirma = async (type: 'gerente' | 'encargado' | 'responsables') => {
+    try {
+      const qrData = await scanQR();
+      if (!qrData) return;
+
+      const decoded = decodeFirmaHash(qrData);
+      if (!decoded) {
+        Alert.alert('Error', 'El QR escaneado no tiene el formato correcto');
+        return;
+      }
+
+      const detalle = await fetchEmpleadoDetalleIfPossible(decoded.empleadoId);
+      const decodedWithDetalle: FirmaData = detalle ? { ...decoded, empleadoDetalle: detalle } : decoded;
+
+      if (type === 'gerente') {
+        setFirmaGerenteHash(qrData);
+        setFirmaGerenteInfo(decodedWithDetalle);
+      } else if (type === 'encargado') {
+        setFirmaEncargadoHash(qrData);
+        setFirmaEncargadoInfo(decodedWithDetalle);
+      } else {
+        setFirmaResponsablesHash(qrData);
+        setFirmaResponsablesInfo(decodedWithDetalle);
+      }
+    } catch (e) {
+      console.error('Error scanning QR:', e);
+      Alert.alert('Error', 'No se pudo escanear el código QR');
+    }
   };
 
   const fetchPermits = useCallback(async () => {
@@ -203,6 +353,69 @@ export default function PermitRequestScreen() {
       }
 
       const isConnected = await getConnectionStatus();
+
+      // empleados corpo (cacheable)
+      try {
+        const cacheKey = `empleados_corpo_${corpoId}_cache`;
+        if (isConnected) {
+          const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+          if (apiUrl) {
+            let token = await AsyncStorage.getItem('access_token');
+            if (!token) {
+              const refreshed = await refreshAccessToken();
+              if (refreshed) token = await AsyncStorage.getItem('access_token');
+            }
+
+            if (token) {
+              const resp = await fetch(`${apiUrl}/api/empleados/corpo/${corpoId}`, {
+                method: 'GET',
+                headers: {
+                  'Authorization': `Bearer ${token}`,
+                  'Content-Type': 'application/json',
+                  'ngrok-skip-browser-warning': '69420',
+                },
+              });
+
+              if (resp.status === 401 || resp.status === 403) {
+                const refreshed = await refreshAccessToken();
+                if (refreshed) {
+                  const token2 = await AsyncStorage.getItem('access_token');
+                  if (token2) {
+                    const resp2 = await fetch(`${apiUrl}/api/empleados/corpo/${corpoId}`, {
+                      method: 'GET',
+                      headers: {
+                        'Authorization': `Bearer ${token2}`,
+                        'Content-Type': 'application/json',
+                        'ngrok-skip-browser-warning': '69420',
+                      },
+                    });
+                    if (resp2.ok) {
+                      const json2 = await resp2.json();
+                      const empleados: CorpoEmpleado[] = Array.isArray(json2.empleados) ? json2.empleados : [];
+                      setEmpleadosCorpo(empleados);
+                      await AsyncStorage.setItem(cacheKey, JSON.stringify(empleados));
+                    }
+                  }
+                }
+              } else if (resp.ok) {
+                const json = await resp.json();
+                const empleados: CorpoEmpleado[] = Array.isArray(json.empleados) ? json.empleados : [];
+                setEmpleadosCorpo(empleados);
+                await AsyncStorage.setItem(cacheKey, JSON.stringify(empleados));
+              }
+            }
+          }
+        } else {
+          const cached = await AsyncStorage.getItem(cacheKey);
+          if (cached) {
+            const empleados = JSON.parse(cached);
+            setEmpleadosCorpo(Array.isArray(empleados) ? empleados : []);
+          }
+        }
+      } catch (e) {
+        // no bloquear pantalla por dropdown
+        console.warn('Error loading empleados corpo:', e);
+      }
 
       if (isConnected) {
         const result = await listPermitRequestByCorpo({
@@ -254,7 +467,21 @@ export default function PermitRequestScreen() {
     }, [fetchPermits])
   );
 
+  // Actualizar selectedSustitutoId cuando se carguen los empleados y estemos en modo edición
+  useEffect(() => {
+    if (editingRecord && empleadosCorpo.length > 0 && permisoSustituidoPor) {
+      const sustitutoMatch = empleadosCorpo.find(emp => 
+        emp.nombre === permisoSustituidoPor || 
+        (emp.codigo && emp.codigo === codigoSustituto)
+      );
+      if (sustitutoMatch && selectedSustitutoId !== String(sustitutoMatch.id)) {
+        setSelectedSustitutoId(String(sustitutoMatch.id));
+      }
+    }
+  }, [empleadosCorpo, editingRecord, permisoSustituidoPor, codigoSustituto, selectedSustitutoId]);
+
   const resetForm = () => {
+    setDivision('');
     setPersonaSolicita('');
     setCodigo('');
     setContrato('');
@@ -263,9 +490,15 @@ export default function PermitRequestScreen() {
     setMotivoPermiso('');
     setPermisoSustituidoPor('');
     setCodigoSustituto('');
-    setFirmaGerente(null);
-    setFirmaEncargadoMonitoreo(null);
     setPermisoCoordinadoPor('');
+    setSelectedEmpleadoId('');
+    setSelectedSustitutoId('');
+    setFirmaGerenteHash('');
+    setFirmaEncargadoHash('');
+    setFirmaResponsablesHash('');
+    setFirmaGerenteInfo(null);
+    setFirmaEncargadoInfo(null);
+    setFirmaResponsablesInfo(null);
   };
 
   const startCreating = () => {
@@ -284,6 +517,7 @@ export default function PermitRequestScreen() {
     setEditingRecord({
       id: record.id,
       id_local: record.id_local,
+      division: (record.division as any) || '',
       persona_solicita: record.persona_solicita || '',
       codigo: record.codigo || '',
       contrato: record.contrato || '',
@@ -295,25 +529,48 @@ export default function PermitRequestScreen() {
       firma_gerente: record.firma_gerente || '',
       firma_encargado_monitoreo: record.firma_encargado_monitoreo || '',
       permiso_coordinado_por: record.permiso_coordinado_por || '',
+      firma_responsables: record.firma_responsables || '',
     });
 
+    setDivision((record.division as any) || '');
     setPersonaSolicita(record.persona_solicita || '');
     setCodigo(record.codigo || '');
     setContrato(record.contrato || '');
     setHorario(record.horario || '');
     if (record.fecha_solicitud) {
-      const dateParts = record.fecha_solicitud.split('/');
-      if (dateParts.length === 3) {
-        setFechaSolicitud(new Date(parseInt(dateParts[2]), parseInt(dateParts[1]) - 1, parseInt(dateParts[0])));
-      }
+      const parsed = parseDateStringToDate(record.fecha_solicitud);
+      if (parsed) setFechaSolicitud(parsed);
     }
     setMotivoPermiso(record.motivo_permiso || '');
     setPermisoSustituidoPor(record.permiso_sustituido_por || '');
     setCodigoSustituto(record.codigo_sustituto || '');
-    // Asegurar formato correcto para las firmas
-    setFirmaGerente(formatSignatureForDisplay(record.firma_gerente));
-    setFirmaEncargadoMonitoreo(formatSignatureForDisplay(record.firma_encargado_monitoreo));
     
+    // Intentar encontrar el sustituto en la lista de empleados
+    if (record.permiso_sustituido_por && empleadosCorpo.length > 0) {
+      const sustitutoMatch = empleadosCorpo.find(emp => 
+        emp.nombre === record.permiso_sustituido_por || 
+        (emp.codigo && emp.codigo === record.codigo_sustituto)
+      );
+      if (sustitutoMatch) {
+        setSelectedSustitutoId(String(sustitutoMatch.id));
+      } else {
+        setSelectedSustitutoId('');
+      }
+    } else {
+      setSelectedSustitutoId('');
+    }
+
+    // Firmas existentes (pueden venir en formato antiguo; si no se puede decodificar, igual conservamos el string)
+    const gerenteHash = record.firma_gerente || '';
+    const encargadoHash = record.firma_encargado_monitoreo || '';
+    const responsablesHash = record.firma_responsables || '';
+    setFirmaGerenteHash(gerenteHash);
+    setFirmaEncargadoHash(encargadoHash);
+    setFirmaResponsablesHash(responsablesHash);
+    setFirmaGerenteInfo(decodeFirmaHash(gerenteHash));
+    setFirmaEncargadoInfo(decodeFirmaHash(encargadoHash));
+    setFirmaResponsablesInfo(decodeFirmaHash(responsablesHash));
+
     setPermisoCoordinadoPor(record.permiso_coordinado_por || '');
   };
 
@@ -331,63 +588,6 @@ export default function PermitRequestScreen() {
     }
   };
 
-  const openSignatureModal = (type: 'gerente' | 'encargado') => {
-    setCurrentSignatureType(type);
-    setIsSignatureModalVisible(true);
-    setTempSignature(null);
-    setSignatureKey(prev => prev + 1);
-  };
-
-  const closeSignatureModal = () => {
-    setIsSignatureModalVisible(false);
-    setCurrentSignatureType(null);
-    setTempSignature(null);
-  };
-
-  const clearSignatureInModal = () => {
-    setTempSignature(null);
-    setSignatureKey(prev => prev + 1);
-    if (signatureRef.current) {
-      signatureRef.current.clearSignature();
-    }
-  };
-
-  const handleSignatureRead = (signature: string) => {
-    if (signature && currentSignatureType) {
-      // Asegurar que la firma tenga el formato correcto
-      let formattedSignature = signature;
-      if (!signature.startsWith('data:')) {
-        // Si no tiene el prefijo, agregarlo
-        formattedSignature = `data:image/png;base64,${signature}`;
-      }
-      
-      if (currentSignatureType === 'gerente') {
-        setFirmaGerente(formattedSignature);
-      } else if (currentSignatureType === 'encargado') {
-        setFirmaEncargadoMonitoreo(formattedSignature);
-      }
-      setIsSignatureModalVisible(false);
-      setCurrentSignatureType(null);
-      setTempSignature(null);
-    } else {
-      Alert.alert('Error', 'No se pudo obtener la firma. Por favor, intente nuevamente.');
-    }
-  };
-
-  const handleSignature = (signature: string) => {
-    setTempSignature(signature);
-  };
-
-  const acceptSignature = () => {
-    if (signatureRef.current) {
-      signatureRef.current.readSignature();
-    } else if (tempSignature) {
-      handleSignatureRead(tempSignature);
-    } else {
-      Alert.alert('Error', 'Debe dibujar una firma antes de aceptar');
-    }
-  };
-
   const savePermitHandler = async () => {
     const currentMarca = await AsyncStorage.getItem('current_marca');
     if (!currentMarca) {
@@ -396,6 +596,20 @@ export default function PermitRequestScreen() {
     }
 
     const currentMarcaData = JSON.parse(currentMarca);
+
+    // Validaciones (modelo requiere campos no nulos)
+    if (!division) return Alert.alert('Error', 'La división es obligatoria');
+    if (!personaSolicita.trim()) return Alert.alert('Error', 'Persona que solicita es obligatoria');
+    if (!codigo.trim()) return Alert.alert('Error', 'Código es obligatorio');
+    if (!contrato.trim()) return Alert.alert('Error', 'Contrato es obligatorio');
+    if (!horario.trim()) return Alert.alert('Error', 'Horario es obligatorio');
+    if (!motivoPermiso.trim()) return Alert.alert('Error', 'Motivo del permiso es obligatorio');
+    if (!permisoSustituidoPor.trim()) return Alert.alert('Error', 'Permiso sustituido por es obligatorio');
+    if (!codigoSustituto.trim()) return Alert.alert('Error', 'Código sustituto es obligatorio');
+    if (!permisoCoordinadoPor.trim()) return Alert.alert('Error', 'Permiso coordinado por es obligatorio');
+    if (!firmaGerenteHash.trim()) return Alert.alert('Error', 'La firma de gerente es obligatoria');
+    if (!firmaEncargadoHash.trim()) return Alert.alert('Error', 'La firma del encargado de monitoreo es obligatoria');
+    if (!firmaResponsablesHash.trim()) return Alert.alert('Error', 'La firma de responsables es obligatoria');
 
     Alert.alert(
       'Confirmar',
@@ -408,17 +622,19 @@ export default function PermitRequestScreen() {
             try {
               const requestData = {
                 marca_id: currentMarcaData.id,
-                persona_solicita: personaSolicita.trim() || null,
-                codigo: codigo.trim() || null,
-                contrato: contrato.trim() || null,
-                horario: horario.trim() || null,
-                fecha_solicitud: formatDate(fechaSolicitud) || null,
-                motivo_permiso: motivoPermiso.trim() || null,
-                permiso_sustituido_por: permisoSustituidoPor.trim() || null,
-                codigo_sustituto: codigoSustituto.trim() || null,
-                firma_gerente: getBase64Only(firmaGerente),
-                firma_encargado_monitoreo: getBase64Only(firmaEncargadoMonitoreo),
-                permiso_coordinado_por: permisoCoordinadoPor.trim() || null,
+                division: division,
+                persona_solicita: personaSolicita.trim(),
+                codigo: codigo.trim(),
+                contrato: contrato.trim(),
+                horario: horario.trim(),
+                fecha_solicitud: formatDate(fechaSolicitud),
+                motivo_permiso: motivoPermiso.trim(),
+                permiso_sustituido_por: permisoSustituidoPor.trim(),
+                codigo_sustituto: codigoSustituto.trim(),
+                firma_gerente: firmaGerenteHash.trim(),
+                firma_encargado_monitoreo: firmaEncargadoHash.trim(),
+                permiso_coordinado_por: permisoCoordinadoPor.trim(),
+                firma_responsables: firmaResponsablesHash.trim(),
               };
 
               const isConnected = await getConnectionStatus();
@@ -457,17 +673,19 @@ export default function PermitRequestScreen() {
                 const newRecordCache: PermitRequest = {
                   id: '',
                   id_local: localId,
-                  persona_solicita: personaSolicita.trim() || null,
-                  codigo: codigo.trim() || null,
-                  contrato: contrato.trim() || null,
-                  horario: horario.trim() || null,
-                  fecha_solicitud: formatDate(fechaSolicitud) || null,
-                  motivo_permiso: motivoPermiso.trim() || null,
-                  permiso_sustituido_por: permisoSustituidoPor.trim() || null,
-                  codigo_sustituto: codigoSustituto.trim() || null,
-                  firma_gerente: getBase64Only(firmaGerente),
-                  firma_encargado_monitoreo: getBase64Only(firmaEncargadoMonitoreo),
-                  permiso_coordinado_por: permisoCoordinadoPor.trim() || null,
+                  division: division,
+                  persona_solicita: personaSolicita.trim(),
+                  codigo: codigo.trim(),
+                  contrato: contrato.trim(),
+                  horario: horario.trim(),
+                  fecha_solicitud: formatDate(fechaSolicitud),
+                  motivo_permiso: motivoPermiso.trim(),
+                  permiso_sustituido_por: permisoSustituidoPor.trim(),
+                  codigo_sustituto: codigoSustituto.trim(),
+                  firma_gerente: firmaGerenteHash.trim(),
+                  firma_encargado_monitoreo: firmaEncargadoHash.trim(),
+                  permiso_coordinado_por: permisoCoordinadoPor.trim(),
+                  firma_responsables: firmaResponsablesHash.trim(),
                   created_at: new Date().toISOString(),
                   synced: false,
                 };
@@ -498,6 +716,20 @@ export default function PermitRequestScreen() {
       return;
     }
 
+    // Validaciones (mantener modelo consistente)
+    if (!division) return Alert.alert('Error', 'La división es obligatoria');
+    if (!personaSolicita.trim()) return Alert.alert('Error', 'Persona que solicita es obligatoria');
+    if (!codigo.trim()) return Alert.alert('Error', 'Código es obligatorio');
+    if (!contrato.trim()) return Alert.alert('Error', 'Contrato es obligatorio');
+    if (!horario.trim()) return Alert.alert('Error', 'Horario es obligatorio');
+    if (!motivoPermiso.trim()) return Alert.alert('Error', 'Motivo del permiso es obligatorio');
+    if (!permisoSustituidoPor.trim()) return Alert.alert('Error', 'Permiso sustituido por es obligatorio');
+    if (!codigoSustituto.trim()) return Alert.alert('Error', 'Código sustituto es obligatorio');
+    if (!permisoCoordinadoPor.trim()) return Alert.alert('Error', 'Permiso coordinado por es obligatorio');
+    if (!firmaGerenteHash.trim()) return Alert.alert('Error', 'La firma de gerente es obligatoria');
+    if (!firmaEncargadoHash.trim()) return Alert.alert('Error', 'La firma del encargado de monitoreo es obligatoria');
+    if (!firmaResponsablesHash.trim()) return Alert.alert('Error', 'La firma de responsables es obligatoria');
+
     Alert.alert(
       'Confirmar',
       '¿Estás seguro de que deseas actualizar esta solicitud de permiso?',
@@ -508,17 +740,19 @@ export default function PermitRequestScreen() {
           onPress: async () => {
             try {
               const requestData = {
-                persona_solicita: personaSolicita.trim() || null,
-                codigo: codigo.trim() || null,
-                contrato: contrato.trim() || null,
-                horario: horario.trim() || null,
-                fecha_solicitud: formatDate(fechaSolicitud) || null,
-                motivo_permiso: motivoPermiso.trim() || null,
-                permiso_sustituido_por: permisoSustituidoPor.trim() || null,
-                codigo_sustituto: codigoSustituto.trim() || null,
-                firma_gerente: getBase64Only(firmaGerente),
-                firma_encargado_monitoreo: getBase64Only(firmaEncargadoMonitoreo),
-                permiso_coordinado_por: permisoCoordinadoPor.trim() || null,
+                division: division,
+                persona_solicita: personaSolicita.trim(),
+                codigo: codigo.trim(),
+                contrato: contrato.trim(),
+                horario: horario.trim(),
+                fecha_solicitud: formatDate(fechaSolicitud),
+                motivo_permiso: motivoPermiso.trim(),
+                permiso_sustituido_por: permisoSustituidoPor.trim(),
+                codigo_sustituto: codigoSustituto.trim(),
+                firma_gerente: firmaGerenteHash.trim(),
+                firma_encargado_monitoreo: firmaEncargadoHash.trim(),
+                permiso_coordinado_por: permisoCoordinadoPor.trim(),
+                firma_responsables: firmaResponsablesHash.trim(),
               };
 
               const isConnected = await getConnectionStatus();
@@ -700,18 +934,14 @@ export default function PermitRequestScreen() {
             <ThemedView style={styles.listItemHeader}>
               <ThemedView style={styles.listItemContent}>
                 <ThemedText style={styles.listItemTitle}>
-                  Solicitud de Permiso
+                  { record.persona_solicita || 'N/A'}
                 </ThemedText>
                 <ThemedText style={styles.listItemSubtitle}>
-                  Persona: {record.persona_solicita || 'N/A'} | Fecha: {record.fecha_solicitud || 'N/A'}
+                  Divisón: {record.division ? `${record.division}` : ''}
                 </ThemedText>
-              </ThemedView>
-              <ThemedView style={styles.listItemActions}>
-                {!record.synced && (
-                  <ThemedView style={styles.offlineBadge}>
-                    <ThemedText style={styles.offlineBadgeText}>Offline</ThemedText>
-                  </ThemedView>
-                )}
+                <ThemedText style={styles.listItemSubtitle}>
+                  Fecha: {record.fecha_solicitud ? record.fecha_solicitud.split('T')[0] : 'N/A'}
+                </ThemedText>
               </ThemedView>
             </ThemedView>
 
@@ -746,11 +976,17 @@ export default function PermitRequestScreen() {
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={true}
       >
         <ThemedView style={styles.contentContainer}>
-          <ThemedText type="title" style={styles.screenTitle}>
-            {getActionIcon('permit')} Solicitud de Permiso
-          </ThemedText>
+          <ThemedView style={styles.titleContainer}>
+            <ThemedText type="title" style={styles.title}>
+              {getActionIcon('permit')} Solicitud de Permiso
+            </ThemedText>
+            <ThemedText style={styles.subtitle}>
+              Gestiona las solicitudes de permiso
+            </ThemedText>
+          </ThemedView>
 
           {!hasCurrentMarca && (
             <ThemedView style={styles.noMarcaContainer}>
@@ -762,7 +998,53 @@ export default function PermitRequestScreen() {
           )}
 
           {isCreating || editingRecord ? (
-            <ThemedView style={styles.formContainer}>
+            <ThemedView style={styles.formCard}>
+              {/* División */}
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formLabel}>División *</ThemedText>
+                <ThemedView style={styles.pickerContainer}>
+                  <Picker
+                    selectedValue={division}
+                    onValueChange={(val) => setDivision(val as 'Seguridad' | 'Aseo y limpieza' | 'Otros' | '')}
+                    style={styles.picker}
+                  >
+                    <Picker.Item label="Seleccionar" value="" />
+                    <Picker.Item label="Seguridad" value="Seguridad" />
+                    <Picker.Item label="Aseo y limpieza" value="Aseo y limpieza" />
+                    <Picker.Item label="Otros" value="Otros" />
+                  </Picker>
+                </ThemedView>
+              </ThemedView>
+
+              {/* Colaborador (dropdown) */}
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formLabel}>Colaborador</ThemedText>
+                <ThemedView style={styles.pickerContainer}>
+                  <Picker
+                    selectedValue={selectedEmpleadoId}
+                    onValueChange={(val) => {
+                      const v = String(val || '');
+                      setSelectedEmpleadoId(v);
+                      const emp = empleadosCorpo.find(e => String(e.id) === v);
+                      if (emp) {
+                        setPersonaSolicita(emp.nombre || '');
+                        setCodigo(emp.codigo || '');
+                      }
+                    }}
+                    style={styles.picker}
+                  >
+                    <Picker.Item label="Seleccionar" value="" />
+                    {empleadosCorpo.map(emp => (
+                      <Picker.Item
+                        key={emp.id}
+                        label={`${emp.nombre}${emp.codigo ? ` (${emp.codigo})` : ''}`}
+                        value={String(emp.id)}
+                      />
+                    ))}
+                  </Picker>
+                </ThemedView>
+              </ThemedView>
+
               {/* Persona que solicita el permiso */}
               <ThemedView style={styles.formGroup}>
                 <ThemedText style={styles.formLabel}>Persona que solicita el permiso</ThemedText>
@@ -848,6 +1130,35 @@ export default function PermitRequestScreen() {
                 />
               </ThemedView>
 
+              {/* Sustituto (dropdown) */}
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formLabel}>Sustituto</ThemedText>
+                <ThemedView style={styles.pickerContainer}>
+                  <Picker
+                    selectedValue={selectedSustitutoId}
+                    onValueChange={(val) => {
+                      const v = String(val || '');
+                      setSelectedSustitutoId(v);
+                      const emp = empleadosCorpo.find(e => String(e.id) === v);
+                      if (emp) {
+                        setPermisoSustituidoPor(emp.nombre || '');
+                        setCodigoSustituto(emp.codigo || '');
+                      }
+                    }}
+                    style={styles.picker}
+                  >
+                    <Picker.Item label="Seleccionar" value="" />
+                    {empleadosCorpo.map(emp => (
+                      <Picker.Item
+                        key={emp.id}
+                        label={`${emp.nombre}${emp.codigo ? ` (${emp.codigo})` : ''}`}
+                        value={String(emp.id)}
+                      />
+                    ))}
+                  </Picker>
+                </ThemedView>
+              </ThemedView>
+
               {/* Permiso sustituido por */}
               <ThemedView style={styles.formGroup}>
                 <ThemedText style={styles.formLabel}>Permiso sustituido por</ThemedText>
@@ -874,52 +1185,114 @@ export default function PermitRequestScreen() {
 
               {/* Firma de gerente */}
               <ThemedView style={styles.formGroup}>
-                <ThemedText style={styles.formLabel}>Firma de gerente</ThemedText>
-                <TouchableOpacity
-                  style={styles.signatureButton}
-                  onPress={() => openSignatureModal('gerente')}
-                >
-                  {firmaGerente ? (
-                    <ThemedView style={styles.signaturePreviewContainer}>
-                      <Image
-                        source={{
-                          uri: formatSignatureForDisplay(firmaGerente) || ''
-                        }}
-                        style={styles.signaturePreview}
-                      />
-                    </ThemedView>
-                  ) : (
-                    <ThemedView style={styles.signaturePlaceholder}>
-                      <Ionicons name="create-outline" size={24} color="#007AFF" />
-                      <ThemedText style={styles.signaturePlaceholderText}>Toca para dibujar la firma</ThemedText>
-                    </ThemedView>
-                  )}
-                </TouchableOpacity>
+                <ThemedText style={styles.formLabel}>Firma de gerente *</ThemedText>
+                {!firmaGerenteHash ? (
+                  <ThemedView style={styles.signatureButtons}>
+                    <TouchableOpacity
+                      style={[styles.signatureButton, isGeneratingFirmaGerente && styles.signatureButtonDisabled]}
+                      onPress={() => handleGenerateFirma('gerente')}
+                      disabled={isGeneratingFirmaGerente}
+                    >
+                      {isGeneratingFirmaGerente ? (
+                        <ActivityIndicator size="small" color="#FFFFFF" />
+                      ) : (
+                        <>
+                          <Ionicons name="finger-print" size={24} color="#FFFFFF" />
+                          <ThemedText style={styles.signatureButtonText}>Generar</ThemedText>
+                        </>
+                      )}
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.signatureButton}
+                      onPress={() => handleScanFirma('gerente')}
+                    >
+                      <Ionicons name="qr-code" size={20} color="#FFFFFF" />
+                      <ThemedText style={styles.signatureButtonText}>Escanear QR</ThemedText>
+                    </TouchableOpacity>
+                  </ThemedView>
+                ) : (
+                  <ThemedView style={styles.signatureInfo}>
+                    <ThemedText style={styles.signatureInfoTitle}>Información de la firma:</ThemedText>
+                    <ThemedText style={styles.signatureInfoText}>ID de sesión: {firmaGerenteInfo?.sessionId || 'N/A'}</ThemedText>
+                    <ThemedText style={styles.signatureInfoText}>ID del empleado: {firmaGerenteInfo?.empleadoId || 'N/A'}</ThemedText>
+                    {firmaGerenteInfo?.empleadoDetalle && (
+                      <ThemedView style={styles.signatureInfoDetail}>
+                        <ThemedText style={styles.signatureInfoDetailText}>
+                          {firmaGerenteInfo.empleadoDetalle.nombre} {firmaGerenteInfo.empleadoDetalle.primer_apellido} {firmaGerenteInfo.empleadoDetalle.segundo_apellido}
+                        </ThemedText>
+                      </ThemedView>
+                    )}
+                    <ThemedText style={styles.signatureInfoText}>Latitud: {firmaGerenteInfo?.latitud || 'N/A'}</ThemedText>
+                    <ThemedText style={styles.signatureInfoText}>Longitud: {firmaGerenteInfo?.longitud || 'N/A'}</ThemedText>
+                    <TouchableOpacity
+                      style={styles.clearSignatureButton}
+                      onPress={() => {
+                        setFirmaGerenteHash('');
+                        setFirmaGerenteInfo(null);
+                      }}
+                    >
+                      <ThemedText style={styles.clearSignatureText}>
+                        <Ionicons name="trash" size={18} color="#FFFFFF" />
+                      </ThemedText>
+                    </TouchableOpacity>
+                  </ThemedView>
+                )}
               </ThemedView>
 
               {/* Encargado de monitoreo */}
               <ThemedView style={styles.formGroup}>
-                <ThemedText style={styles.formLabel}>Encargado de monitoreo</ThemedText>
-                <TouchableOpacity
-                  style={styles.signatureButton}
-                  onPress={() => openSignatureModal('encargado')}
-                >
-                  {firmaEncargadoMonitoreo ? (
-                    <ThemedView style={styles.signaturePreviewContainer}>
-                      <Image
-                        source={{
-                          uri: formatSignatureForDisplay(firmaEncargadoMonitoreo) || ''
-                        }}
-                        style={styles.signaturePreview}
-                      />
-                    </ThemedView>
-                  ) : (
-                    <ThemedView style={styles.signaturePlaceholder}>
-                      <Ionicons name="create-outline" size={24} color="#007AFF" />
-                      <ThemedText style={styles.signaturePlaceholderText}>Toca para dibujar la firma</ThemedText>
-                    </ThemedView>
-                  )}
-                </TouchableOpacity>
+                <ThemedText style={styles.formLabel}>Firma encargado de monitoreo *</ThemedText>
+                {!firmaEncargadoHash ? (
+                  <ThemedView style={styles.signatureButtons}>
+                    <TouchableOpacity
+                      style={[styles.signatureButton, isGeneratingFirmaEncargado && styles.signatureButtonDisabled]}
+                      onPress={() => handleGenerateFirma('encargado')}
+                      disabled={isGeneratingFirmaEncargado}
+                    >
+                      {isGeneratingFirmaEncargado ? (
+                        <ActivityIndicator size="small" color="#FFFFFF" />
+                      ) : (
+                        <>
+                          <Ionicons name="finger-print" size={24} color="#FFFFFF" />
+                          <ThemedText style={styles.signatureButtonText}>Generar</ThemedText>
+                        </>
+                      )}
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.signatureButton}
+                      onPress={() => handleScanFirma('encargado')}
+                    >
+                      <Ionicons name="qr-code" size={20} color="#FFFFFF" />
+                      <ThemedText style={styles.signatureButtonText}>Escanear QR</ThemedText>
+                    </TouchableOpacity>
+                  </ThemedView>
+                ) : (
+                  <ThemedView style={styles.signatureInfo}>
+                    <ThemedText style={styles.signatureInfoTitle}>Información de la firma:</ThemedText>
+                    <ThemedText style={styles.signatureInfoText}>ID de sesión: {firmaEncargadoInfo?.sessionId || 'N/A'}</ThemedText>
+                    <ThemedText style={styles.signatureInfoText}>ID del empleado: {firmaEncargadoInfo?.empleadoId || 'N/A'}</ThemedText>
+                    {firmaEncargadoInfo?.empleadoDetalle && (
+                      <ThemedView style={styles.signatureInfoDetail}>
+                        <ThemedText style={styles.signatureInfoDetailText}>
+                          {firmaEncargadoInfo.empleadoDetalle.nombre} {firmaEncargadoInfo.empleadoDetalle.primer_apellido} {firmaEncargadoInfo.empleadoDetalle.segundo_apellido}
+                        </ThemedText>
+                      </ThemedView>
+                    )}
+                    <ThemedText style={styles.signatureInfoText}>Latitud: {firmaEncargadoInfo?.latitud || 'N/A'}</ThemedText>
+                    <ThemedText style={styles.signatureInfoText}>Longitud: {firmaEncargadoInfo?.longitud || 'N/A'}</ThemedText>
+                    <TouchableOpacity
+                      style={styles.clearSignatureButton}
+                      onPress={() => {
+                        setFirmaEncargadoHash('');
+                        setFirmaEncargadoInfo(null);
+                      }}
+                    >
+                      <ThemedText style={styles.clearSignatureText}>
+                        <Ionicons name="trash" size={18} color="#FFFFFF" />
+                      </ThemedText>
+                    </TouchableOpacity>
+                  </ThemedView>
+                )}
               </ThemedView>
 
               {/* Permiso coordinado por */}
@@ -934,82 +1307,88 @@ export default function PermitRequestScreen() {
                 />
               </ThemedView>
 
+              {/* Firma responsables */}
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formLabel}>Firma responsables *</ThemedText>
+                {!firmaResponsablesHash ? (
+                  <ThemedView style={styles.signatureButtons}>
+                    <TouchableOpacity
+                      style={[styles.signatureButton, isGeneratingFirmaResponsables && styles.signatureButtonDisabled]}
+                      onPress={() => handleGenerateFirma('responsables')}
+                      disabled={isGeneratingFirmaResponsables}
+                    >
+                      {isGeneratingFirmaResponsables ? (
+                        <ActivityIndicator size="small" color="#FFFFFF" />
+                      ) : (
+                        <>
+                          <Ionicons name="finger-print" size={24} color="#FFFFFF" />
+                          <ThemedText style={styles.signatureButtonText}>Generar</ThemedText>
+                        </>
+                      )}
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.signatureButton}
+                      onPress={() => handleScanFirma('responsables')}
+                    >
+                      <Ionicons name="qr-code" size={20} color="#FFFFFF" />
+                      <ThemedText style={styles.signatureButtonText}>Escanear QR</ThemedText>
+                    </TouchableOpacity>
+                  </ThemedView>
+                ) : (
+                  <ThemedView style={styles.signatureInfo}>
+                    <ThemedText style={styles.signatureInfoTitle}>Información de la firma:</ThemedText>
+                    <ThemedText style={styles.signatureInfoText}>ID de sesión: {firmaResponsablesInfo?.sessionId || 'N/A'}</ThemedText>
+                    <ThemedText style={styles.signatureInfoText}>ID del empleado: {firmaResponsablesInfo?.empleadoId || 'N/A'}</ThemedText>
+                    {firmaResponsablesInfo?.empleadoDetalle && (
+                      <ThemedView style={styles.signatureInfoDetail}>
+                        <ThemedText style={styles.signatureInfoDetailText}>
+                          {firmaResponsablesInfo.empleadoDetalle.nombre} {firmaResponsablesInfo.empleadoDetalle.primer_apellido} {firmaResponsablesInfo.empleadoDetalle.segundo_apellido}
+                        </ThemedText>
+                      </ThemedView>
+                    )}
+                    <ThemedText style={styles.signatureInfoText}>Latitud: {firmaResponsablesInfo?.latitud || 'N/A'}</ThemedText>
+                    <ThemedText style={styles.signatureInfoText}>Longitud: {firmaResponsablesInfo?.longitud || 'N/A'}</ThemedText>
+                    <TouchableOpacity
+                      style={styles.clearSignatureButton}
+                      onPress={() => {
+                        setFirmaResponsablesHash('');
+                        setFirmaResponsablesInfo(null);
+                      }}
+                    >
+                      <ThemedText style={styles.clearSignatureText}>
+                        <Ionicons name="trash" size={18} color="#FFFFFF" />
+                      </ThemedText>
+                    </TouchableOpacity>
+                  </ThemedView>
+                )}
+              </ThemedView>
+
               <ThemedView style={styles.actionButtons}>
                 <TouchableOpacity
                   style={[styles.actionButton, styles.cancelButton]}
                   onPress={editingRecord ? cancelEditing : cancelCreating}
                 >
                   {getActionIcon('cancel')}
-                  <ThemedText style={styles.actionButtonText}>Cancelar</ThemedText>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.actionButton, styles.saveButton]}
                   onPress={editingRecord ? updatePermitHandler : savePermitHandler}
                 >
                   {getActionIcon('confirm')}
-                  <ThemedText style={styles.actionButtonText}>
-                    {editingRecord ? 'Actualizar' : 'Guardar'}
-                  </ThemedText>
                 </TouchableOpacity>
               </ThemedView>
             </ThemedView>
           ) : (
             <ThemedView style={styles.listSection}>
               <TouchableOpacity style={styles.createButton} onPress={startCreating}>
-                <Ionicons name="add-circle" size={24} color="#FFFFFF" />
-                <ThemedText style={styles.createButtonText}>Crear Nueva Solicitud de Permiso</ThemedText>
+                <Ionicons name="add" size={24} color="#FFFFFF" />
+                <ThemedText style={styles.createButtonText}>Nueva Solicitud</ThemedText>
               </TouchableOpacity>
               {renderPermitList()}
             </ThemedView>
           )}
         </ThemedView>
       </ScrollView>
-
-      {/* Signature Modal */}
-      <Modal
-        visible={isSignatureModalVisible}
-        animationType="fade"
-        transparent={true}
-        onRequestClose={closeSignatureModal}
-      >
-        <ThemedView style={styles.modalOverlay}>
-          <ThemedView style={styles.modalContainer}>
-            <ThemedView style={styles.modalHeader}>
-              <ThemedText style={styles.modalTitle}>
-                {currentSignatureType === 'gerente' ? 'Firma de Gerente' : 'Encargado de Monitoreo'}
-              </ThemedText>
-              <TouchableOpacity onPress={closeSignatureModal}>
-                <Ionicons name="close" size={24} color="#333" />
-              </TouchableOpacity>
-            </ThemedView>
-            
-            <View style={styles.modalSignatureContainer}>
-              <SignatureScreen
-                ref={signatureRef}
-                onOK={handleSignatureRead}
-                descriptionText="Dibuja la firma en el área blanca"
-                clearText=""
-                confirmText=""
-                webStyle={signatureWebStyle}
-                key={signatureKey}
-                onEnd={handleSignature}
-              />
-            </View>
-            
-            <ThemedView style={styles.modalActions}>
-              <TouchableOpacity style={styles.modalClearButton} onPress={clearSignatureInModal}>
-                <Ionicons name="trash" size={20} color="#000000" />
-                <ThemedText style={styles.modalClearButtonText}>Limpiar</ThemedText>
-              </TouchableOpacity>
-              
-              <TouchableOpacity style={styles.modalAcceptButton} onPress={acceptSignature}>
-                <Ionicons name="checkmark" size={20} color="#000000" />
-                <ThemedText style={styles.modalAcceptButtonText}>Aceptar</ThemedText>
-              </TouchableOpacity>
-            </ThemedView>
-          </ThemedView>
-        </ThemedView>
-      </Modal>
 
       <AppFooter />
       <SlideMenu
@@ -1018,6 +1397,7 @@ export default function PermitRequestScreen() {
         onHomePress={handleHomePress}
         currentRoute="PermitRequest"
       />
+      {QRScannerComponent}
     </ThemedView>
   );
 }
@@ -1037,16 +1417,24 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: 600,
   },
-  screenTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    marginBottom: 20,
-    color: '#000000',
-    textAlign: 'center',
-    flexDirection: 'row',
+  titleContainer: {
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
+    marginBottom: 30,
+    paddingBottom: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+    width: '100%',
+  },
+  title: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  subtitle: {
+    fontSize: 16,
+    opacity: 0.7,
+    textAlign: 'center',
   },
   noMarcaContainer: {
     padding: 20,
@@ -1083,34 +1471,46 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
-  formContainer: {
+  formCard: {
     width: '100%',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 10,
-    padding: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    backgroundColor: '#fff',
+    padding: 16,
+    gap: 8,
+    marginBottom: 20,
   },
   formGroup: {
-    marginBottom: 15,
+    marginBottom: 16,
+    backgroundColor: '#fff',
   },
   formLabel: {
     fontSize: 14,
     fontWeight: '600',
-    marginBottom: 5,
-    color: '#000000',
+    marginBottom: 8,
+    color: '#333',
   },
   formInput: {
+    width: '100%',
+    padding: 12,
     borderWidth: 1,
     borderColor: '#E0E0E0',
     borderRadius: 8,
-    padding: 12,
     fontSize: 16,
-    color: '#000000',
     backgroundColor: '#F9F9F9',
+    color: '#000000',
+  },
+  pickerContainer: {
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    backgroundColor: '#F9F9F9',
+    overflow: 'hidden',
+  },
+  picker: {
+    width: '100%',
+    height: 50,
   },
   textArea: {
     minHeight: 100,
@@ -1130,35 +1530,72 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#000000',
   },
+  signatureButtons: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    backgroundColor: '#fff',
+  },
   signatureButton: {
-    borderWidth: 1,
-    borderColor: '#E0E0E0',
+    backgroundColor: '#007AFF',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
     borderRadius: 8,
-    minHeight: 150,
-    backgroundColor: '#F9F9F9',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  signaturePreviewContainer: {
-    width: '100%',
-    marginBottom: 10,
-    padding: 10,
-    backgroundColor: '#F9F9F9',
-    borderRadius: 8,
-  },
-  signaturePreview: {
-    width: '100%',
-    height: 150,
-    resizeMode: 'contain',
-  },
-  signaturePlaceholder: {
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
+    flex: 1,
+    minWidth: '45%',
   },
-  signaturePlaceholderText: {
+  signatureButtonDisabled: {
+    backgroundColor: '#999',
+  },
+  signatureButtonText: {
+    color: '#FFFFFF',
     fontSize: 14,
-    color: '#007AFF',
+    fontWeight: '600',
+    marginLeft: 8,
+  },
+  signatureInfo: {
+    backgroundColor: '#F5F5F5',
+    borderRadius: 8,
+    padding: 12,
+    marginTop: 8,
+  },
+  signatureInfoTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginBottom: 8,
+    color: '#000000',
+  },
+  signatureInfoText: {
+    fontSize: 14,
+    marginBottom: 4,
+    color: '#000000',
+  },
+  signatureInfoDetail: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    backgroundColor: '#BDE4FF',
+    borderRadius: 8,
+    marginBottom: 4,
+  },
+  signatureInfoDetailText: {
+    fontSize: 12,
+    color: '#000000',
+  },
+  clearSignatureButton: {
+    marginTop: 8,
+    padding: 8,
+    backgroundColor: '#FF3B30',
+    borderRadius: 6,
+    alignItems: 'center',
+    width: '100%',
+  },
+  clearSignatureText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
   },
   actionButtons: {
     flexDirection: 'row',
@@ -1168,56 +1605,49 @@ const styles = StyleSheet.create({
   },
   actionButton: {
     flex: 1,
-    padding: 16,
-    borderRadius: 8,
+    padding: 12,
+    borderRadius: 6,
     alignItems: 'center',
-    flexDirection: 'row',
     justifyContent: 'center',
-    gap: 8,
   },
   cancelButton: {
-    backgroundColor: '#CCCCCC',
+    backgroundColor: '#8E8E93',
   },
   saveButton: {
-    backgroundColor: '#FF9500',
-  },
-  actionButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
+    backgroundColor: '#007AFF',
   },
   listSection: {
     width: '100%',
   },
   listContainer: {
     width: '100%',
-    marginTop: 10,
+    gap: 16,
   },
   listItem: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 10,
-    marginBottom: 10,
+    width: '100%',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    backgroundColor: '#fff',
+    padding: 16,
+    gap: 8,
+    marginBottom: 16,
     overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.2,
-    shadowRadius: 1.41,
-    elevation: 2,
   },
   listItemHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 15,
-    backgroundColor: '#F0F0F0',
+    marginBottom: 8,
+    backgroundColor: '#fff',
   },
   listItemContent: {
     flex: 1,
   },
   listItemTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#000000',
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#007AFF',
     marginBottom: 4,
   },
   listItemSubtitle: {
@@ -1241,9 +1671,10 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   listItemDetails: {
-    padding: 16,
     borderTopWidth: 1,
     borderTopColor: '#EEE',
+    paddingTop: 12,
+    marginTop: 8,
   },
   listItemButtons: {
     flexDirection: 'row',
@@ -1256,7 +1687,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     padding: 12,
-    borderRadius: 8,
+    borderRadius: 6,
     gap: 8,
   },
   editButton: {
@@ -1305,74 +1736,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#666',
     textAlign: 'center',
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  modalContainer: {
-    width: '90%',
-    maxWidth: 500,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 10,
-    overflow: 'hidden',
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E0E0E0',
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#000000',
-  },
-  modalSignatureContainer: {
-    height: 300,
-    width: '100%',
-  },
-  modalActions: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    padding: 16,
-    borderTopWidth: 1,
-    borderTopColor: '#E0E0E0',
-    gap: 12,
-  },
-  modalClearButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 12,
-    backgroundColor: '#F5F5F5',
-    borderRadius: 8,
-    gap: 8,
-  },
-  modalClearButtonText: {
-    fontSize: 16,
-    color: '#000000',
-    fontWeight: '600',
-  },
-  modalAcceptButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 12,
-    backgroundColor: '#4CAF50',
-    borderRadius: 8,
-    gap: 8,
-  },
-  modalAcceptButtonText: {
-    fontSize: 16,
-    color: '#FFFFFF',
-    fontWeight: '600',
   },
 });
 

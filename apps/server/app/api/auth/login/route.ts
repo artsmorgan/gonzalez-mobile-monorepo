@@ -6,7 +6,12 @@ import { prisma } from '../../../../utils/prismaClient';
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const dotenv = require('dotenv');
+import crypto from "crypto";
 dotenv.config();
+
+function hashToken(token: string): string {
+    return crypto.createHash("sha256").update(token).digest("hex");
+}
 
 export async function POST(request: NextRequest) {
     try {
@@ -98,7 +103,7 @@ export async function POST(request: NextRequest) {
             });
             await prisma.refresh_token.create({
                 data: {
-                    token: refreshToken,
+                    token: hashToken(refreshToken),
                     empleadoId: empleado.id,
                     sessionId: sessionId,
                     createdAt: now,

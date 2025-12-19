@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   StyleSheet,
   ScrollView,
@@ -24,6 +24,10 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import * as Network from 'expo-network';
 import { useQRScanner } from '@/hooks/useQRScanner';
+import { Picker } from '@react-native-picker/picker';
+import * as Location from 'expo-location';
+import { jwtDecode } from 'jwt-decode';
+import getHoraAccion from '@/hooks/getHoraAccion';
 import {
   createAttendanceControl,
   updateAttendanceControl,
@@ -44,21 +48,23 @@ interface QRInfo {
     nombre: string;
     primer_apellido: string;
     segundo_apellido: string;
+    cedula_empleado?: string;
   };
 }
 
 interface Colaborador {
+  empleado_id: number | null;
   nombre_colaborador: string;
   cedula: string;
   firma_comentario: string; // base64 del QR
   firma_comentario_info: QRInfo | null; // Información decodificada del QR
   entrada: string;
   salida: string;
+  sustituto_id: number | null;
   nombre_sustituto: string;
   cedula_sustituto: string;
   firma_sustituto: string; // base64 del QR
   firma_sustituto_info: QRInfo | null; // Información decodificada del QR
-  checked: boolean;
 }
 
 interface AttendanceControl {
@@ -71,6 +77,7 @@ interface AttendanceControl {
   total_presentes: string | null;
   fijos: string | null;
   colaboradores: string | null;
+  firma_responsable?: string | null;
   created_at: string;
   synced?: boolean;
 }
@@ -78,21 +85,25 @@ interface AttendanceControl {
 interface EditingAttendanceControl {
   id: string | null;
   id_local: string;
-  cliente: string;
   fecha: string;
   turno: string;
   area_piso: string;
   total_presentes: string;
   fijos: string;
   colaboradores: Colaborador[];
+  firma_responsable: string;
 }
 
 const TURNO_OPTIONS = [
   { label: 'Seleccionar turno', value: '' },
-  { label: 'DIURNO', value: 'DIURNO' },
-  { label: 'MIXTO', value: 'MIXTO' },
-  { label: 'NOCTURNO', value: 'NOCTURNO' },
+  { label: 'Diurno', value: 'DIURNO' },
+  { label: 'Mixto', value: 'MIXTO' },
+  { label: 'Nocturno', value: 'NOCTURNO' },
 ];
+
+type EmpleadoOption = { id: number; nombre: string; cedula: string };
+
+const EMPLEADOS_CORPO_CACHE_KEY = (corpoId: string) => `empleados_corpo_cache_${corpoId}`;
 
 export default function AttendanceControlScreen() {
   const { employee, refreshAccessToken, logout } = useAuth();
@@ -105,13 +116,22 @@ export default function AttendanceControlScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [hasCurrentMarca, setHasCurrentMarca] = useState<boolean>(false);
+  const [marcaClienteName, setMarcaClienteName] = useState<string>('');
+  const [marcaCorpoName, setMarcaCorpoName] = useState<string>('');
+  const [corpoIdStr, setCorpoIdStr] = useState<string>('');
+  const [empleadosOptions, setEmpleadosOptions] = useState<EmpleadoOption[]>([]);
+
+  // Firma responsable (similar a TrainingsScreen)
+  const [location, setLocation] = useState<Location.LocationObject | null>(null);
+  const [isGeneratingFirmaResponsable, setIsGeneratingFirmaResponsable] = useState(false);
+  const [firmaResponsable, setFirmaResponsable] = useState<QRInfo | null>(null);
+  const [firmaResponsableHash, setFirmaResponsableHash] = useState<string>('');
 
   // Editing state
   const [editingRecord, setEditingRecord] = useState<EditingAttendanceControl | null>(null);
   const [isCreating, setIsCreating] = useState(false);
 
   // Form states
-  const [cliente, setCliente] = useState('');
   const [fecha, setFecha] = useState<Date>(new Date());
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [turno, setTurno] = useState('');
@@ -119,6 +139,11 @@ export default function AttendanceControlScreen() {
   const [totalPresentes, setTotalPresentes] = useState('');
   const [fijos, setFijos] = useState('');
   const [colaboradores, setColaboradores] = useState<Colaborador[]>([]);
+
+  // Time pickers for colaboradores
+  const [showTimePicker, setShowTimePicker] = useState(false);
+  const [timePickerValue, setTimePickerValue] = useState<Date>(new Date());
+  const [timePickerTarget, setTimePickerTarget] = useState<{ index: number; field: 'entrada' | 'salida' } | null>(null);
 
   // Expanded states
   const [expandedColaboradorIndices, setExpandedColaboradorIndices] = useState<number[]>([]);
@@ -142,6 +167,54 @@ export default function AttendanceControlScreen() {
     return `${day}/${month}/${year}`;
   };
 
+  const formatTime = (date: Date): string => {
+    const h = date.getHours().toString().padStart(2, '0');
+    const m = date.getMinutes().toString().padStart(2, '0');
+    return `${h}:${m}`;
+  };
+
+  const parseTimeToDate = (time: string): Date => {
+    const now = new Date();
+    const parts = String(time || '').split(':');
+    if (parts.length === 2) {
+      const hh = parseInt(parts[0], 10);
+      const mm = parseInt(parts[1], 10);
+      if (!Number.isNaN(hh) && !Number.isNaN(mm)) {
+        now.setHours(hh, mm, 0, 0);
+        return now;
+      }
+    }
+    now.setHours(0, 0, 0, 0);
+    return now;
+  };
+
+  const normalizeControl = (raw: any): AttendanceControl => {
+    const clienteName = raw?.cliente ?? raw?.nombre_cliente ?? null;
+    return {
+      ...raw,
+      cliente: clienteName,
+      total_presentes: raw?.total_presentes !== null && raw?.total_presentes !== undefined ? String(raw.total_presentes) : null,
+      fijos: raw?.fijos !== null && raw?.fijos !== undefined ? String(raw.fijos) : null,
+    } as AttendanceControl;
+  };
+
+  const parseFechaToDate = (value: any): Date => {
+    if (!value) return new Date();
+    if (typeof value === 'string' && value.includes('/')) {
+      const parts = value.split('/');
+      if (parts.length === 3) {
+        const dd = parseInt(parts[0], 10);
+        const mm = parseInt(parts[1], 10);
+        const yyyy = parseInt(parts[2], 10);
+        if (!Number.isNaN(dd) && !Number.isNaN(mm) && !Number.isNaN(yyyy)) {
+          return new Date(yyyy, mm - 1, dd);
+        }
+      }
+    }
+    const d = new Date(value);
+    return Number.isNaN(d.getTime()) ? new Date() : d;
+  };
+
   const fetchControls = useCallback(async () => {
     try {
       setIsLoading(true);
@@ -157,6 +230,9 @@ export default function AttendanceControlScreen() {
       setHasCurrentMarca(true);
       const currentMarcaData = JSON.parse(currentMarca);
       const corpoId = currentMarcaData.corpo?.id?.toString();
+      setCorpoIdStr(corpoId || '');
+      setMarcaClienteName(currentMarcaData?.cliente?.nombre || '');
+      setMarcaCorpoName(currentMarcaData?.corpo?.nombre || '');
 
       if (!corpoId) {
         setError('No se encontró el ID del corpo');
@@ -174,7 +250,8 @@ export default function AttendanceControlScreen() {
         });
 
         if (result.status && result.data) {
-          setControls(result.data as AttendanceControl[]);
+          const normalized = Array.isArray(result.data) ? (result.data as any[]).map(normalizeControl) : [];
+          setControls(normalized);
         } else {
           setControls([]);
         }
@@ -183,7 +260,8 @@ export default function AttendanceControlScreen() {
         if (cacheStr) {
           const cache = JSON.parse(cacheStr);
           const controlsCache = cache.filter((item: any) => item.type === 'attendance_control');
-          setControls(controlsCache);
+          const normalized = Array.isArray(controlsCache) ? controlsCache.map(normalizeControl) : [];
+          setControls(normalized);
         } else {
           setControls([]);
         }
@@ -206,6 +284,62 @@ export default function AttendanceControlScreen() {
     }
   }, [refreshAccessToken, logout]);
 
+  const fetchEmpleadosByCorpo = useCallback(async (corpoId: string) => {
+    if (!corpoId) return;
+    try {
+      const hasConnection = await getConnectionStatus();
+      const cacheKey = EMPLEADOS_CORPO_CACHE_KEY(corpoId);
+
+      if (!hasConnection) {
+        const cached = await AsyncStorage.getItem(cacheKey);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed)) setEmpleadosOptions(parsed);
+        }
+        return;
+      }
+
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) return;
+
+      let token = await AsyncStorage.getItem('access_token');
+      if (!token) {
+        const refreshed = await refreshAccessToken();
+        if (!refreshed) return;
+        token = await AsyncStorage.getItem('access_token');
+      }
+      if (!token) return;
+
+      const resp = await fetch(`${apiUrl}/api/empleados/corpo/${corpoId}`, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': '69420',
+        },
+      });
+
+      const data = await resp.json().catch(() => null);
+      if (resp.ok && data?.status && Array.isArray(data.empleados)) {
+        const mapped: EmpleadoOption[] = data.empleados.map((e: any) => ({
+          id: Number(e.id),
+          nombre: String(e.nombre || ''),
+          cedula: String(e.cedula || ''),
+        }));
+        setEmpleadosOptions(mapped);
+        await AsyncStorage.setItem(cacheKey, JSON.stringify(mapped));
+      }
+    } catch (e) {
+      console.error('Error fetching empleados by corpo:', e);
+    }
+  }, [refreshAccessToken]);
+
+  useEffect(() => {
+    if (corpoIdStr) {
+      fetchEmpleadosByCorpo(corpoIdStr);
+    }
+  }, [corpoIdStr, fetchEmpleadosByCorpo]);
+
   useFocusEffect(
     useCallback(() => {
       fetchControls();
@@ -217,7 +351,6 @@ export default function AttendanceControlScreen() {
   );
 
   const resetForm = () => {
-    setCliente('');
     setFecha(new Date());
     setTurno('');
     setAreaPiso('');
@@ -225,12 +358,29 @@ export default function AttendanceControlScreen() {
     setFijos('');
     setColaboradores([]);
     setExpandedColaboradorIndices([]);
+    setFirmaResponsable(null);
+    setFirmaResponsableHash('');
   };
 
   const startCreating = () => {
     setIsCreating(true);
     setEditingRecord(null);
     resetForm();
+
+    // Request location permissions (firma)
+    (async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') {
+          Alert.alert('Error', 'Se necesita permiso de ubicación para generar la firma');
+          return;
+        }
+        const currentLocation = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+        setLocation(currentLocation);
+      } catch (error) {
+        console.error('Error getting location:', error);
+      }
+    })();
   };
 
   const cancelCreating = () => {
@@ -250,17 +400,18 @@ export default function AttendanceControlScreen() {
         // Decodificar los QR guardados para mostrar la información
         colaboradoresArray = await Promise.all(colaboradoresArray.map(async (colab: any) => {
           const decoded: Colaborador = {
+            empleado_id: typeof colab.empleado_id === 'number' ? colab.empleado_id : null,
             nombre_colaborador: colab.nombre_colaborador || '',
             cedula: colab.cedula || '',
             firma_comentario: colab.firma_comentario || '',
             firma_comentario_info: null,
             entrada: colab.entrada || '',
             salida: colab.salida || '',
+            sustituto_id: typeof colab.sustituto_id === 'number' ? colab.sustituto_id : null,
             nombre_sustituto: colab.nombre_sustituto || '',
             cedula_sustituto: colab.cedula_sustituto || '',
             firma_sustituto: colab.firma_sustituto || '',
             firma_sustituto_info: null,
-            checked: colab.checked || false,
           };
 
           // Decodificar firma_comentario si existe
@@ -371,28 +522,63 @@ export default function AttendanceControlScreen() {
     setEditingRecord({
       id: record.id,
       id_local: record.id_local,
-      cliente: record.cliente || '',
       fecha: record.fecha || '',
       turno: record.turno || '',
       area_piso: record.area_piso || '',
-      total_presentes: record.total_presentes || '',
-      fijos: record.fijos || '',
+      total_presentes: record.total_presentes !== null && record.total_presentes !== undefined ? String(record.total_presentes) : '',
+      fijos: record.fijos !== null && record.fijos !== undefined ? String(record.fijos) : '',
       colaboradores: colaboradoresArray,
+      firma_responsable: record.firma_responsable || '',
     });
 
-    setCliente(record.cliente || '');
-    if (record.fecha) {
-      const dateParts = record.fecha.split('/');
-      if (dateParts.length === 3) {
-        setFecha(new Date(parseInt(dateParts[2]), parseInt(dateParts[1]) - 1, parseInt(dateParts[0])));
-      }
-    }
+    setFecha(parseFechaToDate(record.fecha));
     setTurno(record.turno || '');
     setAreaPiso(record.area_piso || '');
-    setTotalPresentes(record.total_presentes || '');
-    setFijos(record.fijos || '');
+    setTotalPresentes(record.total_presentes !== null && record.total_presentes !== undefined ? String(record.total_presentes) : '');
+    setFijos(record.fijos !== null && record.fijos !== undefined ? String(record.fijos) : '');
     setColaboradores(colaboradoresArray);
     setExpandedColaboradorIndices(colaboradoresArray.map((_, i) => i));
+
+    // Cargar firma responsable si existe
+    if (record.firma_responsable) {
+      try {
+        const decodedData = atob(String(record.firma_responsable));
+        const parts = decodedData.split(':');
+        if (parts.length === 5) {
+          const [sessionId, empleadoId, latitud, longitud, timestamp] = parts;
+          setFirmaResponsableHash(String(record.firma_responsable));
+          setFirmaResponsable({
+            sessionId,
+            empleadoId,
+            latitud,
+            longitud,
+            timestamp,
+            empleadoDetalle: undefined,
+          });
+        } else {
+          setFirmaResponsableHash('');
+          setFirmaResponsable(null);
+        }
+      } catch {
+        setFirmaResponsableHash('');
+        setFirmaResponsable(null);
+      }
+    } else {
+      setFirmaResponsableHash('');
+      setFirmaResponsable(null);
+    }
+
+    // Ensure location for firma on edit
+    (async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') return;
+        const currentLocation = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+        setLocation(currentLocation);
+      } catch (error) {
+        console.error('Error getting location:', error);
+      }
+    })();
   };
 
   const cancelEditing = () => {
@@ -411,20 +597,39 @@ export default function AttendanceControlScreen() {
 
   const addColaborador = () => {
     const newColaborador: Colaborador = {
+      empleado_id: null,
       nombre_colaborador: '',
       cedula: '',
       firma_comentario: '',
       firma_comentario_info: null,
       entrada: '',
       salida: '',
+      sustituto_id: null,
       nombre_sustituto: '',
       cedula_sustituto: '',
       firma_sustituto: '',
       firma_sustituto_info: null,
-      checked: false,
     };
     setColaboradores([...colaboradores, newColaborador]);
     setExpandedColaboradorIndices([...expandedColaboradorIndices, colaboradores.length]);
+  };
+
+  const openTimePicker = (index: number, field: 'entrada' | 'salida') => {
+    setTimePickerTarget({ index, field });
+    const current = colaboradores[index]?.[field] || '';
+    setTimePickerValue(parseTimeToDate(current));
+    setShowTimePicker(true);
+  };
+
+  const handleTimeChange = (_event: any, selectedDate?: Date) => {
+    if (Platform.OS === 'android') {
+      setShowTimePicker(false);
+    }
+    if (!selectedDate || !timePickerTarget) return;
+
+    const { index, field } = timePickerTarget;
+    updateColaborador(index, field, formatTime(selectedDate));
+    setTimePickerValue(selectedDate);
   };
 
   const updateColaborador = (index: number, field: keyof Colaborador, value: string | boolean) => {
@@ -541,6 +746,140 @@ export default function AttendanceControlScreen() {
     }
   };
 
+  const generateSignatureResponsable = async () => {
+    try {
+      if (!employee) {
+        Alert.alert('Error', 'No se pudo obtener la información del empleado');
+        return;
+      }
+
+      if (!location) {
+        Alert.alert('Error', 'No se pudo obtener la ubicación');
+        return;
+      }
+
+      setIsGeneratingFirmaResponsable(true);
+
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) throw new Error('Server URL not configured');
+
+      const token = await AsyncStorage.getItem('access_token');
+      if (!token) throw new Error('No authentication token found');
+
+      const decodedToken = jwtDecode(token);
+      const sessionId = JSON.parse(JSON.stringify(decodedToken)).sessionId;
+
+      const horaAccion = await getHoraAccion();
+      if (!horaAccion) throw new Error('Hora de acción not found');
+
+      const hash = btoa(sessionId + ':' + employee.id + ':' + location.coords.latitude + ':' + location.coords.longitude + ':' + horaAccion);
+      setFirmaResponsableHash(hash);
+
+      const decodedHash = atob(hash);
+      const [decodedSessionId, decodedEmpleadoId, decodedLatitud, decodedLongitud, decodedTimestamp] = decodedHash.split(':');
+
+      // Fetch empleado details si hay internet
+      const connectionStatus = await getConnectionStatus();
+      let empleadoDetalle = undefined;
+      if (connectionStatus) {
+        try {
+          const empleadoResponse = await fetch(`${apiUrl}/api/empleados/${decodedEmpleadoId}`, {
+            method: 'GET',
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'Content-Type': 'application/json',
+              'ngrok-skip-browser-warning': '69420',
+            },
+          });
+
+          if (empleadoResponse.ok) {
+            const empleadoData = await empleadoResponse.json();
+            empleadoDetalle = {
+              nombre: empleadoData.nombre,
+              primer_apellido: empleadoData.primer_apellido,
+              segundo_apellido: empleadoData.segundo_apellido,
+              cedula_empleado: empleadoData.cedula,
+            };
+          }
+        } catch (e) {
+          console.error('Error fetching empleado details for firma responsable:', e);
+        }
+      }
+
+      setFirmaResponsable({
+        sessionId: decodedSessionId,
+        empleadoId: decodedEmpleadoId,
+        latitud: decodedLatitud,
+        longitud: decodedLongitud,
+        timestamp: decodedTimestamp,
+        empleadoDetalle,
+      });
+    } catch (e) {
+      console.error('Error generating firma responsable:', e);
+      Alert.alert('Error', 'No se pudo generar la firma digital');
+    } finally {
+      setIsGeneratingFirmaResponsable(false);
+    }
+  };
+
+  const handleScanQRResponsable = async () => {
+    try {
+      const qrData = await scanQR();
+      if (!qrData) return;
+
+      const decodedHash = atob(qrData);
+      const parts = decodedHash.split(':');
+      if (parts.length !== 5) {
+        Alert.alert('Error', 'El QR no tiene la estructura esperada');
+        return;
+      }
+
+      const [sessionId, empleadoId, latitud, longitud, timestamp] = parts;
+      setFirmaResponsableHash(qrData);
+
+      const connectionStatus = await getConnectionStatus();
+      let empleadoDetalle = undefined;
+      if (connectionStatus) {
+        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        if (!apiUrl) throw new Error('Server URL not configured');
+
+        const token = await AsyncStorage.getItem('access_token');
+        if (!token) throw new Error('No authentication token found');
+
+        const empleadoResponse = await fetch(`${apiUrl}/api/empleados/${empleadoId}`, {
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+            'ngrok-skip-browser-warning': '69420',
+          },
+        });
+
+        if (empleadoResponse.ok) {
+          const empleadoData = await empleadoResponse.json();
+          empleadoDetalle = {
+            nombre: empleadoData.nombre,
+            primer_apellido: empleadoData.primer_apellido,
+            segundo_apellido: empleadoData.segundo_apellido,
+            cedula_empleado: empleadoData.cedula,
+          };
+        }
+      }
+
+      setFirmaResponsable({
+        sessionId,
+        empleadoId,
+        latitud,
+        longitud,
+        timestamp,
+        empleadoDetalle,
+      });
+    } catch (error) {
+      console.error('Error scanning QR responsable:', error);
+      Alert.alert('Error', 'No se pudo escanear el código QR');
+    }
+  };
+
   const saveControlHandler = async () => {
     const currentMarca = await AsyncStorage.getItem('current_marca');
     if (!currentMarca) {
@@ -561,26 +900,33 @@ export default function AttendanceControlScreen() {
             try {
               // Preparar colaboradores para guardar (sin la información decodificada)
               const colaboradoresToSave = colaboradores.map((colab) => ({
+                empleado_id: colab.empleado_id,
                 nombre_colaborador: colab.nombre_colaborador,
                 cedula: colab.cedula,
                 firma_comentario: colab.firma_comentario,
                 entrada: colab.entrada,
                 salida: colab.salida,
+                sustituto_id: colab.sustituto_id,
                 nombre_sustituto: colab.nombre_sustituto,
                 cedula_sustituto: colab.cedula_sustituto,
                 firma_sustituto: colab.firma_sustituto,
-                checked: colab.checked,
               }));
+
+              if (!firmaResponsableHash) {
+                Alert.alert('Error', 'Debes generar la firma del responsable antes de guardar');
+                return;
+              }
 
               const requestData = {
                 marca_id: currentMarcaData.id,
-                cliente: cliente.trim() || null,
+                cliente: (currentMarcaData?.cliente?.nombre || '').trim() || null,
                 fecha: formatDate(fecha) || null,
                 turno: turno.trim() || null,
                 area_piso: areaPiso.trim() || null,
                 total_presentes: totalPresentes.trim() || null,
                 fijos: fijos.trim() || null,
                 colaboradores: colaboradoresToSave.length > 0 ? JSON.stringify(colaboradoresToSave) : null,
+                firma_responsable: firmaResponsableHash,
               };
 
               const isConnected = await getConnectionStatus();
@@ -619,13 +965,14 @@ export default function AttendanceControlScreen() {
                 const newRecordCache: AttendanceControl = {
                   id: '',
                   id_local: localId,
-                  cliente: cliente.trim() || null,
+                  cliente: (currentMarcaData?.cliente?.nombre || '').trim() || null,
                   fecha: formatDate(fecha) || null,
                   turno: turno.trim() || null,
                   area_piso: areaPiso.trim() || null,
                   total_presentes: totalPresentes.trim() || null,
                   fijos: fijos.trim() || null,
                   colaboradores: colaboradoresToSave.length > 0 ? JSON.stringify(colaboradoresToSave) : null,
+                  firma_responsable: firmaResponsableHash,
                   created_at: new Date().toISOString(),
                   synced: false,
                 };
@@ -667,25 +1014,33 @@ export default function AttendanceControlScreen() {
             try {
               // Preparar colaboradores para guardar (sin la información decodificada)
               const colaboradoresToSave = colaboradores.map((colab) => ({
+                empleado_id: colab.empleado_id,
                 nombre_colaborador: colab.nombre_colaborador,
                 cedula: colab.cedula,
                 firma_comentario: colab.firma_comentario,
                 entrada: colab.entrada,
                 salida: colab.salida,
+                sustituto_id: colab.sustituto_id,
                 nombre_sustituto: colab.nombre_sustituto,
                 cedula_sustituto: colab.cedula_sustituto,
                 firma_sustituto: colab.firma_sustituto,
-                checked: colab.checked,
               }));
 
+              if (!firmaResponsableHash) {
+                Alert.alert('Error', 'Debes generar la firma del responsable antes de actualizar');
+                return;
+              }
+
               const requestData = {
-                cliente: cliente.trim() || null,
+                // Cliente ahora es de lectura (current_marca)
+                cliente: marcaClienteName.trim() || null,
                 fecha: formatDate(fecha) || null,
                 turno: turno.trim() || null,
                 area_piso: areaPiso.trim() || null,
                 total_presentes: totalPresentes.trim() || null,
                 fijos: fijos.trim() || null,
                 colaboradores: colaboradoresToSave.length > 0 ? JSON.stringify(colaboradoresToSave) : null,
+                firma_responsable: firmaResponsableHash,
               };
 
               const isConnected = await getConnectionStatus();
@@ -831,6 +1186,8 @@ export default function AttendanceControlScreen() {
       case 'delete': return <Ionicons name="trash" size={24} color='#FFFFFF' />;
       case 'edit': return <Ionicons name="pencil" size={20} color="#FFFFFF" />;
       case 'qr': return <Ionicons name="qr-code" size={20} color="#007AFF" />;
+      case 'qr-responsable': return <Ionicons name="qr-code" size={20} color="#FFFFFF" />;
+      case 'signature': return <Ionicons name="finger-print" size={24} color="#FFFFFF" />;
       default: return <Ionicons name="people" size={24} color='#000000' />;
     }
   };
@@ -878,18 +1235,23 @@ export default function AttendanceControlScreen() {
               <ThemedView style={styles.listItemHeader}>
                 <ThemedView style={styles.listItemContent}>
                   <ThemedText style={styles.listItemTitle}>
-                    Control de Asistencia
+                    {record.fecha ? record.fecha.split('T')[0] : 'N/A'}
                   </ThemedText>
                   <ThemedText style={styles.listItemSubtitle}>
-                    Cliente: {record.cliente || 'N/A'} | Fecha: {record.fecha || 'N/A'} | Colaboradores: {colaboradoresArray.length}
+                    Cliente: {record.cliente || 'N/A'}
                   </ThemedText>
-                </ThemedView>
-                <ThemedView style={styles.listItemActions}>
-                  {!record.synced && (
-                    <ThemedView style={styles.offlineBadge}>
-                      <ThemedText style={styles.offlineBadgeText}>Offline</ThemedText>
-                    </ThemedView>
-                  )}
+                  <ThemedText style={styles.listItemSubtitle}>
+                    Área / Piso: {record.area_piso || 'N/A'}
+                  </ThemedText>
+                  <ThemedText style={styles.listItemSubtitle}>
+                    Tipo de turno: {record.turno || 'N/A'}
+                  </ThemedText>
+                  <ThemedText style={styles.listItemSubtitle}>
+                    Total Presentes: {record.total_presentes || 'N/A'}
+                  </ThemedText>
+                  <ThemedText style={styles.listItemSubtitle}>
+                    Fijos: {record.fijos || 'N/A'}
+                  </ThemedText>
                 </ThemedView>
               </ThemedView>
 
@@ -929,7 +1291,7 @@ export default function AttendanceControlScreen() {
         >
           <ThemedView style={styles.colaboradorHeaderContent}>
             <ThemedText style={styles.colaboradorHeaderText}>
-              Colaborador {index + 1}: {colaborador.nombre_colaborador || 'Sin nombre'}
+              {colaborador.nombre_colaborador || 'Sin nombre'}
             </ThemedText>
           </ThemedView>
           <ThemedView style={styles.colaboradorHeaderActions}>
@@ -952,6 +1314,33 @@ export default function AttendanceControlScreen() {
 
         {isExpanded && (
           <ThemedView style={styles.colaboradorContent}>
+            {/* Selector colaborador */}
+            <ThemedView style={styles.formGroup}>
+              <ThemedText style={styles.formLabel}>Colaborador</ThemedText>
+              <ThemedView style={styles.pickerWrapper}>
+                <Picker
+                  selectedValue={colaborador.empleado_id ?? ''}
+                  onValueChange={(value) => {
+                    const idNum = value ? parseInt(String(value), 10) : null;
+                    const emp = empleadosOptions.find((e) => e.id === idNum);
+                    const newColaboradores = [...colaboradores];
+                    newColaboradores[index] = {
+                      ...newColaboradores[index],
+                      empleado_id: idNum,
+                      nombre_colaborador: emp?.nombre || '',
+                      cedula: emp?.cedula || '',
+                    };
+                    setColaboradores(newColaboradores);
+                  }}
+                >
+                  <Picker.Item label="Seleccionar colaborador" value="" />
+                  {empleadosOptions.map((e) => (
+                    <Picker.Item key={e.id} label={e.nombre} value={e.id} />
+                  ))}
+                </Picker>
+              </ThemedView>
+            </ThemedView>
+
             {/* Nombre colaborador */}
             <ThemedView style={styles.formGroup}>
               <ThemedText style={styles.formLabel}>Nombre colaborador</ThemedText>
@@ -960,7 +1349,7 @@ export default function AttendanceControlScreen() {
                 placeholder="Nombre colaborador"
                 placeholderTextColor="#999"
                 value={colaborador.nombre_colaborador}
-                onChangeText={(text) => updateColaborador(index, 'nombre_colaborador', text)}
+                editable={false}
               />
             </ThemedView>
 
@@ -972,7 +1361,7 @@ export default function AttendanceControlScreen() {
                 placeholder="Cédula"
                 placeholderTextColor="#999"
                 value={colaborador.cedula}
-                onChangeText={(text) => updateColaborador(index, 'cedula', text)}
+                editable={false}
                 keyboardType="numeric"
               />
             </ThemedView>
@@ -997,7 +1386,7 @@ export default function AttendanceControlScreen() {
                       <ThemedText style={styles.qrInfoText}>ID del empleado: {colaborador.firma_comentario_info.empleadoId}</ThemedText>
                       {colaborador.firma_comentario_info.empleadoDetalle && (
                         <ThemedText style={styles.qrInfoText}>
-                          Empleado: {colaborador.firma_comentario_info.empleadoDetalle.nombre} {colaborador.firma_comentario_info.empleadoDetalle.primer_apellido} {colaborador.firma_comentario_info.empleadoDetalle.segundo_apellido}
+                          Empleado: {colaborador.firma_comentario_info.empleadoDetalle.nombre} {colaborador.firma_comentario_info.empleadoDetalle.primer_apellido} {colaborador.firma_comentario_info.empleadoDetalle.segundo_apellido}{colaborador.firma_comentario_info.empleadoDetalle.cedula_empleado ? ` (${colaborador.firma_comentario_info.empleadoDetalle.cedula_empleado})` : ''}
                         </ThemedText>
                       )}
                       <ThemedText style={styles.qrInfoText}>Latitud: {colaborador.firma_comentario_info.latitud}</ThemedText>
@@ -1027,25 +1416,46 @@ export default function AttendanceControlScreen() {
             {/* Entrada */}
             <ThemedView style={styles.formGroup}>
               <ThemedText style={styles.formLabel}>Entrada</ThemedText>
-              <TextInput
-                style={styles.formInput}
-                placeholder="HH:MM"
-                placeholderTextColor="#999"
-                value={colaborador.entrada}
-                onChangeText={(text) => updateColaborador(index, 'entrada', text)}
-              />
+              <TouchableOpacity style={styles.dateButton} onPress={() => openTimePicker(index, 'entrada')}>
+                <ThemedText style={styles.dateButtonText}>{colaborador.entrada || 'Seleccionar hora'}</ThemedText>
+                <Ionicons name="time" size={20} color="#007AFF" />
+              </TouchableOpacity>
             </ThemedView>
 
             {/* Salida */}
             <ThemedView style={styles.formGroup}>
               <ThemedText style={styles.formLabel}>Salida</ThemedText>
-              <TextInput
-                style={styles.formInput}
-                placeholder="HH:MM"
-                placeholderTextColor="#999"
-                value={colaborador.salida}
-                onChangeText={(text) => updateColaborador(index, 'salida', text)}
-              />
+              <TouchableOpacity style={styles.dateButton} onPress={() => openTimePicker(index, 'salida')}>
+                <ThemedText style={styles.dateButtonText}>{colaborador.salida || 'Seleccionar hora'}</ThemedText>
+                <Ionicons name="time" size={20} color="#007AFF" />
+              </TouchableOpacity>
+            </ThemedView>
+
+            {/* Selector sustituto */}
+            <ThemedView style={styles.formGroup}>
+              <ThemedText style={styles.formLabel}>Sustituto</ThemedText>
+              <ThemedView style={styles.pickerWrapper}>
+                <Picker
+                  selectedValue={colaborador.sustituto_id ?? ''}
+                  onValueChange={(value) => {
+                    const idNum = value ? parseInt(String(value), 10) : null;
+                    const emp = empleadosOptions.find((e) => e.id === idNum);
+                    const newColaboradores = [...colaboradores];
+                    newColaboradores[index] = {
+                      ...newColaboradores[index],
+                      sustituto_id: idNum,
+                      nombre_sustituto: emp?.nombre || '',
+                      cedula_sustituto: emp?.cedula || '',
+                    };
+                    setColaboradores(newColaboradores);
+                  }}
+                >
+                  <Picker.Item label="Seleccionar sustituto" value="" />
+                  {empleadosOptions.map((e) => (
+                    <Picker.Item key={e.id} label={e.nombre} value={e.id} />
+                  ))}
+                </Picker>
+              </ThemedView>
             </ThemedView>
 
             {/* Nombre Sustituto */}
@@ -1056,7 +1466,7 @@ export default function AttendanceControlScreen() {
                 placeholder="Nombre Sustituto"
                 placeholderTextColor="#999"
                 value={colaborador.nombre_sustituto}
-                onChangeText={(text) => updateColaborador(index, 'nombre_sustituto', text)}
+                editable={false}
               />
             </ThemedView>
 
@@ -1068,7 +1478,7 @@ export default function AttendanceControlScreen() {
                 placeholder="Cédula Sustituto"
                 placeholderTextColor="#999"
                 value={colaborador.cedula_sustituto}
-                onChangeText={(text) => updateColaborador(index, 'cedula_sustituto', text)}
+                editable={false}
                 keyboardType="numeric"
               />
             </ThemedView>
@@ -1093,7 +1503,7 @@ export default function AttendanceControlScreen() {
                       <ThemedText style={styles.qrInfoText}>ID del empleado: {colaborador.firma_sustituto_info.empleadoId}</ThemedText>
                       {colaborador.firma_sustituto_info.empleadoDetalle && (
                         <ThemedText style={styles.qrInfoText}>
-                          Empleado: {colaborador.firma_sustituto_info.empleadoDetalle.nombre} {colaborador.firma_sustituto_info.empleadoDetalle.primer_apellido} {colaborador.firma_sustituto_info.empleadoDetalle.segundo_apellido}
+                          Empleado: {colaborador.firma_sustituto_info.empleadoDetalle.nombre} {colaborador.firma_sustituto_info.empleadoDetalle.primer_apellido} {colaborador.firma_sustituto_info.empleadoDetalle.segundo_apellido}{colaborador.firma_sustituto_info.empleadoDetalle.cedula_empleado ? ` (${colaborador.firma_sustituto_info.empleadoDetalle.cedula_empleado})` : ''}
                         </ThemedText>
                       )}
                       <ThemedText style={styles.qrInfoText}>Latitud: {colaborador.firma_sustituto_info.latitud}</ThemedText>
@@ -1119,21 +1529,6 @@ export default function AttendanceControlScreen() {
                 </ThemedView>
               )}
             </ThemedView>
-
-            {/* Checkbox ✓ */}
-            <ThemedView style={styles.formGroup}>
-              <TouchableOpacity
-                style={styles.checkboxContainer}
-                onPress={() => updateColaborador(index, 'checked', !colaborador.checked)}
-              >
-                <View style={styles.checkbox}>
-                  {colaborador.checked && (
-                    <Ionicons name="checkmark" size={20} color="#FF9500" />
-                  )}
-                </View>
-                <ThemedText style={styles.checkboxLabel}>✓</ThemedText>
-              </TouchableOpacity>
-            </ThemedView>
           </ThemedView>
         )}
       </ThemedView>
@@ -1149,9 +1544,16 @@ export default function AttendanceControlScreen() {
         contentContainerStyle={styles.scrollContent}
       >
         <ThemedView style={styles.contentContainer}>
-          <ThemedText type="title" style={styles.screenTitle}>
-            {getActionIcon('attendance')} Control de Asistencia
-          </ThemedText>
+          <ThemedView style={styles.titleContainer}>
+            <ThemedText style={styles.title}>
+              Control de Asistencia
+            </ThemedText>
+            {hasCurrentMarca && (
+              <ThemedText style={styles.subtitle}>
+                Controla la asistencia de los colaboradores
+              </ThemedText>
+            )}
+          </ThemedView>
 
           {!hasCurrentMarca && (
             <ThemedView style={styles.noMarcaContainer}>
@@ -1164,17 +1566,25 @@ export default function AttendanceControlScreen() {
 
           {isCreating || editingRecord ? (
             <ThemedView style={styles.formContainer}>
-              {/* Cliente */}
+              {/* Cliente (read-only desde current_marca) */}
+
+              {false && (
+                <>
               <ThemedView style={styles.formGroup}>
                 <ThemedText style={styles.formLabel}>Cliente</ThemedText>
-                <TextInput
-                  style={styles.formInput}
-                  placeholder="Cliente"
-                  placeholderTextColor="#999"
-                  value={cliente}
-                  onChangeText={setCliente}
-                />
+                <ThemedView style={styles.readonlyBox}>
+                  <ThemedText style={styles.readonlyText}>{marcaClienteName || 'N/A'}</ThemedText>
+                </ThemedView>
               </ThemedView>
+
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formLabel}>Sucursal</ThemedText>
+                <ThemedView style={styles.readonlyBox}>
+                  <ThemedText style={styles.readonlyText}>{marcaCorpoName || 'N/A'}</ThemedText>
+                </ThemedView>
+              </ThemedView>
+              </>
+              )}
 
               {/* Fecha */}
               <ThemedView style={styles.formGroup}>
@@ -1201,23 +1611,12 @@ export default function AttendanceControlScreen() {
               {/* Turno */}
               <ThemedView style={styles.formGroup}>
                 <ThemedText style={styles.formLabel}>Turno</ThemedText>
-                <ThemedView style={styles.turnoContainer}>
-                  {TURNO_OPTIONS.slice(1).map((option) => (
-                    <TouchableOpacity
-                      key={option.value}
-                      style={[styles.turnoOption, turno === option.value && styles.turnoOptionSelected]}
-                      onPress={() => setTurno(option.value)}
-                    >
-                      <View style={styles.turnoCheckbox}>
-                        {turno === option.value && (
-                          <Ionicons name="checkmark" size={16} color="#FFFFFF" />
-                        )}
-                      </View>
-                      <ThemedText style={[styles.turnoOptionText, turno === option.value && styles.turnoOptionTextSelected]}>
-                        {option.label}
-                      </ThemedText>
-                    </TouchableOpacity>
-                  ))}
+                <ThemedView style={styles.pickerWrapper}>
+                  <Picker selectedValue={turno} onValueChange={(val) => setTurno(String(val))}>
+                    {TURNO_OPTIONS.map((o) => (
+                      <Picker.Item key={o.value} label={o.label} value={o.value} />
+                    ))}
+                  </Picker>
                 </ThemedView>
               </ThemedView>
 
@@ -1262,6 +1661,16 @@ export default function AttendanceControlScreen() {
               {/* Lista de colaboradores */}
               {colaboradores.map((colaborador, index) => renderColaborador(colaborador, index))}
 
+              {/* Time picker global para colaboradores */}
+              {showTimePicker && (
+                <DateTimePicker
+                  value={timePickerValue}
+                  mode="time"
+                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                  onChange={handleTimeChange}
+                />
+              )}
+
               <TouchableOpacity
                 style={styles.addColaboradorButton}
                 onPress={addColaborador}
@@ -1270,30 +1679,102 @@ export default function AttendanceControlScreen() {
                 <ThemedText style={styles.addColaboradorButtonText}>Agregar Colaborador</ThemedText>
               </TouchableOpacity>
 
+              {/* Firma responsable (generada) */}
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formLabel}>Firma responsable</ThemedText>
+
+                {!firmaResponsableHash ? (
+                  <ThemedView style={styles.signatureButtons}>
+                    <TouchableOpacity
+                      style={[styles.signatureButton, isGeneratingFirmaResponsable && styles.signatureButtonDisabled]}
+                      onPress={generateSignatureResponsable}
+                      disabled={isGeneratingFirmaResponsable}
+                    >
+                      {isGeneratingFirmaResponsable ? (
+                        <ActivityIndicator size="small" color="#FFFFFF" />
+                      ) : (
+                        <>
+                          {getActionIcon('signature')}
+                          <ThemedText style={styles.signatureButtonText}>Generar</ThemedText>
+                        </>
+                      )}
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.signatureButton}
+                      onPress={handleScanQRResponsable}
+                    >
+                      {getActionIcon('qr-responsable')}
+                      <ThemedText style={styles.signatureButtonText}>Escanear QR</ThemedText>
+                    </TouchableOpacity>
+                  </ThemedView>
+                ) : (
+                  <ThemedView style={styles.qrInfoContainer}>
+                    <ThemedText style={styles.qrInfoTitle}>Información del QR:</ThemedText>
+                    {firmaResponsable && (
+                      <>
+                        <ThemedText style={styles.qrInfoText}>ID de sesión: {firmaResponsable.sessionId}</ThemedText>
+                        <ThemedText style={styles.qrInfoText}>ID del empleado: {firmaResponsable.empleadoId}</ThemedText>
+                        {firmaResponsable.empleadoDetalle && (
+                          <ThemedText style={styles.qrInfoText}>
+                            Empleado: {firmaResponsable.empleadoDetalle.nombre} {firmaResponsable.empleadoDetalle.primer_apellido} {firmaResponsable.empleadoDetalle.segundo_apellido}
+                            {firmaResponsable.empleadoDetalle.cedula_empleado ? ` (${firmaResponsable.empleadoDetalle.cedula_empleado})` : ''}
+                          </ThemedText>
+                        )}
+                        <ThemedText style={styles.qrInfoText}>Latitud: {firmaResponsable.latitud}</ThemedText>
+                        <ThemedText style={styles.qrInfoText}>Longitud: {firmaResponsable.longitud}</ThemedText>
+                        <ThemedText style={styles.qrInfoText}>Timestamp: {new Date(parseInt(firmaResponsable.timestamp)).toLocaleString()}</ThemedText>
+                      </>
+                    )}
+
+                    <TouchableOpacity
+                      style={styles.clearQRButton}
+                      onPress={() => {
+                        setFirmaResponsableHash('');
+                        setFirmaResponsable(null);
+                      }}
+                    >
+                      <Ionicons name="trash" size={16} color="#FF3B30" />
+                      <ThemedText style={styles.clearQRButtonText}>Eliminar firma</ThemedText>
+                    </TouchableOpacity>
+                  </ThemedView>
+                )}
+              </ThemedView>
+
               <ThemedView style={styles.actionButtons}>
                 <TouchableOpacity
-                  style={[styles.actionButton, styles.cancelButton]}
+                  style={styles.cancelButton}
                   onPress={editingRecord ? cancelEditing : cancelCreating}
                 >
-                  {getActionIcon('cancel')}
-                  <ThemedText style={styles.actionButtonText}>Cancelar</ThemedText>
+                  <ThemedText style={styles.cancelButtonText}>
+                    {getActionIcon('cancel')}
+                  </ThemedText>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[styles.actionButton, styles.saveButton]}
+                  style={styles.confirmButton}
                   onPress={editingRecord ? updateControlHandler : saveControlHandler}
                 >
-                  {getActionIcon('confirm')}
-                  <ThemedText style={styles.actionButtonText}>
-                    {editingRecord ? 'Actualizar' : 'Guardar'}
+                  <ThemedText style={styles.confirmButtonText}>
+                    {getActionIcon('confirm')}
                   </ThemedText>
                 </TouchableOpacity>
               </ThemedView>
             </ThemedView>
           ) : (
             <ThemedView style={styles.listSection}>
+                <ThemedView style={styles.readonlyBox}>
+                  <ThemedView style={styles.compactInfoRow}>
+                    <ThemedView style={styles.compactInfoItem}>
+                      <ThemedText style={styles.compactInfoLabel}>Cliente</ThemedText>
+                      <ThemedText style={styles.readonlyText}>{marcaClienteName || 'N/A'}</ThemedText>
+                    </ThemedView>
+                    <ThemedView style={styles.compactInfoItem}>
+                      <ThemedText style={styles.compactInfoLabel}>Sucursal</ThemedText>
+                      <ThemedText style={styles.readonlyText}>{marcaCorpoName || 'N/A'}</ThemedText>
+                    </ThemedView>
+                  </ThemedView>
+                </ThemedView>
               <TouchableOpacity style={styles.createButton} onPress={startCreating}>
-                <Ionicons name="add-circle" size={24} color="#FFFFFF" />
-                <ThemedText style={styles.createButtonText}>Crear Nuevo Control de Asistencia</ThemedText>
+                <Ionicons name="add" size={24} color="#FFFFFF" />
               </TouchableOpacity>
               {renderControlList()}
             </ThemedView>
@@ -1329,40 +1810,50 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: 600,
   },
-  screenTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    marginBottom: 20,
-    color: '#000000',
-    textAlign: 'center',
-    flexDirection: 'row',
+  titleContainer: {
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
+    marginBottom: 30,
+    paddingBottom: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+    width: '100%',
+  },
+  title: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    marginBottom: 8,
+    color: '#000000',
+  },
+  subtitle: {
+    fontSize: 16,
+    opacity: 0.7,
+    textAlign: 'center',
+    color: '#000000',
   },
   noMarcaContainer: {
-    padding: 20,
-    backgroundColor: '#FFEBEE',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#EF5350',
+    flex: 1,
+    justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 20,
+    padding: 40,
+    gap: 20,
   },
   noMarcaTitle: {
-    fontSize: 18,
+    fontSize: 24,
     fontWeight: 'bold',
-    color: '#D32F2F',
-    marginBottom: 10,
+    color: '#FF9500',
+    textAlign: 'center',
   },
   noMarcaMessage: {
-    fontSize: 14,
-    color: '#D32F2F',
+    fontSize: 16,
+    color: '#666',
     textAlign: 'center',
+    lineHeight: 24,
+    maxWidth: 400,
   },
   createButton: {
     backgroundColor: '#007AFF',
-    padding: 15,
+    padding: 16,
     borderRadius: 8,
     alignItems: 'center',
     marginBottom: 20,
@@ -1377,14 +1868,11 @@ const styles = StyleSheet.create({
   },
   formContainer: {
     width: '100%',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 10,
-    padding: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    padding: 16,
   },
   formGroup: {
     marginBottom: 15,
@@ -1418,41 +1906,67 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#000000',
   },
-  turnoContainer: {
+  pickerWrapper: {
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    overflow: 'hidden',
+    backgroundColor: '#F9F9F9',
+  },
+  readonlyBox: {
+    borderWidth: 2,
+    borderColor: '#007AFF',
+    borderRadius: 8,
+    padding: 14,
+    backgroundColor: '#E3F2FD',
+    marginBottom: 15,
+  },
+  readonlyText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#007AFF',
+    textAlign: 'left',
+  },
+  compactInfoRow: {
+    flexDirection: 'column',
+    gap: 8,
+    backgroundColor: '#E3F2FD',
+  },
+  compactInfoItem: {
+    width: '100%',
+    backgroundColor: '#E3F2FD',
+  },
+  compactInfoLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    marginBottom: 3,
+    color: '#000000',
+  },
+  signatureButtons: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 10,
+    backgroundColor: '#fff',
   },
-  turnoOption: {
+  signatureButton: {
+    backgroundColor: '#007AFF',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 10,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#E0E0E0',
-    backgroundColor: '#F9F9F9',
-    gap: 8,
-  },
-  turnoOptionSelected: {
-    backgroundColor: '#007AFF',
-    borderColor: '#007AFF',
-  },
-  turnoCheckbox: {
-    width: 20,
-    height: 20,
-    borderRadius: 4,
-    borderWidth: 2,
-    borderColor: '#E0E0E0',
-    alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#FFFFFF',
+    flex: 1,
+    minWidth: '45%',
   },
-  turnoOptionText: {
-    fontSize: 14,
-    color: '#000000',
+  signatureButtonDisabled: {
+    backgroundColor: '#999',
   },
-  turnoOptionTextSelected: {
+  signatureButtonText: {
     color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
+    marginLeft: 8,
   },
   colaboradorItem: {
     marginBottom: 15,
@@ -1477,11 +1991,13 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     color: '#000000',
+    backgroundColor: '#F5F5F5',
   },
   colaboradorHeaderActions: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
+    backgroundColor: '#F5F5F5',
   },
   removeColaboradorButton: {
     padding: 4,
@@ -1537,26 +2053,6 @@ const styles = StyleSheet.create({
     color: '#FF3B30',
     fontWeight: '600',
   },
-  checkboxContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  checkbox: {
-    width: 24,
-    height: 24,
-    borderWidth: 2,
-    borderColor: '#FF9500',
-    borderRadius: 4,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#FFFFFF',
-  },
-  checkboxLabel: {
-    fontSize: 16,
-    color: '#000000',
-    fontWeight: '600',
-  },
   addColaboradorButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1579,24 +2075,27 @@ const styles = StyleSheet.create({
     marginTop: 16,
     gap: 12,
   },
-  actionButton: {
+  confirmButton: {
     flex: 1,
-    padding: 16,
-    borderRadius: 8,
+    backgroundColor: '#34C759',
+    padding: 12,
+    borderRadius: 6,
     alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 8,
+  },
+  confirmButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
   },
   cancelButton: {
-    backgroundColor: '#CCCCCC',
+    backgroundColor: '#8E8E93',
+    padding: 12,
+    borderRadius: 6,
+    alignItems: 'center',
   },
-  saveButton: {
-    backgroundColor: '#FF9500',
-  },
-  actionButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
+  cancelButtonText: {
+    color: '#fff',
+    fontSize: 14,
     fontWeight: '600',
   },
   listSection: {
@@ -1604,25 +2103,23 @@ const styles = StyleSheet.create({
   },
   listContainer: {
     width: '100%',
-    marginTop: 10,
+    gap: 16,
   },
   listItem: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 10,
-    marginBottom: 10,
-    overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.2,
-    shadowRadius: 1.41,
-    elevation: 2,
+    width: '100%',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    backgroundColor: '#fff',
+    padding: 16,
+    gap: 8,
   },
   listItemHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 15,
-    backgroundColor: '#F0F0F0',
+    marginBottom: 8,
+    backgroundColor: '#fff',
   },
   listItemContent: {
     flex: 1,
@@ -1630,7 +2127,7 @@ const styles = StyleSheet.create({
   listItemTitle: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#000000',
+    color: '#007AFF',
     marginBottom: 4,
   },
   listItemSubtitle: {
@@ -1654,9 +2151,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   listItemDetails: {
-    padding: 16,
-    borderTopWidth: 1,
-    borderTopColor: '#EEE',
+    paddingTop: 8,
   },
   listItemButtons: {
     flexDirection: 'row',

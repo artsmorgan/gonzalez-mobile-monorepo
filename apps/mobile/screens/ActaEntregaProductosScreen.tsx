@@ -1,0 +1,1668 @@
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Image,
+  Modal,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from 'react-native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import DateTimePicker from '@react-native-community/datetimepicker';
+import { Picker } from '@react-native-picker/picker';
+import { CameraView, useCameraPermissions } from 'expo-camera';
+import SignatureScreen from 'react-native-signature-canvas';
+import Ionicons from '@expo/vector-icons/build/Ionicons';
+import * as Network from 'expo-network';
+import * as Location from 'expo-location';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import Constants from 'expo-constants';
+import { jwtDecode } from 'jwt-decode';
+
+import AppHeader from '@/components/AppHeader';
+import AppFooter from '@/components/AppFooter';
+import SlideMenu from '@/components/SlideMenu';
+import { ThemedText } from '@/components/ThemedText';
+import { ThemedView } from '@/components/ThemedView';
+import { useAuth } from '@/contexts/AuthContext';
+import { RootStackParamList } from '../App';
+import { eventBus } from '@/hooks/eventBus';
+import getHoraAccion from '@/hooks/getHoraAccion';
+import { useQRScanner } from '@/hooks/useQRScanner';
+import {
+  createActaEntregaProducto,
+  deleteActaEntregaProducto,
+  listActaEntregaProductoByCorpo,
+  updateActaEntregaProducto,
+} from '@/hooks/evaluationFunctions';
+
+type NavProp = NativeStackNavigationProp<RootStackParamList, 'ActaEntregaProductos'>;
+
+type DetalleItem = {
+  id_local: string;
+  descripcion: string;
+  unidad_medida: string;
+  cantidad: string;
+  devolucion: string;
+  faltantes: string;
+};
+
+type ActaImage = {
+  id?: number;
+  name?: string; // server filename
+  base64?: string; // dataURL (offline)
+  extension?: string;
+};
+
+type ActaEntregaProducto = {
+  id?: number | string;
+  id_local: string;
+  synced?: boolean;
+
+  fecha?: string;
+  tipo_entrega: string;
+  cliente: string;
+  mensual: string;
+  division: string;
+  detalle: string; // JSON string
+  observaciones: string;
+
+  nombre_entrega: string;
+  cedula_entrega: string;
+  fecha_entrega: string; // ISO
+  firma_entrega: string; // dataURL
+
+  nombre_recibe: string;
+  cedula_recibe: string;
+  fecha_recibe: string; // ISO
+  firma_recibe: string; // dataURL
+
+  firma_responsable: string; // hash base64
+
+  images?: ActaImage[];
+};
+
+const generateRandomId = (): string => `local-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+const formatSignatureForDisplay = (value?: string | null) => {
+  if (!value) return '';
+  return value.startsWith('data:') ? value : `data:image/png;base64,${value}`;
+};
+
+const signatureWebStyle = `
+  .m-signature-pad {box-shadow: none; border: none;}
+  .m-signature-pad--body {border: 1px solid #e0e0e0;}
+  .m-signature-pad--footer {display: none; margin: 0px;}
+  body,html {width: 100%; height: 100%; margin: 0; padding: 0;}
+`;
+
+export default function ActaEntregaProductosScreen() {
+  const navigation = useNavigation<NavProp>();
+  const { employee, isAuthenticated, isLoading, refreshAccessToken, logout } = useAuth();
+  const { scanQR } = useQRScanner();
+
+  const [isMenuVisible, setIsMenuVisible] = useState(false);
+  const [isLoadingData, setIsLoadingData] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [hasCurrentMarca, setHasCurrentMarca] = useState(false);
+
+  const [records, setRecords] = useState<ActaEntregaProducto[]>([]);
+  const [isCreating, setIsCreating] = useState(false);
+  const [editingRecord, setEditingRecord] = useState<ActaEntregaProducto | null>(null);
+
+  // Form
+  const [fecha, setFecha] = useState<Date>(new Date());
+  const [tipoEntrega, setTipoEntrega] = useState('');
+  const [cliente, setCliente] = useState('');
+  const [mensual, setMensual] = useState('');
+  const [division, setDivision] = useState<'Seguridad' | 'Aseo y limpieza' | 'Otros' | ''>('');
+  const [observaciones, setObservaciones] = useState('');
+
+  const [nombreEntrega, setNombreEntrega] = useState('');
+  const [cedulaEntrega, setCedulaEntrega] = useState('');
+  const [fechaEntrega, setFechaEntrega] = useState<Date>(new Date());
+  const [firmaEntrega, setFirmaEntrega] = useState<string>('');
+
+  const [nombreRecibe, setNombreRecibe] = useState('');
+  const [cedulaRecibe, setCedulaRecibe] = useState('');
+  const [fechaRecibe, setFechaRecibe] = useState<Date>(new Date());
+  const [firmaRecibe, setFirmaRecibe] = useState<string>('');
+
+  const [firmaResponsableHash, setFirmaResponsableHash] = useState<string>('');
+  const [isGeneratingFirmaResponsable, setIsGeneratingFirmaResponsable] = useState(false);
+
+  const [detalleItems, setDetalleItems] = useState<DetalleItem[]>([]);
+  const [expandedDetalleIds, setExpandedDetalleIds] = useState<string[]>([]);
+  const [expandedImagesIds, setExpandedImagesIds] = useState<string[]>([]);
+  const [expandedSignaturesIds, setExpandedSignaturesIds] = useState<string[]>([]);
+
+  // Photos
+  const [images, setImages] = useState<ActaImage[]>([]);
+  const [photosDirty, setPhotosDirty] = useState(false);
+  const [permission, requestPermission] = useCameraPermissions();
+  const cameraRef = useRef<CameraView | null>(null);
+  const [isCameraVisible, setIsCameraVisible] = useState(false);
+
+  // Signature modal
+  const signatureRef = useRef<any>(null);
+  const [isSignatureModalVisible, setIsSignatureModalVisible] = useState(false);
+  const [signatureKey, setSignatureKey] = useState(0);
+  const [signatureTarget, setSignatureTarget] = useState<'entrega' | 'recibe'>('entrega');
+
+  // Date pickers
+  const [showFechaPicker, setShowFechaPicker] = useState(false);
+  const [showFechaEntregaPicker, setShowFechaEntregaPicker] = useState(false);
+  const [showFechaRecibePicker, setShowFechaRecibePicker] = useState(false);
+
+  const getConnectionStatus = async (): Promise<boolean> => {
+    const networkState = await Network.getNetworkStateAsync();
+    return networkState.isConnected && networkState.isInternetReachable ? true : false;
+  };
+
+  // Auth redirect
+  useEffect(() => {
+    if (!isLoading && !isAuthenticated) {
+      navigation.replace('Home');
+    }
+  }, [isAuthenticated, isLoading, navigation]);
+
+  const resetForm = () => {
+    setFecha(new Date());
+    setTipoEntrega('');
+    setCliente('');
+    setMensual('');
+    setDivision('');
+    setObservaciones('');
+    setNombreEntrega('');
+    setCedulaEntrega('');
+    setFechaEntrega(new Date());
+    setFirmaEntrega('');
+    setNombreRecibe('');
+    setCedulaRecibe('');
+    setFechaRecibe(new Date());
+    setFirmaRecibe('');
+    setFirmaResponsableHash('');
+    setDetalleItems([]);
+    setExpandedDetalleIds([]);
+    setExpandedImagesIds([]);
+    setExpandedSignaturesIds([]);
+    setImages([]);
+    setPhotosDirty(false);
+  };
+
+  const decodeFirmaHash = (hash: string) => {
+    try {
+      if (!hash || String(hash).trim().length === 0) return null;
+      const decoded = atob(String(hash));
+      const parts = decoded.split(':');
+      if (parts.length !== 5) return null;
+      const [sessionId, empleadoId, latitud, longitud, timestamp] = parts;
+      return { sessionId, empleadoId, latitud, longitud, timestamp };
+    } catch {
+      return null;
+    }
+  };
+
+  const generateFirmaHashForCurrentUser = async (): Promise<string | null> => {
+    try {
+      if (!employee) {
+        Alert.alert('Error', 'No se pudo obtener la información del empleado');
+        return null;
+      }
+
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permiso denegado', 'Se necesita permiso de ubicación para generar la firma');
+        return null;
+      }
+
+      const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      const token = await AsyncStorage.getItem('access_token');
+      if (!token) {
+        Alert.alert('Error', 'No se pudo obtener el token de sesión');
+        return null;
+      }
+
+      const decoded: any = jwtDecode(token);
+      const sessionId = decoded.sessionId || 'unknown';
+      const timestamp = await getHoraAccion();
+      if (!timestamp) {
+        Alert.alert('Error', 'No se pudo obtener la hora');
+        return null;
+      }
+
+      const { latitude, longitude } = location.coords;
+      const empleadoId = String(employee.id);
+      return btoa(`${sessionId}:${empleadoId}:${latitude}:${longitude}:${timestamp}`);
+    } catch (e) {
+      console.error('Error generating firma_responsable:', e);
+      return null;
+    }
+  };
+
+  const handleGenerateFirmaResponsable = async () => {
+    try {
+      setIsGeneratingFirmaResponsable(true);
+      const hash = await generateFirmaHashForCurrentUser();
+      if (!hash) return;
+      setFirmaResponsableHash(hash);
+    } finally {
+      setIsGeneratingFirmaResponsable(false);
+    }
+  };
+
+  const handleScanFirmaResponsable = async () => {
+    try {
+      const qrData = await scanQR();
+      if (!qrData) return;
+      const decoded = decodeFirmaHash(qrData);
+      if (!decoded) {
+        Alert.alert('Error', 'El QR escaneado no tiene el formato correcto');
+        return;
+      }
+      setFirmaResponsableHash(qrData);
+    } catch (e) {
+      console.error('Error scanning firma_responsable:', e);
+      Alert.alert('Error', 'No se pudo escanear el QR');
+    }
+  };
+
+  const addDetalleItem = () => {
+    const id_local = generateRandomId();
+    const newItem: DetalleItem = {
+      id_local,
+      descripcion: '',
+      unidad_medida: '',
+      cantidad: '',
+      devolucion: '',
+      faltantes: '',
+    };
+    setDetalleItems((prev) => [...prev, newItem]);
+    setExpandedDetalleIds((prev) => [...prev, id_local]);
+  };
+
+  const updateDetalleItem = (id_local: string, field: keyof Omit<DetalleItem, 'id_local'>, value: string) => {
+    setDetalleItems((prev) =>
+      prev.map((it) => (it.id_local === id_local ? { ...it, [field]: value } : it))
+    );
+  };
+
+  const removeDetalleItem = (id_local: string) => {
+    Alert.alert('Confirmar', '¿Eliminar este detalle?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Eliminar',
+        style: 'destructive',
+        onPress: () => {
+          setDetalleItems((prev) => prev.filter((it) => it.id_local !== id_local));
+          setExpandedDetalleIds((prev) => prev.filter((id) => id !== id_local));
+        },
+      },
+    ]);
+  };
+
+  const toggleDetalleExpand = (id_local: string) => {
+    setExpandedDetalleIds((prev) => (prev.includes(id_local) ? prev.filter((id) => id !== id_local) : [...prev, id_local]));
+  };
+
+  const loadImageFromServer = useCallback(async (actaId: number, imageName: string): Promise<string | null> => {
+    try {
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) return null;
+
+      let token = await AsyncStorage.getItem('access_token');
+      if (!token) {
+        const refreshed = await refreshAccessToken();
+        if (!refreshed) return null;
+        token = await AsyncStorage.getItem('access_token');
+      }
+      if (!token) return null;
+
+      const resp = await fetch(`${apiUrl}/api/acta-entrega-productos/${actaId}/get-image/${encodeURIComponent(imageName)}?t=${Date.now()}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'ngrok-skip-browser-warning': '69420',
+        },
+      });
+      if (!resp.ok) return null;
+
+      const blob = await resp.blob();
+      const dataUrl = await new Promise<string | null>((resolve) => {
+        const reader = new FileReader();
+        reader.onerror = () => resolve(null);
+        reader.onloadend = () => resolve((reader.result as string) || null);
+        reader.readAsDataURL(blob);
+      });
+      return dataUrl;
+    } catch (e) {
+      console.error('Error loading acta image from server:', e);
+      return null;
+    }
+  }, [refreshAccessToken]);
+
+  const preloadServerImagesForEdit = useCallback(async (record: ActaEntregaProducto) => {
+    try {
+      const isConnected = await getConnectionStatus();
+      const actaId = typeof record.id === 'number' ? record.id : parseInt(String(record.id || ''), 10);
+      if (!isConnected || !actaId) return;
+
+      const imgs = Array.isArray(record.images) ? record.images : [];
+      if (imgs.length === 0) return;
+
+      const next: ActaImage[] = [];
+      for (const img of imgs) {
+        if (img.base64) {
+          next.push(img);
+          continue;
+        }
+        if (!img.name) {
+          next.push(img);
+          continue;
+        }
+        const dataUrl = await loadImageFromServer(actaId, img.name);
+        if (dataUrl) next.push({ ...img, base64: dataUrl, extension: img.extension || 'jpg' });
+        else next.push(img);
+      }
+      setImages(next);
+    } catch (e) {
+      console.error('Error preloading acta images:', e);
+    }
+  }, [loadImageFromServer]);
+
+  const openCamera = async () => {
+    try {
+      // Evitar perder imágenes existentes si el registro ya está sincronizado y no hay conexión
+      if (editingRecord?.id && !(await getConnectionStatus())) {
+        Alert.alert('Sin conexión', 'Necesitas conexión para agregar fotos en un registro ya sincronizado.');
+        return;
+      }
+      if (!permission?.granted) {
+        const result = await requestPermission();
+        if (!result.granted) {
+          Alert.alert('Permiso denegado', 'Se necesita permiso para usar la cámara');
+          return;
+        }
+      }
+      setIsCameraVisible(true);
+    } catch (e) {
+      console.error('Error opening camera:', e);
+      Alert.alert('Error', 'No se pudo abrir la cámara');
+    }
+  };
+
+  const capturePhoto = async () => {
+    if (!cameraRef.current) {
+      Alert.alert('Error', 'La cámara no está lista');
+      return;
+    }
+    try {
+      const photo = await cameraRef.current.takePictureAsync({
+        base64: true,
+        quality: 0.7,
+        skipProcessing: false,
+      });
+      if (!photo?.base64) {
+        Alert.alert('Error', 'No se pudo capturar la foto');
+        setIsCameraVisible(false);
+        return;
+      }
+      const base64Image = `data:image/jpeg;base64,${photo.base64}`;
+      setIsCameraVisible(false);
+      setTimeout(() => {
+        setPhotosDirty(true);
+        setImages((prev) => [...prev, { base64: base64Image, extension: 'jpg' }]);
+      }, 100);
+    } catch (e) {
+      console.error('Error capturing photo:', e);
+      Alert.alert('Error', 'No se pudo capturar la foto');
+      setIsCameraVisible(false);
+    }
+  };
+
+  const removeImage = (index: number) => {
+    Alert.alert('Confirmar', '¿Eliminar esta foto?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Eliminar',
+        style: 'destructive',
+        onPress: () => {
+          setPhotosDirty(true);
+          setImages((prev) => prev.filter((_, i) => i !== index));
+        },
+      },
+    ]);
+  };
+
+  const openSignatureModal = (target: 'entrega' | 'recibe') => {
+    setSignatureTarget(target);
+    setIsSignatureModalVisible(true);
+    setSignatureKey((prev) => prev + 1);
+  };
+
+  const closeSignatureModal = () => setIsSignatureModalVisible(false);
+
+  const clearSignatureInModal = () => {
+    setSignatureKey((prev) => prev + 1);
+    if (signatureRef.current) signatureRef.current.clearSignature();
+  };
+
+  const handleSignatureRead = (signature: string) => {
+    if (!signature) {
+      Alert.alert('Error', 'No se pudo obtener la firma');
+      return;
+    }
+    const formatted = signature.startsWith('data:') ? signature : `data:image/png;base64,${signature}`;
+    if (signatureTarget === 'entrega') setFirmaEntrega(formatted);
+    else setFirmaRecibe(formatted);
+    setIsSignatureModalVisible(false);
+  };
+
+  const acceptSignature = () => {
+    if (signatureRef.current) signatureRef.current.readSignature();
+    else Alert.alert('Error', 'Debe dibujar una firma antes de aceptar');
+  };
+
+  const buildDetalleJson = () => JSON.stringify(detalleItems.map((d) => ({
+    descripcion: d.descripcion,
+    unidad_medida: d.unidad_medida,
+    cantidad: d.cantidad,
+    devolucion: d.devolucion,
+    faltantes: d.faltantes,
+  })));
+
+  const buildImagenesJson = () => JSON.stringify(images.map((img) => ({
+    file_base64: img.base64 || '',
+    extension: img.extension || 'jpg',
+  })));
+
+  const fetchRecords = useCallback(async () => {
+    setIsLoadingData(true);
+    setError(null);
+
+    try {
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      if (!currentMarcaStr) {
+        setHasCurrentMarca(false);
+        setRecords([]);
+        setIsLoadingData(false);
+        return;
+      }
+      const currentMarca = JSON.parse(currentMarcaStr);
+      setHasCurrentMarca(true);
+
+      // En la mayoría de módulos, corpo viene como currentMarca.corpo.id
+      const corpoId =
+        String(
+          currentMarca?.corpo?.id ??
+          currentMarca?.corpo_id ??
+          currentMarca?.corpoId ??
+          ''
+        );
+      if (!corpoId) {
+        setError('No se encontró el ID del corpo');
+        setIsLoadingData(false);
+        return;
+      }
+
+      const isConnected = await getConnectionStatus();
+
+      // cache local (siempre)
+      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+      const cache = cacheStr ? JSON.parse(cacheStr) : [];
+      const localRecords: ActaEntregaProducto[] = (cache || [])
+        .filter((x: any) => x.type === 'acta_entrega_producto')
+        .map((x: any) => x as ActaEntregaProducto);
+
+      if (!isConnected) {
+        setRecords(localRecords);
+        setIsLoadingData(false);
+        return;
+      }
+
+      const res = await listActaEntregaProductoByCorpo({ corpo_id: corpoId, refreshAccessToken, logout });
+      if (!res.status) {
+        setRecords(localRecords);
+        setError(res.message || 'Error al obtener actas');
+        setIsLoadingData(false);
+        return;
+      }
+
+      const serverRecords: ActaEntregaProducto[] = Array.isArray(res.data) ? res.data : [];
+      // merge: server + local no sincronizados
+      const unsynced = localRecords.filter((r) => r.synced === false);
+      setRecords([...unsynced, ...serverRecords]);
+      setIsLoadingData(false);
+    } catch (e) {
+      console.error('Error fetching actas:', e);
+      setError('Error al cargar actas');
+      setIsLoadingData(false);
+    }
+  }, [logout, refreshAccessToken]);
+
+  useFocusEffect(
+    useCallback(() => {
+      fetchRecords();
+      eventBus.on('connectionRestored', fetchRecords);
+      return () => eventBus.off('connectionRestored', fetchRecords);
+    }, [fetchRecords])
+  );
+
+  const startCreating = () => {
+    resetForm();
+    setIsCreating(true);
+    setEditingRecord(null);
+  };
+
+  const cancelCreating = () => {
+    setIsCreating(false);
+    resetForm();
+  };
+
+  const startEditing = (record: ActaEntregaProducto) => {
+    setIsCreating(false);
+    setEditingRecord(record);
+
+    setFecha(record.fecha ? new Date(record.fecha) : new Date());
+    setTipoEntrega(record.tipo_entrega || '');
+    setCliente(record.cliente || '');
+    setMensual(record.mensual || '');
+    setDivision((record.division as any) || '');
+    setObservaciones(record.observaciones || '');
+
+    setNombreEntrega(record.nombre_entrega || '');
+    setCedulaEntrega(record.cedula_entrega || '');
+    setFechaEntrega(record.fecha_entrega ? new Date(record.fecha_entrega) : new Date());
+    setFirmaEntrega(formatSignatureForDisplay(record.firma_entrega) || '');
+
+    setNombreRecibe(record.nombre_recibe || '');
+    setCedulaRecibe(record.cedula_recibe || '');
+    setFechaRecibe(record.fecha_recibe ? new Date(record.fecha_recibe) : new Date());
+    setFirmaRecibe(formatSignatureForDisplay(record.firma_recibe) || '');
+
+    setFirmaResponsableHash(record.firma_responsable || '');
+
+    // detalle JSON -> array
+    try {
+      const parsed = JSON.parse(record.detalle || '[]');
+      const items: DetalleItem[] = Array.isArray(parsed)
+        ? parsed.map((x: any) => ({
+          id_local: generateRandomId(),
+          descripcion: String(x.descripcion || ''),
+          unidad_medida: String(x.unidad_medida || ''),
+          cantidad: String(x.cantidad || ''),
+          devolucion: String(x.devolucion || ''),
+          faltantes: String(x.faltantes || ''),
+        }))
+        : [];
+      setDetalleItems(items);
+      setExpandedDetalleIds([]);
+    } catch {
+      setDetalleItems([]);
+      setExpandedDetalleIds([]);
+    }
+
+    // imágenes (si es offline: base64; si es server: name)
+    setImages(record.images || []);
+    setPhotosDirty(false);
+    preloadServerImagesForEdit(record);
+  };
+
+  const cancelEditing = () => {
+    setEditingRecord(null);
+    resetForm();
+  };
+
+  const validateForm = () => {
+    if (!tipoEntrega.trim()) return 'Tipo de entrega es obligatorio';
+    if (!cliente.trim()) return 'Cliente es obligatorio';
+    if (!mensual.trim()) return 'Mensual es obligatorio';
+    if (!division) return 'División es obligatoria';
+    if (!observaciones.trim()) return 'Observaciones es obligatorio';
+    if (!nombreEntrega.trim()) return 'Nombre (entrega) es obligatorio';
+    if (!cedulaEntrega.trim()) return 'Cédula (entrega) es obligatorio';
+    if (!firmaEntrega.trim()) return 'Firma (entrega) es obligatoria';
+    if (!nombreRecibe.trim()) return 'Nombre (recibe) es obligatorio';
+    if (!cedulaRecibe.trim()) return 'Cédula (recibe) es obligatorio';
+    if (!firmaRecibe.trim()) return 'Firma (recibe) es obligatoria';
+    if (!firmaResponsableHash.trim()) return 'Firma del responsable es obligatoria (QR/Generar)';
+    if (detalleItems.length === 0) return 'Debe agregar al menos un detalle';
+    return null;
+  };
+
+  const saveHandler = async () => {
+    const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+    if (!currentMarcaStr) return Alert.alert('Error', 'No se encontró la marca actual');
+    const currentMarca = JSON.parse(currentMarcaStr);
+
+    const validation = validateForm();
+    if (validation) return Alert.alert('Error', validation);
+
+    Alert.alert('Confirmar', '¿Deseas guardar el acta?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Confirmar',
+        onPress: async () => {
+          try {
+            const requestData = {
+              marca_id: currentMarca.id,
+              tipo_entrega: tipoEntrega.trim(),
+              cliente: cliente.trim(),
+              mensual: mensual.trim(),
+              division: division,
+              detalle: buildDetalleJson(),
+              observaciones: observaciones.trim(),
+              nombre_entrega: nombreEntrega.trim(),
+              cedula_entrega: cedulaEntrega.trim(),
+              fecha_entrega: fechaEntrega.toISOString(),
+              firma_entrega: firmaEntrega,
+              nombre_recibe: nombreRecibe.trim(),
+              cedula_recibe: cedulaRecibe.trim(),
+              fecha_recibe: fechaRecibe.toISOString(),
+              firma_recibe: firmaRecibe,
+              firma_responsable: firmaResponsableHash.trim(),
+              imagenes: buildImagenesJson(),
+            };
+
+            const isConnected = await getConnectionStatus();
+            if (isConnected) {
+              const res = await createActaEntregaProducto({ requestData, refreshAccessToken, logout });
+              if (res.status) {
+                Alert.alert('Éxito', 'Acta creada correctamente');
+                cancelCreating();
+                fetchRecords();
+              } else {
+                Alert.alert('Error', res.message || 'No se pudo crear el acta');
+              }
+              return;
+            }
+
+            // Offline
+            const localId = generateRandomId();
+            const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+            const actions = actionsStr ? JSON.parse(actionsStr) : [];
+            actions.push({
+              id: localId,
+              action: 'create',
+              type: 'acta_entrega_producto',
+              payload: requestData,
+              synced: false,
+            });
+            await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+
+            const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+            const cache = cacheStr ? JSON.parse(cacheStr) : [];
+
+            const newCacheRecord: ActaEntregaProducto = {
+              id: '',
+              id_local: localId,
+              synced: false,
+              fecha: new Date().toISOString(),
+              tipo_entrega: requestData.tipo_entrega,
+              cliente: requestData.cliente,
+              mensual: requestData.mensual,
+              division: requestData.division,
+              detalle: requestData.detalle,
+              observaciones: requestData.observaciones,
+              nombre_entrega: requestData.nombre_entrega,
+              cedula_entrega: requestData.cedula_entrega,
+              fecha_entrega: requestData.fecha_entrega,
+              firma_entrega: requestData.firma_entrega,
+              nombre_recibe: requestData.nombre_recibe,
+              cedula_recibe: requestData.cedula_recibe,
+              fecha_recibe: requestData.fecha_recibe,
+              firma_recibe: requestData.firma_recibe,
+              firma_responsable: requestData.firma_responsable,
+              images: images,
+            };
+
+            cache.push({ ...newCacheRecord, type: 'acta_entrega_producto' });
+            await AsyncStorage.setItem('evaluations_cache', JSON.stringify(cache));
+
+            Alert.alert('Modo Offline', 'Acta registrada localmente. Se sincronizará cuando haya conexión.');
+            cancelCreating();
+            fetchRecords();
+          } catch (e) {
+            console.error('Error saving acta:', e);
+            Alert.alert('Error', 'No se pudo guardar el acta');
+          }
+        },
+      },
+    ]);
+  };
+
+  const updateHandler = async () => {
+    if (!editingRecord) return;
+    const recordId = editingRecord.id || editingRecord.id_local;
+    if (!recordId) return Alert.alert('Error', 'ID de registro no encontrado');
+
+    const validation = validateForm();
+    if (validation) return Alert.alert('Error', validation);
+
+    Alert.alert('Confirmar', '¿Deseas actualizar el acta?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Confirmar',
+        onPress: async () => {
+          try {
+            const requestData = {
+              tipo_entrega: tipoEntrega.trim(),
+              cliente: cliente.trim(),
+              mensual: mensual.trim(),
+              division: division,
+              detalle: buildDetalleJson(),
+              observaciones: observaciones.trim(),
+              nombre_entrega: nombreEntrega.trim(),
+              cedula_entrega: cedulaEntrega.trim(),
+              fecha_entrega: fechaEntrega.toISOString(),
+              firma_entrega: firmaEntrega,
+              nombre_recibe: nombreRecibe.trim(),
+              cedula_recibe: cedulaRecibe.trim(),
+              fecha_recibe: fechaRecibe.toISOString(),
+              firma_recibe: firmaRecibe,
+              firma_responsable: firmaResponsableHash.trim(),
+              ...(photosDirty ? { imagenes: buildImagenesJson() } : {}),
+            };
+
+            const isConnected = await getConnectionStatus();
+            const isLocal = editingRecord.id_local && String(editingRecord.id_local).startsWith('local-');
+
+            if (isConnected && !isLocal && editingRecord.id) {
+              const res = await updateActaEntregaProducto({ id: editingRecord.id, requestData, refreshAccessToken, logout });
+              if (res.status) {
+                Alert.alert('Éxito', 'Acta actualizada correctamente');
+                cancelEditing();
+                fetchRecords();
+              } else {
+                Alert.alert('Error', res.message || 'No se pudo actualizar');
+              }
+              return;
+            }
+
+            // Offline: actualizar cache + acción
+            const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+            const actions = actionsStr ? JSON.parse(actionsStr) : [];
+
+            if (isLocal) {
+              // actualizar acción create existente
+              const idx = actions.findIndex((a: any) => a.id === editingRecord.id_local && a.action === 'create' && a.type === 'acta_entrega_producto');
+              if (idx !== -1) actions[idx] = { ...actions[idx], payload: { ...actions[idx].payload, ...requestData } };
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+            } else {
+              const filtered = actions.filter((a: any) => !(a.id === editingRecord.id && a.action === 'update' && a.type === 'acta_entrega_producto'));
+              filtered.push({ id: editingRecord.id, action: 'update', type: 'acta_entrega_producto', payload: requestData, synced: false });
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(filtered));
+            }
+
+            const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+            const cache = cacheStr ? JSON.parse(cacheStr) : [];
+            const updatedCache = (cache || []).map((it: any) => {
+              if (it.type === 'acta_entrega_producto' && (it.id_local === editingRecord.id_local || it.id === editingRecord.id)) {
+                return {
+                  ...it,
+                  ...requestData,
+                  synced: false,
+                  images,
+                };
+              }
+              return it;
+            });
+            await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+
+            Alert.alert('Modo Offline', 'Cambios guardados localmente. Se sincronizarán al reconectar.');
+            cancelEditing();
+            fetchRecords();
+          } catch (e) {
+            console.error('Error updating acta:', e);
+            Alert.alert('Error', 'No se pudo actualizar el acta');
+          }
+        },
+      },
+    ]);
+  };
+
+  const deleteHandler = async (record: ActaEntregaProducto) => {
+    Alert.alert('Confirmar', '¿Deseas eliminar este acta?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Eliminar',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            const isConnected = await getConnectionStatus();
+            const isLocal = record.id_local && String(record.id_local).startsWith('local-');
+
+            if (isConnected && !isLocal && record.id) {
+              const res = await deleteActaEntregaProducto({ id: record.id, refreshAccessToken, logout });
+              if (res.status) {
+                Alert.alert('Éxito', 'Acta eliminada');
+                fetchRecords();
+              } else {
+                Alert.alert('Error', res.message || 'No se pudo eliminar');
+              }
+              return;
+            }
+
+            // Offline: crear acción delete o remover acción create si era local
+            const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+            const actions = actionsStr ? JSON.parse(actionsStr) : [];
+
+            if (isLocal) {
+              const updatedActions = actions.filter((a: any) => !(a.id === record.id_local && a.type === 'acta_entrega_producto'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            } else {
+              const filtered = actions.filter((a: any) => !(a.id === record.id && a.action === 'delete' && a.type === 'acta_entrega_producto'));
+              filtered.push({ id: record.id, action: 'delete', type: 'acta_entrega_producto', payload: {}, synced: false });
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(filtered));
+            }
+
+            const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+            const cache = cacheStr ? JSON.parse(cacheStr) : [];
+            const updatedCache = (cache || []).filter((it: any) => {
+              if (it.type !== 'acta_entrega_producto') return true;
+              if (isLocal) return it.id_local !== record.id_local;
+              return it.id !== record.id;
+            });
+            await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+
+            setRecords((prev) => prev.filter((r) => (isLocal ? r.id_local !== record.id_local : r.id !== record.id)));
+            Alert.alert('Modo Offline', 'Acta eliminada localmente. Se sincronizará al reconectar.');
+            fetchRecords();
+          } catch (e) {
+            console.error('Error deleting acta:', e);
+            Alert.alert('Error', 'No se pudo eliminar el acta');
+          }
+        },
+      },
+    ]);
+  };
+
+  const toggleImagesExpand = (recordId: string) => {
+    setExpandedImagesIds((prev) => (prev.includes(recordId) ? prev.filter((id) => id !== recordId) : [...prev, recordId]));
+  };
+
+  const toggleSignaturesExpand = (recordId: string) => {
+    setExpandedSignaturesIds((prev) => (prev.includes(recordId) ? prev.filter((id) => id !== recordId) : [...prev, recordId]));
+  };
+
+  const renderSignaturesPreview = (record: ActaEntregaProducto) => {
+    const firmaEntrega = record.firma_entrega || '';
+    const firmaRecibe = record.firma_recibe || '';
+    
+    if (!firmaEntrega && !firmaRecibe) return null;
+
+    const recordId = String(record.id || record.id_local || '');
+    const expanded = expandedSignaturesIds.includes(recordId);
+
+    return (
+      <ThemedView style={styles.signaturesCollapsableCard}>
+        <TouchableOpacity style={styles.signaturesCollapsableHeader} onPress={() => toggleSignaturesExpand(recordId)}>
+          <ThemedText style={styles.signaturesCollapsableHeaderText}>
+            Firmas
+          </ThemedText>
+          <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={18} color="#007AFF" />
+        </TouchableOpacity>
+
+        {expanded && (
+          <ThemedView style={styles.signaturesCollapsableBody}>
+            {firmaEntrega && (
+              <ThemedView style={styles.signatureItem}>
+                <ThemedText style={styles.signatureItemLabel}>Firma de entrega</ThemedText>
+                <Image source={{ uri: formatSignatureForDisplay(firmaEntrega) }} style={styles.signaturePreviewImage} resizeMode="contain" />
+              </ThemedView>
+            )}
+            {firmaRecibe && (
+              <ThemedView style={styles.signatureItem}>
+                <ThemedText style={styles.signatureItemLabel}>Firma de recibe</ThemedText>
+                <Image source={{ uri: formatSignatureForDisplay(firmaRecibe) }} style={styles.signaturePreviewImage} resizeMode="contain" />
+              </ThemedView>
+            )}
+          </ThemedView>
+        )}
+      </ThemedView>
+    );
+  };
+
+  const renderImagesPreview = (record: ActaEntregaProducto) => {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const idNum = typeof record.id === 'number' ? record.id : parseInt(String(record.id || ''), 10);
+    const imgs = record.images || [];
+    if (imgs.length === 0) return null;
+
+    const recordId = String(record.id || record.id_local || '');
+    const expanded = expandedImagesIds.includes(recordId);
+
+    return (
+      <ThemedView style={styles.imagesCollapsableCard}>
+        <TouchableOpacity style={styles.imagesCollapsableHeader} onPress={() => toggleImagesExpand(recordId)}>
+          <ThemedText style={styles.imagesCollapsableHeaderText}>
+            Imágenes ({imgs.length})
+          </ThemedText>
+          <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={18} color="#007AFF" />
+        </TouchableOpacity>
+
+        {expanded && (
+          <ThemedView style={styles.imagesCollapsableBody}>
+            {imgs.map((img, idx) => {
+              const uri = img.base64
+                ? img.base64
+                : (apiUrl && idNum && img.name)
+                  ? `${apiUrl}/api/acta-entrega-productos/${idNum}/get-image/${encodeURIComponent(img.name)}`
+                  : '';
+              if (!uri) return null;
+              return (
+                <Image key={`${img.name || 'local'}-${idx}`} source={{ uri }} style={styles.fullSizeImage} resizeMode="contain" />
+              );
+            })}
+          </ThemedView>
+        )}
+      </ThemedView>
+    );
+  };
+
+  const renderList = () => {
+    if (isLoadingData) {
+      return (
+        <ThemedView style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#007AFF" />
+          <ThemedText style={styles.loadingText}>Cargando actas...</ThemedText>
+        </ThemedView>
+      );
+    }
+
+    if (error) {
+      return (
+        <ThemedView style={styles.errorContainer}>
+          <ThemedText style={styles.errorText}>{error}</ThemedText>
+        </ThemedView>
+      );
+    }
+
+    if (records.length === 0) {
+      return (
+        <ThemedView style={styles.emptyContainer}>
+          <ThemedText style={styles.emptyText}>No hay actas registradas.</ThemedText>
+        </ThemedView>
+      );
+    }
+
+    return (
+      <ThemedView style={styles.listContainer}>
+        {records.map((r) => (
+          <ThemedView key={String(r.id || r.id_local)} style={styles.listItem}>
+            <ThemedView style={styles.listItemHeader}>
+              <ThemedView style={styles.listItemContent}>
+                <ThemedText style={styles.listItemTitle}>{r.cliente || 'N/A'}</ThemedText>
+                <ThemedText style={styles.listItemSubtitle}>División: {r.division || ''}</ThemedText>
+                <ThemedText style={styles.listItemSubtitle}>
+                  Fecha: {r.fecha ? String(r.fecha).split('T')[0] : (r.fecha_entrega ? String(r.fecha_entrega).split('T')[0] : 'N/A')}
+                </ThemedText>
+                <ThemedText style={styles.listItemSubtitle}>Cantidad de productos: {r.detalle ? JSON.parse(r.detalle).length : 0}</ThemedText>
+              </ThemedView>
+            </ThemedView>
+
+            {renderImagesPreview(r)}
+
+            {renderSignaturesPreview(r)}
+
+            <ThemedView style={styles.listItemButtons}>
+              <TouchableOpacity style={[styles.listItemButton, styles.editButton]} onPress={() => startEditing(r)}>
+                <Ionicons name="pencil" size={18} color="#FFFFFF" />
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.listItemButton, styles.deleteButton]} onPress={() => deleteHandler(r)}>
+                <Ionicons name="trash" size={18} color="#FFFFFF" />
+              </TouchableOpacity>
+            </ThemedView>
+          </ThemedView>
+        ))}
+      </ThemedView>
+    );
+  };
+
+  const renderDetalleSection = () => (
+    <ThemedView style={styles.formGroup}>
+      <ThemedView style={styles.sectionHeaderRow}>
+        <ThemedText style={styles.sectionTitle}>Detalle *</ThemedText>
+        <TouchableOpacity style={styles.smallAddButton} onPress={addDetalleItem}>
+          <Ionicons name="add" size={18} color="#FFFFFF" />
+        </TouchableOpacity>
+      </ThemedView>
+
+      {detalleItems.length === 0 ? (
+        <ThemedText style={styles.helperText}>Agrega ítems al detalle.</ThemedText>
+      ) : (
+        detalleItems.map((it) => {
+          const expanded = expandedDetalleIds.includes(it.id_local);
+          return (
+            <ThemedView key={it.id_local} style={styles.detailCard}>
+              <TouchableOpacity style={styles.detailHeader} onPress={() => toggleDetalleExpand(it.id_local)}>
+                <ThemedText style={styles.detailHeaderText}>{it.descripcion || 'Detalle'}</ThemedText>
+                <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={18} color="#007AFF" />
+              </TouchableOpacity>
+
+              {expanded && (
+                <ThemedView style={styles.detailBody}>
+                  <ThemedText style={styles.formLabel}>Descripción</ThemedText>
+                  <TextInput style={styles.formInput} value={it.descripcion} onChangeText={(v) => updateDetalleItem(it.id_local, 'descripcion', v)} placeholder="Descripción" placeholderTextColor="#999" />
+
+                  <ThemedText style={styles.formLabel}>Unidad de medida</ThemedText>
+                  <TextInput style={styles.formInput} value={it.unidad_medida} onChangeText={(v) => updateDetalleItem(it.id_local, 'unidad_medida', v)} placeholder="Unidad de medida" placeholderTextColor="#999" />
+
+                  <ThemedText style={styles.formLabel}>Cantidad</ThemedText>
+                  <TextInput style={styles.formInput} value={it.cantidad} onChangeText={(v) => updateDetalleItem(it.id_local, 'cantidad', v)} placeholder="Cantidad" placeholderTextColor="#999" />
+
+                  <ThemedText style={styles.formLabel}>Devolución</ThemedText>
+                  <TextInput style={styles.formInput} value={it.devolucion} onChangeText={(v) => updateDetalleItem(it.id_local, 'devolucion', v)} placeholder="Devolución" placeholderTextColor="#999" />
+
+                  <ThemedText style={styles.formLabel}>Faltantes</ThemedText>
+                  <TextInput style={styles.formInput} value={it.faltantes} onChangeText={(v) => updateDetalleItem(it.id_local, 'faltantes', v)} placeholder="Faltantes" placeholderTextColor="#999" />
+
+                  <TouchableOpacity style={styles.removeDetailButton} onPress={() => removeDetalleItem(it.id_local)}>
+                    <Ionicons name="trash" size={16} color="#FFFFFF" />
+                    <ThemedText style={styles.removeDetailButtonText}>Eliminar</ThemedText>
+                  </TouchableOpacity>
+                </ThemedView>
+              )}
+            </ThemedView>
+          );
+        })
+      )}
+    </ThemedView>
+  );
+
+  const renderPhotosSection = () => (
+    <ThemedView style={styles.formGroup}>
+      <ThemedText style={styles.formLabel}>Fotos (opcional):</ThemedText>
+      <TouchableOpacity style={styles.captureImageButton} onPress={openCamera}>
+        <Ionicons name="camera" size={20} color="#007AFF" />
+        <ThemedText style={styles.captureImageButtonText}>
+          {images.length > 0 ? 'Agregar otra foto' : 'Capturar foto'}
+        </ThemedText>
+      </TouchableOpacity>
+
+      {images.length === 0 ? (
+        <ThemedText style={styles.helperText}>Agrega una o varias fotos.</ThemedText>
+      ) : (
+        <ThemedView style={styles.thumbRow}>
+          {images.map((img, idx) => {
+            const uri = img.base64 || '';
+            if (!uri) return null;
+            return (
+              <ThemedView key={`img-${idx}`} style={styles.thumbWrapper}>
+                <Image source={{ uri }} style={styles.thumb} />
+                <TouchableOpacity style={styles.thumbDelete} onPress={() => removeImage(idx)}>
+                  <Ionicons name="close" size={16} color="#FFFFFF" />
+                </TouchableOpacity>
+              </ThemedView>
+            );
+          })}
+        </ThemedView>
+      )}
+    </ThemedView>
+  );
+
+  return (
+    <ThemedView style={styles.container}>
+      <AppHeader onMenuPress={() => setIsMenuVisible(true)} title="Entrega de productos" />
+
+      <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
+        <ThemedView style={styles.contentContainer}>
+          <ThemedView style={styles.titleContainer}>
+            <ThemedText style={styles.title}>
+              <Ionicons name="clipboard" size={28} color="#000000" /> Entrega de productos
+            </ThemedText>
+            <ThemedText style={styles.subtitle}>Gestiona actas de entrega de productos</ThemedText>
+          </ThemedView>
+
+          {!hasCurrentMarca && (
+            <ThemedView style={styles.noMarcaContainer}>
+              <ThemedText style={styles.noMarcaTitle}>Marca no seleccionada</ThemedText>
+              <ThemedText style={styles.noMarcaMessage}>
+                No se encontró una marca seleccionada. Por favor, selecciona una marca desde el menú principal.
+              </ThemedText>
+            </ThemedView>
+          )}
+
+          {isCreating || editingRecord ? (
+            <ThemedView style={[styles.vehicleCard, styles.formCard]}>
+              {/* Tipo entrega */}
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formLabel}>Tipo de entrega *</ThemedText>
+                <TextInput style={styles.formInput} value={tipoEntrega} onChangeText={setTipoEntrega} placeholder="Tipo de entrega" placeholderTextColor="#999" />
+              </ThemedView>
+
+              {/* Cliente */}
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formLabel}>Cliente *</ThemedText>
+                <TextInput style={styles.formInput} value={cliente} onChangeText={setCliente} placeholder="Cliente" placeholderTextColor="#999" />
+              </ThemedView>
+
+              {/* Mensual */}
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formLabel}>Mensual *</ThemedText>
+                <TextInput style={styles.formInput} value={mensual} onChangeText={setMensual} placeholder="Mensual" placeholderTextColor="#999" />
+              </ThemedView>
+
+              {/* División */}
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formLabel}>División *</ThemedText>
+                <ThemedView style={styles.pickerContainer}>
+                  <Picker
+                    selectedValue={division}
+                    onValueChange={(val) => setDivision(val as any)}
+                    style={styles.picker}
+                  >
+                    <Picker.Item label="Seleccionar" value="" />
+                    <Picker.Item label="Seguridad" value="Seguridad" />
+                    <Picker.Item label="Aseo y limpieza" value="Aseo y limpieza" />
+                    <Picker.Item label="Otros" value="Otros" />
+                  </Picker>
+                </ThemedView>
+              </ThemedView>
+
+              {renderDetalleSection()}
+
+              {/* Observaciones */}
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formLabel}>Observaciones *</ThemedText>
+                <TextInput
+                  style={[styles.formInput, styles.textArea]}
+                  value={observaciones}
+                  onChangeText={setObservaciones}
+                  placeholder="Observaciones"
+                  placeholderTextColor="#999"
+                  multiline
+                  numberOfLines={4}
+                  textAlignVertical="top"
+                />
+              </ThemedView>
+
+              {/* Entrega */}
+              <ThemedText style={styles.sectionTitle}>Entrega</ThemedText>
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formLabel}>Nombre entrega *</ThemedText>
+                <TextInput style={styles.formInput} value={nombreEntrega} onChangeText={setNombreEntrega} placeholder="Nombre" placeholderTextColor="#999" />
+              </ThemedView>
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formLabel}>Cédula entrega *</ThemedText>
+                <TextInput style={styles.formInput} value={cedulaEntrega} onChangeText={setCedulaEntrega} placeholder="Cédula" placeholderTextColor="#999" />
+              </ThemedView>
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formLabel}>Fecha entrega *</ThemedText>
+                <TouchableOpacity style={styles.dateButton} onPress={() => setShowFechaEntregaPicker(true)}>
+                  <ThemedText style={styles.dateButtonText}>{fechaEntrega.toISOString().split('T')[0]}</ThemedText>
+                  <Ionicons name="calendar" size={18} color="#007AFF" />
+                </TouchableOpacity>
+                {showFechaEntregaPicker && (
+                  <DateTimePicker
+                    value={fechaEntrega}
+                    mode="date"
+                    display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                    onChange={(_, d) => {
+                      if (Platform.OS === 'android') setShowFechaEntregaPicker(false);
+                      if (d) setFechaEntrega(d);
+                    }}
+                  />
+                )}
+              </ThemedView>
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formLabel}>Firma entrega *</ThemedText>
+                {!firmaEntrega ? (
+                  <TouchableOpacity style={styles.signatureDrawButton} onPress={() => openSignatureModal('entrega')}>
+                    <Ionicons name="create-outline" size={22} color="#007AFF" />
+                    <ThemedText style={styles.signatureDrawButtonText}>Toca para dibujar la firma</ThemedText>
+                  </TouchableOpacity>
+                ) : (
+                  <ThemedView style={styles.signaturePreviewContainer}>
+                    <Image source={{ uri: formatSignatureForDisplay(firmaEntrega) }} style={styles.signaturePreview} />
+                    <TouchableOpacity style={styles.clearSignatureButton} onPress={() => setFirmaEntrega('')}>
+                      <Ionicons name="trash" size={16} color="#FF3B30" />
+                      <ThemedText style={styles.clearSignatureButtonText}>Eliminar</ThemedText>
+                    </TouchableOpacity>
+                  </ThemedView>
+                )}
+              </ThemedView>
+
+              {/* Recibe */}
+              <ThemedText style={styles.sectionTitle}>Recibe</ThemedText>
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formLabel}>Nombre recibe *</ThemedText>
+                <TextInput style={styles.formInput} value={nombreRecibe} onChangeText={setNombreRecibe} placeholder="Nombre" placeholderTextColor="#999" />
+              </ThemedView>
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formLabel}>Cédula recibe *</ThemedText>
+                <TextInput style={styles.formInput} value={cedulaRecibe} onChangeText={setCedulaRecibe} placeholder="Cédula" placeholderTextColor="#999" />
+              </ThemedView>
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formLabel}>Fecha recibe *</ThemedText>
+                <TouchableOpacity style={styles.dateButton} onPress={() => setShowFechaRecibePicker(true)}>
+                  <ThemedText style={styles.dateButtonText}>{fechaRecibe.toISOString().split('T')[0]}</ThemedText>
+                  <Ionicons name="calendar" size={18} color="#007AFF" />
+                </TouchableOpacity>
+                {showFechaRecibePicker && (
+                  <DateTimePicker
+                    value={fechaRecibe}
+                    mode="date"
+                    display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                    onChange={(_, d) => {
+                      if (Platform.OS === 'android') setShowFechaRecibePicker(false);
+                      if (d) setFechaRecibe(d);
+                    }}
+                  />
+                )}
+              </ThemedView>
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formLabel}>Firma recibe *</ThemedText>
+                {!firmaRecibe ? (
+                  <TouchableOpacity style={styles.signatureDrawButton} onPress={() => openSignatureModal('recibe')}>
+                    <Ionicons name="create-outline" size={22} color="#007AFF" />
+                    <ThemedText style={styles.signatureDrawButtonText}>Toca para dibujar la firma</ThemedText>
+                  </TouchableOpacity>
+                ) : (
+                  <ThemedView style={styles.signaturePreviewContainer}>
+                    <Image source={{ uri: formatSignatureForDisplay(firmaRecibe) }} style={styles.signaturePreview} />
+                    <TouchableOpacity style={styles.clearSignatureButton} onPress={() => setFirmaRecibe('')}>
+                      <Ionicons name="trash" size={16} color="#FF3B30" />
+                      <ThemedText style={styles.clearSignatureButtonText}>Eliminar</ThemedText>
+                    </TouchableOpacity>
+                  </ThemedView>
+                )}
+              </ThemedView>
+
+              {/* Firma responsable (QR) */}
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formLabel}>Firma responsable (QR) *</ThemedText>
+                {!firmaResponsableHash ? (
+                  <ThemedView style={styles.signatureButtons}>
+                    <TouchableOpacity
+                      style={[styles.signatureButton, isGeneratingFirmaResponsable && styles.signatureButtonDisabled]}
+                      onPress={handleGenerateFirmaResponsable}
+                      disabled={isGeneratingFirmaResponsable}
+                    >
+                      {isGeneratingFirmaResponsable ? (
+                        <ActivityIndicator size="small" color="#FFFFFF" />
+                      ) : (
+                        <>
+                          <Ionicons name="finger-print" size={22} color="#FFFFFF" />
+                          <ThemedText style={styles.signatureButtonText}>Generar</ThemedText>
+                        </>
+                      )}
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.signatureButton} onPress={handleScanFirmaResponsable}>
+                      <Ionicons name="qr-code" size={18} color="#FFFFFF" />
+                      <ThemedText style={styles.signatureButtonText}>Escanear QR</ThemedText>
+                    </TouchableOpacity>
+                  </ThemedView>
+                ) : (
+                  <ThemedView style={styles.signatureInfo}>
+                    <ThemedView style={{ flex: 1, paddingRight: 10 , backgroundColor: '#F9F9F9'}}>
+                      <ThemedText style={styles.signatureInfoText}>Información de la firma:</ThemedText>
+                      {(() => {
+                        const info = decodeFirmaHash(firmaResponsableHash);
+                        if (!info) {
+                          return <ThemedText style={styles.signatureInfoValue}>Formato no decodificable</ThemedText>;
+                        }
+                        return (
+                          <>
+                            <ThemedText style={styles.signatureInfoValue}>Sesión: {info.sessionId || 'N/A'}</ThemedText>
+                            <ThemedText style={styles.signatureInfoValue}>Empleado: {info.empleadoId || 'N/A'}</ThemedText>
+                            <ThemedText style={styles.signatureInfoValue}>Lat: {info.latitud || 'N/A'} | Long: {info.longitud || 'N/A'}</ThemedText>
+                            <ThemedText style={styles.signatureInfoValue}>Hora: {info.timestamp || 'N/A'}</ThemedText>
+                          </>
+                        );
+                      })()}
+                    </ThemedView>
+                    <TouchableOpacity style={styles.clearSignatureButtonTiny} onPress={() => setFirmaResponsableHash('')}>
+                      <Ionicons name="trash" size={18} color="#FFFFFF" />
+                    </TouchableOpacity>
+                  </ThemedView>
+                )}
+              </ThemedView>
+
+              {renderPhotosSection()}
+
+              <ThemedView style={styles.buttonRow}>
+                <TouchableOpacity
+                  style={styles.confirmButton}
+                  onPress={editingRecord ? updateHandler : saveHandler}
+                >
+                  <ThemedText style={styles.confirmButtonText}>
+                    <Ionicons name="checkmark" size={18} color="#FFFFFF" />
+                  </ThemedText>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.cancelButton}
+                  onPress={editingRecord ? cancelEditing : cancelCreating}
+                >
+                  <ThemedText style={styles.cancelButtonText}>
+                    <Ionicons name="close" size={18} color="#FFFFFF" />
+                  </ThemedText>
+                </TouchableOpacity>
+              </ThemedView>
+            </ThemedView>
+          ) : (
+            <ThemedView style={styles.listSection}>
+              <TouchableOpacity style={styles.createButton} onPress={startCreating}>
+                <ThemedText style={styles.createButtonText}>
+                  <Ionicons name="add" size={20} color="#FFFFFF" />
+                </ThemedText>
+              </TouchableOpacity>
+              {renderList()}
+            </ThemedView>
+          )}
+        </ThemedView>
+      </ScrollView>
+
+      {/* Camera Modal */}
+      <Modal visible={isCameraVisible} animationType="slide" onRequestClose={() => setIsCameraVisible(false)}>
+        <View style={styles.cameraContainer}>
+          <CameraView ref={cameraRef} style={styles.camera} facing="back" />
+          <View style={styles.cameraControls}>
+            <TouchableOpacity style={styles.cameraCancelButton} onPress={() => setIsCameraVisible(false)}>
+              <Ionicons name="close" size={30} color="#FFFFFF" />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.cameraCaptureButton} onPress={capturePhoto}>
+              <View style={styles.cameraCaptureButtonInner} />
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Signature Modal */}
+      <Modal visible={isSignatureModalVisible} animationType="fade" transparent={true} onRequestClose={closeSignatureModal}>
+        <ThemedView style={styles.modalOverlay}>
+          <ThemedView style={styles.modalContainer}>
+            <ThemedView style={styles.modalHeader}>
+              <ThemedText style={styles.modalTitle}>
+                {signatureTarget === 'entrega' ? 'Firma de entrega' : 'Firma de recibe'}
+              </ThemedText>
+              <TouchableOpacity onPress={closeSignatureModal}>
+                <Ionicons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+            </ThemedView>
+
+            <View style={styles.modalSignatureContainer}>
+              <SignatureScreen
+                ref={signatureRef}
+                onOK={handleSignatureRead}
+                descriptionText="Dibuja la firma en el área blanca"
+                clearText=""
+                confirmText=""
+                webStyle={signatureWebStyle}
+                key={signatureKey}
+              />
+            </View>
+
+            <ThemedView style={styles.modalActions}>
+              <TouchableOpacity style={styles.modalClearButton} onPress={clearSignatureInModal}>
+                <Ionicons name="trash" size={20} color="#000000" />
+                <ThemedText style={styles.modalClearButtonText}>Limpiar</ThemedText>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={styles.modalAcceptButton} onPress={acceptSignature}>
+                <Ionicons name="checkmark" size={20} color="#000000" />
+                <ThemedText style={styles.modalAcceptButtonText}>Aceptar</ThemedText>
+              </TouchableOpacity>
+            </ThemedView>
+          </ThemedView>
+        </ThemedView>
+      </Modal>
+
+      <AppFooter />
+      <SlideMenu isVisible={isMenuVisible} onClose={() => setIsMenuVisible(false)} onHomePress={() => navigation.navigate('Home')} currentRoute="ActaEntregaProductos" />
+    </ThemedView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1 },
+  scrollView: { flex: 1 },
+  scrollContent: { alignItems: 'center', padding: 20, backgroundColor: '#fff' },
+  contentContainer: { width: '100%', maxWidth: 600 },
+
+  titleContainer: {
+    alignItems: 'center',
+    marginBottom: 30,
+    paddingBottom: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+    width: '100%',
+  },
+  title: { fontSize: 28, fontWeight: 'bold', textAlign: 'center', marginBottom: 8 },
+  subtitle: { fontSize: 16, opacity: 0.7, textAlign: 'center' },
+
+  noMarcaContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 40, gap: 20 },
+  noMarcaTitle: { fontSize: 24, fontWeight: 'bold', color: '#FF9500', textAlign: 'center' },
+  noMarcaMessage: { fontSize: 16, color: '#666', textAlign: 'center', lineHeight: 24 },
+
+  listSection: { width: '100%'},
+  createButton: {
+    backgroundColor: '#007AFF',
+    padding: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  createButtonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+
+  listContainer: { width: '100%', gap: 16 },
+  listItem: {
+    width: '100%',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    backgroundColor: '#fff',
+    padding: 16,
+    gap: 8,
+  },
+  listItemHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
+  listItemContent: { flex: 1, paddingRight: 10 },
+  listItemTitle: { fontSize: 20, fontWeight: 'bold', color: '#007AFF' },
+  listItemSubtitle: { fontSize: 14, color: '#666', marginTop: 4 },
+  offlineBadge: { backgroundColor: '#FF9500', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999 },
+  offlineBadgeText: { color: '#FFF', fontWeight: '700', fontSize: 12 },
+  listItemButtons: { flexDirection: 'row', gap: 12, marginTop: 8, backgroundColor: '#fff' },
+  listItemButton: { flex: 1, padding: 12, borderRadius: 6, alignItems: 'center' },
+  editButton: { backgroundColor: '#007AFF' },
+  deleteButton: { backgroundColor: '#FF3B30' },
+  listItemButtonText: { color: '#fff', fontSize: 14, fontWeight: '600' },
+
+  thumbRow: { flexDirection: 'row', gap: 10, marginTop: 10, flexWrap: 'wrap' },
+  thumbWrapper: { position: 'relative' },
+  thumb: { width: 72, height: 72, borderRadius: 10, backgroundColor: '#EEE' },
+  thumbDelete: { position: 'absolute', top: -6, right: -6, width: 22, height: 22, borderRadius: 11, backgroundColor: '#FF3B30', alignItems: 'center', justifyContent: 'center' },
+
+  imagesCollapsableCard: {
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    backgroundColor: '#F9F9F9',
+    overflow: 'hidden',
+  },
+  imagesCollapsableHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 12,
+    backgroundColor: '#F0F0F0',
+  },
+  imagesCollapsableHeaderText: { fontSize: 14, fontWeight: '600', color: '#007AFF', flex: 1, paddingRight: 8 },
+  imagesCollapsableBody: { padding: 12, backgroundColor: '#F9F9F9', gap: 12 },
+  fullSizeImage: { width: '100%', height: 300, borderRadius: 8, backgroundColor: '#EEE' },
+
+  signaturesCollapsableCard: {
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    backgroundColor: '#F9F9F9',
+    overflow: 'hidden',
+  },
+  signaturesCollapsableHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 12,
+    backgroundColor: '#F0F0F0',
+  },
+  signaturesCollapsableHeaderText: { fontSize: 14, fontWeight: '600', color: '#007AFF', flex: 1, paddingRight: 8 },
+  signaturesCollapsableBody: { padding: 12, backgroundColor: '#F9F9F9', gap: 16 },
+  signatureItem: { gap: 8 },
+  signatureItemLabel: { fontSize: 14, fontWeight: '600', color: '#333' },
+  signaturePreviewImage: { width: '100%', height: 200, borderRadius: 8, backgroundColor: '#EEE' },
+
+  vehicleCard: {
+    width: '100%',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    backgroundColor: '#fff',
+    padding: 16,
+    gap: 8,
+  },
+  formCard: { marginBottom: 20 },
+  formGroup: { marginBottom: 16, backgroundColor: '#fff' },
+  formLabel: { fontSize: 14, fontWeight: '600', marginBottom: 8, color: '#333' },
+  formInput: {
+    width: '100%',
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    fontSize: 16,
+    backgroundColor: '#F9F9F9',
+    color: '#000000',
+  },
+  pickerContainer: {
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    backgroundColor: '#F9F9F9',
+    overflow: 'hidden',
+  },
+  picker: { width: '100%', height: 50 },
+  textArea: { height: 100, textAlignVertical: 'top' },
+
+  sectionHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, backgroundColor: '#fff' },
+  sectionTitle: { fontSize: 16, fontWeight: 'bold', color: '#007AFF' },
+  smallAddButton: { backgroundColor: '#007AFF', width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  helperText: { color: '#666', fontSize: 13 },
+
+  detailCard: {
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    backgroundColor: '#F9F9F9',
+    overflow: 'hidden',
+  },
+  detailHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 12,
+    backgroundColor: '#F0F0F0',
+  },
+  detailHeaderText: { fontSize: 14, fontWeight: '600', color: '#007AFF', flex: 1, paddingRight: 8 },
+  detailBody: { padding: 12, backgroundColor: '#F9F9F9', gap: 10 },
+  removeDetailButton: { backgroundColor: '#FF3B30', borderRadius: 6, padding: 12, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8, marginTop: 6 },
+  removeDetailButtonText: { color: '#FFF', fontWeight: '800' },
+
+  dateButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    backgroundColor: '#F9F9F9',
+  },
+  dateButtonText: { fontSize: 16, color: '#000000' },
+
+  signatureDrawButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#F0F0F0',
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#007AFF',
+    marginTop: 8,
+  },
+  signatureDrawButtonText: { fontSize: 16, fontWeight: '600', color: '#333' },
+  captureImageButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#F0F0F0',
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#007AFF',
+    marginTop: 8,
+  },
+  captureImageButtonText: { color: '#333', fontSize: 16, fontWeight: '600' },
+  signaturePreviewContainer: {
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    backgroundColor: '#F9F9F9',
+    overflow: 'hidden',
+  },
+  signaturePreview: { width: '100%', height: 160, backgroundColor: '#F9F9F9' },
+  clearSignatureButton: { flexDirection: 'row', alignItems: 'center', padding: 12, gap: 8 },
+  clearSignatureButtonText: { color: '#FF3B30', fontSize: 14, fontWeight: '600' },
+
+  signatureButtons: { flexDirection: 'row', gap: 10 },
+  signatureButton: { flex: 1, backgroundColor: '#007AFF', borderRadius: 6, padding: 12, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8 },
+  signatureButtonDisabled: { opacity: 0.6 },
+  signatureButtonText: { color: '#FFF', fontWeight: '800' },
+  signatureInfo: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#F9F9F9', borderRadius: 8, padding: 12, borderWidth: 1, borderColor: '#E0E0E0' },
+  signatureInfoText: { fontSize: 14, fontWeight: '600', color: '#007AFF' },
+  signatureInfoValue: { fontSize: 13, color: '#666', marginTop: 4 },
+  clearSignatureButtonTiny: { backgroundColor: '#FF3B30', width: 40, height: 40, borderRadius: 6, alignItems: 'center', justifyContent: 'center' },
+
+  buttonRow: { flexDirection: 'row', gap: 12, marginTop: 8, backgroundColor: '#fff' },
+  confirmButton: { flex: 1, backgroundColor: '#34C759', padding: 12, borderRadius: 6, alignItems: 'center' },
+  confirmButtonText: { color: '#fff', fontSize: 14, fontWeight: '600' },
+  cancelButton: { flex: 1, backgroundColor: '#8E8E93', padding: 12, borderRadius: 6, alignItems: 'center' },
+  cancelButtonText: { color: '#fff', fontSize: 14, fontWeight: '600' },
+
+  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 },
+  loadingText: { marginTop: 16, fontSize: 16, opacity: 0.7 },
+  errorContainer: { padding: 40, alignItems: 'center' },
+  errorText: { fontSize: 16, color: '#FF3B30', textAlign: 'center' },
+  emptyContainer: { padding: 40, alignItems: 'center' },
+  emptyText: { fontSize: 16, opacity: 0.5, textAlign: 'center' },
+
+  cameraContainer: { flex: 1, backgroundColor: '#000' },
+  camera: { flex: 1 },
+  cameraControls: { position: 'absolute', bottom: 40, width: '100%', flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 40, alignItems: 'center' },
+  cameraCancelButton: { width: 56, height: 56, borderRadius: 28, backgroundColor: 'rgba(0,0,0,0.4)', alignItems: 'center', justifyContent: 'center' },
+  cameraCaptureButton: { width: 70, height: 70, borderRadius: 35, borderWidth: 4, borderColor: '#FFF', alignItems: 'center', justifyContent: 'center' },
+  cameraCaptureButtonInner: { width: 52, height: 52, borderRadius: 26, backgroundColor: '#FFF' },
+
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 16 },
+  modalContainer: { backgroundColor: '#FFF', borderRadius: 12, overflow: 'hidden' },
+  modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 14, borderBottomWidth: 1, borderBottomColor: '#E5E7EB' },
+  modalTitle: { fontSize: 16, fontWeight: '800', color: '#111' },
+  modalSignatureContainer: { height: 280, backgroundColor: '#FFF' },
+  modalActions: { flexDirection: 'row', gap: 10, padding: 14, justifyContent: 'flex-end' },
+  modalClearButton: { backgroundColor: '#F1F5F9', borderRadius: 10, paddingVertical: 10, paddingHorizontal: 12, flexDirection: 'row', gap: 8, alignItems: 'center' },
+  modalClearButtonText: { color: '#111', fontWeight: '800' },
+  modalAcceptButton: { backgroundColor: '#D1FAE5', borderRadius: 10, paddingVertical: 10, paddingHorizontal: 12, flexDirection: 'row', gap: 8, alignItems: 'center' },
+  modalAcceptButtonText: { color: '#111', fontWeight: '800' },
+});
+
+

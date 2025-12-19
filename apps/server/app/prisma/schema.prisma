@@ -634,14 +634,13 @@ model c_empleado {
   last_checked_update                                                       DateTime?                                   @db.DateTime(0)
   firma_manual                                                              String?                                     @db.LongText
   ingresado                                                                 Boolean                                     @default(false)
-  c_empleado_notification                                                   c_empleado_notification[]
-  e_empleado_visualizacion_manual_puesto                                    e_empleado_visualizacion_manual_puesto[]
   a_recovery_password_token                                                 a_recovery_password_token[]
   b_pago_excluido                                                           b_pago_excluido[]
   c_adendas                                                                 c_adendas[]
   c_bonificaciones                                                          c_bonificaciones[]
   c_cambio_guardia_c_cambio_guardia_empleadoAusente_idToc_empleado          c_cambio_guardia[]                          @relation("c_cambio_guardia_empleadoAusente_idToc_empleado")
   c_cambio_guardia_c_cambio_guardia_empleadoReemplaza_idToc_empleado        c_cambio_guardia[]                          @relation("c_cambio_guardia_empleadoReemplaza_idToc_empleado")
+  c_contribucion_incidente                                                  c_contribucion_incidente[]
   c_curso_empleado                                                          c_curso_empleado[]
   c_deudas                                                                  c_deudas[]
   n_educacion_tecnico                                                       n_educacion_tecnico?                        @relation(fields: [educacionTecnico_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "FK_C84A3999114FAA7C")
@@ -666,6 +665,7 @@ model c_empleado {
   c_empleado_basedatos_digital                                              c_empleado_basedatos_digital[]
   c_empleado_datos_adjuntos_rrhh                                            c_empleado_datos_adjuntos_rrhh[]
   c_empleado_gasto_principal                                                c_empleado_gasto_principal[]
+  c_empleado_notification                                                   c_empleado_notification[]
   c_empleado_plaza_c_empleado_plaza_empleado_idToc_empleado                 c_empleado_plaza[]                          @relation("c_empleado_plaza_empleado_idToc_empleado")
   c_empleado_referencias                                                    c_empleado_referencias[]
   c_empleado_registro_laboral                                               c_empleado_registro_laboral[]
@@ -698,6 +698,7 @@ model c_empleado {
   e_educacion_idiomas                                                       e_educacion_idiomas[]
   e_empleado_incumplimiento                                                 e_empleado_incumplimiento[]
   e_empleado_lista_negra                                                    e_empleado_lista_negra[]
+  e_empleado_visualizacion_manual_puesto                                    e_empleado_visualizacion_manual_puesto[]
   e_estructura_empleado_autorizado_contrato                                 e_estructura_empleado_autorizado_contrato[]
   e_familia                                                                 e_familia[]
   e_historia_salud                                                          e_historia_salud[]
@@ -751,17 +752,17 @@ model c_notifications {
   title                   String                    @db.LongText
   description             String                    @db.LongText
   created_at              DateTime                  @default(now())
-  c_plaza_notification    c_plaza_notification[]
   c_empleado_notification c_empleado_notification[]
+  c_plaza_notification    c_plaza_notification[]
 }
 
 model c_empleado_notification {
-  id                  Int                 @id @default(autoincrement())
-  empleadoId          Int
-  notificationId      Int
-  watched             Boolean             @default(false)
-  c_notifications     c_notifications     @relation(fields: [notificationId], references: [id], onDelete: Cascade)
-  c_empleado          c_empleado          @relation(fields: [empleadoId], references: [id], onDelete: Cascade)
+  id              Int             @id @default(autoincrement())
+  empleadoId      Int
+  notificationId  Int
+  watched         Boolean         @default(false)
+  c_empleado      c_empleado      @relation(fields: [empleadoId], references: [id], onDelete: Cascade)
+  c_notifications c_notifications @relation(fields: [notificationId], references: [id], onDelete: Cascade)
 
   @@index([notificationId], map: "c_empleado_notification_notificationId_fkey")
   @@index([empleadoId], map: "c_plaza_notification_empleadoId_fkey")
@@ -802,33 +803,33 @@ model c_notas_voz {
 }
 
 model c_incidente {
-  id                          Int                       @id @default(autoincrement())
+  id                          Int                        @id @default(autoincrement())
   corpo_id                    Int
   ejecutivo_cuenta            Int
-  fecha_incidente             DateTime                  @db.Date
-  fecha_reporte               DateTime                  @db.Date
-  nombre_responsable          String                    @db.VarChar(45)
+  fecha_incidente             DateTime                   @db.Date
+  fecha_reporte               DateTime                   @db.Date
+  nombre_responsable          String                     @db.VarChar(45)
   clasificacion               Int
-  descripcion                 String                    @db.LongText
-  involucrados                String                    @db.LongText
-  fecha_libro_novedades       String                    @db.LongText
-  nombre_responsable_atencion String                    @db.VarChar(45)
-  solucion                    String?                   @db.LongText
-  fecha_solucion              DateTime?                 @db.Date
-  fecha_real_solucion         DateTime?                 @db.Date
-  costo_asociado              String?                   @db.LongText
-  consecutivo_informe         String?                   @db.LongText
-  link_informe                String?                   @db.LongText
+  descripcion                 String                     @db.LongText
+  involucrados                String                     @db.LongText
+  fecha_libro_novedades       String                     @db.LongText
+  nombre_responsable_atencion String                     @db.VarChar(45)
+  solucion                    String?                    @db.LongText
+  fecha_solucion              DateTime?                  @db.Date
+  fecha_real_solucion         DateTime?                  @db.Date
+  costo_asociado              String?                    @db.LongText
+  consecutivo_informe         String?                    @db.LongText
+  link_informe                String?                    @db.LongText
   cliente_id                  Int
   empresa_id                  Int
   estado                      Boolean
-  file_audio                  String?                   @db.LongText
-  file_image                  String?                   @db.LongText
-  n_clasificacion_incidente   n_clasificacion_incidente @relation(fields: [clasificacion], references: [id], onDelete: NoAction)
-  e_estructura_cliente        e_estructura_cliente      @relation(fields: [cliente_id], references: [id], onDelete: NoAction)
-  e_estructura_sucursal       e_estructura_sucursal     @relation(fields: [corpo_id], references: [id], onDelete: NoAction)
-  n_ejecutivo_cuenta          n_ejecutivo_cuenta        @relation(fields: [ejecutivo_cuenta], references: [id], onDelete: NoAction)
-  e_estructura_empresa        e_estructura_empresa      @relation(fields: [empresa_id], references: [id], onDelete: NoAction)
+  c_archivos_incidente        c_archivos_incidente[]
+  c_contribucion_incidente    c_contribucion_incidente[]
+  n_clasificacion_incidente   n_clasificacion_incidente  @relation(fields: [clasificacion], references: [id], onDelete: NoAction)
+  e_estructura_cliente        e_estructura_cliente       @relation(fields: [cliente_id], references: [id], onDelete: NoAction)
+  e_estructura_sucursal       e_estructura_sucursal      @relation(fields: [corpo_id], references: [id], onDelete: NoAction)
+  n_ejecutivo_cuenta          n_ejecutivo_cuenta         @relation(fields: [ejecutivo_cuenta], references: [id], onDelete: NoAction)
+  e_estructura_empresa        e_estructura_empresa       @relation(fields: [empresa_id], references: [id], onDelete: NoAction)
 
   @@index([clasificacion], map: "c_incidente_clasificacion_fkey")
   @@index([cliente_id], map: "c_incidente_cliente_id_fkey")
@@ -837,28 +838,70 @@ model c_incidente {
   @@index([empresa_id], map: "c_incidente_empresa_id_fkey")
 }
 
+model c_archivos_incidente {
+  id            Int         @id @default(autoincrement())
+  name          String      @db.LongText
+  original_name String      @db.LongText
+  type          String      @db.VarChar(25)
+  extension     String      @db.VarChar(25)
+  incidente_id  Int
+  c_incidente   c_incidente @relation(fields: [incidente_id], references: [id], onDelete: Cascade)
+
+  @@index([incidente_id], map: "c_archivos_incidente_incidente_id_fkey")
+}
+
+model c_contribucion_incidente {
+  id                          Int                           @id @default(autoincrement())
+  incidente_id                Int
+  empleado_id                 Int
+  aporte                      String                        @db.LongText
+  rol_aporte                  String                        @db.VarChar(25)
+  created_at                  DateTime                      @db.DateTime(0)
+  c_archivos_aporte_incidente c_archivos_aporte_incidente[]
+  c_empleado                  c_empleado                    @relation(fields: [empleado_id], references: [id], onDelete: Cascade)
+  c_incidente                 c_incidente                   @relation(fields: [incidente_id], references: [id], onDelete: Cascade)
+
+  @@index([empleado_id], map: "c_contribucion_incidente_empleado_id_fkey")
+  @@index([incidente_id], map: "c_contribucion_incidente_incidente_id_fkey")
+}
+
+model c_archivos_aporte_incidente {
+  id                       Int                      @id @default(autoincrement())
+  name                     String                   @db.LongText
+  original_name            String                   @db.LongText
+  type                     String                   @db.VarChar(25)
+  extension                String                   @db.VarChar(25)
+  contribucion_id          Int
+  c_contribucion_incidente c_contribucion_incidente @relation(fields: [contribucion_id], references: [id], onDelete: Cascade)
+
+  @@index([contribucion_id], map: "c_archivos_aporte_incidente_contribucion_id_fkey")
+}
+
 model c_evaluacion_empleado {
-  id               Int        @id @default(autoincrement())
-  nombre_empleado  String     @db.VarChar(45)
-  cedula_empleado  String     @db.VarChar(45)
-  corpo_id         Int
-  puesto_id        Int
-  plaza_id         Int
-  empleado_id      Int
-  evaluador_id     Int
-  tipo             String     @db.VarChar(25)
-  fecha_ingreso    DateTime   @db.Date
-  fecha_evaluacion DateTime   @db.Date
-  evaluacion       String     @db.LongText
-  comentarios      String     @db.LongText
-  nombre_evaluador String     @db.VarChar(45)
-  firma_evaluador  String     @db.LongText
-  firma_empleado   String     @db.LongText
-  created_at       DateTime   @db.DateTime
-  
+  id                    Int                   @id @default(autoincrement())
+  nombre_empleado       String                @db.VarChar(45)
+  cedula_empleado       String                @db.VarChar(45)
+  corpo_id              Int
+  puesto_id             Int
+  plaza_id              Int
+  empleado_id           Int
+  evaluador_id          Int
+  tipo                  String                @db.VarChar(25)
+  fecha_ingreso         DateTime              @db.Date
+  fecha_evaluacion      DateTime              @db.Date
+  evaluacion            String                @db.LongText
+  comentarios           String                @db.LongText
+  nombre_evaluador      String                @db.VarChar(45)
+  firma_evaluador       String                @db.LongText
+  firma_empleado        String                @db.LongText
+  created_at            DateTime              @db.DateTime(0)
   e_estructura_sucursal e_estructura_sucursal @relation(fields: [corpo_id], references: [id], onDelete: NoAction)
-  e_estructura_puesto e_estructura_puesto @relation(fields: [puesto_id], references: [id], onDelete: NoAction)
-  e_estructura_plazas e_estructura_plazas @relation(fields: [plaza_id], references: [id], onDelete: NoAction)
+  e_estructura_plazas   e_estructura_plazas   @relation(fields: [plaza_id], references: [id], onDelete: NoAction)
+  e_estructura_puesto   e_estructura_puesto   @relation(fields: [puesto_id], references: [id], onDelete: NoAction)
+
+  @@index([corpo_id], map: "c_evaluacion_empleado_corpo_id_fkey")
+  @@index([plaza_id], map: "c_evaluacion_empleado_plaza_id_fkey")
+  @@index([puesto_id], map: "c_evaluacion_empleado_puesto_id_fkey")
 }
 
 model c_control_kilometraje {
@@ -970,36 +1013,83 @@ model c_producto_no_conforme_matriz {
   created_by                String?
 }
 
+model c_acta_entre_producto {
+  id                               Int                                @id @default(autoincrement())
+  empresa_id                       Int
+  cliente_id                       Int
+  contrato_id                      Int
+  corpo_id                         Int
+  puesto_id                        Int
+  plaza_id                         Int
+  fecha                            DateTime                           @default(now())
+  tipo_entrega                     String                             @db.LongText
+  cliente                          String                             @db.LongText
+  mensual                          String                             @db.LongText
+  division                         String                             @db.VarChar(25)
+  detalle                          String                             @db.LongText
+  observaciones                    String                             @db.LongText
+  nombre_entrega                   String                             @db.LongText
+  cedula_entrega                   String                             @db.VarChar(30)
+  fecha_entrega                    DateTime                           @default(now())
+  firma_entrega                    String                             @db.LongText
+  nombre_recibe                    String                             @db.LongText
+  cedula_recibe                    String                             @db.VarChar(30)
+  fecha_recibe                     DateTime                           @default(now())
+  firma_recibe                     String                             @db.LongText
+  firma_responsable                String                             @db.LongText
+  c_imagenes_acta_entrega_producto c_imagenes_acta_entrega_producto[]
+}
+
+model c_imagenes_acta_entrega_producto {
+  id                    Int                   @id @default(autoincrement())
+  name                  String                @db.LongText
+  acta_id               Int
+  c_acta_entre_producto c_acta_entre_producto @relation(fields: [acta_id], references: [id], onDelete: Cascade)
+
+  @@index([acta_id], map: "c_imagenes_acta_entrega_producto_acta_id_fkey")
+}
+
 model c_maestro_quejas {
-  id                           String   @id @default(uuid())
-  empresa_id                   String?
-  cliente_id                   String?
-  contrato_id                  String?
-  corpo_id                     String?
-  puesto_id                    String?
-  plaza_id                     String?
-  sociedad                     String?
-  nombre_realiza_queja         String?
-  cliente                      String?
-  empresa_presenta_queja       String?
-  persona_presenta_queja       String?
-  medio_recepcion_queja        String?
-  tipo_queja                   String?
-  ubicacion                    String?
-  nivel_queja                  String?
-  fecha_queja                  String?
-  motivo_queja                 String?
-  descripcion_queja            String?  @db.LongText
-  fecha_inicio                 String?
-  fecha_revision               String?
-  resolucion_queja             String?  @db.LongText
-  mes_queja                    String?
-  ano_queja                    String?
-  estado                       String?
-  accion_correctiva_preventiva String?
-  anexo_evidencia              String?  @db.LongText
-  created_at                   DateTime @default(now())
-  created_by                   String?
+  id                           Int               @id @default(autoincrement())
+  empresa_id                   Int
+  cliente_id                   Int
+  contrato_id                  Int
+  corpo_id                     Int
+  puesto_id                    Int
+  plaza_id                     Int
+  sociedad                     String
+  nombre_realiza_queja         String
+  cliente                      String
+  empresa_presenta_queja       String
+  persona_presenta_queja       String
+  medio_recepcion_queja        String
+  tipo_queja                   String
+  ubicacion                    String
+  nivel_queja                  String
+  fecha_queja                  String
+  motivo_queja                 String
+  descripcion_queja            String            @db.LongText
+  fecha_inicio                 String
+  fecha_revision               String
+  resolucion_queja             String            @db.LongText
+  estado                       String
+  accion_correctiva_preventiva String
+  created_at                   DateTime          @default(now())
+  created_by                   String
+  firma_responsable            String            @db.LongText
+  c_anexos_quejas              c_anexos_quejas[]
+}
+
+model c_anexos_quejas {
+  id               Int              @id @default(autoincrement())
+  name             String           @db.LongText
+  original_name    String           @db.LongText
+  type             String           @db.VarChar(25)
+  extension        String           @db.VarChar(25)
+  queja_id         Int
+  c_maestro_quejas c_maestro_quejas @relation(fields: [queja_id], references: [id], onDelete: Cascade)
+
+  @@index([queja_id], map: "c_anexos_quejas_queja_id_fkey")
 }
 
 model c_control_aseadores {
@@ -1287,45 +1377,48 @@ model c_rol_trabajo_mensual {
 }
 
 model c_solicitud_permiso {
-  id                        String   @id @default(uuid())
-  empresa_id                String?
-  cliente_id                String?
-  contrato_id               String?
-  corpo_id                  String?
-  puesto_id                 String?
-  plaza_id                  String?
-  persona_solicita          String?
-  codigo                    String?
-  contrato                  String?
-  horario                   String?
-  fecha_solicitud           String?
-  motivo_permiso            String?  @db.LongText
-  permiso_sustituido_por    String?
-  codigo_sustituto          String?
-  firma_gerente             String?  @db.LongText
-  firma_encargado_monitoreo String?  @db.LongText
-  permiso_coordinado_por    String?
+  id                        Int      @id @default(autoincrement())
+  empresa_id                String
+  cliente_id                String
+  contrato_id               String
+  corpo_id                  String
+  puesto_id                 String
+  plaza_id                  String
+  persona_solicita          String
+  codigo                    String
+  contrato                  String
+  horario                   String
+  fecha_solicitud           DateTime
+  motivo_permiso            String   @db.LongText
+  permiso_sustituido_por    String
+  codigo_sustituto          String
+  firma_gerente             String   @db.LongText
+  firma_encargado_monitoreo String   @db.LongText
+  permiso_coordinado_por    String
   created_at                DateTime @default(now())
-  created_by                String?
+  created_by                String
+  firma_responsables        String   @db.LongText
+  division                  String
 }
 
 model c_control_asistencia {
-  id              String   @id @default(uuid())
-  empresa_id      String?
-  cliente_id      String?
-  contrato_id     String?
-  corpo_id        String?
-  puesto_id       String?
-  plaza_id        String?
-  cliente         String?
-  fecha           String?
-  turno           String?
-  area_piso       String?
-  total_presentes String?
-  fijos           String?
-  colaboradores   String?  @db.LongText
-  created_at      DateTime @default(now())
-  created_by      String?
+  id                Int      @id @default(autoincrement())
+  empresa_id        Int
+  cliente_id        Int
+  contrato_id       Int
+  corpo_id          Int
+  puesto_id         Int
+  plaza_id          Int
+  fecha             DateTime
+  turno             String
+  area_piso         String
+  total_presentes   Int
+  fijos             Int
+  colaboradores     String   @db.LongText
+  created_at        DateTime @default(now())
+  created_by        Int
+  firma_responsable String   @db.LongText
+  nombre_cliente    String
 }
 
 model c_apertura_cierre_puesto {
@@ -1354,23 +1447,25 @@ model c_apertura_cierre_puesto {
 }
 
 model c_registro_induccion_recorrido {
-  id                     String   @id @default(uuid())
-  empresa_id             String?
-  cliente_id             String?
-  contrato_id            String?
-  corpo_id               String?
-  puesto_id              String?
-  plaza_id               String?
-  fecha                  String?
-  renglon_edificio       String?
+  id                     Int   @id @default(autoincrement())
+  empresa_id             Int
+  cliente_id             Int
+  contrato_id            Int
+  corpo_id               Int
+  puesto_id              Int
+  plaza_id               Int
+  fecha                  DateTime @default(now())
+  division               String
+  renglon_edificio       String
   supervisor_cliente     String?
-  supervisor_corporacion String?
-  temas_desarrollados    String?  @db.LongText
-  aspectos_especificos   String?  @db.LongText
-  participantes          String?  @db.LongText
-  firma_supervisor       String?  @db.LongText
+  supervisor_corporacion String
+  temas_desarrollados    String   @db.LongText
+  aspectos_especificos   String   @db.LongText
+  participantes          String   @db.LongText
+  firma_supervisor       String   @db.LongText
+  firma_responsable      String   @db.LongText
   created_at             DateTime @default(now())
-  created_by             String?
+  created_by             String
 }
 
 model c_informe_supervision {
@@ -1657,17 +1752,20 @@ model c_encuesta_cliente {
 }
 
 model refresh_token {
-  id         Int        @id @default(autoincrement())
-  token      String     @unique @db.VarChar(512)
-  createdAt  DateTime   @default(now())
-  expiresAt  DateTime
-  revoked    Boolean    @default(false)
+  id         Int     @id @default(autoincrement())
+  token     String   @db.VarChar(64)
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+  revoked   Boolean  @default(false)
   empleadoId Int
-  sessionId  String
+  sessionId String   @db.VarChar(36)
+
   c_empleado c_empleado @relation(fields: [empleadoId], references: [id], onDelete: Cascade)
 
-  @@index([empleadoId], map: "refresh_token_empleadoId_fkey")
+  @@unique([token])
+  @@index([empleadoId])
 }
+
 
 model c_empleado_basedatos_digital {
   id                 Int                 @id @default(autoincrement())
@@ -3122,9 +3220,9 @@ model e_estructura_puesto {
   e_estructura_combo_articulo_cp             e_estructura_combo_articulo_cp?              @relation(fields: [comboArticulosCP_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "FK_5C9F9D207A17505D")
   e_estructura_horariopuesto                 e_estructura_horariopuesto?                  @relation(fields: [horarioPuesto_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "FK_5C9F9D209FF23C2C")
   n_horas_extras                             n_horas_extras?                              @relation(fields: [tipoHoraExtra_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "FK_5C9F9D20EB6A1B22")
+  e_puestos_manual_puesto                    e_puestos_manual_puesto[]
   e_registro_personas                        e_registro_personas[]
   e_registro_vehiculos                       e_registro_vehiculos[]
-  e_puestos_manual_puesto                    e_puestos_manual_puesto[]
   m_reposicion_de_horas                      m_reposicion_de_horas[]
 
   @@index([sucursal_id], map: "IDX_5C9F9D20279A5D5E")
@@ -3147,13 +3245,14 @@ model e_estructura_requerimiento_contrato {
 }
 
 model e_manual_puesto {
-  id                                     Int      @id @default(autoincrement())
-  title                                  String   @db.LongText
-  description                            String   @db.LongText
-  firma                                  String   @db.LongText
+  id                                     Int                                      @id @default(autoincrement())
+  title                                  String                                   @db.LongText
+  description                            String                                   @db.LongText
+  firma                                  String                                   @db.LongText
   puesto_id                              Int
   created_by                             String
-  created_at                             DateTime @db.DateTime(0)
+  created_at                             DateTime                                 @db.DateTime(0)
+  quiz                                   String?                                  @db.LongText
   e_archivos_manual_puesto               e_archivos_manual_puesto[]
   e_empleado_visualizacion_manual_puesto e_empleado_visualizacion_manual_puesto[]
   e_puestos_manual_puesto                e_puestos_manual_puesto[]
@@ -3165,16 +3264,21 @@ model e_puestos_manual_puesto {
   puesto_id           Int
   e_manual_puesto     e_manual_puesto     @relation(fields: [manual_puesto_id], references: [id], onDelete: Cascade)
   e_estructura_puesto e_estructura_puesto @relation(fields: [puesto_id], references: [id], onDelete: Cascade)
+
+  @@index([manual_puesto_id], map: "e_puestos_manual_puesto_manual_puesto_id_fkey")
+  @@index([puesto_id], map: "e_puestos_manual_puesto_puesto_id_fkey")
 }
 
 model e_archivos_manual_puesto {
-  id               Int      @id @default(autoincrement())
-  name             String   @db.LongText
-  original_name    String   @db.LongText
-  type             String   @db.VarChar(25)
-  extension        String   @db.VarChar(25)
+  id               Int             @id @default(autoincrement())
+  name             String          @db.LongText
+  type             String          @db.VarChar(25)
+  extension        String          @db.VarChar(25)
   manual_puesto_id Int
-  e_manual_puesto e_manual_puesto @relation(fields: [manual_puesto_id], references: [id], onDelete: Cascade)
+  original_name    String          @db.LongText
+  e_manual_puesto  e_manual_puesto @relation(fields: [manual_puesto_id], references: [id], onDelete: Cascade)
+
+  @@index([manual_puesto_id], map: "e_archivos_manual_puesto_manual_puesto_id_fkey")
 }
 
 model e_empleado_visualizacion_manual_puesto {
@@ -3184,8 +3288,14 @@ model e_empleado_visualizacion_manual_puesto {
   nombre_empleado  String          @db.LongText
   firma_empleado   String          @db.LongText
   created_at       DateTime        @db.DateTime(0)
-  e_manual_puesto  e_manual_puesto @relation(fields: [manual_puesto_id], references: [id], onDelete: Cascade)
+  quiz_answear     String?         @db.LongText
+  updated_at       DateTime        @db.DateTime(0)
+  approved         Boolean?
   c_empleado       c_empleado      @relation(fields: [empleado_id], references: [id], onDelete: Cascade)
+  e_manual_puesto  e_manual_puesto @relation(fields: [manual_puesto_id], references: [id], onDelete: Cascade)
+
+  @@index([empleado_id], map: "e_empleado_visualizacion_manual_puesto_empleado_id_fkey")
+  @@index([manual_puesto_id], map: "e_empleado_visualizacion_manual_puesto_manual_puesto_id_fkey")
 }
 
 model e_estructura_sucursal {
@@ -3247,27 +3357,27 @@ model e_estructura_sucursal {
 }
 
 model e_actividad_corpo {
-  id                      Int                       @id @default(autoincrement())
-  empresa_id              Int
-  cliente_id              Int
-  contrato_id             Int
-  corpo_id                Int
-  puesto_id               Int?
-  plaza_id                Int?
-  nombre_actividad        String                    @db.VarChar(255)
-  fecha_inicio            DateTime                  @db.Date
-  frecuencia              String                    @db.LongText
-  es_revision_equipo      Boolean
-  descripcion_actividad   String                    @db.LongText
-  reglas                  String                    @db.LongText
-  firma_responsable       String                    @db.LongText
-  e_estructura_cliente    e_estructura_cliente      @relation(fields: [cliente_id], references: [id], onDelete: Cascade)
-  e_estructura_contrato   e_estructura_contrato     @relation(fields: [contrato_id], references: [id], onDelete: Cascade)
-  e_estructura_sucursal   e_estructura_sucursal     @relation(fields: [corpo_id], references: [id], onDelete: Cascade)
-  e_estructura_empresa    e_estructura_empresa      @relation(fields: [empresa_id], references: [id], onDelete: Cascade)
-  e_estructura_plazas     e_estructura_plazas?      @relation(fields: [plaza_id], references: [id], onDelete: Cascade)
-  e_estructura_puesto     e_estructura_puesto?       @relation(fields: [puesto_id], references: [id], onDelete: Cascade)
-  e_actividad_corpo_plaza e_actividad_corpo_plaza[]
+  id                       Int                        @id @default(autoincrement())
+  empresa_id               Int
+  cliente_id               Int
+  contrato_id              Int
+  corpo_id                 Int
+  puesto_id                Int?
+  plaza_id                 Int?
+  nombre_actividad         String                     @db.VarChar(255)
+  fecha_inicio             DateTime                   @db.Date
+  frecuencia               String                     @db.LongText
+  es_revision_equipo       Boolean
+  descripcion_actividad    String                     @db.LongText
+  reglas                   String                     @db.LongText
+  firma_responsable        String                     @db.LongText
+  e_estructura_cliente     e_estructura_cliente       @relation(fields: [cliente_id], references: [id], onDelete: Cascade)
+  e_estructura_contrato    e_estructura_contrato      @relation(fields: [contrato_id], references: [id], onDelete: Cascade)
+  e_estructura_sucursal    e_estructura_sucursal      @relation(fields: [corpo_id], references: [id], onDelete: Cascade)
+  e_estructura_empresa     e_estructura_empresa       @relation(fields: [empresa_id], references: [id], onDelete: Cascade)
+  e_estructura_plazas      e_estructura_plazas?       @relation(fields: [plaza_id], references: [id], onDelete: Cascade)
+  e_estructura_puesto      e_estructura_puesto?       @relation(fields: [puesto_id], references: [id], onDelete: Cascade)
+  e_actividad_corpo_plaza  e_actividad_corpo_plaza[]
   e_actividad_puesto_plaza e_actividad_puesto_plaza[]
 
   @@index([cliente_id], map: "e_actividad_corpo_cliente_id_fkey")
@@ -3279,42 +3389,44 @@ model e_actividad_corpo {
 }
 
 model e_actividad_puesto_plaza {
-  id                Int  @id @default(autoincrement())
+  id                Int               @id @default(autoincrement())
   actividadCorpo_id Int
   puesto_id         Int
   plaza_id          Int?
   e_actividad_corpo e_actividad_corpo @relation(fields: [actividadCorpo_id], references: [id], onDelete: Cascade)
+
+  @@index([actividadCorpo_id], map: "e_actividad_puesto_plaza_actividadCorpo_id_fkey")
 }
 
 model e_actividad_corpo_plaza {
-  id                  Int                 @id @default(autoincrement())
-  actividadCorpo_id   Int
-  plaza_id            Int
-  bitacora            String              @db.LongText
-  file_name           String?             @db.LongText
-  created_at          DateTime
-  updated_at          DateTime
-  marcada             Boolean             @default(false)
-  e_actividad_corpo_revision_equipo       e_actividad_corpo_revision_equipo[]
-  e_actividad_corpo   e_actividad_corpo   @relation(fields: [actividadCorpo_id], references: [id], onDelete: Cascade)
-  e_estructura_plazas e_estructura_plazas @relation(fields: [plaza_id], references: [id], onDelete: Cascade)
+  id                                Int                                 @id @default(autoincrement())
+  actividadCorpo_id                 Int
+  plaza_id                          Int
+  bitacora                          String                              @db.LongText
+  file_name                         String?                             @db.LongText
+  created_at                        DateTime
+  updated_at                        DateTime
+  marcada                           Boolean                             @default(false)
+  e_actividad_corpo                 e_actividad_corpo                   @relation(fields: [actividadCorpo_id], references: [id], onDelete: Cascade)
+  e_estructura_plazas               e_estructura_plazas                 @relation(fields: [plaza_id], references: [id], onDelete: Cascade)
+  e_actividad_corpo_revision_equipo e_actividad_corpo_revision_equipo[]
 
   @@index([actividadCorpo_id], map: "e_actividad_corpo_plaza_actividadCorpo_id_fkey")
   @@index([plaza_id], map: "e_actividad_corpo_plaza_plaza_id_fkey")
 }
 
 model e_actividad_corpo_revision_equipo {
-  id                       Int                     @id @default(autoincrement())
-  articulo_id              Int
-  es_correcto              Boolean
-  motivo_incorrecto        String                  @db.LongText
-  created_at               DateTime
-  updated_at               DateTime
-  marcada                  Boolean                 @default(false)
-  actividadCorpoPlaza_id Int
-  file_name                String?                 @db.LongText
+  id                      Int                     @id @default(autoincrement())
+  articulo_id             Int
+  es_correcto             Boolean
+  motivo_incorrecto       String                  @db.LongText
+  created_at              DateTime
+  updated_at              DateTime
+  marcada                 Boolean                 @default(false)
+  file_name               String?                 @db.LongText
+  actividadCorpoPlaza_id  Int
   e_actividad_corpo_plaza e_actividad_corpo_plaza @relation(fields: [actividadCorpoPlaza_id], references: [id], onDelete: Cascade)
-  n_articulo_corpo_puesto  n_articulo_corpo_puesto @relation(fields: [articulo_id], references: [id], onDelete: Cascade)
+  n_articulo_corpo_puesto n_articulo_corpo_puesto @relation(fields: [articulo_id], references: [id], onDelete: Cascade)
 
   @@index([articulo_id], map: "e_actividad_corpo_revision_equipo_articulo_id_fkey")
   @@index([actividadCorpoPlaza_id], map: "e_actividad_corpo_revision_equipo_actividad_corpo_plaza_fkey")
@@ -4957,7 +5069,7 @@ model pg_planilla_empleado {
   imp_refuerzo                                                                                  Decimal                         @db.Decimal(10, 2)
   num_refuerzos                                                                                 Decimal                         @db.Decimal(10, 2)
   num_induccion                                                                                 Decimal                         @db.Decimal(10, 2)
-  info_ultima_semana                                                                            Json?
+  info_ultima_semana                                                                            String?                         @db.LongText
   pg_pe_bonif_empl_pagado                                                                       pg_pe_bonif_empl_pagado[]
   pg_pe_bonif_plaza_pagado                                                                      pg_pe_bonif_plaza_pagado[]
   pg_pe_deuda_descontado                                                                        pg_pe_deuda_descontado[]

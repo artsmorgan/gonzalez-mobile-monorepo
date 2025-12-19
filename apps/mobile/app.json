@@ -63,7 +63,7 @@
       "typedRoutes": true
     },
     "extra": {
-      "API_SERVER": "https://a1354b5d3170.ngrok-free.app",
+      "API_SERVER": "https://598ab127822b.ngrok-free.app",
       "APP_MODE": "dev",
       "router": {},
       "eas": {
