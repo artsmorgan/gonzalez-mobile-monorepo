@@ -8,6 +8,7 @@ const metroTransformerPath = path.join(projectRoot, 'node_modules/metro/src/Delt
 
 if (!fs.existsSync(metroTransformerPath)) {
   console.log('⚠ Metro Transformer not found at:', metroTransformerPath);
+  console.log('  This is normal if Metro hasn\'t been installed yet.');
   process.exit(0); // Don't fail if Metro isn't found yet
 }
 
