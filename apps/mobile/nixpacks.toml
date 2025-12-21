@@ -9,7 +9,8 @@ cmds = [
   "export EXPO_PROJECT_ROOT=$(pwd)",
   "export METRO_PROJECT_ROOT=$(pwd)",
   "export NODE_PATH=$(pwd)/node_modules",
-  "cd $(pwd) && npx expo export --platform web"
+  "mkdir -p /tmp/metro-fix && ln -sf $(pwd)/node_modules /tmp/metro-fix/node_modules || true",
+  "npx expo export --platform web"
 ]
 
 [start]
