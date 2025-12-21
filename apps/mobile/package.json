@@ -11,7 +11,8 @@
     "lint": "expo lint",
     "build": "eas build --platform all",
     "build:web": "expo export --platform web",
-    "postinstall": "node patch-metro.js || true"
+    "postinstall": "node patch-metro.js || true",
+    "build:railway": "npx expo export --platform web --clear"
   },
   "dependencies": {
     "@expo/vector-icons": "15.0.3",
