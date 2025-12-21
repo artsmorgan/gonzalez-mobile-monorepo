@@ -32,14 +32,14 @@ if (fs.existsSync(rootNodeModules) && fs.existsSync(localNodeModules)) {
   config.watchFolders = [];
   
   // Ensure resolver only uses local node_modules with absolute path
+  // Don't disable hierarchical lookup completely - it's needed for module resolution
   config.resolver = {
     ...config.resolver,
     nodeModulesPaths: [localNodeModules],
-    disableHierarchicalLookup: true,
-    // Block any attempts to resolve from absolute root
+    disableHierarchicalLookup: false, // Allow hierarchical lookup for proper module resolution
+    // Block any attempts to resolve from absolute root (but allow relative lookups)
     blockList: [
-      /^\/node_modules\/.*/,
-      /^\/.*node_modules\/.*/,
+      /^\/node_modules\/.*/, // Block absolute root /node_modules
     ],
   };
   
