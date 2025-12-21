@@ -5,13 +5,7 @@ nixPkgs = ["nodejs_20", "npm-9_x"]
 cmds = ["npm install"]
 
 [phases.build]
-cmds = [
-  "export EXPO_PROJECT_ROOT=$(pwd)",
-  "export METRO_PROJECT_ROOT=$(pwd)",
-  "export NODE_PATH=$(pwd)/node_modules",
-  "node patch-metro.js",
-  "npx expo export --platform web --clear"
-]
+cmds = ["./build.sh"]
 
 [start]
 cmd = "npx serve dist -l 3000"
