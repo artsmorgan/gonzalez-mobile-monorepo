@@ -2,10 +2,10 @@ const { getDefaultConfig } = require("expo/metro-config");
 const path = require("path");
 const fs = require("fs");
 
-const projectRoot = __dirname;
+const projectRoot = path.resolve(__dirname);
 const config = getDefaultConfig(projectRoot);
 
-// Explicitly set project root to prevent Metro from looking in wrong places
+// Explicitly set project root using absolute path
 config.projectRoot = projectRoot;
 
 // Check if monorepo root node_modules exists (for local dev)
@@ -27,39 +27,13 @@ if (fs.existsSync(rootNodeModules) && fs.existsSync(localNodeModules)) {
   };
 } else {
   // Railway build context - only use local node_modules
-  // Set watchFolders to project root only (not empty, as Metro needs it)
+  // Use absolute paths to prevent Metro from resolving incorrectly
   config.watchFolders = [projectRoot];
   config.resolver = {
     ...config.resolver,
     nodeModulesPaths: [localNodeModules],
     disableHierarchicalLookup: true,
   };
-  
-  // Override transformer to prevent checking absolute root paths
-  const originalCreateTransformer = config.transformer?.createTransformer;
-  if (originalCreateTransformer) {
-    config.transformer = {
-      ...config.transformer,
-      createTransformer: function(...args) {
-        const transformer = originalCreateTransformer.apply(this, args);
-        // Patch verifyRootExists if it exists
-        if (transformer && typeof transformer === 'object') {
-          const originalVerify = transformer.verifyRootExists;
-          if (originalVerify) {
-            transformer.verifyRootExists = function(roots) {
-              // Filter out absolute root paths
-              const filteredRoots = roots.filter(root => {
-                const normalized = path.normalize(root);
-                return !normalized.startsWith('/') || normalized.startsWith(projectRoot);
-              });
-              return originalVerify.call(this, filteredRoots);
-            };
-          }
-        }
-        return transformer;
-      },
-    };
-  }
 }
 
 module.exports = config;
