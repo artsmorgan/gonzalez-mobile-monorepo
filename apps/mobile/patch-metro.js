@@ -10,14 +10,17 @@ if (fs.existsSync(metroTransformerPath)) {
   let content = fs.readFileSync(metroTransformerPath, 'utf8');
   
   // Patch verifyRootExists to filter out absolute root paths
-  const originalVerifyPattern = /function verifyRootExists\([^)]*\)\s*\{[^}]*statSync\([^)]*\)/s;
-  
   if (content.includes('function verifyRootExists')) {
-    const patchedVerify = `function verifyRootExists(roots) {
+    // Find the verifyRootExists function and replace it
+    // Match the function definition and its body
+    const functionMatch = content.match(/function verifyRootExists\([^)]*\)\s*\{[\s\S]*?\n\s*\}/);
+    
+    if (functionMatch) {
+      const patchedVerify = `function verifyRootExists(roots) {
   if (!roots || roots.length === 0) return;
   
   // Filter out absolute root paths that don't start with project root
-  const projectRoot = process.cwd();
+  const projectRoot = ${JSON.stringify(projectRoot)};
   const filteredRoots = roots.filter(root => {
     if (!root) return false;
     const normalized = path.normalize(root);
@@ -37,14 +40,17 @@ if (fs.existsSync(metroTransformerPath)) {
     }
   });
 }`;
-    
-    content = content.replace(
-      /function verifyRootExists\([^)]*\)\s*\{[^}]*\}/s,
-      patchedVerify
-    );
-    
-    fs.writeFileSync(metroTransformerPath, content);
-    console.log('✓ Patched Metro Transformer to fix path resolution');
+      
+      content = content.replace(
+        /function verifyRootExists\([^)]*\)\s*\{[\s\S]*?\n\s*\}/,
+        patchedVerify
+      );
+      
+      fs.writeFileSync(metroTransformerPath, content);
+      console.log('✓ Patched Metro Transformer to fix path resolution');
+    } else {
+      console.log('⚠ Could not find verifyRootExists function body to patch');
+    }
   } else {
     console.log('⚠ Could not find verifyRootExists function to patch');
   }
