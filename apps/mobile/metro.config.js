@@ -14,8 +14,8 @@ const rootNodeModules = path.resolve(workspaceRoot, "node_modules");
 const localNodeModules = path.resolve(projectRoot, "node_modules");
 
 // Configure watchFolders and nodeModulesPaths based on environment
-if (fs.existsSync(rootNodeModules)) {
-  // Local dev with monorepo
+if (fs.existsSync(rootNodeModules) && fs.existsSync(localNodeModules)) {
+  // Local dev with monorepo - use both
   config.watchFolders = [workspaceRoot];
   config.resolver = {
     ...config.resolver,
@@ -27,12 +27,23 @@ if (fs.existsSync(rootNodeModules)) {
   };
 } else {
   // Railway build context - only use local node_modules
-  config.watchFolders = [projectRoot];
+  // Don't set watchFolders to avoid Metro checking absolute paths
+  config.watchFolders = [];
   config.resolver = {
     ...config.resolver,
     nodeModulesPaths: [localNodeModules],
     disableHierarchicalLookup: true,
+    // Prevent Metro from looking in absolute root
+    blockList: [/\/node_modules\/.*/],
   };
+  
+  // Set cache directory to local
+  config.cacheStores = [
+    {
+      get: () => null,
+      set: () => {},
+    },
+  ];
 }
 
 module.exports = config;
