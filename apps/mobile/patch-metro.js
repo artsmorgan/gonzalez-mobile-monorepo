@@ -34,12 +34,17 @@ if (content.includes('verifyRootExists')) {
   ];
   
   const patchedVerify = `function verifyRootExists(roots) {
-  if (!roots || roots.length === 0) return;
+  // Ensure roots is an array
+  if (!roots) return;
+  if (!Array.isArray(roots)) {
+    roots = [roots].filter(Boolean);
+  }
+  if (roots.length === 0) return;
   
   // Filter out absolute root paths that don't start with project root
   const projectRoot = ${JSON.stringify(projectRoot)};
   const filteredRoots = roots.filter(root => {
-    if (!root) return false;
+    if (!root || typeof root !== 'string') return false;
     try {
       const normalized = path.normalize(root);
       // Only allow paths that are within the project root or relative
@@ -52,9 +57,11 @@ if (content.includes('verifyRootExists')) {
   // Only verify paths that exist and are within project
   filteredRoots.forEach(root => {
     try {
-      const normalized = path.normalize(root);
-      if (normalized.startsWith(projectRoot) && fs.existsSync(root)) {
-        fs.statSync(root);
+      if (typeof root === 'string') {
+        const normalized = path.normalize(root);
+        if (normalized.startsWith(projectRoot) && fs.existsSync(root)) {
+          fs.statSync(root);
+        }
       }
     } catch (e) {
       // Ignore errors for paths outside project root
