@@ -64,9 +64,13 @@ module.exports = {
       typedRoutes: true
     },
     extra: {
-      // Use environment variable if available, otherwise fallback to default
-      API_SERVER: process.env.EXPO_PUBLIC_API_SERVER || process.env.API_SERVER || "https://598ab127822b.ngrok-free.app",
-      APP_MODE: process.env.APP_MODE || "dev",
+      // Use environment variable if available (Railway production)
+      // Falls back to local development URL if not set
+      API_SERVER: process.env.EXPO_PUBLIC_API_SERVER || 
+                  process.env.API_SERVER || 
+                  process.env.NEXT_PUBLIC_API_SERVER ||
+                  "https://598ab127822b.ngrok-free.app", // Local dev fallback
+      APP_MODE: process.env.APP_MODE || process.env.NODE_ENV || "dev",
       router: {},
       eas: {
         projectId: "0e68d6d2-7653-4d13-a407-3823ff43722a"
