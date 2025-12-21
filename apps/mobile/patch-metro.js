@@ -6,11 +6,18 @@ const path = require('path');
 const projectRoot = process.cwd();
 const metroTransformerPath = path.join(projectRoot, 'node_modules/metro/src/DeltaBundler/Transformer.js');
 
+console.log('🔧 Metro Patch Script Starting...');
+console.log('  Project Root:', projectRoot);
+console.log('  Metro Path:', metroTransformerPath);
+
 if (!fs.existsSync(metroTransformerPath)) {
   console.log('⚠ Metro Transformer not found at:', metroTransformerPath);
   console.log('  This is normal if Metro hasn\'t been installed yet.');
+  console.log('  Will try again when Metro is installed.');
   process.exit(0); // Don't fail if Metro isn't found yet
 }
+
+console.log('✓ Metro Transformer found, attempting to patch...');
 
 let content = fs.readFileSync(metroTransformerPath, 'utf8');
 const originalContent = content;
@@ -83,11 +90,32 @@ if (content.includes('verifyRootExists')) {
   if (patched && content !== originalContent) {
     fs.writeFileSync(metroTransformerPath, content);
     console.log('✓ Patched Metro Transformer to fix path resolution');
+    console.log('  Patched function: verifyRootExists');
+  } else if (!patched) {
+    console.log('⚠ Could not patch Metro Transformer - trying alternative method...');
+    // Alternative: Create a dummy /node_modules if we have permissions (unlikely in Railway)
+    // Or modify the function more aggressively
+    const altPattern = /roots\.forEach\([^}]*statSync[^}]*\}\)/s;
+    if (altPattern.test(content)) {
+      content = content.replace(altPattern, `roots.filter(r => r && !r.startsWith('/') || r.startsWith('${projectRoot}')).forEach(root => {
+      try {
+        if (fs.existsSync(root)) fs.statSync(root);
+      } catch (e) {}
+    })`);
+      fs.writeFileSync(metroTransformerPath, content);
+      console.log('✓ Patched Metro Transformer using alternative method');
+      patched = true;
+    }
+    
+    if (!patched) {
+      console.log('⚠ Could not patch Metro Transformer - function structure may have changed');
+      console.log('  Attempting to continue anyway...');
+    }
   } else {
-    console.log('⚠ Could not patch Metro Transformer - function structure may have changed');
-    console.log('  Attempting to continue anyway...');
+    console.log('⚠ No changes needed (already patched?)');
   }
 } else {
   console.log('⚠ verifyRootExists function not found in Metro Transformer');
   console.log('  Metro version may be different than expected');
+  console.log('  Content preview:', content.substring(0, 200));
 }
