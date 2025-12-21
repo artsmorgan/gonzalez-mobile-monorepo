@@ -5,7 +5,11 @@ nixPkgs = ["nodejs_20", "npm-9_x"]
 cmds = ["npm install"]
 
 [phases.build]
-cmds = ["EXPO_PROJECT_ROOT=$(pwd) npx expo export --platform web"]
+cmds = [
+  "export EXPO_PROJECT_ROOT=$(pwd)",
+  "export METRO_PROJECT_ROOT=$(pwd)",
+  "npx expo export --platform web"
+]
 
 [start]
 cmd = "npx serve dist -l 3000"
