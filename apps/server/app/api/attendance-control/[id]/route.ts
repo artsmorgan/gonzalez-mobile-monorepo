@@ -115,8 +115,13 @@ export async function DELETE(
         const resolvedParams = await context.params;
         const { id } = resolvedParams;
 
+        const idInt = parseInt(String(id), 10);
+        if (!idInt) {
+            return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
+        }
+
         await prisma.c_control_asistencia.delete({
-            where: { id }
+            where: { id: idInt }
         });
 
         return NextResponse.json({
