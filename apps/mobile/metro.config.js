@@ -27,23 +27,39 @@ if (fs.existsSync(rootNodeModules) && fs.existsSync(localNodeModules)) {
   };
 } else {
   // Railway build context - only use local node_modules
-  // Don't set watchFolders to avoid Metro checking absolute paths
-  config.watchFolders = [];
+  // Set watchFolders to project root only (not empty, as Metro needs it)
+  config.watchFolders = [projectRoot];
   config.resolver = {
     ...config.resolver,
     nodeModulesPaths: [localNodeModules],
     disableHierarchicalLookup: true,
-    // Prevent Metro from looking in absolute root
-    blockList: [/\/node_modules\/.*/],
   };
   
-  // Set cache directory to local
-  config.cacheStores = [
-    {
-      get: () => null,
-      set: () => {},
-    },
-  ];
+  // Override transformer to prevent checking absolute root paths
+  const originalCreateTransformer = config.transformer?.createTransformer;
+  if (originalCreateTransformer) {
+    config.transformer = {
+      ...config.transformer,
+      createTransformer: function(...args) {
+        const transformer = originalCreateTransformer.apply(this, args);
+        // Patch verifyRootExists if it exists
+        if (transformer && typeof transformer === 'object') {
+          const originalVerify = transformer.verifyRootExists;
+          if (originalVerify) {
+            transformer.verifyRootExists = function(roots) {
+              // Filter out absolute root paths
+              const filteredRoots = roots.filter(root => {
+                const normalized = path.normalize(root);
+                return !normalized.startsWith('/') || normalized.startsWith(projectRoot);
+              });
+              return originalVerify.call(this, filteredRoots);
+            };
+          }
+        }
+        return transformer;
+      },
+    };
+  }
 }
 
 module.exports = config;
