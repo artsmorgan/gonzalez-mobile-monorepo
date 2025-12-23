@@ -64,7 +64,7 @@
       "typedRoutes": true
     },
     "extra": {
-      "API_SERVER": "https://598ab127822b.ngrok-free.app",
+      "API_SERVER": "https://api-gonzalez-mobile-monorepo-production.up.railway.app",
       "APP_MODE": "dev",
       "router": {},
       "eas": {
