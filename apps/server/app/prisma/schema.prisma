@@ -624,7 +624,7 @@ model c_empleado {
   plazaEmpleado_id                                                          Int?
   duracion_del_contrato                                                     String?                                     @db.VarChar(2)
   fecha_fin_contrato                                                        DateTime?                                   @db.Date
-  carrera_estudiada                                                         String?                                     @db.VarChar(50)
+  carrera_estudiada                                                         String?                                     @db.LongText
   latitude                                                                  Decimal?                                    @db.Decimal(10, 8)
   longitude                                                                 Decimal?                                    @db.Decimal(11, 8)
   password_expires_at                                                       DateTime?                                   @db.DateTime(0)
