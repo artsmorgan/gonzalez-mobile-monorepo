@@ -5,7 +5,8 @@
     "version": "1.0.0",
     "platforms": [
       "android",
-      "ios"
+      "ios",
+      "web"
     ],
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -31,7 +32,7 @@
     },
     "web": {
       "bundler": "metro",
-      "output": "static",
+      "output": "single",
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
