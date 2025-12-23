@@ -3,4 +3,3 @@ apps/mobile/node_modules
 apps/server/node_modules
 apps/mobile/.env
 apps/server/.env
-apps/server/app/prisma/migrations
