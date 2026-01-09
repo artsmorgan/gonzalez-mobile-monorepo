@@ -307,7 +307,7 @@ export default function SatisfactionSurveysScreen() {
           if (refreshed) {
             return fetchSurveys();
           } else {
-            Alert.alert('Error', 'Sesión expirada. Por favor inicie sesión nuevamente.');
+            Alert.alert('14', 'Sesión expirada. Por favor inicie sesión nuevamente.');
             await logout();
             return;
           }

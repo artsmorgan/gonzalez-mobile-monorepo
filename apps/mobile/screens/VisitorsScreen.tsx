@@ -314,7 +314,7 @@ export default function VisitorsScreen() {
           if (refreshed) {
             return fetchVisitors();
           } else {
-            Alert.alert('Error', 'Sesión expirada. Por favor inicie sesión nuevamente.');
+            Alert.alert('16', 'Sesión expirada. Por favor inicie sesión nuevamente.');
             await logout();
             return;
           }

@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   StyleSheet,
   ScrollView,
@@ -13,6 +13,9 @@ import {
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import { Picker } from '@react-native-picker/picker';
+import * as Location from 'expo-location';
+import { jwtDecode } from 'jwt-decode';
 import SignatureScreen from "react-native-signature-canvas";
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
@@ -34,20 +37,33 @@ import {
   listOpeningClosingPositionByCorpo,
 } from '@/hooks/evaluationFunctions';
 import { eventBus } from '@/hooks/eventBus';
+import getHoraAccion from '@/hooks/getHoraAccion';
+import { useQRScanner } from '@/hooks/useQRScanner';
 
 type OpeningClosingPositionScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'OpeningClosingPosition'>;
 
-interface Actividad {
-  ok_na: boolean;
-  actividad: string;
+type MainStructurePlazaNode = { id: number; nombre: string };
+type MainStructurePuestoNode = { id: number; nombre: string; plazas: MainStructurePlazaNode[] };
+type MainStructureSucursalNode = { id: number; nombre: string; puestos: MainStructurePuestoNode[] };
+type MainStructureContratoNode = { id: number; nombre: string; sucursales: MainStructureSucursalNode[] };
+type MainStructureDivisionNode = { id: number; nombre: string; contratos: MainStructureContratoNode[] };
+type MainStructureClienteNode = { id: number; nombre: string; division: MainStructureDivisionNode[] };
+type MainStructureEmpresaNode = { id: number; nombre: string; clientes: MainStructureClienteNode[] };
+type MainStructureTree = MainStructureEmpresaNode[];
+
+type ArticuloCatalogItem = { id: number; nombre: string };
+
+type ActividadRespuesta = 'Ok' | 'N/A' | null;
+interface ActividadItem {
+  pregunta: string;
+  respuesta: ActividadRespuesta;
   observaciones: string;
-  representante_cliente: string;
-  representante_empresa_saliente: string;
 }
 
 interface InventarioItem {
   activos_equipos: string;
-  tipo: string;
+  tipo_id: number | null;
+  tipo_nombre: string;
   numero_activo: string;
   numero_serie: string;
   marca: string;
@@ -55,51 +71,72 @@ interface InventarioItem {
   descripcion: string;
 }
 
-interface OpeningClosingPosition {
-  id: string;
+type OcpImageLocal = {
   id_local: string;
-  cliente: string | null;
-  numero_corpo: string | null;
-  numero_puesto: string | null;
-  fecha_realizado: string | null;
-  nombre_corpo: string | null;
-  nombre_puesto: string | null;
-  tipo: string | null;
-  actividades: string | null;
-  inventario: string | null;
-  fotos: string | null;
+  base64: string;
+  extension: string;
+  original_name: string;
+};
+
+type OcpImageRemote = {
+  id: number;
+  name: string;
+  original_name: string;
+  url: string;
+};
+
+interface OpeningClosingPosition {
+  id: number | null;
+  id_local: string;
+  cliente_id: number;
+  corpo_id: number;
+  puesto_id: number;
+  division_id: number;
+  fecha: string; // ISO
+  tipo: string;
+  nombre_representante_cliente: string;
+  nombre_representante_empresa_entrante: string;
+  nombre_representante_empresa_saliente: string;
+  actividades: string;
+  inventario: string;
   otras_observaciones: string | null;
-  nombre_representante_cliente: string | null;
-  firma_cliente: string | null;
+  firma_representante_cliente: string;
+  firma_representante_empresa_entrante: string;
+  firma_representante_empresa_saliente: string;
+  firma_responsable: string;
+  cliente_nombre?: string | null;
+  corpo_nombre?: string | null;
+  puesto_nombre?: string | null;
+  division_nombre?: string | null;
+  images?: OcpImageRemote[];
+  images_local?: OcpImageLocal[]; // solo UI offline (base64)
   created_at: string;
   synced?: boolean;
 }
 
 interface EditingOpeningClosingPosition {
-  id: string | null;
+  id: number | null;
   id_local: string;
-  cliente: string;
-  numero_corpo: string;
-  numero_puesto: string;
-  fecha_realizado: string;
-  nombre_corpo: string;
-  nombre_puesto: string;
-  tipo: string[];
-  actividades: Actividad[];
-  inventario: InventarioItem[];
-  fotos: string[];
-  otras_observaciones: string;
-  nombre_representante_cliente: string;
-  firma_cliente: string;
 }
 
-const ACTIVIDADES_PREDEFINIDAS = [
+const ACTIVIDADES_ASEO_LIMPIEZA = [
   "Presentese al lugar y presente al misceláneo que va a prestar el servicio.",
-  "Verifique ubicación de: -Oficina de Aseo (si aplica) -Cuartos de aseo -Comedor (lugar para toma de tiempos de alimentación trabajador)",
-  "Realice una revisión de las condiciones: -Fuentes de electricidad (para uso de cepillo, aspiradoras, etc) -Mobiliario",
+  "Verifique ubicación de: Oficina de Aseo (si aplica), Cuartos de aseo, Comedor (lugar para toma de tiempos de alimentación trabajador).",
+  "Realice una revisión de las condiciones: Fuentes de electricidad (para uso de cepillo, aspiradoras, etc), Mobiliario.",
   "Realice un recorrido del puesto.",
   "Entrega/Retiro de equipos e insumos.",
-  "Entrega/Retiro de Papelería: -AYL-F-002-Rol de Trabajo Mensual -AYL-F-013-Control de asistencia -AYL-M-001-Manual de Puestos Aseo y Limpieza -AYL-F-035-Guia de Funciones del puesto -AYL-F-028 Registro de Tareas de Limpieza -AYL-PO-001-Código de Vestimenta Aseo y Limpieza -AYL-F-018-Estándar de Dilución de Químicos -AYL-F-009-Solicitud de Permiso",
+  "Entrega/Retiro de Papelería: AYL-F-002-Rol de Trabajo Mensual, AYL-F-013-Control de asistencia, AYL-M-001-Manual de Puestos Aseo y Limpieza, AYL-F-035-Guia de Funciones del puesto, AYL-F-028 Registro de Tareas de Limpieza, AYL-PO-001-Código de Vestimenta Aseo y Limpieza, AYL-F-018-Estándar de Dilución de Químicos, AYL-F-009-Solicitud de Permiso.",
+];
+
+const ACTIVIDADES_SEGURIDAD = [
+  "Presentese al lugar",
+  "Tome posesión de la(s) caseta(s) y realice una revisión de las condiciones y equipo con que cuenta la misma: Fuentes de electricidad, Mobiliario.",
+  "Realice un recorrido del puesto, revisando el estado de los siguientes aspectos: Accesos (puertas, ventanas, portones), Barreras perimetrales e instalaciones, Alarmas, Cámaras.",
+  "Revisión de activos y equipos del cliente",
+  "Revisión de papelería: Formularios, Controles de ingreso/salida, entre otros",
+  "Controles electrónicos: controles de mando, agujas",
+  "Llaves de acceso",
+  "Apertura o cierre de Libro de Novedades, donde se detallan las actividades de apertura de puesto.",
 ];
 
 export default function OpeningClosingPositionScreen() {
@@ -112,30 +149,61 @@ export default function OpeningClosingPositionScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [hasCurrentMarca, setHasCurrentMarca] = useState<boolean>(false);
+  // UI: collapsables por item en lista
+  const [expandedActivitiesById, setExpandedActivitiesById] = useState<Record<string, boolean>>({});
+  const [expandedInventoryById, setExpandedInventoryById] = useState<Record<string, boolean>>({});
+  const [expandedImagesById, setExpandedImagesById] = useState<Record<string, boolean>>({});
 
   // Editing state
   const [editingRecord, setEditingRecord] = useState<EditingOpeningClosingPosition | null>(null);
   const [isCreating, setIsCreating] = useState(false);
 
+  // Marca context (para division automática)
+  const [marcaId, setMarcaId] = useState<number | null>(null);
+  const [marcaDivisionId, setMarcaDivisionId] = useState<number | null>(null); // current_marca.roleDivision.division.id
+
+  // Estructura principal (árbol) + loading + selección
+  const [structure, setStructure] = useState<MainStructureTree>([]);
+  const [isStructureLoading, setIsStructureLoading] = useState(false);
+  const [selectedEmpresaId, setSelectedEmpresaId] = useState<number | null>(null);
+  const [selectedClienteId, setSelectedClienteId] = useState<number | null>(null);
+  const [selectedDivisionId, setSelectedDivisionId] = useState<number | null>(null);
+  const [selectedContratoId, setSelectedContratoId] = useState<number | null>(null);
+  const [selectedSucursalId, setSelectedSucursalId] = useState<number | null>(null);
+  const [selectedPuestoId, setSelectedPuestoId] = useState<number | null>(null); // solo 1 puesto
+
+  // Catálogo artículos (inventario - solo Seguridad)
+  const [articulosCatalog, setArticulosCatalog] = useState<ArticuloCatalogItem[]>([]);
+  const [isArticulosLoading, setIsArticulosLoading] = useState(false);
+
   // Form states
-  const [cliente, setCliente] = useState('');
-  const [numeroCorpo, setNumeroCorpo] = useState('');
-  const [numeroPuesto, setNumeroPuesto] = useState('');
   const [fechaRealizado, setFechaRealizado] = useState<Date>(new Date());
   const [showDatePicker, setShowDatePicker] = useState(false);
-  const [nombreCorpo, setNombreCorpo] = useState('');
-  const [nombrePuesto, setNombrePuesto] = useState('');
-  const [tipo, setTipo] = useState<string[]>([]);
-  const [actividades, setActividades] = useState<Actividad[]>([]);
-  const [inventario, setInventario] = useState<InventarioItem[]>([]);
-  const [fotos, setFotos] = useState<string[]>([]);
-  const [otrasObservaciones, setOtrasObservaciones] = useState('');
-  const [nombreRepresentanteCliente, setNombreRepresentanteCliente] = useState('');
-  const [firmaCliente, setFirmaCliente] = useState<string | null>(null);
+  const [tipo, setTipo] = useState<'Apertura' | 'Cierre'>('Apertura');
 
-  // Expanded states
-  const [expandedActividadIndices, setExpandedActividadIndices] = useState<number[]>([]);
+  const [nombreRepresentanteCliente, setNombreRepresentanteCliente] = useState('');
+  const [nombreRepresentanteEmpresaEntrante, setNombreRepresentanteEmpresaEntrante] = useState('');
+  const [nombreRepresentanteEmpresaSaliente, setNombreRepresentanteEmpresaSaliente] = useState('');
+
+  const [actividades, setActividades] = useState<ActividadItem[]>([]);
+  const [inventario, setInventario] = useState<InventarioItem[]>([]);
   const [expandedInventarioIndices, setExpandedInventarioIndices] = useState<number[]>([]);
+
+  const [imagenesLocal, setImagenesLocal] = useState<OcpImageLocal[]>([]);
+  const [imagenesRemote, setImagenesRemote] = useState<OcpImageRemote[]>([]);
+  const [deletedRemoteImageIds, setDeletedRemoteImageIds] = useState<number[]>([]);
+
+  const [otrasObservaciones, setOtrasObservaciones] = useState('');
+
+  // Firmas (3 dibujadas + 1 QR)
+  const [firmaRepresentanteCliente, setFirmaRepresentanteCliente] = useState<string | null>(null);
+  const [firmaRepresentanteEmpresaEntrante, setFirmaRepresentanteEmpresaEntrante] = useState<string | null>(null);
+  const [firmaRepresentanteEmpresaSaliente, setFirmaRepresentanteEmpresaSaliente] = useState<string | null>(null);
+
+  const [firmaResponsable, setFirmaResponsable] = useState<string>('');
+  const [isGeneratingFirma, setIsGeneratingFirma] = useState(false);
+  const [location, setLocation] = useState<Location.LocationObject | null>(null);
+  const { scanQR, QRScannerComponent } = useQRScanner();
 
   // Camera states
   const [isCameraVisible, setIsCameraVisible] = useState(false);
@@ -144,6 +212,7 @@ export default function OpeningClosingPositionScreen() {
 
   // Signature modal states
   const [isSignatureModalVisible, setIsSignatureModalVisible] = useState(false);
+  const [signatureTarget, setSignatureTarget] = useState<'cliente' | 'entrante' | 'saliente'>('cliente');
   const signatureRef = useRef<any>(null);
   const [signatureKey, setSignatureKey] = useState(0);
 
@@ -196,10 +265,11 @@ export default function OpeningClosingPositionScreen() {
   };
 
   const formatDate = (date: Date): string => {
-    const day = date.getDate().toString().padStart(2, '0');
-    const month = (date.getMonth() + 1).toString().padStart(2, '0');
+    // yyyy-mm-dd (compatible con server new Date())
     const year = date.getFullYear();
-    return `${day}/${month}/${year}`;
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
   };
 
   // Helper para extraer solo el base64 de las firmas
@@ -221,6 +291,190 @@ export default function OpeningClosingPositionScreen() {
     return `data:image/png;base64,${signature}`;
   };
 
+  const decodeFirmaHash = (hash?: string | null) => {
+    try {
+      if (!hash || String(hash).trim().length === 0) return null;
+      const decoded = atob(String(hash));
+      const parts = decoded.split(':');
+      if (parts.length !== 5) return null;
+      const [sessionId, empleadoId, latitud, longitud, timestamp] = parts;
+      return { sessionId, empleadoId, latitud, longitud, timestamp };
+    } catch {
+      return null;
+    }
+  };
+
+  const buildActividadesForDivision = (divId: number | null): ActividadItem[] => {
+    const base =
+      divId === 5 ? ACTIVIDADES_ASEO_LIMPIEZA
+      : divId === 4 ? ACTIVIDADES_SEGURIDAD
+      : [];
+
+    return base.map((q) => ({
+      pregunta: q,
+      respuesta: null,
+      observaciones: '',
+    }));
+  };
+
+  const requestLocation = async () => {
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') return null;
+      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      setLocation(loc);
+      return loc;
+    } catch {
+      return null;
+    }
+  };
+
+  const handleGenerateFirmaResponsable = async () => {
+    if (isGeneratingFirma) return;
+    setIsGeneratingFirma(true);
+    try {
+      const loc = location ?? (await requestLocation());
+      if (!loc || !employee) {
+        Alert.alert('Error', 'No se pudo obtener ubicación o usuario');
+        return;
+      }
+      const token = await AsyncStorage.getItem('access_token');
+      if (!token) throw new Error('No authentication token found');
+      const decodedToken: any = jwtDecode(token);
+      const sessionId = decodedToken.sessionId;
+      const horaAccion = await getHoraAccion();
+      const hash = btoa(`${sessionId}:${employee.id}:${loc.coords.latitude}:${loc.coords.longitude}:${horaAccion}`);
+      setFirmaResponsable(hash);
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'No se pudo generar la firma');
+    } finally {
+      setIsGeneratingFirma(false);
+    }
+  };
+
+  const handleScanFirmaResponsable = async () => {
+    try {
+      const qrData = await scanQR();
+      if (!qrData) return;
+      setFirmaResponsable(qrData);
+    } catch {
+      Alert.alert('Error', 'No se pudo escanear el QR');
+    }
+  };
+
+  const fetchMainStructure = useCallback(async () => {
+    setIsStructureLoading(true);
+    try {
+      // cache-first
+      const cacheStr = await AsyncStorage.getItem('main_structure_cache');
+      if (cacheStr) {
+        try {
+          const parsed = JSON.parse(cacheStr);
+          if (Array.isArray(parsed)) setStructure(parsed);
+        } catch {
+          // ignore
+        }
+      }
+
+      const isConnected = await getConnectionStatus();
+      if (!isConnected) return;
+
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) throw new Error('Server URL not configured');
+
+      let token = await AsyncStorage.getItem('access_token');
+      if (!token) {
+        const refreshed = await refreshAccessToken();
+        if (!refreshed) return;
+        token = await AsyncStorage.getItem('access_token');
+      }
+
+      const response = await fetch(`${apiUrl}/api/main-structure`, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': '69420',
+        },
+      });
+
+      if (response.status === 401 || response.status === 403) {
+        const refreshed = await refreshAccessToken();
+        if (refreshed) return fetchMainStructure();
+        await logout();
+        return;
+      }
+
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+
+      const data = await response.json();
+      const incoming = data?.structure;
+      if (data?.status && Array.isArray(incoming)) {
+        setStructure(incoming);
+        await AsyncStorage.setItem('main_structure_cache', JSON.stringify(incoming));
+      }
+    } catch (e) {
+      console.error('Error fetching main structure for opening-closing-position:', e);
+    } finally {
+      setIsStructureLoading(false);
+    }
+  }, [refreshAccessToken, logout]);
+
+  const loadArticulosCatalog = useCallback(async () => {
+    setIsArticulosLoading(true);
+    try {
+      const cache = await AsyncStorage.getItem('articulos_cache');
+      if (cache) {
+        try {
+          const parsed = JSON.parse(cache);
+          if (Array.isArray(parsed)) setArticulosCatalog(parsed);
+        } catch {
+          // ignore
+        }
+      }
+
+      const isConnected = await getConnectionStatus();
+      if (!isConnected) return;
+
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) throw new Error('Server URL not configured');
+
+      let token = await AsyncStorage.getItem('access_token');
+      if (!token) {
+        const refreshed = await refreshAccessToken();
+        if (!refreshed) return;
+        token = await AsyncStorage.getItem('access_token');
+      }
+
+      const response = await fetch(`${apiUrl}/api/articulos`, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': '69420',
+        },
+      });
+
+      if (response.status === 401 || response.status === 403) {
+        const refreshed = await refreshAccessToken();
+        if (refreshed) return loadArticulosCatalog();
+        await logout();
+        return;
+      }
+
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+      const data = await response.json();
+      if (data.status && Array.isArray(data.articulos)) {
+        setArticulosCatalog(data.articulos);
+        await AsyncStorage.setItem('articulos_cache', JSON.stringify(data.articulos));
+      }
+    } catch (e) {
+      console.error('Error fetching articulos catalog:', e);
+    } finally {
+      setIsArticulosLoading(false);
+    }
+  }, [refreshAccessToken, logout]);
+
   const fetchPositions = useCallback(async () => {
     try {
       setIsLoading(true);
@@ -236,6 +490,20 @@ export default function OpeningClosingPositionScreen() {
       setHasCurrentMarca(true);
       const currentMarcaData = JSON.parse(currentMarca);
       const corpoId = currentMarcaData.corpo?.id?.toString();
+
+      setMarcaId(typeof currentMarcaData?.id === 'number' ? currentMarcaData.id : (currentMarcaData?.id ? Number(currentMarcaData.id) : null));
+      const divIdRaw = currentMarcaData?.roleDivision?.division?.id;
+      setMarcaDivisionId(divIdRaw !== undefined && divIdRaw !== null ? Number(divIdRaw) : null);
+
+      // Preselección del árbol con marca actual (si existe)
+      setSelectedEmpresaId(currentMarcaData?.empresa?.id ?? null);
+      setSelectedClienteId(currentMarcaData?.cliente?.id ?? null);
+      setSelectedContratoId(currentMarcaData?.contrato?.id ?? null);
+      setSelectedSucursalId(currentMarcaData?.corpo?.id ?? null);
+      setSelectedPuestoId(currentMarcaData?.puesto?.id ?? null);
+
+      // Estructura principal (cache-first + refresh online)
+      await fetchMainStructure();
 
       if (!corpoId) {
         setError('No se encontró el ID del corpo');
@@ -283,7 +551,7 @@ export default function OpeningClosingPositionScreen() {
     } finally {
       setIsLoading(false);
     }
-  }, [refreshAccessToken, logout]);
+  }, [refreshAccessToken, logout, fetchMainStructure]);
 
   useFocusEffect(
     useCallback(() => {
@@ -295,30 +563,130 @@ export default function OpeningClosingPositionScreen() {
     }, [fetchPositions])
   );
 
+  const selectedEmpresaNode = useMemo(() => {
+    if (selectedEmpresaId === null) return null;
+    return structure.find((e) => e.id === selectedEmpresaId) ?? null;
+  }, [structure, selectedEmpresaId]);
+
+  const selectedClienteNode = useMemo(() => {
+    if (!selectedEmpresaNode || selectedClienteId === null) return null;
+    return selectedEmpresaNode.clientes.find((c) => c.id === selectedClienteId) ?? null;
+  }, [selectedEmpresaNode, selectedClienteId]);
+
+  const selectedDivisionNode = useMemo(() => {
+    if (!selectedClienteNode || selectedDivisionId === null) return null;
+    return (selectedClienteNode.division || []).find((d) => d.id === selectedDivisionId) ?? null;
+  }, [selectedClienteNode, selectedDivisionId]);
+
+  const selectedContratoNode = useMemo(() => {
+    if (!selectedDivisionNode || selectedContratoId === null) return null;
+    return (selectedDivisionNode.contratos || []).find((c) => c.id === selectedContratoId) ?? null;
+  }, [selectedDivisionNode, selectedContratoId]);
+
+  const selectedSucursalNode = useMemo(() => {
+    if (!selectedContratoNode || selectedSucursalId === null) return null;
+    return (selectedContratoNode.sucursales || []).find((s) => s.id === selectedSucursalId) ?? null;
+  }, [selectedContratoNode, selectedSucursalId]);
+
+  // Auto-selección de división por marca cuando se selecciona cliente
+  useEffect(() => {
+    if (editingRecord) return; // en edición respetar la división del registro
+    if (!selectedClienteNode || !marcaDivisionId) {
+      setSelectedDivisionId(null);
+      return;
+    }
+
+    const found = (selectedClienteNode.division || []).find((d) => d.id === marcaDivisionId) ?? null;
+    if (!found) {
+      setSelectedDivisionId(null);
+      return;
+    }
+
+    // Set (y bloquear) la división
+    setSelectedDivisionId(found.id);
+  }, [selectedClienteNode, marcaDivisionId, editingRecord]);
+
+  // Cuando la división (auto) cambia, validar/limpiar selecciones inferiores si ya no pertenecen
+  useEffect(() => {
+    if (!selectedDivisionNode) {
+      setSelectedContratoId(null);
+      setSelectedSucursalId(null);
+      setSelectedPuestoId(null);
+      return;
+    }
+    if (selectedContratoId !== null) {
+      const exists = (selectedDivisionNode.contratos || []).some((c) => c.id === selectedContratoId);
+      if (!exists) setSelectedContratoId(null);
+    }
+  }, [selectedDivisionNode]);
+
+  useEffect(() => {
+    if (!selectedContratoNode) {
+      setSelectedSucursalId(null);
+      setSelectedPuestoId(null);
+      return;
+    }
+    if (selectedSucursalId !== null) {
+      const exists = (selectedContratoNode.sucursales || []).some((s) => s.id === selectedSucursalId);
+      if (!exists) setSelectedSucursalId(null);
+    }
+  }, [selectedContratoNode]);
+
+  useEffect(() => {
+    if (!selectedSucursalNode) {
+      setSelectedPuestoId(null);
+      return;
+    }
+    if (selectedPuestoId !== null) {
+      const exists = (selectedSucursalNode.puestos || []).some((p) => p.id === selectedPuestoId);
+      if (!exists) setSelectedPuestoId(null);
+    }
+  }, [selectedSucursalNode]);
+
+  const empresaOptions = useMemo(() => structure.map((e) => ({ id: e.id, nombre: e.nombre })), [structure]);
+  const clienteOptions = useMemo(() => (selectedEmpresaNode?.clientes || []).map((c) => ({ id: c.id, nombre: c.nombre })), [selectedEmpresaNode]);
+  const divisionOptions = useMemo(() => (selectedClienteNode?.division || []).map((d) => ({ id: d.id, nombre: d.nombre })), [selectedClienteNode]);
+  const contratoOptions = useMemo(() => (selectedDivisionNode?.contratos || []).map((c) => ({ id: c.id, nombre: c.nombre })), [selectedDivisionNode]);
+  const sucursalOptions = useMemo(() => (selectedContratoNode?.sucursales || []).map((s) => ({ id: s.id, nombre: s.nombre })), [selectedContratoNode]);
+  const puestoOptions = useMemo(() => (selectedSucursalNode?.puestos || []).map((p) => ({ id: p.id, nombre: p.nombre })), [selectedSucursalNode]);
+
+  const isSeguridadDivision = selectedDivisionId === 4;
+
+  // Actividades: cargar predefinidas según división cuando se inicia la creación (o si cambia cliente/división durante creación)
+  useEffect(() => {
+    if (!isCreating || editingRecord) return;
+    setActividades(buildActividadesForDivision(selectedDivisionId));
+  }, [isCreating, editingRecord, selectedDivisionId]);
+
+  // Inventario: si no es Seguridad, asegurar [] y ocultar sección
+  useEffect(() => {
+    if (!isCreating && !editingRecord) return;
+    if (!isSeguridadDivision) {
+      setInventario([]);
+      setExpandedInventarioIndices([]);
+    } else {
+      // Cargar catálogo de artículos solo cuando aplica
+      loadArticulosCatalog();
+    }
+  }, [isSeguridadDivision, isCreating, editingRecord, loadArticulosCatalog]);
+
   const resetForm = () => {
-    setCliente('');
-    setNumeroCorpo('');
-    setNumeroPuesto('');
     setFechaRealizado(new Date());
-    setNombreCorpo('');
-    setNombrePuesto('');
-    setTipo([]);
-    // Cargar actividades predefinidas por defecto
-    const actividadesPredefinidas: Actividad[] = ACTIVIDADES_PREDEFINIDAS.map(actividad => ({
-      ok_na: false,
-      actividad: actividad,
-      observaciones: '',
-      representante_cliente: '',
-      representante_empresa_saliente: '',
-    }));
-    setActividades(actividadesPredefinidas);
-    setExpandedActividadIndices(actividadesPredefinidas.map((_, i) => i));
-    setInventario([]);
-    setFotos([]);
-    setOtrasObservaciones('');
+    setTipo('Apertura');
     setNombreRepresentanteCliente('');
-    setFirmaCliente(null);
+    setNombreRepresentanteEmpresaEntrante('');
+    setNombreRepresentanteEmpresaSaliente('');
+    setActividades(buildActividadesForDivision(selectedDivisionId));
+    setInventario([]);
     setExpandedInventarioIndices([]);
+    setImagenesLocal([]);
+    setImagenesRemote([]);
+    setDeletedRemoteImageIds([]);
+    setOtrasObservaciones('');
+    setFirmaRepresentanteCliente(null);
+    setFirmaRepresentanteEmpresaEntrante(null);
+    setFirmaRepresentanteEmpresaSaliente(null);
+    setFirmaResponsable('');
   };
 
   const startCreating = () => {
@@ -334,80 +702,58 @@ export default function OpeningClosingPositionScreen() {
 
   const startEditing = (record: OpeningClosingPosition) => {
     setIsCreating(false);
-    let actividadesArray: Actividad[] = [];
+    let actividadesArray: ActividadItem[] = [];
     let inventarioArray: InventarioItem[] = [];
-    let fotosArray: string[] = [];
 
-    if (record.actividades) {
-      try {
-        actividadesArray = JSON.parse(record.actividades);
-        if (!Array.isArray(actividadesArray)) actividadesArray = [];
-      } catch (e) {
-        actividadesArray = [];
-      }
+    try {
+      const parsed = JSON.parse(record.actividades || '[]');
+      if (Array.isArray(parsed)) actividadesArray = parsed;
+    } catch {
+      actividadesArray = [];
     }
 
-    if (record.inventario) {
-      try {
-        inventarioArray = JSON.parse(record.inventario);
-        if (!Array.isArray(inventarioArray)) inventarioArray = [];
-      } catch (e) {
-        inventarioArray = [];
-      }
+    try {
+      const parsed = JSON.parse(record.inventario || '[]');
+      if (Array.isArray(parsed)) inventarioArray = parsed;
+    } catch {
+      inventarioArray = [];
     }
 
-    if (record.fotos) {
-      try {
-        fotosArray = JSON.parse(record.fotos);
-        if (!Array.isArray(fotosArray)) fotosArray = [];
-      } catch (e) {
-        fotosArray = [];
-      }
-    }
+    setEditingRecord({ id: record.id, id_local: record.id_local });
 
-    let tipoArray: string[] = [];
-    if (record.tipo) {
-      tipoArray = record.tipo.split(',').filter(t => t.trim() !== '');
-    }
+    // Intentar setear el árbol desde cliente/división/contrato/sucursal/puesto
+    const empresaFound = structure.find((e) => (e.clientes || []).some((c) => c.id === record.cliente_id)) ?? null;
+    if (empresaFound) setSelectedEmpresaId(empresaFound.id);
+    setSelectedClienteId(record.cliente_id);
+    setSelectedDivisionId(record.division_id);
+    setSelectedSucursalId(record.corpo_id);
+    setSelectedPuestoId(record.puesto_id);
 
-    setEditingRecord({
-      id: record.id,
-      id_local: record.id_local,
-      cliente: record.cliente || '',
-      numero_corpo: record.numero_corpo || '',
-      numero_puesto: record.numero_puesto || '',
-      fecha_realizado: record.fecha_realizado || '',
-      nombre_corpo: record.nombre_corpo || '',
-      nombre_puesto: record.nombre_puesto || '',
-      tipo: tipoArray,
-      actividades: actividadesArray,
-      inventario: inventarioArray,
-      fotos: fotosArray,
-      otras_observaciones: record.otras_observaciones || '',
-      nombre_representante_cliente: record.nombre_representante_cliente || '',
-      firma_cliente: record.firma_cliente || '',
-    });
+    // Contrato: buscar el contrato que contiene la sucursal seleccionada
+    const clienteNode = empresaFound?.clientes?.find((c) => c.id === record.cliente_id);
+    const divisionNode = clienteNode?.division?.find((d) => d.id === record.division_id);
+    const contratoFound =
+      divisionNode?.contratos?.find((ct) => (ct.sucursales || []).some((s) => s.id === record.corpo_id)) ?? null;
+    if (contratoFound) setSelectedContratoId(contratoFound.id);
 
-    setCliente(record.cliente || '');
-    setNumeroCorpo(record.numero_corpo || '');
-    setNumeroPuesto(record.numero_puesto || '');
-    if (record.fecha_realizado) {
-      const dateParts = record.fecha_realizado.split('/');
-      if (dateParts.length === 3) {
-        setFechaRealizado(new Date(parseInt(dateParts[2]), parseInt(dateParts[1]) - 1, parseInt(dateParts[0])));
-      }
-    }
-    setNombreCorpo(record.nombre_corpo || '');
-    setNombrePuesto(record.nombre_puesto || '');
-    setTipo(tipoArray);
+    setFechaRealizado(record.fecha ? new Date(String(record.fecha)) : new Date());
+    setTipo((record.tipo === 'Cierre' ? 'Cierre' : 'Apertura'));
+    setNombreRepresentanteCliente(record.nombre_representante_cliente || '');
+    setNombreRepresentanteEmpresaEntrante(record.nombre_representante_empresa_entrante || '');
+    setNombreRepresentanteEmpresaSaliente(record.nombre_representante_empresa_saliente || '');
     setActividades(actividadesArray);
     setInventario(inventarioArray);
-    setFotos(fotosArray);
-    setOtrasObservaciones(record.otras_observaciones || '');
-    setNombreRepresentanteCliente(record.nombre_representante_cliente || '');
-    setFirmaCliente(formatSignatureForDisplay(record.firma_cliente));
-    setExpandedActividadIndices(actividadesArray.map((_, i) => i));
     setExpandedInventarioIndices(inventarioArray.map((_, i) => i));
+
+    setImagenesRemote(record.images || []);
+    setImagenesLocal(record.images_local || []);
+    setDeletedRemoteImageIds([]);
+
+    setOtrasObservaciones(record.otras_observaciones || '');
+    setFirmaRepresentanteCliente(formatSignatureForDisplay(record.firma_representante_cliente));
+    setFirmaRepresentanteEmpresaEntrante(formatSignatureForDisplay(record.firma_representante_empresa_entrante));
+    setFirmaRepresentanteEmpresaSaliente(formatSignatureForDisplay(record.firma_representante_empresa_saliente));
+    setFirmaResponsable(record.firma_responsable || '');
   };
 
   const cancelEditing = () => {
@@ -424,63 +770,19 @@ export default function OpeningClosingPositionScreen() {
     }
   };
 
-  const toggleTipo = (tipoValue: string) => {
-    setTipo(prev => 
-      prev.includes(tipoValue) 
-        ? prev.filter(t => t !== tipoValue)
-        : [...prev, tipoValue]
-    );
+  const setActividadRespuesta = (index: number, value: ActividadRespuesta) => {
+    setActividades((prev) => prev.map((a, i) => (i === index ? { ...a, respuesta: value } : a)));
   };
 
-  const addActividad = () => {
-    const newActividad: Actividad = {
-      ok_na: false,
-      actividad: '',
-      observaciones: '',
-      representante_cliente: '',
-      representante_empresa_saliente: '',
-    };
-    setActividades([...actividades, newActividad]);
-    setExpandedActividadIndices([...expandedActividadIndices, actividades.length]);
-  };
-
-  const updateActividad = (index: number, field: keyof Actividad, value: string | boolean) => {
-    const newActividades = [...actividades];
-    newActividades[index] = {
-      ...newActividades[index],
-      [field]: value,
-    };
-    setActividades(newActividades);
-  };
-
-  const removeActividad = (index: number) => {
-    Alert.alert(
-      'Confirmar',
-      '¿Estás seguro de que deseas eliminar esta actividad?',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Eliminar',
-          style: 'destructive',
-          onPress: () => {
-            setActividades(actividades.filter((_, i) => i !== index));
-            setExpandedActividadIndices(expandedActividadIndices.filter(i => i !== index).map(i => i > index ? i - 1 : i));
-          },
-        },
-      ]
-    );
-  };
-
-  const toggleActividadExpansion = (index: number) => {
-    setExpandedActividadIndices(prev =>
-      prev.includes(index) ? prev.filter(i => i !== index) : [...prev, index]
-    );
+  const setActividadObservaciones = (index: number, text: string) => {
+    setActividades((prev) => prev.map((a, i) => (i === index ? { ...a, observaciones: text } : a)));
   };
 
   const addInventario = () => {
     const newInventario: InventarioItem = {
       activos_equipos: '',
-      tipo: '',
+      tipo_id: null,
+      tipo_nombre: '',
       numero_activo: '',
       numero_serie: '',
       marca: '',
@@ -491,13 +793,25 @@ export default function OpeningClosingPositionScreen() {
     setExpandedInventarioIndices([...expandedInventarioIndices, inventario.length]);
   };
 
-  const updateInventario = (index: number, field: keyof InventarioItem, value: string) => {
-    const newInventario = [...inventario];
-    newInventario[index] = {
-      ...newInventario[index],
-      [field]: value,
+  const updateInventarioText = (
+    index: number,
+    field: 'activos_equipos' | 'numero_activo' | 'numero_serie' | 'marca' | 'modelo' | 'descripcion',
+    value: string
+  ) => {
+    const next = [...inventario];
+    next[index] = { ...next[index], [field]: value };
+    setInventario(next);
+  };
+
+  const updateInventarioTipo = (index: number, tipoId: number | null) => {
+    const selected = tipoId ? (articulosCatalog.find((a) => a.id === tipoId) ?? null) : null;
+    const next = [...inventario];
+    next[index] = {
+      ...next[index],
+      tipo_id: tipoId,
+      tipo_nombre: selected?.nombre || '',
     };
-    setInventario(newInventario);
+    setInventario(next);
   };
 
   const removeInventario = (index: number) => {
@@ -558,12 +872,18 @@ export default function OpeningClosingPositionScreen() {
         setIsCameraVisible(false);
         return;
       }
-
-      const base64Image = `data:image/jpeg;base64,${photo.base64}`;
       setIsCameraVisible(false);
       
       setTimeout(() => {
-        setFotos([...fotos, base64Image]);
+        setImagenesLocal((prev) => [
+          ...prev,
+          {
+            id_local: generateRandomId(),
+            base64: String(photo.base64),
+            extension: 'jpg',
+            original_name: `foto_${Date.now()}.jpg`,
+          },
+        ]);
       }, 100);
     } catch (error) {
       console.error('Error al capturar foto:', error);
@@ -572,26 +892,35 @@ export default function OpeningClosingPositionScreen() {
     }
   };
 
-  const removePhoto = (index: number) => {
-    Alert.alert(
-      'Confirmar',
-      '¿Estás seguro de que deseas eliminar esta foto?',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Eliminar',
-          style: 'destructive',
-          onPress: () => {
-            setFotos(fotos.filter((_, i) => i !== index));
-          },
-        },
-      ]
-    );
+  const removeLocalImage = (idLocal: string) => {
+    Alert.alert('Confirmar', '¿Eliminar esta foto?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Eliminar',
+        style: 'destructive',
+        onPress: () => setImagenesLocal((prev) => prev.filter((x) => x.id_local !== idLocal)),
+      },
+    ]);
   };
 
-  const openSignatureModal = () => {
+  const removeRemoteImage = (id: number) => {
+    Alert.alert('Confirmar', '¿Eliminar esta foto?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Eliminar',
+        style: 'destructive',
+        onPress: () => {
+          setImagenesRemote((prev) => prev.filter((x) => x.id !== id));
+          setDeletedRemoteImageIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+        },
+      },
+    ]);
+  };
+
+  const openSignatureModal = (target: 'cliente' | 'entrante' | 'saliente') => {
+    setSignatureTarget(target);
     setIsSignatureModalVisible(true);
-    setSignatureKey(prev => prev + 1);
+    setSignatureKey((prev) => prev + 1);
   };
 
   const closeSignatureModal = () => {
@@ -611,7 +940,9 @@ export default function OpeningClosingPositionScreen() {
       if (!signature.startsWith('data:')) {
         formattedSignature = `data:image/png;base64,${signature}`;
       }
-      setFirmaCliente(formattedSignature);
+      if (signatureTarget === 'cliente') setFirmaRepresentanteCliente(formattedSignature);
+      if (signatureTarget === 'entrante') setFirmaRepresentanteEmpresaEntrante(formattedSignature);
+      if (signatureTarget === 'saliente') setFirmaRepresentanteEmpresaSaliente(formattedSignature);
       setIsSignatureModalVisible(false);
     } else {
       Alert.alert('Error', 'No se pudo obtener la firma. Por favor, intente nuevamente.');
@@ -644,30 +975,59 @@ export default function OpeningClosingPositionScreen() {
           text: 'Confirmar',
           onPress: async () => {
             try {
-              // Preparar fotos para guardar (solo base64 sin prefijo)
-              const fotosToSave = fotos.map(foto => {
-                if (foto.startsWith('data:')) {
-                  const parts = foto.split(',');
-                  return parts.length > 1 ? parts[1] : foto;
-                }
-                return foto;
-              });
+              if (!selectedClienteId || !selectedSucursalId || !selectedPuestoId || !selectedDivisionId) {
+                Alert.alert('Error', 'Debes seleccionar Cliente / División / Contrato / Sucursal / Puesto');
+                return;
+              }
+              if (!nombreRepresentanteCliente.trim() || !nombreRepresentanteEmpresaEntrante.trim() || !nombreRepresentanteEmpresaSaliente.trim()) {
+                Alert.alert('Error', 'Debes completar los nombres de representantes');
+                return;
+              }
+              const fCliente = getBase64Only(firmaRepresentanteCliente);
+              const fEntrante = getBase64Only(firmaRepresentanteEmpresaEntrante);
+              const fSaliente = getBase64Only(firmaRepresentanteEmpresaSaliente);
+              if (!fCliente || !fEntrante || !fSaliente) {
+                Alert.alert('Error', 'Debes registrar las 3 firmas dibujadas');
+                return;
+              }
+              if (!firmaResponsable) {
+                Alert.alert('Error', 'Debes registrar la firma del responsable (QR)');
+                return;
+              }
 
-              const requestData = {
+              const actividadesStr = JSON.stringify(actividades || []);
+              const inventarioStr = JSON.stringify(isSeguridadDivision ? (inventario || []) : []);
+
+              const imagenesStr =
+                imagenesLocal.length > 0
+                  ? JSON.stringify(
+                      imagenesLocal.map((img) => ({
+                        file_base64: img.base64,
+                        extension: img.extension,
+                        original_name: img.original_name,
+                      }))
+                    )
+                  : null;
+
+              const requestData: any = {
                 marca_id: currentMarcaData.id,
-                cliente: cliente.trim() || null,
-                numero_corpo: numeroCorpo.trim() || null,
-                numero_puesto: numeroPuesto.trim() || null,
-                fecha_realizado: formatDate(fechaRealizado) || null,
-                nombre_corpo: nombreCorpo.trim() || null,
-                nombre_puesto: nombrePuesto.trim() || null,
-                tipo: tipo.length > 0 ? tipo.join(',') : null,
-                actividades: actividades.length > 0 ? JSON.stringify(actividades) : null,
-                inventario: inventario.length > 0 ? JSON.stringify(inventario) : null,
-                fotos: fotosToSave.length > 0 ? JSON.stringify(fotosToSave) : null,
+                cliente_id: selectedClienteId,
+                corpo_id: selectedSucursalId,
+                puesto_id: selectedPuestoId,
+                division_id: selectedDivisionId,
+                fecha: formatDate(fechaRealizado),
+                tipo,
+                nombre_representante_cliente: nombreRepresentanteCliente.trim(),
+                nombre_representante_empresa_entrante: nombreRepresentanteEmpresaEntrante.trim(),
+                nombre_representante_empresa_saliente: nombreRepresentanteEmpresaSaliente.trim(),
+                actividades: actividadesStr,
+                inventario: inventarioStr,
                 otras_observaciones: otrasObservaciones.trim() || null,
-                nombre_representante_cliente: nombreRepresentanteCliente.trim() || null,
-                firma_cliente: getBase64Only(firmaCliente),
+                firma_representante_cliente: fCliente,
+                firma_representante_empresa_entrante: fEntrante,
+                firma_representante_empresa_saliente: fSaliente,
+                firma_responsable: firmaResponsable,
+                ...(imagenesStr ? { imagenes: imagenesStr } : {}),
               };
 
               const isConnected = await getConnectionStatus();
@@ -704,21 +1064,29 @@ export default function OpeningClosingPositionScreen() {
                 const cache = cacheStr ? JSON.parse(cacheStr) : [];
 
                 const newRecordCache: OpeningClosingPosition = {
-                  id: '',
+                  id: null,
                   id_local: localId,
-                  cliente: cliente.trim() || null,
-                  numero_corpo: numeroCorpo.trim() || null,
-                  numero_puesto: numeroPuesto.trim() || null,
-                  fecha_realizado: formatDate(fechaRealizado) || null,
-                  nombre_corpo: nombreCorpo.trim() || null,
-                  nombre_puesto: nombrePuesto.trim() || null,
-                  tipo: tipo.length > 0 ? tipo.join(',') : null,
-                  actividades: actividades.length > 0 ? JSON.stringify(actividades) : null,
-                  inventario: inventario.length > 0 ? JSON.stringify(inventario) : null,
-                  fotos: fotosToSave.length > 0 ? JSON.stringify(fotosToSave) : null,
+                  cliente_id: selectedClienteId,
+                  corpo_id: selectedSucursalId,
+                  puesto_id: selectedPuestoId,
+                  division_id: selectedDivisionId,
+                  fecha: formatDate(fechaRealizado),
+                  tipo,
+                  nombre_representante_cliente: nombreRepresentanteCliente.trim(),
+                  nombre_representante_empresa_entrante: nombreRepresentanteEmpresaEntrante.trim(),
+                  nombre_representante_empresa_saliente: nombreRepresentanteEmpresaSaliente.trim(),
+                  actividades: actividadesStr,
+                  inventario: inventarioStr,
                   otras_observaciones: otrasObservaciones.trim() || null,
-                  nombre_representante_cliente: nombreRepresentanteCliente.trim() || null,
-                  firma_cliente: getBase64Only(firmaCliente),
+                  firma_representante_cliente: fCliente,
+                  firma_representante_empresa_entrante: fEntrante,
+                  firma_representante_empresa_saliente: fSaliente,
+                  firma_responsable: firmaResponsable,
+                  cliente_nombre: selectedClienteNode?.nombre || null,
+                  corpo_nombre: selectedSucursalNode?.nombre || null,
+                  puesto_nombre: (selectedSucursalNode?.puestos || []).find((p) => p.id === selectedPuestoId)?.nombre || null,
+                  division_nombre: selectedDivisionNode?.nombre || null,
+                  images_local: imagenesLocal,
                   created_at: new Date().toISOString(),
                   synced: false,
                 };
@@ -749,6 +1117,8 @@ export default function OpeningClosingPositionScreen() {
       return;
     }
 
+    const recordIdStr = typeof recordId === 'number' ? String(recordId) : recordId;
+
     Alert.alert(
       'Confirmar',
       '¿Estás seguro de que deseas actualizar esta apertura-cierre de puesto?',
@@ -758,36 +1128,66 @@ export default function OpeningClosingPositionScreen() {
           text: 'Confirmar',
           onPress: async () => {
             try {
-              // Preparar fotos para guardar (solo base64 sin prefijo)
-              const fotosToSave = fotos.map(foto => {
-                if (foto.startsWith('data:')) {
-                  const parts = foto.split(',');
-                  return parts.length > 1 ? parts[1] : foto;
-                }
-                return foto;
-              });
+              if (!selectedClienteId || !selectedSucursalId || !selectedPuestoId || !selectedDivisionId) {
+                Alert.alert('Error', 'Debes seleccionar Cliente / División / Contrato / Sucursal / Puesto');
+                return;
+              }
+              if (!nombreRepresentanteCliente.trim() || !nombreRepresentanteEmpresaEntrante.trim() || !nombreRepresentanteEmpresaSaliente.trim()) {
+                Alert.alert('Error', 'Debes completar los nombres de representantes');
+                return;
+              }
+              const fCliente = getBase64Only(firmaRepresentanteCliente);
+              const fEntrante = getBase64Only(firmaRepresentanteEmpresaEntrante);
+              const fSaliente = getBase64Only(firmaRepresentanteEmpresaSaliente);
+              if (!fCliente || !fEntrante || !fSaliente) {
+                Alert.alert('Error', 'Debes registrar las 3 firmas dibujadas');
+                return;
+              }
+              if (!firmaResponsable) {
+                Alert.alert('Error', 'Debes registrar la firma del responsable (QR)');
+                return;
+              }
 
-              const requestData = {
-                cliente: cliente.trim() || null,
-                numero_corpo: numeroCorpo.trim() || null,
-                numero_puesto: numeroPuesto.trim() || null,
-                fecha_realizado: formatDate(fechaRealizado) || null,
-                nombre_corpo: nombreCorpo.trim() || null,
-                nombre_puesto: nombrePuesto.trim() || null,
-                tipo: tipo.length > 0 ? tipo.join(',') : null,
-                actividades: actividades.length > 0 ? JSON.stringify(actividades) : null,
-                inventario: inventario.length > 0 ? JSON.stringify(inventario) : null,
-                fotos: fotosToSave.length > 0 ? JSON.stringify(fotosToSave) : null,
+              const actividadesStr = JSON.stringify(actividades || []);
+              const inventarioStr = JSON.stringify(isSeguridadDivision ? (inventario || []) : []);
+
+              const imagenesStr =
+                imagenesLocal.length > 0
+                  ? JSON.stringify(
+                      imagenesLocal.map((img) => ({
+                        file_base64: img.base64,
+                        extension: img.extension,
+                        original_name: img.original_name,
+                      }))
+                    )
+                  : null;
+
+              const requestData: any = {
+                cliente_id: selectedClienteId,
+                corpo_id: selectedSucursalId,
+                puesto_id: selectedPuestoId,
+                division_id: selectedDivisionId,
+                fecha: formatDate(fechaRealizado),
+                tipo,
+                nombre_representante_cliente: nombreRepresentanteCliente.trim(),
+                nombre_representante_empresa_entrante: nombreRepresentanteEmpresaEntrante.trim(),
+                nombre_representante_empresa_saliente: nombreRepresentanteEmpresaSaliente.trim(),
+                actividades: actividadesStr,
+                inventario: inventarioStr,
                 otras_observaciones: otrasObservaciones.trim() || null,
-                nombre_representante_cliente: nombreRepresentanteCliente.trim() || null,
-                firma_cliente: getBase64Only(firmaCliente),
+                firma_representante_cliente: fCliente,
+                firma_representante_empresa_entrante: fEntrante,
+                firma_representante_empresa_saliente: fSaliente,
+                firma_responsable: firmaResponsable,
+                ...(imagenesStr ? { imagenes: imagenesStr } : {}),
+                ...(deletedRemoteImageIds.length > 0 ? { delete_imagenes: JSON.stringify(deletedRemoteImageIds) } : {}),
               };
 
               const isConnected = await getConnectionStatus();
 
               if (isConnected) {
                 const result = await updateOpeningClosingPosition({
-                  id: recordId,
+                  id: recordIdStr,
                   requestData,
                   refreshAccessToken,
                   logout,
@@ -804,7 +1204,7 @@ export default function OpeningClosingPositionScreen() {
                 const actionsStr = await AsyncStorage.getItem('evaluations_actions');
                 const actions = actionsStr ? JSON.parse(actionsStr) : [];
                 actions.push({
-                  id: recordId,
+                  id: recordIdStr,
                   action: 'update',
                   type: 'opening_closing_position',
                   payload: requestData,
@@ -816,10 +1216,31 @@ export default function OpeningClosingPositionScreen() {
                 if (cacheStr) {
                   const cache = JSON.parse(cacheStr);
                   const updatedCache = cache.map((item: any) => {
-                    if ((item.id === recordId || item.id_local === recordId) && item.type === 'opening_closing_position') {
+                    if ((item.id === recordIdStr || String(item.id) === recordIdStr || item.id_local === recordIdStr) && item.type === 'opening_closing_position') {
                       return {
                         ...item,
-                        ...requestData,
+                        cliente_id: selectedClienteId,
+                        corpo_id: selectedSucursalId,
+                        puesto_id: selectedPuestoId,
+                        division_id: selectedDivisionId,
+                        fecha: formatDate(fechaRealizado),
+                        tipo,
+                        nombre_representante_cliente: nombreRepresentanteCliente.trim(),
+                        nombre_representante_empresa_entrante: nombreRepresentanteEmpresaEntrante.trim(),
+                        nombre_representante_empresa_saliente: nombreRepresentanteEmpresaSaliente.trim(),
+                        actividades: JSON.stringify(actividades || []),
+                        inventario: JSON.stringify(isSeguridadDivision ? (inventario || []) : []),
+                        otras_observaciones: otrasObservaciones.trim() || null,
+                        firma_representante_cliente: getBase64Only(firmaRepresentanteCliente),
+                        firma_representante_empresa_entrante: getBase64Only(firmaRepresentanteEmpresaEntrante),
+                        firma_representante_empresa_saliente: getBase64Only(firmaRepresentanteEmpresaSaliente),
+                        firma_responsable: firmaResponsable,
+                        cliente_nombre: selectedClienteNode?.nombre || item.cliente_nombre || null,
+                        corpo_nombre: selectedSucursalNode?.nombre || item.corpo_nombre || null,
+                        puesto_nombre: (selectedSucursalNode?.puestos || []).find((p) => p.id === selectedPuestoId)?.nombre || item.puesto_nombre || null,
+                        division_nombre: selectedDivisionNode?.nombre || item.division_nombre || null,
+                        images_local: imagenesLocal,
+                        images: imagenesRemote,
                         synced: false,
                       };
                     }
@@ -849,6 +1270,8 @@ export default function OpeningClosingPositionScreen() {
       return;
     }
 
+    const recordIdStr = typeof recordId === 'number' ? String(recordId) : recordId;
+
     Alert.alert(
       'Confirmar',
       '¿Estás seguro de que deseas eliminar esta apertura-cierre de puesto?',
@@ -862,7 +1285,7 @@ export default function OpeningClosingPositionScreen() {
 
               if (isConnected) {
                 const result = await deleteOpeningClosingPosition({
-                  id: recordId,
+                  id: recordIdStr,
                   refreshAccessToken,
                   logout,
                 });
@@ -877,7 +1300,7 @@ export default function OpeningClosingPositionScreen() {
                 const actionsStr = await AsyncStorage.getItem('evaluations_actions');
                 const actions = actionsStr ? JSON.parse(actionsStr) : [];
                 actions.push({
-                  id: recordId,
+                  id: recordIdStr,
                   action: 'delete',
                   type: 'opening_closing_position',
                   payload: {},
@@ -888,7 +1311,7 @@ export default function OpeningClosingPositionScreen() {
                 const cacheStr = await AsyncStorage.getItem('evaluations_cache');
                 if (cacheStr) {
                   const cache = JSON.parse(cacheStr);
-                  const updatedCache = cache.filter((item: any) => !((item.id === recordId || item.id_local === recordId) && item.type === 'opening_closing_position'));
+                  const updatedCache = cache.filter((item: any) => !((item.id === recordIdStr || String(item.id) === recordIdStr || item.id_local === recordIdStr) && item.type === 'opening_closing_position'));
                   await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
                 }
 
@@ -958,44 +1381,214 @@ export default function OpeningClosingPositionScreen() {
     return (
       <ThemedView style={styles.listContainer}>
         {positions.map((record) => {
-          let actividadesArray: Actividad[] = [];
-          let inventarioArray: InventarioItem[] = [];
-          if (record.actividades) {
-            try {
-              actividadesArray = JSON.parse(record.actividades);
-            } catch (e) {
-              actividadesArray = [];
-            }
+          const itemKey = String((record.id ?? record.id_local) || '');
+          let actividadesArr: any[] = [];
+          let inventarioArr: any[] = [];
+          const imagesRemoteArr = Array.isArray((record as any).images) ? ((record as any).images as any[]) : [];
+          const imagesLocalArr = Array.isArray((record as any).images_local) ? ((record as any).images_local as any[]) : [];
+          try {
+            const parsed = JSON.parse(record.actividades || '[]');
+            if (Array.isArray(parsed)) actividadesArr = parsed;
+          } catch {
+            actividadesArr = [];
           }
-          if (record.inventario) {
-            try {
-              inventarioArray = JSON.parse(record.inventario);
-            } catch (e) {
-              inventarioArray = [];
-            }
+          try {
+            const parsed = JSON.parse(record.inventario || '[]');
+            if (Array.isArray(parsed)) inventarioArr = parsed;
+          } catch {
+            inventarioArr = [];
           }
+
+          const isActivitiesOpen = !!expandedActivitiesById[itemKey];
+          const isImagesOpen = !!expandedImagesById[itemKey];
+          const isInventoryOpen = !!expandedInventoryById[itemKey];
 
           return (
             <ThemedView key={record.id || record.id_local} style={styles.listItem}>
               <ThemedView style={styles.listItemHeader}>
                 <ThemedView style={styles.listItemContent}>
                   <ThemedText style={styles.listItemTitle}>
-                    Apertura-Cierre de Puesto
+                   {record.puesto_nombre || 'N/A'}
                   </ThemedText>
                   <ThemedText style={styles.listItemSubtitle}>
-                    Cliente: {record.cliente || 'N/A'} | Fecha: {record.fecha_realizado || 'N/A'} | Tipo: {record.tipo || 'N/A'}
+                  Tipo: { record.tipo || 'N/A'}
                   </ThemedText>
-                </ThemedView>
-                <ThemedView style={styles.listItemActions}>
-                  {!record.synced && (
-                    <ThemedView style={styles.offlineBadge}>
-                      <ThemedText style={styles.offlineBadgeText}>Offline</ThemedText>
-                    </ThemedView>
-                  )}
+                  <ThemedText style={styles.listItemSubtitle}>
+                    División: {record.division_nombre || 'N/A'}
+                  </ThemedText>
+                  <ThemedText style={styles.listItemSubtitle}>
+                    Cliente: {record.cliente_nombre || 'N/A'}
+                  </ThemedText>
+                  <ThemedText style={styles.listItemSubtitle}>
+                    Corpo: {record.corpo_nombre || 'N/A'}
+                  </ThemedText>
+                  <ThemedText style={styles.listItemSubtitle}>
+                    Fecha: {record.fecha ? String(record.fecha).split('T')[0] : 'N/A'}
+                  </ThemedText>
                 </ThemedView>
               </ThemedView>
 
               <ThemedView style={styles.listItemDetails}>
+                {!!itemKey && actividadesArr.length > 0 && (
+                  <>
+                    <TouchableOpacity
+                      style={styles.collapseButton}
+                      onPress={() =>
+                        setExpandedActivitiesById((prev) => ({ ...prev, [itemKey]: !prev[itemKey] }))
+                      }
+                      activeOpacity={0.8}
+                    >
+                      <ThemedText style={styles.collapseButtonText}>
+                        Actividades ({actividadesArr.length})
+                      </ThemedText>
+                      <Ionicons
+                        name={isActivitiesOpen ? 'chevron-up' : 'chevron-down'}
+                        size={18}
+                        color="#007AFF"
+                      />
+                    </TouchableOpacity>
+                    {isActivitiesOpen && (
+                      <ThemedView style={styles.collapsableContent}>
+                        {actividadesArr.map((a: any, idx: number) => (
+                          <ThemedView key={`${itemKey}-act-${idx}`} style={styles.detailBlock}>
+                            <ThemedText style={styles.detailLine}>
+                              <ThemedText style={styles.detailLabel}>{idx + 1}. </ThemedText>
+                              <ThemedText style={styles.detailValue}>{String(a?.pregunta || '').trim() || '—'}</ThemedText>
+                            </ThemedText>
+                            <ThemedText style={styles.detailLine}>
+                              <ThemedText style={styles.detailLabel}>Respuesta: </ThemedText>
+                              <ThemedText style={styles.detailValue}>{String(a?.respuesta || '').trim() || '—'}</ThemedText>
+                            </ThemedText>
+                            {String(a?.observaciones || '').trim().length > 0 && (
+                              <ThemedText style={styles.detailLine}>
+                                <ThemedText style={styles.detailLabel}>Obs: </ThemedText>
+                                <ThemedText style={styles.detailValue}>{String(a?.observaciones).trim()}</ThemedText>
+                              </ThemedText>
+                            )}
+                          </ThemedView>
+                        ))}
+                      </ThemedView>
+                    )}
+                  </>
+                )}
+
+                {!!itemKey && (imagesRemoteArr.length > 0 || imagesLocalArr.length > 0) && (
+                  <>
+                    <TouchableOpacity
+                      style={styles.collapseButton}
+                      onPress={() =>
+                        setExpandedImagesById((prev) => ({ ...prev, [itemKey]: !prev[itemKey] }))
+                      }
+                      activeOpacity={0.8}
+                    >
+                      <ThemedText style={styles.collapseButtonText}>
+                        Imágenes ({imagesRemoteArr.length + imagesLocalArr.length})
+                      </ThemedText>
+                      <Ionicons
+                        name={isImagesOpen ? 'chevron-up' : 'chevron-down'}
+                        size={18}
+                        color="#007AFF"
+                      />
+                    </TouchableOpacity>
+                    {isImagesOpen && (
+                      <ThemedView style={styles.collapsableContent}>
+                        {imagesRemoteArr.map((img: any) => (
+                          <ThemedView key={`${itemKey}-img-r-${img?.id ?? img?.name ?? Math.random()}`} style={styles.photoItemMini}>
+                            <Image
+                              source={{ uri: String(img?.url || '') }}
+                              style={styles.photoPreviewMini}
+                              resizeMode="contain"
+                            />
+                            {!!String(img?.original_name || '').trim() && (
+                              <ThemedText style={styles.photoCaption}>{String(img.original_name).trim()}</ThemedText>
+                            )}
+                          </ThemedView>
+                        ))}
+                        {imagesLocalArr.map((img: any) => {
+                          const extRaw = String(img?.extension || 'jpg').replace('.', '').toLowerCase();
+                          const mime = extRaw === 'jpg' ? 'jpeg' : extRaw;
+                          const uri = `data:image/${mime};base64,${String(img?.base64 || '')}`;
+                          return (
+                            <ThemedView key={`${itemKey}-img-l-${img?.id_local ?? img?.original_name ?? Math.random()}`} style={styles.photoItemMini}>
+                              <Image source={{ uri }} style={styles.photoPreviewMini} resizeMode="contain" />
+                              {!!String(img?.original_name || '').trim() && (
+                                <ThemedText style={styles.photoCaption}>{String(img.original_name).trim()}</ThemedText>
+                              )}
+                            </ThemedView>
+                          );
+                        })}
+                      </ThemedView>
+                    )}
+                  </>
+                )}
+
+                {!!itemKey && inventarioArr.length > 0 && (
+                  <>
+                    <TouchableOpacity
+                      style={styles.collapseButton}
+                      onPress={() =>
+                        setExpandedInventoryById((prev) => ({ ...prev, [itemKey]: !prev[itemKey] }))
+                      }
+                      activeOpacity={0.8}
+                    >
+                      <ThemedText style={styles.collapseButtonText}>
+                        Inventario ({inventarioArr.length})
+                      </ThemedText>
+                      <Ionicons
+                        name={isInventoryOpen ? 'chevron-up' : 'chevron-down'}
+                        size={18}
+                        color="#007AFF"
+                      />
+                    </TouchableOpacity>
+                    {isInventoryOpen && (
+                      <ThemedView style={styles.collapsableContent}>
+                        {inventarioArr.map((inv: any, idx: number) => (
+                          <ThemedView key={`${itemKey}-inv-${idx}`} style={styles.detailBlock}>
+                            <ThemedText style={styles.detailLine}>
+                              <ThemedText style={styles.detailLabel}>Item {idx + 1}: </ThemedText>
+                              <ThemedText style={styles.detailValue}>{String(inv?.activos_equipos || '').trim() || '—'}</ThemedText>
+                            </ThemedText>
+                            <ThemedText style={styles.detailLine}>
+                              <ThemedText style={styles.detailLabel}>Tipo: </ThemedText>
+                              <ThemedText style={styles.detailValue}>{String(inv?.tipo_nombre || '').trim() || '—'}</ThemedText>
+                            </ThemedText>
+                            {!!String(inv?.numero_activo || '').trim() && (
+                              <ThemedText style={styles.detailLine}>
+                                <ThemedText style={styles.detailLabel}># Activo: </ThemedText>
+                                <ThemedText style={styles.detailValue}>{String(inv?.numero_activo).trim()}</ThemedText>
+                              </ThemedText>
+                            )}
+                            {!!String(inv?.numero_serie || '').trim() && (
+                              <ThemedText style={styles.detailLine}>
+                                <ThemedText style={styles.detailLabel}>Serie: </ThemedText>
+                                <ThemedText style={styles.detailValue}>{String(inv?.numero_serie).trim()}</ThemedText>
+                              </ThemedText>
+                            )}
+                            {!!String(inv?.marca || '').trim() && (
+                              <ThemedText style={styles.detailLine}>
+                                <ThemedText style={styles.detailLabel}>Marca: </ThemedText>
+                                <ThemedText style={styles.detailValue}>{String(inv?.marca).trim()}</ThemedText>
+                              </ThemedText>
+                            )}
+                            {!!String(inv?.modelo || '').trim() && (
+                              <ThemedText style={styles.detailLine}>
+                                <ThemedText style={styles.detailLabel}>Modelo: </ThemedText>
+                                <ThemedText style={styles.detailValue}>{String(inv?.modelo).trim()}</ThemedText>
+                              </ThemedText>
+                            )}
+                            {!!String(inv?.descripcion || '').trim() && (
+                              <ThemedText style={styles.detailLine}>
+                                <ThemedText style={styles.detailLabel}>Desc: </ThemedText>
+                                <ThemedText style={styles.detailValue}>{String(inv?.descripcion).trim()}</ThemedText>
+                              </ThemedText>
+                            )}
+                          </ThemedView>
+                        ))}
+                      </ThemedView>
+                    )}
+                  </>
+                )}
+
                 <ThemedView style={styles.listItemButtons}>
                   <TouchableOpacity
                     style={[styles.listItemButton, styles.editButton]}
@@ -1020,110 +1613,50 @@ export default function OpeningClosingPositionScreen() {
     );
   };
 
-  const renderActividad = (actividad: Actividad, index: number) => {
-    const isExpanded = expandedActividadIndices.includes(index);
+  const renderActividad = (actividad: ActividadItem, index: number) => {
+    const selected = actividad.respuesta;
+
+    const Radio = ({ label, value }: { label: string; value: ActividadRespuesta }) => {
+      const isOn = selected === value;
+      return (
+        <TouchableOpacity
+          style={styles.radioOption}
+          onPress={() => setActividadRespuesta(index, value)}
+        >
+          <Ionicons
+            name={isOn ? 'radio-button-on' : 'radio-button-off'}
+            size={18}
+            color={isOn ? '#007AFF' : '#999'}
+          />
+          <ThemedText style={styles.radioLabel}>{label}</ThemedText>
+        </TouchableOpacity>
+      );
+    };
 
     return (
       <ThemedView key={index} style={styles.actividadItem}>
-        <TouchableOpacity
-          style={styles.actividadHeader}
-          onPress={() => toggleActividadExpansion(index)}
-        >
-          <ThemedView style={styles.actividadHeaderContent}>
-            <ThemedText style={styles.actividadHeaderText}>
-              Actividad {index + 1}
-            </ThemedText>
-          </ThemedView>
-          <ThemedView style={styles.actividadHeaderActions}>
-            <TouchableOpacity
-              onPress={(e) => {
-                e.stopPropagation();
-                removeActividad(index);
-              }}
-              style={styles.removeActividadButton}
-            >
-              <Ionicons name="trash" size={20} color="#FF3B30" />
-            </TouchableOpacity>
-            <Ionicons
-              name={isExpanded ? 'chevron-up' : 'chevron-down'}
-              size={24}
-              color="#000000"
-            />
-          </ThemedView>
-        </TouchableOpacity>
+        <ThemedText style={styles.actividadHeaderText}>
+          {index + 1}. {actividad.pregunta}
+        </ThemedText>
 
-        {isExpanded && (
-          <ThemedView style={styles.actividadContent}>
-            {/* OK o NA checkbox */}
-            <ThemedView style={styles.formGroup}>
-              <TouchableOpacity
-                style={styles.checkboxContainer}
-                onPress={() => updateActividad(index, 'ok_na', !actividad.ok_na)}
-              >
-                <View style={styles.checkbox}>
-                  {actividad.ok_na && (
-                    <Ionicons name="checkmark" size={20} color="#FF9500" />
-                  )}
-                </View>
-                <ThemedText style={styles.checkboxLabel}>OK o NA</ThemedText>
-              </TouchableOpacity>
-            </ThemedView>
+        <ThemedView style={styles.radioRow}>
+          <Radio label="Ok" value="Ok" />
+          <Radio label="N/A" value="N/A" />
+        </ThemedView>
 
-            {/* Actividad */}
-            <ThemedView style={styles.formGroup}>
-              <ThemedText style={styles.formLabel}>Actividad</ThemedText>
-              <TextInput
-                style={[styles.formInput, styles.textArea]}
-                placeholder="Actividad"
-                placeholderTextColor="#999"
-                multiline
-                numberOfLines={3}
-                textAlignVertical="top"
-                value={actividad.actividad}
-                onChangeText={(text) => updateActividad(index, 'actividad', text)}
-              />
-            </ThemedView>
-
-            {/* Observaciones */}
-            <ThemedView style={styles.formGroup}>
-              <ThemedText style={styles.formLabel}>Observaciones</ThemedText>
-              <TextInput
-                style={[styles.formInput, styles.textArea]}
-                placeholder="Observaciones"
-                placeholderTextColor="#999"
-                multiline
-                numberOfLines={4}
-                textAlignVertical="top"
-                value={actividad.observaciones}
-                onChangeText={(text) => updateActividad(index, 'observaciones', text)}
-              />
-            </ThemedView>
-
-            {/* Representante del cliente */}
-            <ThemedView style={styles.formGroup}>
-              <ThemedText style={styles.formLabel}>Representante del cliente</ThemedText>
-              <TextInput
-                style={styles.formInput}
-                placeholder="Representante del cliente"
-                placeholderTextColor="#999"
-                value={actividad.representante_cliente}
-                onChangeText={(text) => updateActividad(index, 'representante_cliente', text)}
-              />
-            </ThemedView>
-
-            {/* Representante de empresa saliente */}
-            <ThemedView style={styles.formGroup}>
-              <ThemedText style={styles.formLabel}>Representante de empresa saliente</ThemedText>
-              <TextInput
-                style={styles.formInput}
-                placeholder="Representante de empresa saliente"
-                placeholderTextColor="#999"
-                value={actividad.representante_empresa_saliente}
-                onChangeText={(text) => updateActividad(index, 'representante_empresa_saliente', text)}
-              />
-            </ThemedView>
-          </ThemedView>
-        )}
+        <ThemedView style={styles.formGroup}>
+          <ThemedText style={styles.formLabel}>Observaciones (opcional)</ThemedText>
+          <TextInput
+            style={[styles.formInput, styles.textArea]}
+            placeholder="Observaciones"
+            placeholderTextColor="#999"
+            multiline
+            numberOfLines={3}
+            textAlignVertical="top"
+            value={actividad.observaciones}
+            onChangeText={(t) => setActividadObservaciones(index, t)}
+          />
+        </ThemedView>
       </ThemedView>
     );
   };
@@ -1170,20 +1703,29 @@ export default function OpeningClosingPositionScreen() {
                 placeholder="Activos o equipos"
                 placeholderTextColor="#999"
                 value={item.activos_equipos}
-                onChangeText={(text) => updateInventario(index, 'activos_equipos', text)}
+                onChangeText={(text) => updateInventarioText(index, 'activos_equipos', text)}
               />
             </ThemedView>
 
             {/* Tipo */}
             <ThemedView style={styles.formGroup}>
               <ThemedText style={styles.formLabel}>Tipo</ThemedText>
-              <TextInput
-                style={styles.formInput}
-                placeholder="Tipo"
-                placeholderTextColor="#999"
-                value={item.tipo}
-                onChangeText={(text) => updateInventario(index, 'tipo', text)}
-              />
+              <ThemedView style={styles.pickerWrapper}>
+                <Picker
+                  selectedValue={item.tipo_id ?? 0}
+                  onValueChange={(val) => updateInventarioTipo(index, val === 0 ? null : Number(val))}
+                  enabled={!isArticulosLoading && articulosCatalog.length > 0}
+                  style={styles.picker}
+                >
+                  <Picker.Item
+                    label={isArticulosLoading ? 'Cargando tipos...' : 'Seleccione tipo...'}
+                    value={0}
+                  />
+                  {articulosCatalog.map((a) => (
+                    <Picker.Item key={a.id} label={a.nombre} value={a.id} />
+                  ))}
+                </Picker>
+              </ThemedView>
             </ThemedView>
 
             {/* # de Activo */}
@@ -1194,7 +1736,7 @@ export default function OpeningClosingPositionScreen() {
                 placeholder="# de Activo"
                 placeholderTextColor="#999"
                 value={item.numero_activo}
-                onChangeText={(text) => updateInventario(index, 'numero_activo', text)}
+                onChangeText={(text) => updateInventarioText(index, 'numero_activo', text)}
               />
             </ThemedView>
 
@@ -1206,7 +1748,7 @@ export default function OpeningClosingPositionScreen() {
                 placeholder="Número de Serie"
                 placeholderTextColor="#999"
                 value={item.numero_serie}
-                onChangeText={(text) => updateInventario(index, 'numero_serie', text)}
+                onChangeText={(text) => updateInventarioText(index, 'numero_serie', text)}
               />
             </ThemedView>
 
@@ -1218,7 +1760,7 @@ export default function OpeningClosingPositionScreen() {
                 placeholder="Marca"
                 placeholderTextColor="#999"
                 value={item.marca}
-                onChangeText={(text) => updateInventario(index, 'marca', text)}
+                onChangeText={(text) => updateInventarioText(index, 'marca', text)}
               />
             </ThemedView>
 
@@ -1230,7 +1772,7 @@ export default function OpeningClosingPositionScreen() {
                 placeholder="Modelo"
                 placeholderTextColor="#999"
                 value={item.modelo}
-                onChangeText={(text) => updateInventario(index, 'modelo', text)}
+                onChangeText={(text) => updateInventarioText(index, 'modelo', text)}
               />
             </ThemedView>
 
@@ -1245,7 +1787,7 @@ export default function OpeningClosingPositionScreen() {
                 numberOfLines={3}
                 textAlignVertical="top"
                 value={item.descripcion}
-                onChangeText={(text) => updateInventario(index, 'descripcion', text)}
+                onChangeText={(text) => updateInventarioText(index, 'descripcion', text)}
               />
             </ThemedView>
           </ThemedView>
@@ -1263,9 +1805,14 @@ export default function OpeningClosingPositionScreen() {
         contentContainerStyle={styles.scrollContent}
       >
         <ThemedView style={styles.contentContainer}>
-          <ThemedText type="title" style={styles.screenTitle}>
-            {getActionIcon('position')} Apertura-Cierre de Puesto
-          </ThemedText>
+          <ThemedView style={styles.titleContainer}>
+            <ThemedText type="title" style={styles.title}>
+              {getActionIcon('position')} Apertura-Cierre de Puesto
+            </ThemedText>
+            <ThemedText style={styles.subtitle}>
+              Registra la apertura o cierre de un puesto, actividades, inventario y evidencias.
+            </ThemedText>
+          </ThemedView>
 
           {!hasCurrentMarca && (
             <ThemedView style={styles.noMarcaContainer}>
@@ -1278,42 +1825,177 @@ export default function OpeningClosingPositionScreen() {
 
           {isCreating || editingRecord ? (
             <ThemedView style={styles.formContainer}>
-              {/* Cliente */}
-              <ThemedView style={styles.formGroup}>
-                <ThemedText style={styles.formLabel}>Cliente</ThemedText>
-                <TextInput
-                  style={styles.formInput}
-                  placeholder="Cliente"
-                  placeholderTextColor="#999"
-                  value={cliente}
-                  onChangeText={setCliente}
-                />
-              </ThemedView>
+              {/* Estructura principal (árbol) */}
+              <ThemedView style={styles.sectionContainer}>
+                <ThemedView style={styles.sectionHeader}>
+                  <ThemedText style={styles.sectionTitle}>Estructura</ThemedText>
+                </ThemedView>
 
-              {/* Número de Corpo */}
-              <ThemedView style={styles.formGroup}>
-                <ThemedText style={styles.formLabel}>Número de Corpo</ThemedText>
-                <TextInput
-                  style={styles.formInput}
-                  placeholder="Número de Corpo"
-                  placeholderTextColor="#999"
-                  value={numeroCorpo}
-                  onChangeText={setNumeroCorpo}
-                  keyboardType="numeric"
-                />
-              </ThemedView>
+                {isStructureLoading ? (
+                  <ThemedView style={styles.loadingInline}>
+                    <ActivityIndicator size="small" color="#007AFF" />
+                    <ThemedText style={styles.loadingInlineText}>Cargando estructura...</ThemedText>
+                  </ThemedView>
+                ) : (
+                  <ThemedView style={styles.sectionBody}>
+                    <ThemedView style={styles.formGroup}>
+                      <ThemedText style={styles.formLabel}>Empresa</ThemedText>
+                      <ThemedView style={styles.pickerWrapper}>
+                        <Picker
+                          selectedValue={selectedEmpresaId ?? 0}
+                          onValueChange={(v) => {
+                            const next = Number(v) || null;
+                            setSelectedEmpresaId(next);
+                            setSelectedClienteId(null);
+                            setSelectedDivisionId(null);
+                            setSelectedContratoId(null);
+                            setSelectedSucursalId(null);
+                            setSelectedPuestoId(null);
+                          }}
+                          style={styles.picker}
+                        >
+                          <Picker.Item label="Seleccione empresa..." value={0} />
+                          {empresaOptions.map((e) => (
+                            <Picker.Item key={e.id} label={e.nombre} value={e.id} />
+                          ))}
+                        </Picker>
+                      </ThemedView>
+                    </ThemedView>
 
-              {/* Número de Puesto */}
-              <ThemedView style={styles.formGroup}>
-                <ThemedText style={styles.formLabel}>Número de Puesto</ThemedText>
-                <TextInput
-                  style={styles.formInput}
-                  placeholder="Número de Puesto"
-                  placeholderTextColor="#999"
-                  value={numeroPuesto}
-                  onChangeText={setNumeroPuesto}
-                  keyboardType="numeric"
-                />
+                    <ThemedView style={styles.formGroup}>
+                      <ThemedText style={styles.formLabel}>Cliente</ThemedText>
+                      <ThemedView style={styles.pickerWrapper}>
+                        <Picker
+                          selectedValue={selectedClienteId ?? 0}
+                          onValueChange={(v) => {
+                            const next = Number(v) || null;
+                            setSelectedClienteId(next);
+                            setSelectedContratoId(null);
+                            setSelectedSucursalId(null);
+                            setSelectedPuestoId(null);
+                          }}
+                          enabled={selectedEmpresaId !== null && clienteOptions.length > 0}
+                          style={styles.picker}
+                        >
+                          <Picker.Item
+                            label={selectedEmpresaId ? 'Seleccione cliente...' : 'Seleccione empresa primero'}
+                            value={0}
+                          />
+                          {clienteOptions.map((c) => (
+                            <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                          ))}
+                        </Picker>
+                      </ThemedView>
+                      {selectedEmpresaId !== null && clienteOptions.length === 0 && (
+                        <ThemedText style={styles.hintText}>No hay clientes disponibles para esta empresa.</ThemedText>
+                      )}
+                    </ThemedView>
+
+                    <ThemedView style={styles.formGroup}>
+                      <ThemedText style={styles.formLabel}>División (automática)</ThemedText>
+                      <ThemedView style={styles.pickerWrapper}>
+                        <Picker
+                          selectedValue={selectedDivisionId ?? 0}
+                          onValueChange={() => {}}
+                          enabled={false}
+                          style={styles.picker}
+                        >
+                          <Picker.Item
+                            label={
+                              selectedClienteId
+                                ? (selectedDivisionId ? (divisionOptions.find((d) => d.id === selectedDivisionId)?.nombre || 'División') : 'No disponible para su marca')
+                                : 'Seleccione cliente primero'
+                            }
+                            value={0}
+                          />
+                        </Picker>
+                      </ThemedView>
+                      {selectedClienteId && !selectedDivisionId && (
+                        <ThemedText style={styles.hintText}>
+                          La división de su marca no existe para el cliente seleccionado.
+                        </ThemedText>
+                      )}
+                    </ThemedView>
+
+                    <ThemedView style={styles.formGroup}>
+                      <ThemedText style={styles.formLabel}>Contrato</ThemedText>
+                      <ThemedView style={styles.pickerWrapper}>
+                        <Picker
+                          selectedValue={selectedContratoId ?? 0}
+                          onValueChange={(v) => {
+                            const next = Number(v) || null;
+                            setSelectedContratoId(next);
+                            setSelectedSucursalId(null);
+                            setSelectedPuestoId(null);
+                          }}
+                          enabled={selectedDivisionId !== null && contratoOptions.length > 0}
+                          style={styles.picker}
+                        >
+                          <Picker.Item
+                            label={selectedDivisionId ? 'Seleccione contrato...' : 'Seleccione cliente primero'}
+                            value={0}
+                          />
+                          {contratoOptions.map((c) => (
+                            <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                          ))}
+                        </Picker>
+                      </ThemedView>
+                      {selectedDivisionId !== null && contratoOptions.length === 0 && (
+                        <ThemedText style={styles.hintText}>No hay contratos disponibles para esta división.</ThemedText>
+                      )}
+                    </ThemedView>
+
+                    <ThemedView style={styles.formGroup}>
+                      <ThemedText style={styles.formLabel}>Sucursal</ThemedText>
+                      <ThemedView style={styles.pickerWrapper}>
+                        <Picker
+                          selectedValue={selectedSucursalId ?? 0}
+                          onValueChange={(v) => {
+                            const next = Number(v) || null;
+                            setSelectedSucursalId(next);
+                            setSelectedPuestoId(null);
+                          }}
+                          enabled={selectedContratoId !== null && sucursalOptions.length > 0}
+                          style={styles.picker}
+                        >
+                          <Picker.Item
+                            label={selectedContratoId ? 'Seleccione sucursal...' : 'Seleccione contrato primero'}
+                            value={0}
+                          />
+                          {sucursalOptions.map((s) => (
+                            <Picker.Item key={s.id} label={s.nombre} value={s.id} />
+                          ))}
+                        </Picker>
+                      </ThemedView>
+                      {selectedContratoId !== null && sucursalOptions.length === 0 && (
+                        <ThemedText style={styles.hintText}>No hay sucursales disponibles para este contrato.</ThemedText>
+                      )}
+                    </ThemedView>
+
+                    <ThemedView style={styles.formGroup}>
+                      <ThemedText style={styles.formLabel}>Puesto (1 por registro)</ThemedText>
+                      <ThemedView style={styles.pickerWrapper}>
+                        <Picker
+                          selectedValue={selectedPuestoId ?? 0}
+                          onValueChange={(v) => setSelectedPuestoId((Number(v) || null))}
+                          enabled={selectedSucursalId !== null && puestoOptions.length > 0}
+                          style={styles.picker}
+                        >
+                          <Picker.Item
+                            label={selectedSucursalId ? 'Seleccione puesto...' : 'Seleccione sucursal primero'}
+                            value={0}
+                          />
+                          {puestoOptions.map((p) => (
+                            <Picker.Item key={p.id} label={p.nombre} value={p.id} />
+                          ))}
+                        </Picker>
+                      </ThemedView>
+                      {selectedSucursalId !== null && puestoOptions.length === 0 && (
+                        <ThemedText style={styles.hintText}>No hay puestos disponibles para esta sucursal.</ThemedText>
+                      )}
+                    </ThemedView>
+                  </ThemedView>
+                )}
               </ThemedView>
 
               {/* Fecha en que se realizó */}
@@ -1338,134 +2020,80 @@ export default function OpeningClosingPositionScreen() {
                 )}
               </ThemedView>
 
-              {/* Nombre del Corpo */}
-              <ThemedView style={styles.formGroup}>
-                <ThemedText style={styles.formLabel}>Nombre del Corpo</ThemedText>
-                <TextInput
-                  style={styles.formInput}
-                  placeholder="Nombre del Corpo"
-                  placeholderTextColor="#999"
-                  value={nombreCorpo}
-                  onChangeText={setNombreCorpo}
-                />
-              </ThemedView>
-
-              {/* Nombre del Puesto */}
-              <ThemedView style={styles.formGroup}>
-                <ThemedText style={styles.formLabel}>Nombre del Puesto</ThemedText>
-                <TextInput
-                  style={styles.formInput}
-                  placeholder="Nombre del Puesto"
-                  placeholderTextColor="#999"
-                  value={nombrePuesto}
-                  onChangeText={setNombrePuesto}
-                />
-              </ThemedView>
-
               {/* Tipo */}
               <ThemedView style={styles.formGroup}>
                 <ThemedText style={styles.formLabel}>Tipo</ThemedText>
-                <ThemedView style={styles.tipoContainer}>
-                  <TouchableOpacity
-                    style={[styles.tipoOption, tipo.includes('Apertura') && styles.tipoOptionSelected]}
-                    onPress={() => toggleTipo('Apertura')}
-                  >
-                    <View style={styles.tipoCheckbox}>
-                      {tipo.includes('Apertura') && (
-                        <Ionicons name="checkmark" size={16} color="#FFFFFF" />
-                      )}
-                    </View>
-                    <ThemedText style={[styles.tipoOptionText, tipo.includes('Apertura') && styles.tipoOptionTextSelected]}>
-                      Apertura
-                    </ThemedText>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.tipoOption, tipo.includes('Cierre') && styles.tipoOptionSelected]}
-                    onPress={() => toggleTipo('Cierre')}
-                  >
-                    <View style={styles.tipoCheckbox}>
-                      {tipo.includes('Cierre') && (
-                        <Ionicons name="checkmark" size={16} color="#FFFFFF" />
-                      )}
-                    </View>
-                    <ThemedText style={[styles.tipoOptionText, tipo.includes('Cierre') && styles.tipoOptionTextSelected]}>
-                      Cierre
-                    </ThemedText>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.tipoOption, tipo.includes('Inventario') && styles.tipoOptionSelected]}
-                    onPress={() => toggleTipo('Inventario')}
-                  >
-                    <View style={styles.tipoCheckbox}>
-                      {tipo.includes('Inventario') && (
-                        <Ionicons name="checkmark" size={16} color="#FFFFFF" />
-                      )}
-                    </View>
-                    <ThemedText style={[styles.tipoOptionText, tipo.includes('Inventario') && styles.tipoOptionTextSelected]}>
-                      Inventario
-                    </ThemedText>
-                  </TouchableOpacity>
+                <ThemedView style={styles.pickerWrapper}>
+                  <Picker selectedValue={tipo} onValueChange={(v) => setTipo(v)} style={styles.picker}>
+                    <Picker.Item label="Apertura" value="Apertura" />
+                    <Picker.Item label="Cierre" value="Cierre" />
+                  </Picker>
                 </ThemedView>
               </ThemedView>
 
               {/* Lista de actividades */}
               <ThemedView style={styles.sectionContainer}>
-                <ThemedText style={styles.sectionTitle}>Actividades</ThemedText>
-                {actividades.map((actividad, index) => renderActividad(actividad, index))}
-                <TouchableOpacity
-                  style={styles.addButton}
-                  onPress={addActividad}
-                >
-                  <Ionicons name="add-circle" size={24} color="#4CAF50" />
-                  <ThemedText style={styles.addButtonText}>Agregar Actividad</ThemedText>
-                </TouchableOpacity>
+                <ThemedView style={styles.sectionHeader}>
+                  <ThemedText style={styles.sectionTitle}>Actividades</ThemedText>
+                </ThemedView>
+                <ThemedView style={styles.sectionBody}>
+                  {actividades.map((actividad, index) => renderActividad(actividad, index))}
+                  {selectedDivisionId !== 4 && selectedDivisionId !== 5 && (
+                    <ThemedText style={styles.hintText}>No hay actividades configuradas para esta división.</ThemedText>
+                  )}
+                </ThemedView>
               </ThemedView>
 
               {/* Lista de inventario */}
-              <ThemedView style={styles.sectionContainer}>
-                <ThemedText style={styles.sectionTitle}>Inventario de activos y/o Equipos</ThemedText>
-                {inventario.map((item, index) => renderInventario(item, index))}
-                <TouchableOpacity
-                  style={styles.addButton}
-                  onPress={addInventario}
-                >
-                  <Ionicons name="add-circle" size={24} color="#4CAF50" />
-                  <ThemedText style={styles.addButtonText}>Agregar Item de Inventario</ThemedText>
-                </TouchableOpacity>
-              </ThemedView>
-
-              {/* Fotos */}
-              <ThemedView style={styles.sectionContainer}>
-                <ThemedText style={styles.sectionTitle}>Fotografías</ThemedText>
-                <ThemedText style={styles.sectionSubtitle}>
-                  Tome fotografías de las instalaciones estado de recibido/entrega
-                </ThemedText>
-                <TouchableOpacity
-                  style={styles.cameraButton}
-                  onPress={openCamera}
-                >
-                  <Ionicons name="camera" size={24} color="#FFFFFF" />
-                  <ThemedText style={styles.cameraButtonText}>Tomar Foto</ThemedText>
-                </TouchableOpacity>
-                {fotos.length > 0 && (
-                  <ThemedView style={styles.photosContainer}>
-                    {fotos.map((foto, index) => (
-                      <ThemedView key={index} style={styles.photoItem}>
-                        <Image
-                          source={{ uri: foto }}
-                          style={styles.photoPreview}
-                          resizeMode="contain"
-                        />
-                        <TouchableOpacity
-                          style={styles.removePhotoButton}
-                          onPress={() => removePhoto(index)}
-                        >
-                          <Ionicons name="trash" size={20} color="#FF3B30" />
-                        </TouchableOpacity>
-                      </ThemedView>
-                    ))}
+              {isSeguridadDivision && (
+                <ThemedView style={styles.sectionContainer}>
+                  <ThemedView style={styles.sectionHeader}>
+                    <ThemedText style={styles.sectionTitle}>Inventario de activos y/o equipos</ThemedText>
                   </ThemedView>
-                )}
+                  <ThemedView style={styles.sectionBody}>
+                    {inventario.map((item, index) => renderInventario(item, index))}
+                    <TouchableOpacity style={styles.addButton} onPress={addInventario}>
+                      <Ionicons name="add-circle" size={24} color="#4CAF50" />
+                      <ThemedText style={styles.addButtonText}>Agregar Item de Inventario</ThemedText>
+                    </TouchableOpacity>
+                  </ThemedView>
+                </ThemedView>
+              )}
+
+              {/* Fotografías */}
+              <ThemedView style={styles.sectionContainer}>
+                <ThemedView style={styles.sectionHeader}>
+                  <ThemedText style={styles.sectionTitle}>Fotografías</ThemedText>
+                </ThemedView>
+                <ThemedView style={styles.sectionBody}>
+                  <ThemedText style={styles.sectionSubtitle}>
+                    Tome fotografías de las instalaciones estado de recibido/entrega
+                  </ThemedText>
+                  <TouchableOpacity style={styles.cameraButton} onPress={openCamera}>
+                    <Ionicons name="camera" size={24} color="#FFFFFF" />
+                    <ThemedText style={styles.cameraButtonText}>Tomar Foto</ThemedText>
+                  </TouchableOpacity>
+                  {(imagenesRemote.length > 0 || imagenesLocal.length > 0) && (
+                    <ThemedView style={styles.photosContainer}>
+                      {imagenesRemote.map((img) => (
+                        <ThemedView key={`r-${img.id}`} style={styles.photoItem}>
+                          <Image source={{ uri: img.url }} style={styles.photoPreview} resizeMode="contain" />
+                          <TouchableOpacity style={styles.removePhotoButton} onPress={() => removeRemoteImage(img.id)}>
+                            <Ionicons name="trash" size={20} color="#FF3B30" />
+                          </TouchableOpacity>
+                        </ThemedView>
+                      ))}
+                      {imagenesLocal.map((img) => (
+                        <ThemedView key={`l-${img.id_local}`} style={styles.photoItem}>
+                          <Image source={{ uri: `data:image/jpeg;base64,${img.base64}` }} style={styles.photoPreview} resizeMode="contain" />
+                          <TouchableOpacity style={styles.removePhotoButton} onPress={() => removeLocalImage(img.id_local)}>
+                            <Ionicons name="trash" size={20} color="#FF3B30" />
+                          </TouchableOpacity>
+                        </ThemedView>
+                      ))}
+                    </ThemedView>
+                  )}
+                </ThemedView>
               </ThemedView>
 
               {/* Otras Observaciones */}
@@ -1483,7 +2111,8 @@ export default function OpeningClosingPositionScreen() {
                 />
               </ThemedView>
 
-              {/* Nombre representante del cliente */}
+              {/* Nombres de representantes */}
+              <ThemedText style={styles.formSectionTitle}>Representantes</ThemedText>
               <ThemedView style={styles.formGroup}>
                 <ThemedText style={styles.formLabel}>Nombre representante del cliente</ThemedText>
                 <TextInput
@@ -1495,13 +2124,35 @@ export default function OpeningClosingPositionScreen() {
                 />
               </ThemedView>
 
-              {/* Firma del cliente */}
               <ThemedView style={styles.formGroup}>
-                <ThemedText style={styles.formLabel}>Firma Cliente</ThemedText>
-                {!firmaCliente ? (
+                <ThemedText style={styles.formLabel}>Nombre representante empresa entrante</ThemedText>
+                <TextInput
+                  style={styles.formInput}
+                  placeholder="Nombre representante empresa entrante"
+                  placeholderTextColor="#999"
+                  value={nombreRepresentanteEmpresaEntrante}
+                  onChangeText={setNombreRepresentanteEmpresaEntrante}
+                />
+              </ThemedView>
+
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formLabel}>Nombre representante empresa saliente</ThemedText>
+                <TextInput
+                  style={styles.formInput}
+                  placeholder="Nombre representante empresa saliente"
+                  placeholderTextColor="#999"
+                  value={nombreRepresentanteEmpresaSaliente}
+                  onChangeText={setNombreRepresentanteEmpresaSaliente}
+                />
+              </ThemedView>
+
+              {/* Firmas dibujadas */}
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formSectionTitle}>Firma representante cliente</ThemedText>
+                {!firmaRepresentanteCliente ? (
                   <TouchableOpacity
                     style={styles.signatureButton}
-                    onPress={openSignatureModal}
+                    onPress={() => openSignatureModal('cliente')}
                   >
                     <Ionicons name="create-outline" size={24} color="#007AFF" />
                     <ThemedText style={styles.signatureButtonText}>Toca para dibujar la firma</ThemedText>
@@ -1509,12 +2160,12 @@ export default function OpeningClosingPositionScreen() {
                 ) : (
                   <ThemedView style={styles.signaturePreviewContainer}>
                     <Image
-                      source={{ uri: formatSignatureForDisplay(firmaCliente) || '' }}
+                      source={{ uri: formatSignatureForDisplay(firmaRepresentanteCliente) || '' }}
                       style={styles.signaturePreview}
                     />
                     <TouchableOpacity
                       style={styles.clearSignatureButton}
-                      onPress={() => setFirmaCliente(null)}
+                      onPress={() => setFirmaRepresentanteCliente(null)}
                     >
                       <Ionicons name="trash" size={16} color="#FF3B30" />
                       <ThemedText style={styles.clearSignatureButtonText}>Eliminar Firma</ThemedText>
@@ -1523,20 +2174,99 @@ export default function OpeningClosingPositionScreen() {
                 )}
               </ThemedView>
 
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formSectionTitle}>Firma representante empresa entrante</ThemedText>
+                {!firmaRepresentanteEmpresaEntrante ? (
+                  <TouchableOpacity style={styles.signatureButton} onPress={() => openSignatureModal('entrante')}>
+                    <Ionicons name="create-outline" size={24} color="#007AFF" />
+                    <ThemedText style={styles.signatureButtonText}>Toca para dibujar la firma</ThemedText>
+                  </TouchableOpacity>
+                ) : (
+                  <ThemedView style={styles.signaturePreviewContainer}>
+                    <Image source={{ uri: formatSignatureForDisplay(firmaRepresentanteEmpresaEntrante) || '' }} style={styles.signaturePreview} />
+                    <TouchableOpacity style={styles.clearSignatureButton} onPress={() => setFirmaRepresentanteEmpresaEntrante(null)}>
+                      <Ionicons name="trash" size={16} color="#FF3B30" />
+                      <ThemedText style={styles.clearSignatureButtonText}>Eliminar Firma</ThemedText>
+                    </TouchableOpacity>
+                  </ThemedView>
+                )}
+              </ThemedView>
+
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formSectionTitle}>Firma representante empresa saliente</ThemedText>
+                {!firmaRepresentanteEmpresaSaliente ? (
+                  <TouchableOpacity style={styles.signatureButton} onPress={() => openSignatureModal('saliente')}>
+                    <Ionicons name="create-outline" size={24} color="#007AFF" />
+                    <ThemedText style={styles.signatureButtonText}>Toca para dibujar la firma</ThemedText>
+                  </TouchableOpacity>
+                ) : (
+                  <ThemedView style={styles.signaturePreviewContainer}>
+                    <Image source={{ uri: formatSignatureForDisplay(firmaRepresentanteEmpresaSaliente) || '' }} style={styles.signaturePreview} />
+                    <TouchableOpacity style={styles.clearSignatureButton} onPress={() => setFirmaRepresentanteEmpresaSaliente(null)}>
+                      <Ionicons name="trash" size={16} color="#FF3B30" />
+                      <ThemedText style={styles.clearSignatureButtonText}>Eliminar Firma</ThemedText>
+                    </TouchableOpacity>
+                  </ThemedView>
+                )}
+              </ThemedView>
+
+              {/* Firma responsable (QR) */}
+              <ThemedView style={styles.sectionContainer}>
+                <ThemedView style={styles.sectionHeader}>
+                  <ThemedText style={styles.sectionTitle}>Firma responsable</ThemedText>
+                </ThemedView>
+                <ThemedView style={styles.sectionBody}>
+                  <ThemedView style={styles.firmaButtonsRow}>
+                    <TouchableOpacity style={styles.firmaBlueButton} onPress={handleGenerateFirmaResponsable} disabled={isGeneratingFirma}>
+                      <Ionicons name="qr-code-outline" size={18} color="#FFFFFF" />
+                      <ThemedText style={styles.firmaBlueButtonText}>{isGeneratingFirma ? 'Generando...' : 'Generar'}</ThemedText>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.firmaBlueButton} onPress={handleScanFirmaResponsable}>
+                      <Ionicons name="scan-outline" size={18} color="#FFFFFF" />
+                      <ThemedText style={styles.firmaBlueButtonText}>Escanear QR</ThemedText>
+                    </TouchableOpacity>
+                  </ThemedView>
+                  {!firmaResponsable ? (
+                    <ThemedText style={styles.hintText}>Debes generar o escanear una firma.</ThemedText>
+                  ) : (
+                    <ThemedView style={styles.firmaInfoBox}>
+                      <ThemedView style={styles.firmaInfoHeader}>
+                        <ThemedText style={styles.firmaInfoTitle}>Firma registrada</ThemedText>
+                        <TouchableOpacity onPress={() => setFirmaResponsable('')} style={styles.firmaTinyTrash}>
+                          <Ionicons name="trash" size={14} color="#FF3B30" />
+                        </TouchableOpacity>
+                      </ThemedView>
+                      {(() => {
+                        const info = decodeFirmaHash(firmaResponsable);
+                        if (!info) return <ThemedText style={styles.hintText}>QR sin información decodificable.</ThemedText>;
+                        return (
+                          <>
+                            <ThemedText style={styles.firmaInfoText}>Sesión: {info.sessionId}</ThemedText>
+                            <ThemedText style={styles.firmaInfoText}>Empleado: {info.empleadoId}</ThemedText>
+                            <ThemedText style={styles.firmaInfoText}>Lat/Lng: {info.latitud}, {info.longitud}</ThemedText>
+                            <ThemedText style={styles.firmaInfoText}>Hora: {info.timestamp}</ThemedText>
+                          </>
+                        );
+                      })()}
+                    </ThemedView>
+                  )}
+                </ThemedView>
+              </ThemedView>
+
               <ThemedView style={styles.actionButtons}>
                 <TouchableOpacity
                   style={[styles.actionButton, styles.cancelButton]}
                   onPress={editingRecord ? cancelEditing : cancelCreating}
                 >
                   {getActionIcon('cancel')}
-                  <ThemedText style={styles.actionButtonText}>Cancelar</ThemedText>
+                  <ThemedText style={[styles.actionButtonText, styles.actionButtonTextDark]}>Cancelar</ThemedText>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.actionButton, styles.saveButton]}
                   onPress={editingRecord ? updatePositionHandler : savePositionHandler}
                 >
                   {getActionIcon('confirm')}
-                  <ThemedText style={styles.actionButtonText}>
+                  <ThemedText style={[styles.actionButtonText, styles.actionButtonTextLight]}>
                     {editingRecord ? 'Actualizar' : 'Guardar'}
                   </ThemedText>
                 </TouchableOpacity>
@@ -1545,8 +2275,7 @@ export default function OpeningClosingPositionScreen() {
           ) : (
             <ThemedView style={styles.listSection}>
               <TouchableOpacity style={styles.createButton} onPress={startCreating}>
-                <Ionicons name="add-circle" size={24} color="#FFFFFF" />
-                <ThemedText style={styles.createButtonText}>Crear Nueva Apertura-Cierre de Puesto</ThemedText>
+                <Ionicons name="add" size={24} color="#FFFFFF" />
               </TouchableOpacity>
               {renderPositionList()}
             </ThemedView>
@@ -1593,7 +2322,13 @@ export default function OpeningClosingPositionScreen() {
         <ThemedView style={styles.modalOverlay}>
           <ThemedView style={styles.modalContainer}>
             <ThemedView style={styles.modalHeader}>
-              <ThemedText style={styles.modalTitle}>Firma del Cliente</ThemedText>
+              <ThemedText style={styles.modalTitle}>
+                {signatureTarget === 'cliente'
+                  ? 'Firma representante cliente'
+                  : signatureTarget === 'entrante'
+                    ? 'Firma representante empresa entrante'
+                    : 'Firma representante empresa saliente'}
+              </ThemedText>
               <TouchableOpacity onPress={closeSignatureModal}>
                 <Ionicons name="close" size={24} color="#333" />
               </TouchableOpacity>
@@ -1626,6 +2361,9 @@ export default function OpeningClosingPositionScreen() {
         </ThemedView>
       </Modal>
 
+      {/* QR Scanner */}
+      {QRScannerComponent}
+
       <AppFooter />
       <SlideMenu
         isVisible={isMenuVisible}
@@ -1638,31 +2376,21 @@ export default function OpeningClosingPositionScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  scrollView: {
-    flex: 1,
-  },
-  scrollContent: {
+  // Layout (mismo patrón que LlavesScreen)
+  container: { flex: 1 },
+  scrollView: { flex: 1 },
+  scrollContent: { padding: 16 },
+  contentContainer: { width: '100%', maxWidth: 800, alignSelf: 'center' },
+  // Header principal (como LlavesScreen: título + subtítulo + línea)
+  titleContainer: {
     alignItems: 'center',
-    padding: 20,
+    marginBottom: 24,
+    paddingBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
   },
-  contentContainer: {
-    width: '100%',
-    maxWidth: 600,
-  },
-  screenTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    marginBottom: 20,
-    color: '#000000',
-    textAlign: 'center',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-  },
+  title: { fontSize: 22, fontWeight: 'bold', textAlign: 'center', marginBottom: 8, color: '#000000' },
+  subtitle: { fontSize: 14, opacity: 0.7, textAlign: 'center', color: '#000000' },
   noMarcaContainer: {
     padding: 20,
     backgroundColor: '#FFEBEE',
@@ -1683,49 +2411,33 @@ const styles = StyleSheet.create({
     color: '#D32F2F',
     textAlign: 'center',
   },
-  createButton: {
-    backgroundColor: '#007AFF',
-    padding: 15,
-    borderRadius: 8,
-    alignItems: 'center',
-    marginBottom: 20,
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 10,
-  },
-  createButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  formContainer: {
-    width: '100%',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 10,
-    padding: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
+  createButton: { backgroundColor: '#007AFF', paddingVertical: 12, borderRadius: 8, alignItems: 'center', marginBottom: 16, flexDirection: 'row', justifyContent: 'center', gap: 10 },
+  createButtonText: { color: '#FFFFFF', fontSize: 16, fontWeight: '600' },
+  // Form card (similar a LlavesScreen.formCard)
+  formContainer: { width: '100%', backgroundColor: '#FFFFFF', borderRadius: 10, padding: 14, borderWidth: 1, borderColor: '#E0E0E0' },
   formGroup: {
     marginBottom: 15,
   },
-  formLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    marginBottom: 5,
-    color: '#000000',
+  formLabel: { fontSize: 13, fontWeight: '700', marginBottom: 6, color: '#333' },
+  formInput: { borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 10, fontSize: 14, color: '#000000', backgroundColor: '#FFFFFF' },
+  pickerWrapper: { borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 8, overflow: 'hidden', backgroundColor: '#FFFFFF', justifyContent: 'center' },
+  picker: { height: 54, width: '100%', color: '#000000', fontSize: 16 },
+  pickerItem: { fontSize: 16, height: 54 },
+  hintText: {
+    marginTop: 6,
+    fontSize: 12,
+    color: '#666',
+    fontStyle: 'italic',
   },
-  formInput: {
-    borderWidth: 1,
-    borderColor: '#E0E0E0',
-    borderRadius: 8,
-    padding: 12,
-    fontSize: 16,
+  loadingInline: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 10,
+  },
+  loadingInlineText: {
+    fontSize: 14,
     color: '#000000',
-    backgroundColor: '#F9F9F9',
   },
   textArea: {
     minHeight: 100,
@@ -1782,17 +2494,27 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
   },
   sectionContainer: {
-    marginTop: 20,
-    marginBottom: 20,
-    padding: 15,
-    backgroundColor: '#F5F5F5',
-    borderRadius: 8,
+    width: '100%',
+    marginTop: 14,
+    marginBottom: 14,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   sectionTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
+    fontSize: 16,
+    fontWeight: '700',
     color: '#000000',
-    marginBottom: 10,
+    flex: 1,
+  },
+  sectionBody: {
+    marginTop: 10,
+    padding: 12,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#EAEAEA',
   },
   sectionSubtitle: {
     fontSize: 12,
@@ -1807,6 +2529,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E0E0E0',
     overflow: 'hidden',
+    padding: 12,
   },
   actividadHeader: {
     flexDirection: 'row',
@@ -1822,6 +2545,25 @@ const styles = StyleSheet.create({
   actividadHeaderText: {
     fontSize: 16,
     fontWeight: '600',
+    color: '#000000',
+  },
+  radioRow: {
+    flexDirection: 'row',
+    gap: 16,
+    marginTop: 10,
+    marginBottom: 10,
+  },
+  radioOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    backgroundColor: '#F5F5F5',
+  },
+  radioLabel: {
+    fontSize: 14,
     color: '#000000',
   },
   actividadHeaderActions: {
@@ -1914,6 +2656,55 @@ const styles = StyleSheet.create({
     gap: 10,
     marginBottom: 15,
   },
+  firmaButtonsRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 10,
+  },
+  firmaBlueButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#007AFF',
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+    gap: 8,
+  },
+  firmaBlueButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  firmaInfoBox: {
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 10,
+    padding: 12,
+    backgroundColor: '#FFFFFF',
+  },
+  firmaInfoHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  firmaInfoTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#000000',
+  },
+  firmaInfoText: {
+    fontSize: 12,
+    color: '#333',
+    marginTop: 2,
+  },
+  firmaTinyTrash: {
+    paddingHorizontal: 6,
+    paddingVertical: 4,
+  },
   cameraButtonText: {
     color: '#FFFFFF',
     fontSize: 16,
@@ -1989,32 +2780,13 @@ const styles = StyleSheet.create({
     color: '#FF3B30',
     fontWeight: '600',
   },
-  actionButtons: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 16,
-    gap: 12,
-  },
-  actionButton: {
-    flex: 1,
-    padding: 16,
-    borderRadius: 8,
-    alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 8,
-  },
-  cancelButton: {
-    backgroundColor: '#CCCCCC',
-  },
-  saveButton: {
-    backgroundColor: '#FF9500',
-  },
-  actionButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
-  },
+  actionButtons: { marginTop: 16, flexDirection: 'row', gap: 10, justifyContent: 'space-between' },
+  actionButton: { flex: 1, flexDirection: 'row', gap: 10, alignItems: 'center', justifyContent: 'center', paddingVertical: 14, borderRadius: 12 },
+  cancelButton: { backgroundColor: '#EDEDED' },
+  saveButton: { backgroundColor: '#007AFF' },
+  actionButtonText: { fontSize: 16, fontWeight: '800' },
+  actionButtonTextDark: { color: '#000000' },
+  actionButtonTextLight: { color: '#FFFFFF' },
   listSection: {
     width: '100%',
   },
@@ -2022,37 +2794,22 @@ const styles = StyleSheet.create({
     width: '100%',
     marginTop: 10,
   },
+  // Cards (similar a LlavesScreen.bitacoraCard)
   listItem: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 10,
-    marginBottom: 10,
+    borderRadius: 14,
+    padding: 0,
+    borderWidth: 1,
+    borderColor: '#E5E5EA',
+    marginBottom: 12,
     overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.2,
-    shadowRadius: 1.41,
-    elevation: 2,
   },
-  listItemHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 15,
-    backgroundColor: '#F0F0F0',
-  },
+  listItemHeader: { padding: 16 },
   listItemContent: {
     flex: 1,
   },
-  listItemTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#000000',
-    marginBottom: 4,
-  },
-  listItemSubtitle: {
-    fontSize: 14,
-    color: '#666',
-  },
+  listItemTitle: { fontSize: 16, fontWeight: '800', color: '#000000' },
+  listItemSubtitle: { marginTop: 4, fontSize: 13, color: '#000000', opacity: 0.7 },
   listItemActions: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2070,14 +2827,47 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   listItemDetails: {
-    padding: 16,
     borderTopWidth: 1,
     borderTopColor: '#EEE',
+    padding: 16,
   },
+  // Collapsables en items (mismo patrón que LlavesScreen)
+  collapseButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    marginTop: 8,
+    backgroundColor: '#FAFAFA',
+  },
+  collapseButtonText: { fontSize: 13, fontWeight: '600', color: '#007AFF' },
+  collapsableContent: { marginTop: 8, padding: 10, borderRadius: 8, backgroundColor: '#F8F9FA' },
+  detailBlock: { marginBottom: 10, backgroundColor: '#F8F9FA' },
+  detailLine: { marginBottom: 4, color: '#000', backgroundColor: '#F8F9FA' },
+  detailLabel: { fontWeight: '700', color: '#333' },
+  detailValue: { color: '#000' },
+  photoItemMini: {
+    width: '100%',
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    padding: 8,
+    backgroundColor: '#FFFFFF',
+  },
+  photoPreviewMini: { width: '100%', height: 200, borderRadius: 8, backgroundColor: '#F8F9FA' },
+  photoCaption: { marginTop: 8, fontSize: 12, color: '#000', opacity: 0.7 },
+  // Títulos del formulario como en módulos previos (azul)
+  formSectionTitle: { marginTop: 14, fontSize: 15, fontWeight: '800', color: '#007AFF' },
   listItemButtons: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     gap: 12,
+    marginTop: 10,
   },
   listItemButton: {
     flex: 1,

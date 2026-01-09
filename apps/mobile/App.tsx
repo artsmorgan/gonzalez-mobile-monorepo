@@ -20,6 +20,11 @@ import { markNotificationsAsRead } from './hooks/notificationsFunctions';
 import { createSurvey as createSurveyAPI } from './hooks/surveysFunctions';
 import { createTraining } from './hooks/trainingFunctions';
 import { createVoiceNote, deleteVoiceNote } from './hooks/voiceNotesFunctions';
+import { createBitacoraVehiculoDetenido, deleteBitacoraVehiculoDetenido, updateBitacoraVehiculoDetenido } from './hooks/bitacoraVehiculoDetenidoFunctions';
+import { createLlave, deleteLlave, updateLlave } from './hooks/llavesFunctions';
+import { createMovimientoLlave, deleteMovimientoLlave, updateMovimientoLlave } from './hooks/movimientosLlavesFunctions';
+import { createDocumentoEntregado, deleteDocumentoEntregado, updateDocumentoEntregado } from './hooks/documentosEntregadosFunctions';
+import { createApreciacionVulnerabilidad, deleteApreciacionVulnerabilidad, updateApreciacionVulnerabilidad } from './hooks/apreciacionVulnerabilidadFunctions';
 import { eventBus } from './hooks/eventBus';
 
 import HomeScreen from './screens/HomeScreen';
@@ -72,6 +77,7 @@ import AttendanceControlScreen from './screens/AttendanceControlScreen';
 import OpeningClosingPositionScreen from './screens/OpeningClosingPositionScreen';
 import ActaEntregaProductosScreen from './screens/ActaEntregaProductosScreen';
 import InductionTourRecordScreen from './screens/InductionTourRecordScreen';
+import GeneralInductionRegisterScreen from './screens/GeneralInductionRegisterScreen';
 import SupervisionReportScreen from './screens/SupervisionReportScreen';
 import ElectricBrushGuideScreen from './screens/ElectricBrushGuideScreen';
 import GeneralClientsListScreen from './screens/GeneralClientsListScreen';
@@ -94,6 +100,10 @@ import updateServerTime, { setDisconnectedTime } from './hooks/updateServerTime'
 import JobManualsScreen from './screens/JobManualsScreen';
 import { createJobManual, deleteJobManual, signJobManual, putJobManualQuizResult } from './hooks/jobManualsFunctions';
 import StaffEvaluationsScreen from './screens/StaffEvaluationsScreen';
+import BitacoraVehiculosDetenidosScreen from './screens/BitacoraVehiculosDetenidosScreen';
+import LlavesScreen from './screens/LlavesScreen';
+import DocumentosEntregadosScreen from './screens/DocumentosEntregadosScreen';
+import ApreciacionVulnerabilidadScreen from './screens/ApreciacionVulnerabilidadScreen';
 import { createStaffEvaluation, deleteStaffEvaluation } from './hooks/staffEvaluationsFunctions';
 
 export type RootStackParamList = {
@@ -157,6 +167,7 @@ export type RootStackParamList = {
   OpeningClosingPosition: undefined;
   ActaEntregaProductos: undefined;
   InductionTourRecord: undefined;
+  GeneralInductionRegister: undefined;
   SupervisionReport: undefined;
   ElectricBrushGuide: undefined;
   GeneralClientsList: undefined;
@@ -171,6 +182,10 @@ export type RootStackParamList = {
   CommunicationPlanRequirements: undefined;
   JobManuals: undefined;
   StaffEvaluations: undefined;
+  BitacoraVehiculosDetenidos: undefined;
+  Llaves: undefined;
+  DocumentosEntregados: undefined;
+  ApreciacionVulnerabilidad: undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -233,6 +248,7 @@ function RootNavigator() {
       <Stack.Screen name="OpeningClosingPosition" component={OpeningClosingPositionScreen} />
       <Stack.Screen name="ActaEntregaProductos" component={ActaEntregaProductosScreen} />
       <Stack.Screen name="InductionTourRecord" component={InductionTourRecordScreen} />
+      <Stack.Screen name="GeneralInductionRegister" component={GeneralInductionRegisterScreen} />
       <Stack.Screen name="SupervisionReport" component={SupervisionReportScreen} />
       <Stack.Screen name="ElectricBrushGuide" component={ElectricBrushGuideScreen} />
       <Stack.Screen name="GeneralClientsList" component={GeneralClientsListScreen} />
@@ -247,6 +263,10 @@ function RootNavigator() {
       <Stack.Screen name="CommunicationPlanRequirements" component={CommunicationPlanRequirementsScreen} />
       <Stack.Screen name="JobManuals" component={JobManualsScreen} />
       <Stack.Screen name="StaffEvaluations" component={StaffEvaluationsScreen} />
+      <Stack.Screen name="BitacoraVehiculosDetenidos" component={BitacoraVehiculosDetenidosScreen} />
+      <Stack.Screen name="Llaves" component={LlavesScreen} />
+      <Stack.Screen name="DocumentosEntregados" component={DocumentosEntregadosScreen} />
+      <Stack.Screen name="ApreciacionVulnerabilidad" component={ApreciacionVulnerabilidadScreen} />
     </Stack.Navigator>
   );
 }
@@ -303,6 +323,11 @@ function AppContent() {
           checkAbsentReasonCache(),
           checkLunchTimeActionsCache(),
           checkVehiclesActionsCache(),
+          checkBitacoraVehiculoDetenidoActionsCache(),
+          checkLlavesActionsCache(),
+          checkMovimientosLlavesActionsCache(),
+          checkDocumentosEntregadosActionsCache(),
+          checkApreciacionVulnerabilidadActionsCache(),
           checkNotificationsActionsCache(),
           checkVisitorsActionsCache(),
           checkNotesActionsCache(),
@@ -427,6 +452,7 @@ function AppContent() {
             id: action.id,
             firma: action.firma,
             quizAnswear: action.quizAnswear ?? null,
+            files: action.files ?? null,
             refreshAccessToken,
             logout,
             marcaId: action.marcaId,
@@ -443,6 +469,25 @@ function AppContent() {
               const updatedCache = cache.map((item: any) => {
                 if (item.id === action.id) {
                   const visualizaciones = item.visualizaciones || [];
+                  let filesForVis: any[] = [];
+                  try {
+                    const parsed = typeof action.files === 'string' ? JSON.parse(action.files) : [];
+                    if (Array.isArray(parsed)) {
+                      filesForVis = parsed.map((f: any) => ({
+                        id: Date.now() + Math.random(),
+                        id_local: `vis_file_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+                        type: f.type,
+                        extension: f.extension,
+                        name: f.original_name || `archivo.${f.extension || 'dat'}`,
+                        original_name: f.original_name,
+                        base64: f.file_base64,
+                        mimeType: f.mimeType,
+                        url: '',
+                      }));
+                    }
+                  } catch {
+                    filesForVis = [];
+                  }
                   const newVis = {
                     id: Date.now(),
                     empleado_id: employee?.id || 0,
@@ -453,6 +498,7 @@ function AppContent() {
                     approved: null,
                     created_at: new Date().toISOString(),
                     updated_at: new Date().toISOString(),
+                    files: filesForVis,
                   };
                   return {
                     ...item,
@@ -641,6 +687,415 @@ function AppContent() {
         }
       } catch (error) {
         console.error('Error procesando acción de vehículo:', error);
+      }
+    }
+  }
+
+  const checkBitacoraVehiculoDetenidoActionsCache = async () => {
+    if (!employee) return;
+
+    const actionsStr = await AsyncStorage.getItem('bitacora_vehiculo_detenido_actions');
+    if (!actionsStr) return;
+
+    const actions = JSON.parse(actionsStr);
+    if (!actions || actions.length === 0) return;
+
+    console.log('Sincronizando acciones de bitácora de vehículos detenidos:', actions.length);
+
+    for (const action of actions) {
+      try {
+        if (action.type === 'create') {
+          const result = await createBitacoraVehiculoDetenido({
+            requestData: action.requestData,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result.status) {
+            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'create'));
+            await AsyncStorage.setItem('bitacora_vehiculo_detenido_actions', JSON.stringify(updatedActions));
+
+            // Reemplazar id_local por id real en cache
+            if (result.id) {
+              const cacheStr = await AsyncStorage.getItem('bitacora_vehiculo_detenido_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((b: any) => {
+                  if (b.id_local && b.id_local === action.id) {
+                    return { ...b, id: result.id, id_local: '' };
+                  }
+                  return b;
+                });
+                await AsyncStorage.setItem('bitacora_vehiculo_detenido_cache', JSON.stringify(updatedCache));
+              }
+            }
+          }
+        } else if (action.type === 'update') {
+          const result = await updateBitacoraVehiculoDetenido({
+            id: action.id,
+            requestData: action.requestData,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result.status) {
+            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'update'));
+            await AsyncStorage.setItem('bitacora_vehiculo_detenido_actions', JSON.stringify(updatedActions));
+          }
+        } else if (action.type === 'delete') {
+          const result = await deleteBitacoraVehiculoDetenido({
+            id: action.id,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result.status) {
+            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'delete'));
+            await AsyncStorage.setItem('bitacora_vehiculo_detenido_actions', JSON.stringify(updatedActions));
+
+            const cacheStr = await AsyncStorage.getItem('bitacora_vehiculo_detenido_cache');
+            if (cacheStr) {
+              const cache = JSON.parse(cacheStr);
+              const updatedCache = cache.filter((b: any) => b.id !== action.id);
+              await AsyncStorage.setItem('bitacora_vehiculo_detenido_cache', JSON.stringify(updatedCache));
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error procesando acción de bitácora vehículo detenido:', error);
+      }
+    }
+  }
+
+  const checkLlavesActionsCache = async () => {
+    if (!employee) return;
+
+    const actionsStr = await AsyncStorage.getItem('llaves_actions');
+    if (!actionsStr) return;
+
+    const actions = JSON.parse(actionsStr);
+    if (!actions || actions.length === 0) return;
+
+    console.log('Sincronizando acciones de llaves:', actions.length);
+
+    for (const action of actions) {
+      try {
+        if (action.type === 'create') {
+          const result = await createLlave({
+            requestData: action.requestData,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result.status) {
+            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'create'));
+            await AsyncStorage.setItem('llaves_actions', JSON.stringify(updatedActions));
+
+            // Reemplazar id_local por id real en cache
+            if (result.id) {
+              const cacheStr = await AsyncStorage.getItem('llaves_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((it: any) => {
+                  if (it.id_local && it.id_local === action.id) {
+                    return { ...it, id: result.id, id_local: '' };
+                  }
+                  return it;
+                });
+                await AsyncStorage.setItem('llaves_cache', JSON.stringify(updatedCache));
+              }
+            }
+          }
+        } else if (action.type === 'update') {
+          const result = await updateLlave({
+            id: action.id,
+            requestData: action.requestData,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result.status) {
+            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'update'));
+            await AsyncStorage.setItem('llaves_actions', JSON.stringify(updatedActions));
+          }
+        } else if (action.type === 'delete') {
+          const result = await deleteLlave({
+            id: action.id,
+            marcaId: action.marcaId,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result.status) {
+            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'delete'));
+            await AsyncStorage.setItem('llaves_actions', JSON.stringify(updatedActions));
+
+            const cacheStr = await AsyncStorage.getItem('llaves_cache');
+            if (cacheStr) {
+              const cache = JSON.parse(cacheStr);
+              const updatedCache = cache.filter((it: any) => it.id !== action.id);
+              await AsyncStorage.setItem('llaves_cache', JSON.stringify(updatedCache));
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error procesando acción de llaves:', error);
+      }
+    }
+  }
+
+  const checkMovimientosLlavesActionsCache = async () => {
+    if (!employee) return;
+
+    const actionsStr = await AsyncStorage.getItem('movimientos_llaves_actions');
+    if (!actionsStr) return;
+
+    const actions = JSON.parse(actionsStr);
+    if (!actions || actions.length === 0) return;
+
+    console.log('Sincronizando acciones de movimientos de llaves:', actions.length);
+
+    for (const action of actions) {
+      try {
+        // Resolver llaveId real si viene de una llave creada offline (llaveLocalId)
+        let llaveId: number = Number(action.llaveId) || 0;
+        if ((!llaveId || llaveId === 0) && action.llaveLocalId) {
+          const cacheStr = await AsyncStorage.getItem('llaves_cache');
+          if (cacheStr) {
+            const cache = JSON.parse(cacheStr);
+            const found = cache.find((it: any) => it.id_local && it.id_local === action.llaveLocalId);
+            if (found?.id && found.id !== 0) llaveId = found.id;
+          }
+        }
+
+        // Si aún no hay llaveId real, posponer
+        if (!llaveId || llaveId === 0) continue;
+
+        if (action.type === 'create') {
+          const result = await createMovimientoLlave({
+            llaveId,
+            requestData: action.requestData,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result.status) {
+            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'create'));
+            await AsyncStorage.setItem('movimientos_llaves_actions', JSON.stringify(updatedActions));
+
+            // Reemplazar id_local por id real en cache (dentro de movimientos de la llave)
+            if (result.id) {
+              const cacheStr = await AsyncStorage.getItem('llaves_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((it: any) => {
+                  if (it.id !== llaveId) return it;
+                  const movs = Array.isArray(it.movimientos) ? it.movimientos : [];
+                  const nextMovs = movs.map((m: any) => {
+                    if (m.id_local && m.id_local === action.id) {
+                      return { ...m, id: result.id, id_local: '' };
+                    }
+                    return m;
+                  });
+                  return { ...it, movimientos: nextMovs };
+                });
+                await AsyncStorage.setItem('llaves_cache', JSON.stringify(updatedCache));
+              }
+            }
+          }
+        } else if (action.type === 'update') {
+          const result = await updateMovimientoLlave({
+            llaveId,
+            id: action.id,
+            requestData: action.requestData,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result.status) {
+            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'update'));
+            await AsyncStorage.setItem('movimientos_llaves_actions', JSON.stringify(updatedActions));
+          }
+        } else if (action.type === 'delete') {
+          const result = await deleteMovimientoLlave({
+            llaveId,
+            id: action.id,
+            marcaId: action.marcaId,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result.status) {
+            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'delete'));
+            await AsyncStorage.setItem('movimientos_llaves_actions', JSON.stringify(updatedActions));
+
+            const cacheStr = await AsyncStorage.getItem('llaves_cache');
+            if (cacheStr) {
+              const cache = JSON.parse(cacheStr);
+              const updatedCache = cache.map((it: any) => {
+                if (it.id !== llaveId) return it;
+                const movs = Array.isArray(it.movimientos) ? it.movimientos : [];
+                const nextMovs = movs.filter((m: any) => m.id !== action.id);
+                return { ...it, movimientos: nextMovs };
+              });
+              await AsyncStorage.setItem('llaves_cache', JSON.stringify(updatedCache));
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error procesando acción de movimientos de llaves:', error);
+      }
+    }
+  }
+
+  const checkDocumentosEntregadosActionsCache = async () => {
+    if (!employee) return;
+
+    const actionsStr = await AsyncStorage.getItem('documentos_entregados_actions');
+    if (!actionsStr) return;
+
+    const actions = JSON.parse(actionsStr);
+    if (!actions || actions.length === 0) return;
+
+    console.log('Sincronizando acciones de documentos entregados:', actions.length);
+
+    for (const action of actions) {
+      try {
+        if (action.type === 'create') {
+          const result = await createDocumentoEntregado({
+            requestData: action.requestData,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result.status) {
+            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'create'));
+            await AsyncStorage.setItem('documentos_entregados_actions', JSON.stringify(updatedActions));
+
+            // Reemplazar id_local por id real en cache
+            if (result.id) {
+              const cacheStr = await AsyncStorage.getItem('documentos_entregados_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((it: any) => {
+                  if (it.id_local && it.id_local === action.id) {
+                    return { ...it, id: result.id, id_local: '' };
+                  }
+                  return it;
+                });
+                await AsyncStorage.setItem('documentos_entregados_cache', JSON.stringify(updatedCache));
+              }
+            }
+          }
+        } else if (action.type === 'update') {
+          const result = await updateDocumentoEntregado({
+            id: action.id,
+            requestData: action.requestData,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result.status) {
+            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'update'));
+            await AsyncStorage.setItem('documentos_entregados_actions', JSON.stringify(updatedActions));
+          }
+        } else if (action.type === 'delete') {
+          const result = await deleteDocumentoEntregado({
+            id: action.id,
+            marcaId: action.marcaId,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result.status) {
+            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'delete'));
+            await AsyncStorage.setItem('documentos_entregados_actions', JSON.stringify(updatedActions));
+
+            const cacheStr = await AsyncStorage.getItem('documentos_entregados_cache');
+            if (cacheStr) {
+              const cache = JSON.parse(cacheStr);
+              const updatedCache = cache.filter((it: any) => it.id !== action.id);
+              await AsyncStorage.setItem('documentos_entregados_cache', JSON.stringify(updatedCache));
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error procesando acción de documentos entregados:', error);
+      }
+    }
+  }
+
+  const checkApreciacionVulnerabilidadActionsCache = async () => {
+    if (!employee) return;
+
+    const actionsStr = await AsyncStorage.getItem('apreciacion_vulnerabilidad_actions');
+    if (!actionsStr) return;
+
+    const actions = JSON.parse(actionsStr);
+    if (!actions || actions.length === 0) return;
+
+    console.log('Sincronizando acciones de apreciación de vulnerabilidad:', actions.length);
+
+    for (const action of actions) {
+      try {
+        if (action.type === 'create') {
+          const result = await createApreciacionVulnerabilidad({
+            requestData: action.requestData,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result.status) {
+            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'create'));
+            await AsyncStorage.setItem('apreciacion_vulnerabilidad_actions', JSON.stringify(updatedActions));
+
+            if (result.id) {
+              const cacheStr = await AsyncStorage.getItem('apreciacion_vulnerabilidad_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((it: any) => {
+                  if (it.id_local && it.id_local === action.id) {
+                    return { ...it, id: result.id, id_local: '' };
+                  }
+                  return it;
+                });
+                await AsyncStorage.setItem('apreciacion_vulnerabilidad_cache', JSON.stringify(updatedCache));
+              }
+            }
+          }
+        } else if (action.type === 'update') {
+          const result = await updateApreciacionVulnerabilidad({
+            id: action.id,
+            requestData: action.requestData,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result.status) {
+            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'update'));
+            await AsyncStorage.setItem('apreciacion_vulnerabilidad_actions', JSON.stringify(updatedActions));
+          }
+        } else if (action.type === 'delete') {
+          const result = await deleteApreciacionVulnerabilidad({
+            id: action.id,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result.status) {
+            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'delete'));
+            await AsyncStorage.setItem('apreciacion_vulnerabilidad_actions', JSON.stringify(updatedActions));
+
+            const cacheStr = await AsyncStorage.getItem('apreciacion_vulnerabilidad_cache');
+            if (cacheStr) {
+              const cache = JSON.parse(cacheStr);
+              const updatedCache = cache.filter((it: any) => it.id !== action.id);
+              await AsyncStorage.setItem('apreciacion_vulnerabilidad_cache', JSON.stringify(updatedCache));
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error procesando acción de apreciación de vulnerabilidad:', error);
       }
     }
   }
@@ -1494,7 +1949,13 @@ function AppContent() {
                 const cache = JSON.parse(cacheStr);
                 const updatedCache = cache.map((item: any) => {
                   if (item.id_local === action.id && item.type === 'opening_closing_position') {
-                    return { ...item, synced: true, id: result.data?.id || item.id };
+                    return {
+                      ...item,
+                      synced: true,
+                      id: result.data?.id || item.id,
+                      images: result.data?.images || item.images || [],
+                      images_local: [],
+                    };
                   }
                   return item;
                 });
@@ -1526,6 +1987,34 @@ function AppContent() {
                 const cache = JSON.parse(cacheStr);
                 const updatedCache = cache.map((item: any) => {
                   if (item.id_local === action.id && item.type === 'induction_tour_record') {
+                    return { ...item, synced: true, id: result.data?.id || item.id };
+                  }
+                  return item;
+                });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'general_induction_register') {
+            console.log('Creando registro de inducción general:', action.id);
+            const { createGeneralInductionRegister } = await import('@/hooks/evaluationFunctions');
+            const result = await createGeneralInductionRegister({
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
+
+            if (result.status) {
+              console.log('Registro de inducción general creado correctamente');
+              const updatedActions = actions.filter(
+                (a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'general_induction_register')
+              );
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if (item.id_local === action.id && item.type === 'general_induction_register') {
                     return { ...item, synced: true, id: result.data?.id || item.id };
                   }
                   return item;
@@ -2237,8 +2726,20 @@ function AppContent() {
           } else if (action.type === 'opening_closing_position') {
             console.log('Actualizando apertura-cierre de puesto:', action.id);
             const { updateOpeningClosingPosition } = await import('@/hooks/evaluationFunctions');
+            // Si el action.id es local, intentar resolver al ID real ya sincronizado
+            let resolvedId: any = action.id;
+            try {
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const found = cache.find((it: any) => it.type === 'opening_closing_position' && it.id_local === action.id && it.id);
+                if (found?.id) resolvedId = String(found.id);
+              }
+            } catch {
+              // ignore
+            }
             const result = await updateOpeningClosingPosition({
-              id: action.id,
+              id: resolvedId,
               requestData: action.payload,
               refreshAccessToken,
               logout,
@@ -2248,6 +2749,28 @@ function AppContent() {
               console.log('Apertura-Cierre de Puesto actualizado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'opening_closing_position'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+              // Marcar cache como sincronizado (y actualizar imágenes si vienen)
+              try {
+                const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                if (cacheStr) {
+                  const cache = JSON.parse(cacheStr);
+                  const updatedCache = cache.map((item: any) => {
+                    if ((item.id === resolvedId || String(item.id) === String(resolvedId) || item.id_local === action.id) && item.type === 'opening_closing_position') {
+                      return {
+                        ...item,
+                        synced: true,
+                        images: result.data?.images || item.images || [],
+                        images_local: [],
+                      };
+                    }
+                    return item;
+                  });
+                  await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                }
+              } catch {
+                // ignore
+              }
             }
           } else if (action.type === 'induction_tour_record') {
             console.log('Actualizando registro de inducción y recorrido:', action.id);
@@ -2268,6 +2791,33 @@ function AppContent() {
             if (result.status) {
               console.log('Registro de inducción y recorrido actualizado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'induction_tour_record'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            }
+          } else if (action.type === 'general_induction_register') {
+            console.log('Actualizando registro de inducción general:', action.id);
+            const { updateGeneralInductionRegister } = await import('@/hooks/evaluationFunctions');
+            // Si el action.id es local, intentar resolver al ID real ya sincronizado
+            let resolvedId: any = action.id;
+            try {
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const found = cache.find((it: any) => it.type === 'general_induction_register' && it.id_local === action.id && it.id);
+                if (found?.id) resolvedId = String(found.id);
+              }
+            } catch {
+              // ignore
+            }
+            const result = await updateGeneralInductionRegister({
+              id: resolvedId,
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
+
+            if (result.status) {
+              console.log('Registro de inducción general actualizado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'general_induction_register'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
             }
           } else if (action.type === 'supervision_report') {
@@ -2928,8 +3478,20 @@ function AppContent() {
           } else if (action.type === 'opening_closing_position') {
             console.log('Eliminando apertura-cierre de puesto:', action.id);
             const { deleteOpeningClosingPosition } = await import('@/hooks/evaluationFunctions');
+            // Si el action.id es local, intentar resolver al ID real ya sincronizado
+            let resolvedId: any = action.id;
+            try {
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const found = cache.find((it: any) => it.type === 'opening_closing_position' && it.id_local === action.id && it.id);
+                if (found?.id) resolvedId = String(found.id);
+              }
+            } catch {
+              // ignore
+            }
             const result = await deleteOpeningClosingPosition({
-              id: action.id,
+              id: resolvedId,
               refreshAccessToken,
               logout,
             });
@@ -2942,7 +3504,7 @@ function AppContent() {
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
                 const cache = JSON.parse(cacheStr);
-                const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'opening_closing_position'));
+                const updatedCache = cache.filter((item: any) => !((item.id === resolvedId || String(item.id) === String(resolvedId) || item.id_local === action.id) && item.type === 'opening_closing_position'));
                 await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
               }
             }
@@ -2964,6 +3526,39 @@ function AppContent() {
               if (cacheStr) {
                 const cache = JSON.parse(cacheStr);
                 const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'induction_tour_record'));
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'general_induction_register') {
+            console.log('Eliminando registro de inducción general:', action.id);
+            const { deleteGeneralInductionRegister } = await import('@/hooks/evaluationFunctions');
+            // Si el action.id es local, intentar resolver al ID real ya sincronizado
+            let resolvedId: any = action.id;
+            try {
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const found = cache.find((it: any) => it.type === 'general_induction_register' && it.id_local === action.id && it.id);
+                if (found?.id) resolvedId = String(found.id);
+              }
+            } catch {
+              // ignore
+            }
+            const result = await deleteGeneralInductionRegister({
+              id: resolvedId,
+              refreshAccessToken,
+              logout,
+            });
+
+            if (result.status) {
+              console.log('Registro de inducción general eliminado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'general_induction_register'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.filter((item: any) => !((item.id === resolvedId || String(item.id) === String(resolvedId) || item.id_local === action.id) && item.type === 'general_induction_register'));
                 await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
               }
             }
@@ -3785,7 +4380,7 @@ function AppContent() {
       if (refreshed) {
         return get_notifications();
       } else {
-        Alert.alert('Error', 'Sesión expirada. Por favor inicie sesión nuevamente.');
+        Alert.alert('1', 'Sesión expirada. Por favor inicie sesión nuevamente.');
         await logout();
         return;
       }

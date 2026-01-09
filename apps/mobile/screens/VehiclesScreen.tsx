@@ -272,7 +272,7 @@ export default function VehiclesScreen() {
           if (refreshed) {
             return fetchVehicles();
           } else {
-            Alert.alert('Error', 'Sesión expirada. Por favor inicie sesión nuevamente.');
+            Alert.alert('15', 'Sesión expirada. Por favor inicie sesión nuevamente.');
             await logout();
             return;
           }

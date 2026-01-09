@@ -17,20 +17,45 @@ export async function GET(
         }
 
         const resolvedParams = await context.params;
-        const { corpo_id } = resolvedParams;
+        const corpoId = parseInt(resolvedParams.corpo_id, 10);
+
+        if (!corpoId) {
+            return NextResponse.json({ status: false, message: "Corpo inválido", data: [] }, { status: 400 });
+        }
+
+        const proto = req.headers.get("x-forwarded-proto") || "http";
+        const host = req.headers.get("x-forwarded-host") || req.headers.get("host") || "";
+        const baseUrl = host ? `${proto}://${host}` : "";
 
         const records = await prisma.c_apertura_cierre_puesto.findMany({
             where: {
-                corpo_id: corpo_id
+                corpo_id: corpoId
             },
             orderBy: {
                 created_at: 'desc'
-            }
+            },
+            include: {
+                c_imagenes_apertura_cierre_puesto: true,
+                e_estructura_cliente: { select: { nombre: true } },
+                e_estructura_sucursal: { select: { nombre: true } },
+                e_estructura_puesto: { select: { nombre: true } },
+                n_division: { select: { nombre: true } },
+            },
         });
 
-        const recordsWithIdLocal = records.map(record => ({
+        const recordsWithIdLocal = records.map((record: any) => ({
             ...record,
-            id_local: ""
+            id_local: "",
+            cliente_nombre: record.e_estructura_cliente?.nombre || null,
+            corpo_nombre: record.e_estructura_sucursal?.nombre || null,
+            puesto_nombre: record.e_estructura_puesto?.nombre || null,
+            division_nombre: record.n_division?.nombre || null,
+            images: (record.c_imagenes_apertura_cierre_puesto || []).map((f: any) => ({
+                id: f.id,
+                name: f.name,
+                original_name: f.original_name,
+                url: baseUrl ? `${baseUrl}/api/opening-closing-position/${record.id}/get-image/${f.name}` : "",
+            })),
         }));
 
         return NextResponse.json({

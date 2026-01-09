@@ -6646,18 +6646,23 @@ export const listAttendanceControlByCorpo = async ({
 interface CreateOpeningClosingPositionParams {
   requestData: {
     marca_id: number;
-    cliente?: string | null;
-    numero_corpo?: string | null;
-    numero_puesto?: string | null;
-    fecha_realizado?: string | null;
-    nombre_corpo?: string | null;
-    nombre_puesto?: string | null;
-    tipo?: string | null;
-    actividades?: string | null;
-    inventario?: string | null;
-    fotos?: string | null;
+    cliente_id: number;
+    corpo_id: number;
+    puesto_id: number;
+    division_id: number;
+    fecha: string; // ISO date string
+    tipo: "Apertura" | "Cierre";
+    nombre_representante_cliente: string;
+    nombre_representante_empresa_entrante: string;
+    nombre_representante_empresa_saliente: string;
+    actividades: string; // JSON string
+    inventario: string; // JSON string (si no aplica, enviar "[]")
     otras_observaciones?: string | null;
-    firma_cliente?: string | null;
+    firma_representante_cliente: string; // base64
+    firma_representante_empresa_entrante: string; // base64
+    firma_representante_empresa_saliente: string; // base64
+    firma_responsable: string; // hash QR
+    imagenes?: string | null; // JSON string [{file_base64, extension, original_name}]
   };
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
@@ -6666,18 +6671,24 @@ interface CreateOpeningClosingPositionParams {
 interface UpdateOpeningClosingPositionParams {
   id: string;
   requestData: {
-    cliente?: string | null;
-    numero_corpo?: string | null;
-    numero_puesto?: string | null;
-    fecha_realizado?: string | null;
-    nombre_corpo?: string | null;
-    nombre_puesto?: string | null;
-    tipo?: string | null;
-    actividades?: string | null;
-    inventario?: string | null;
-    fotos?: string | null;
+    cliente_id?: number;
+    corpo_id?: number;
+    puesto_id?: number;
+    division_id?: number;
+    fecha?: string;
+    tipo?: "Apertura" | "Cierre";
+    nombre_representante_cliente?: string;
+    nombre_representante_empresa_entrante?: string;
+    nombre_representante_empresa_saliente?: string;
+    actividades?: string;
+    inventario?: string;
     otras_observaciones?: string | null;
-    firma_cliente?: string | null;
+    firma_representante_cliente?: string;
+    firma_representante_empresa_entrante?: string;
+    firma_representante_empresa_saliente?: string;
+    firma_responsable?: string;
+    imagenes?: string | null; // nuevas a agregar
+    delete_imagenes?: string | null; // JSON string number[]
   };
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
@@ -7186,6 +7197,248 @@ export const listInductionTourRecordByCorpo = async ({
     return {
       status: false,
       message: error instanceof Error ? error.message : 'Error al listar los registros de inducción y recorrido',
+      data: [],
+    };
+  }
+};
+
+// =========================================================
+// Registro Inducción General
+// =========================================================
+
+interface CreateGeneralInductionRegisterParams {
+  requestData: {
+    empresa_id: number;
+    cliente_id: number;
+    corpo_id: number;
+    division: string;
+    fecha?: string | null;
+    temas_a_tratar: string;
+    colaboradores: string;
+    capacitadores: string;
+    firma_responsable: string;
+  };
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+interface UpdateGeneralInductionRegisterParams {
+  id: string;
+  requestData: {
+    division?: string;
+    fecha?: string | null;
+    temas_a_tratar?: string;
+    colaboradores?: string;
+    capacitadores?: string;
+    firma_responsable?: string;
+  };
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+interface DeleteGeneralInductionRegisterParams {
+  id: string;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+interface ListGeneralInductionRegisterByCorpoParams {
+  corpo_id: string;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+export const createGeneralInductionRegister = async ({
+  requestData,
+  refreshAccessToken,
+  logout,
+}: CreateGeneralInductionRegisterParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) throw new Error('Server URL not configured');
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) throw new Error('No authentication token found');
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/general-induction-register`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+      body: JSON.stringify(requestData),
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) return createGeneralInductionRegister({ requestData, refreshAccessToken, logout });
+      await logout();
+      throw new Error('Sesión expirada');
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error creating general induction register:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al crear el registro de inducción general',
+    };
+  }
+};
+
+export const updateGeneralInductionRegister = async ({
+  id,
+  requestData,
+  refreshAccessToken,
+  logout,
+}: UpdateGeneralInductionRegisterParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) throw new Error('Server URL not configured');
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) throw new Error('No authentication token found');
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/general-induction-register/${id}`, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+      body: JSON.stringify(requestData),
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) return updateGeneralInductionRegister({ id, requestData, refreshAccessToken, logout });
+      await logout();
+      throw new Error('Sesión expirada');
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error updating general induction register:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al actualizar el registro de inducción general',
+    };
+  }
+};
+
+export const deleteGeneralInductionRegister = async ({
+  id,
+  refreshAccessToken,
+  logout,
+}: DeleteGeneralInductionRegisterParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) throw new Error('Server URL not configured');
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) throw new Error('No authentication token found');
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/general-induction-register/${id}`, {
+      method: 'DELETE',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) return deleteGeneralInductionRegister({ id, refreshAccessToken, logout });
+      await logout();
+      throw new Error('Sesión expirada');
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error deleting general induction register:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al eliminar el registro de inducción general',
+    };
+  }
+};
+
+export const listGeneralInductionRegisterByCorpo = async ({
+  corpo_id,
+  refreshAccessToken,
+  logout,
+}: ListGeneralInductionRegisterByCorpoParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) throw new Error('Server URL not configured');
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) throw new Error('No authentication token found');
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/general-induction-register/corpo/${corpo_id}`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) return listGeneralInductionRegisterByCorpo({ corpo_id, refreshAccessToken, logout });
+      await logout();
+      throw new Error('Sesión expirada');
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error listing general induction register:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al listar los registros de inducción general',
       data: [],
     };
   }

@@ -59,7 +59,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
         setShouldRender(false);
       });
     }
-    fetchPermissions();
+    //fetchPermissions();
   }, [isVisible, slideAnim]);
 
   const handleLogout = () => {
@@ -140,7 +140,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
         return fetchPermissions();
       } else {
         // If refresh fails, logout the user
-        Alert.alert('Error', 'Sesión expirada. Por favor inicie sesión nuevamente.');
+        Alert.alert('4', 'Sesión expirada. Por favor inicie sesión nuevamente.');
         await logout();
       }
     }
@@ -229,6 +229,26 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
     navigation.navigate('Incidents');
   };
 
+  const handleBitacoraVehiculosDetenidosPress = () => {
+    onClose();
+    navigation.navigate('BitacoraVehiculosDetenidos');
+  };
+
+  const handleLlavesPress = () => {
+    onClose();
+    navigation.navigate('Llaves');
+  };
+
+  const handleApreciacionVulnerabilidadPress = () => {
+    onClose();
+    navigation.navigate('ApreciacionVulnerabilidad');
+  };
+
+  const handleDocumentosEntregadosPress = () => {
+    onClose();
+    navigation.navigate('DocumentosEntregados');
+  };
+
   const handleSurveysPress = () => {
     onClose();
     navigation.navigate('SatisfactionSurveys');
@@ -257,6 +277,11 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
   const handleInductionTourRecordPress = () => {
     onClose();
     navigation.navigate('InductionTourRecord');
+  };
+
+  const handleGeneralInductionRegisterPress = () => {
+    onClose();
+    navigation.navigate('GeneralInductionRegister');
   };
 
   const handlePermitRequestPress = () => {
@@ -300,12 +325,17 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
       case 'visitors': return <Ionicons name="people" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'staffevaluations': return <Ionicons name="clipboard" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'incidents': return <Ionicons name="warning" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'bitacora-vehiculos-detenidos': return <Ionicons name="car-sport" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'llaves': return <Ionicons name="key" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'documentos-entregados': return <Ionicons name="document-text" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'apreciacion-vulnerabilidad': return <Ionicons name="shield-checkmark" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'surveys': return <Ionicons name="document-text" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'trainings': return <Ionicons name="school" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'voice-notes': return <Ionicons name="mic" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'job-manuals': return <Ionicons name="book" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'complaints-master': return <Ionicons name="chatbubbles" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'induction-tour-record': return <Ionicons name="document-text" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'general-induction-register': return <Ionicons name="document-text" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'attendance-control': return <Ionicons name="people" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'permit-request': return <Ionicons name="document-text" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'opening-closing-position': return <Ionicons name="business" size={20} color={isActive ? '#007AFF' : '#000000'} />;
@@ -620,6 +650,106 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
             <TouchableOpacity 
               style={[
                 styles.menuItem, 
+                isActiveRoute('BitacoraVehiculosDetenidos') && styles.activeMenuItem
+              ]} 
+              onPress={handleBitacoraVehiculosDetenidosPress}
+            >
+              <ThemedText 
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('BitacoraVehiculosDetenidos') && styles.activeMenuItemText
+                ]}
+              >
+                {getActionIcon('bitacora-vehiculos-detenidos', isActiveRoute('BitacoraVehiculosDetenidos'))}
+              </ThemedText>
+              <ThemedText 
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('BitacoraVehiculosDetenidos') && styles.activeMenuItemText
+                ]}
+              >
+                Bitácora de vehículos detenidos
+              </ThemedText>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.menuItem,
+                isActiveRoute('Llaves') && styles.activeMenuItem
+              ]}
+              onPress={handleLlavesPress}
+            >
+              <ThemedText
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('Llaves') && styles.activeMenuItemText
+                ]}
+              >
+                {getActionIcon('llaves', isActiveRoute('Llaves'))}
+              </ThemedText>
+              <ThemedText
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('Llaves') && styles.activeMenuItemText
+                ]}
+              >
+                Llaves
+              </ThemedText>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.menuItem,
+                isActiveRoute('DocumentosEntregados') && styles.activeMenuItem
+              ]}
+              onPress={handleDocumentosEntregadosPress}
+            >
+              <ThemedText
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('DocumentosEntregados') && styles.activeMenuItemText
+                ]}
+              >
+                {getActionIcon('documentos-entregados', isActiveRoute('DocumentosEntregados'))}
+              </ThemedText>
+              <ThemedText
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('DocumentosEntregados') && styles.activeMenuItemText
+                ]}
+              >
+                Documentos entregados
+              </ThemedText>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.menuItem,
+                isActiveRoute('ApreciacionVulnerabilidad') && styles.activeMenuItem
+              ]}
+              onPress={handleApreciacionVulnerabilidadPress}
+            >
+              <ThemedText
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('ApreciacionVulnerabilidad') && styles.activeMenuItemText
+                ]}
+              >
+                {getActionIcon('apreciacion-vulnerabilidad', isActiveRoute('ApreciacionVulnerabilidad'))}
+              </ThemedText>
+              <ThemedText
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('ApreciacionVulnerabilidad') && styles.activeMenuItemText
+                ]}
+              >
+                Apreciación de vulnerabilidad
+              </ThemedText>
+            </TouchableOpacity>
+
+            <TouchableOpacity 
+              style={[
+                styles.menuItem, 
                 isActiveRoute('SatisfactionSurveys') && styles.activeMenuItem
               ]} 
               onPress={handleSurveysPress}
@@ -765,6 +895,31 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                 Registro de Induc. y Recorrd.
               </ThemedText>
             </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.menuItem,
+                isActiveRoute('GeneralInductionRegister') && styles.activeMenuItem
+              ]}
+              onPress={handleGeneralInductionRegisterPress}
+            >
+              <ThemedText
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('GeneralInductionRegister') && styles.activeMenuItemText
+                ]}
+              >
+                {getActionIcon('general-induction-register', isActiveRoute('GeneralInductionRegister'))}
+              </ThemedText>
+              <ThemedText
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('GeneralInductionRegister') && styles.activeMenuItemText
+                ]}
+              >
+                Registro Inducción General
+              </ThemedText>
+            </TouchableOpacity>
             
             <TouchableOpacity
               style={[
@@ -816,7 +971,6 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </ThemedText>
             </TouchableOpacity>
             
-            {false && (
             <TouchableOpacity
               style={[
                 styles.menuItem,
@@ -841,7 +995,6 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                 Apertura-Cierre de Puesto
               </ThemedText>
             </TouchableOpacity>
-            )}
 
             <TouchableOpacity
               style={[

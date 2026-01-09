@@ -126,7 +126,8 @@ export async function GET(req: NextRequest) {
 
                 const visualizaciones = await (prisma as any)
                     .e_empleado_visualizacion_manual_puesto.findMany({
-                        where: { manual_puesto_id: manual.id }
+                        where: { manual_puesto_id: manual.id },
+                        include: { e_empleado_visualizacion_archivos: true },
                     });
 
                 const currentEmployeeSigned = (visualizaciones as any[]).some(
@@ -160,6 +161,36 @@ export async function GET(req: NextRequest) {
                     };
                 });
 
+                const visFilesMappedByVisId = new Map<number, any[]>();
+                (visualizaciones as any[]).forEach((v: any) => {
+                    const arr = (v?.e_empleado_visualizacion_archivos || []) as any[];
+                    const mapped = arr.map((file) => {
+                        const fileName = file.name;
+                        let urlPath = `/uploads/job-manuals/${manual.id}/visualizaciones/${v.id}/${fileName}`;
+                        if (file.type === 'image') {
+                            urlPath = `/api/job-manuals/${manual.id}/visualizations/${v.id}/get-image/${fileName}`;
+                        } else if (file.type === 'audio') {
+                            urlPath = `/api/job-manuals/${manual.id}/visualizations/${v.id}/get-audio/${fileName}`;
+                        } else if (file.type === 'video') {
+                            urlPath = `/api/job-manuals/${manual.id}/visualizations/${v.id}/get-video/${fileName}`;
+                        } else {
+                            urlPath = `/api/job-manuals/${manual.id}/visualizations/${v.id}/get-file/${fileName}`;
+                        }
+
+                        const url = `${baseUrl}${urlPath}`;
+
+                        return {
+                            id: file.id,
+                            name: file.name,
+                            original_name: file.original_name,
+                            type: file.type,
+                            extension: file.extension,
+                            url
+                        };
+                    });
+                    visFilesMappedByVisId.set(v.id, mapped);
+                });
+
                 return {
                     id: manual.id,
                     title: manual.title,
@@ -183,7 +214,8 @@ export async function GET(req: NextRequest) {
                         quiz_answear: v.quiz_answear ?? null,
                         approved: v.approved ?? null,
                         created_at: v.created_at,
-                        updated_at: v.updated_at
+                        updated_at: v.updated_at,
+                        files: visFilesMappedByVisId.get(v.id) ?? [],
                     })),
                     currentEmployeeSigned
                 };

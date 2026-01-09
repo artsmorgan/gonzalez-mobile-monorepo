@@ -1,10 +1,11 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Dimensions, Linking, Modal, ScrollView, StyleSheet, TextInput, TouchableOpacity, View, Image } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import * as Network from 'expo-network';
 import * as Location from 'expo-location';
 import * as DocumentPicker from 'expo-document-picker';
+import { Picker } from '@react-native-picker/picker';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -31,6 +32,15 @@ interface Puesto {
   id: number;
   nombre: string;
 }
+
+type MainStructurePlazaNode = { id: number; nombre: string };
+type MainStructurePuestoNode = { id: number; nombre: string; plazas: MainStructurePlazaNode[] };
+type MainStructureSucursalNode = { id: number; nombre: string; puestos: MainStructurePuestoNode[] };
+type MainStructureContratoNode = { id: number; nombre: string; sucursales: MainStructureSucursalNode[] };
+type MainStructureDivisionNode = { id: number; nombre: string; contratos: MainStructureContratoNode[] };
+type MainStructureClienteNode = { id: number; nombre: string; division: MainStructureDivisionNode[] };
+type MainStructureEmpresaNode = { id: number; nombre: string; clientes: MainStructureClienteNode[] };
+type MainStructureTree = MainStructureEmpresaNode[];
 
 interface FirmaData {
   sessionId: string;
@@ -93,6 +103,7 @@ interface JobManualRemote {
     created_at: string;
     updated_at?: string;
     approved_pending?: boolean; // solo para UI offline (no viene del server)
+    files?: ManualFileRemote[];
   }[];
   currentEmployeeSigned: boolean;
   id_local?: string;
@@ -119,6 +130,10 @@ export default function JobManualsScreen() {
   const [isViewerVisible, setIsViewerVisible] = useState(false);
   const [viewSignature, setViewSignature] = useState<string | null>(null);
   const [isSigningManual, setIsSigningManual] = useState(false);
+  const [viewTextFiles, setViewTextFiles] = useState<ManualFileLocal[]>([]);
+  const [viewImageFiles, setViewImageFiles] = useState<ManualFileLocal[]>([]);
+  const [viewAudioFiles, setViewAudioFiles] = useState<ManualFileLocal[]>([]);
+  const [viewVideoFiles, setViewVideoFiles] = useState<ManualFileLocal[]>([]);
 
   // ----------------------
   // Quiz (visualización / respuestas)
@@ -131,8 +146,18 @@ export default function JobManualsScreen() {
   const tituloRef = useRef('');
   const descripcionRef = useRef('');
 
-  const [availablePuestos, setAvailablePuestos] = useState<Puesto[]>([]);
   const [selectedPuestos, setSelectedPuestos] = useState<number[]>([]);
+
+  const [structure, setStructure] = useState<MainStructureTree>([]);
+  const [isStructureLoading, setIsStructureLoading] = useState(false);
+  const [selectedEmpresaId, setSelectedEmpresaId] = useState<number | null>(null);
+  const [selectedClienteId, setSelectedClienteId] = useState<number | null>(null);
+  const [selectedDivisionId, setSelectedDivisionId] = useState<number | null>(null);
+  const [selectedContratoId, setSelectedContratoId] = useState<number | null>(null);
+  const [selectedSucursalId, setSelectedSucursalId] = useState<number | null>(null);
+  const [selectedPuestoId, setSelectedPuestoId] = useState<number | null>(null);
+  const [hasConfirmedPuestos, setHasConfirmedPuestos] = useState(false);
+  const [isSelectedPuestosExpanded, setIsSelectedPuestosExpanded] = useState(false);
 
   const [textFiles, setTextFiles] = useState<ManualFileLocal[]>([]);
   const [imageFiles, setImageFiles] = useState<ManualFileLocal[]>([]);
@@ -226,6 +251,68 @@ export default function JobManualsScreen() {
     }
   };
 
+  const fetchMainStructure = useCallback(async () => {
+    try {
+      setIsStructureLoading(true);
+
+      // 1) Cache primero (para modo offline inmediato)
+      const cacheStr = await AsyncStorage.getItem('main_structure_cache');
+      if (cacheStr) {
+        try {
+          const cached = JSON.parse(cacheStr);
+          if (Array.isArray(cached)) setStructure(cached);
+        } catch {
+          // ignore cache parse errors
+        }
+      }
+
+      // 2) Si hay internet, refrescar desde API y actualizar cache
+      const isConnected = await getConnectionStatus();
+      if (!isConnected) return;
+
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) throw new Error('Server URL not configured');
+
+      let token = await AsyncStorage.getItem('access_token');
+      if (!token) {
+        const refreshed = await refreshAccessToken();
+        if (!refreshed) throw new Error('No authentication token found');
+        token = await AsyncStorage.getItem('access_token');
+      }
+
+      const response = await fetch(`${apiUrl}/api/main-structure`, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': '69420',
+        },
+      });
+
+      if (response.status === 401 || response.status === 403) {
+        const refreshed = await refreshAccessToken();
+        if (refreshed) return fetchMainStructure();
+        await logout();
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      const incoming = data?.structure;
+      if (data?.status && Array.isArray(incoming)) {
+        setStructure(incoming);
+        await AsyncStorage.setItem('main_structure_cache', JSON.stringify(incoming));
+      }
+    } catch (error) {
+      console.error('Error fetching main structure for job manuals:', error);
+    } finally {
+      setIsStructureLoading(false);
+    }
+  }, [refreshAccessToken, logout]);
+
   const fetchCurrentMarca = useCallback(async () => {
     try {
       setIsLoading(true);
@@ -243,11 +330,16 @@ export default function JobManualsScreen() {
       const role = currentMarca.roleDivision?.role?.nombre || null;
       setRoleName(role);
 
-      // Cargar puestos por corpo para selección en formulario (similar a NotesScreen)
-      const corpoId = currentMarca.corpo?.id;
-      if (corpoId) {
-        await fetchPuestosCorpo(corpoId);
-      }
+      // Cargar estructura (cache-first) para selección de puestos por árbol
+      await fetchMainStructure();
+
+      // Preseleccionar árbol con la marca actual (si viene disponible)
+      setSelectedEmpresaId(currentMarca.empresa?.id ?? null);
+      setSelectedClienteId(currentMarca.cliente?.id ?? null);
+      setSelectedDivisionId(currentMarca.division?.id ?? null);
+      setSelectedContratoId(currentMarca.contrato?.id ?? null);
+      setSelectedSucursalId(currentMarca.corpo?.id ?? null);
+      setSelectedPuestoId(null);
 
       // Cargar manuales para visualización
       await fetchManuals(currentMarca.id);
@@ -257,66 +349,6 @@ export default function JobManualsScreen() {
       setIsLoading(false);
     }
   }, []);
-
-  const fetchPuestosCorpo = async (corpoId: number) => {
-    try {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-      if (!apiUrl) {
-        throw new Error('Server URL not configured');
-      }
-
-      const isConnected = await getConnectionStatus();
-
-      if (isConnected) {
-        let token = await AsyncStorage.getItem('access_token');
-        if (!token) {
-          const refreshed = await refreshAccessToken();
-          if (!refreshed) {
-            throw new Error('No authentication token found');
-          }
-          token = await AsyncStorage.getItem('access_token');
-        }
-
-        const response = await fetch(`${apiUrl}/api/puestos/corpo/${corpoId}`, {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-            'ngrok-skip-browser-warning': '69420',
-          },
-        });
-
-        if (response.status === 401 || response.status === 403) {
-          const refreshed = await refreshAccessToken();
-          if (refreshed) {
-            return fetchPuestosCorpo(corpoId);
-          } else {
-            await logout();
-            return;
-          }
-        }
-
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        const data = await response.json();
-        const puestosData: Puesto[] = data?.puestos || [];
-        setAvailablePuestos(puestosData);
-        await AsyncStorage.setItem(`puestos_corpo_cache_${corpoId}`, JSON.stringify(puestosData));
-      } else {
-        const puestosCache = await AsyncStorage.getItem(`puestos_corpo_cache_${corpoId}`);
-        if (puestosCache) {
-          const cachedPuestos = JSON.parse(puestosCache);
-          setAvailablePuestos(cachedPuestos);
-        } else {
-          setAvailablePuestos([]);
-        }
-      }
-    } catch (error) {
-      console.error('Error fetching puestos corpo for job manuals:', error);
-    }
-  };
 
   const fetchManuals = async (marcaIdToUse: number) => {
     try {
@@ -680,6 +712,116 @@ export default function JobManualsScreen() {
     });
   };
 
+  const filteredPuestosFromTree: Puesto[] = useMemo(() => {
+    // Si no hay selección en el árbol, no sugerimos nada.
+    const hasAnySelection =
+      selectedEmpresaId !== null ||
+      selectedClienteId !== null ||
+      selectedDivisionId !== null ||
+      selectedContratoId !== null ||
+      selectedSucursalId !== null ||
+      selectedPuestoId !== null;
+
+    if (!hasAnySelection) return [];
+
+    const seen = new Set<number>();
+    const out: Puesto[] = [];
+
+    for (const empresa of structure) {
+      if (selectedEmpresaId !== null && empresa.id !== selectedEmpresaId) continue;
+      for (const cliente of empresa.clientes ?? []) {
+        if (selectedClienteId !== null && cliente.id !== selectedClienteId) continue;
+        for (const division of cliente.division ?? []) {
+          if (selectedDivisionId !== null && division.id !== selectedDivisionId) continue;
+          for (const contrato of division.contratos ?? []) {
+            if (selectedContratoId !== null && contrato.id !== selectedContratoId) continue;
+            for (const sucursal of contrato.sucursales ?? []) {
+              if (selectedSucursalId !== null && sucursal.id !== selectedSucursalId) continue;
+              for (const puesto of sucursal.puestos ?? []) {
+                if (selectedPuestoId !== null && puesto.id !== selectedPuestoId) continue;
+                if (!seen.has(puesto.id)) {
+                  seen.add(puesto.id);
+                  out.push({ id: puesto.id, nombre: puesto.nombre });
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return out;
+  }, [
+    structure,
+    selectedEmpresaId,
+    selectedClienteId,
+    selectedDivisionId,
+    selectedContratoId,
+    selectedSucursalId,
+    selectedPuestoId,
+  ]);
+
+  const applyPuestosFromTree = () => {
+    if (filteredPuestosFromTree.length === 0) {
+      Alert.alert('Información', 'Selecciona un nivel del árbol para obtener puestos.');
+      return;
+    }
+    setSelectedPuestos(filteredPuestosFromTree.map(p => p.id));
+    setHasConfirmedPuestos(true);
+    setIsSelectedPuestosExpanded(true);
+  };
+
+  const empresaOptions = useMemo(() => structure ?? [], [structure]);
+
+  const clienteOptions = useMemo(() => {
+    const empresa = structure.find(e => e.id === selectedEmpresaId);
+    return empresa?.clientes ?? [];
+  }, [structure, selectedEmpresaId]);
+
+  const divisionOptions = useMemo(() => {
+    const cliente = clienteOptions.find(c => c.id === selectedClienteId);
+    return cliente?.division ?? [];
+  }, [clienteOptions, selectedClienteId]);
+
+  const contratoOptions = useMemo(() => {
+    const division = divisionOptions.find(d => d.id === selectedDivisionId);
+    return division?.contratos ?? [];
+  }, [divisionOptions, selectedDivisionId]);
+
+  const sucursalOptions = useMemo(() => {
+    const contrato = contratoOptions.find(c => c.id === selectedContratoId);
+    return contrato?.sucursales ?? [];
+  }, [contratoOptions, selectedContratoId]);
+
+  const puestoOptions = useMemo(() => {
+    const sucursal = sucursalOptions.find(s => s.id === selectedSucursalId);
+    return sucursal?.puestos ?? [];
+  }, [sucursalOptions, selectedSucursalId]);
+
+  const puestoNameById = useMemo(() => {
+    const map = new Map<number, string>();
+    for (const empresa of structure) {
+      for (const cliente of empresa.clientes ?? []) {
+        for (const division of cliente.division ?? []) {
+          for (const contrato of division.contratos ?? []) {
+            for (const sucursal of contrato.sucursales ?? []) {
+              for (const puesto of sucursal.puestos ?? []) {
+                map.set(puesto.id, puesto.nombre);
+              }
+            }
+          }
+        }
+      }
+    }
+    return map;
+  }, [structure]);
+
+  const selectedPuestosUi = useMemo(() => {
+    return selectedPuestos
+      .map((id) => ({ id, nombre: puestoNameById.get(id) || `Puesto #${id}` }))
+      .sort((a, b) => a.nombre.localeCompare(b.nombre));
+  }, [selectedPuestos, puestoNameById]);
+
   const handleAddFile = async (type: ManualFileLocal['type']) => {
     try {
       let pickerTypes: string | string[] | undefined;
@@ -780,6 +922,131 @@ export default function JobManualsScreen() {
       console.error('Error picking file for job manual:', error);
       Alert.alert('Error', 'No se pudo seleccionar el archivo. Intenta nuevamente.');
     }
+  };
+
+  const handleAddViewFile = async (type: ManualFileLocal['type']) => {
+    try {
+      let pickerTypes: string | string[] | undefined;
+
+      switch (type) {
+        case 'image':
+          pickerTypes = ['image/*'];
+          break;
+        case 'audio':
+          pickerTypes = ['audio/*'];
+          break;
+        case 'video':
+          pickerTypes = ['video/*'];
+          break;
+        case 'document':
+          pickerTypes = [
+            'application/pdf',
+            'application/msword',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'application/vnd.ms-excel',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'text/plain',
+            'text/csv',
+          ];
+          break;
+        default:
+          pickerTypes = [
+            'application/pdf',
+            'application/msword',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'text/plain',
+          ];
+          break;
+      }
+
+      const result = await DocumentPicker.getDocumentAsync({
+        type: pickerTypes,
+        multiple: false,
+        copyToCacheDirectory: true,
+      });
+
+      if (result.canceled || !result.assets || result.assets.length === 0) return;
+
+      const asset = result.assets[0];
+      const response = await fetch(asset.uri);
+      const blob = await response.blob();
+
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const res = reader.result;
+          if (typeof res === 'string') {
+            const parts = res.split(',');
+            resolve(parts.length > 1 ? parts[1] : parts[0]);
+          } else {
+            reject(new Error('No se pudo leer el archivo seleccionado'));
+          }
+        };
+        reader.onerror = () => reject(reader.error ?? new Error('Error al leer el archivo seleccionado'));
+        reader.readAsDataURL(blob);
+      });
+
+      let extension = '';
+      if (asset.name && asset.name.includes('.')) extension = asset.name.split('.').pop() || '';
+      else if (asset.mimeType && asset.mimeType.includes('/')) extension = asset.mimeType.split('/').pop() || '';
+
+      const localId = `local_vis_file_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      const newFile: ManualFileLocal = {
+        id: localId,
+        type,
+        name: asset.name || `archivo.${extension || 'dat'}`,
+        extension: extension || 'dat',
+        base64,
+        uri: asset.uri,
+        mimeType: asset.mimeType,
+      };
+
+      if (type === 'image') setViewImageFiles(prev => [...prev, newFile]);
+      else if (type === 'audio') setViewAudioFiles(prev => [...prev, newFile]);
+      else if (type === 'video') setViewVideoFiles(prev => [...prev, newFile]);
+      else setViewTextFiles(prev => [...prev, newFile]);
+    } catch (e) {
+      console.error('Error picking file for visualization:', e);
+      Alert.alert('Error', 'No se pudo seleccionar el archivo. Intenta nuevamente.');
+    }
+  };
+
+  const removeViewLocalFile = (type: ManualFileLocal['type'], id: string) => {
+    if (type === 'image') setViewImageFiles(prev => prev.filter(f => f.id !== id));
+    else if (type === 'audio') setViewAudioFiles(prev => prev.filter(f => f.id !== id));
+    else if (type === 'video') setViewVideoFiles(prev => prev.filter(f => f.id !== id));
+    else setViewTextFiles(prev => prev.filter(f => f.id !== id));
+  };
+
+  const buildVisualizationFilesPayload = () => {
+    const files = [...viewTextFiles, ...viewImageFiles, ...viewAudioFiles, ...viewVideoFiles];
+    return JSON.stringify(
+      files.map(f => ({
+        type: f.type,
+        extension: f.extension,
+        original_name: f.name,
+        file_base64: f.base64,
+        mimeType: f.mimeType,
+      }))
+    );
+  };
+
+  const buildVisualizationFileUrl = (manualId: number | undefined, visId: number | undefined, file: ManualFileRemote) => {
+    const hasLocalId = file.id_local !== undefined && file.id_local !== null && file.id_local !== '';
+    if (hasLocalId && file.base64) {
+      const mime = file.mimeType || (file.type ? `${file.type}/${file.extension || 'octet-stream'}` : `application/${file.extension || 'octet-stream'}`);
+      return `data:${mime};base64,${file.base64}`;
+    }
+
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (manualId && visId && apiUrl) {
+      if (file.type === 'image') return `${apiUrl}/api/job-manuals/${manualId}/visualizations/${visId}/get-image/${encodeURIComponent(file.name)}`;
+      if (file.type === 'audio') return `${apiUrl}/api/job-manuals/${manualId}/visualizations/${visId}/get-audio/${encodeURIComponent(file.name)}`;
+      if (file.type === 'video') return `${apiUrl}/api/job-manuals/${manualId}/visualizations/${visId}/get-video/${encodeURIComponent(file.name)}`;
+      return `${apiUrl}/api/job-manuals/${manualId}/visualizations/${visId}/get-file/${encodeURIComponent(file.name)}`;
+    }
+
+    return file.url || '';
   };
 
   const removeLocalFile = (type: ManualFileLocal['type'], id: string) => {
@@ -1458,35 +1725,251 @@ export default function JobManualsScreen() {
               {/* Selección de puestos */}
               <ThemedView style={styles.formGroup}>
                 <ThemedText style={styles.formLabel}>Puestos que recibirán el manual:</ThemedText>
-                {availablePuestos.length === 0 ? (
+
+                {isStructureLoading ? (
+                  <ThemedView style={styles.loadingManualsContainer}>
+                    <ActivityIndicator size="small" color="#007AFF" />
+                    <ThemedText style={styles.loadingText}>Cargando estructura...</ThemedText>
+                  </ThemedView>
+                ) : structure.length === 0 ? (
                   <ThemedText style={styles.emptyText}>
-                    No hay puestos disponibles para este corpo.
+                    No se pudo cargar la estructura. Conéctate a internet para descargarla o asegúrate de tener cache.
                   </ThemedText>
                 ) : (
-                  <ThemedView style={styles.puestosList}>
-                    {availablePuestos.map((puesto) => {
-                      const isSelected = selectedPuestos.includes(puesto.id);
-                      return (
-                        <TouchableOpacity
-                          key={puesto.id}
-                          style={[
-                            styles.puestoItem,
-                            isSelected && styles.puestoItemSelected,
-                          ]}
-                          onPress={() => togglePuestoSelection(puesto.id)}
+                  <>
+                    <ThemedText style={styles.signatureHintMuted}>
+                      Filtra el árbol hasta el nivel deseado. Si seleccionas un nivel superior, se vincularán todos los puestos debajo.
+                    </ThemedText>
+
+                    <ThemedView style={styles.structureGroup}>
+                      <ThemedText style={styles.smallLabel}>Empresa</ThemedText>
+                      <ThemedView style={styles.pickerWrapper}>
+                        <Picker
+                          enabled={empresaOptions.length > 0}
+                          selectedValue={selectedEmpresaId ?? 0}
+                          onValueChange={(v) => {
+                            const next = Number(v) || 0;
+                            setSelectedEmpresaId(next === 0 ? null : next);
+                            setSelectedClienteId(null);
+                            setSelectedDivisionId(null);
+                            setSelectedContratoId(null);
+                            setSelectedSucursalId(null);
+                            setSelectedPuestoId(null);
+                            setHasConfirmedPuestos(false);
+                            setIsSelectedPuestosExpanded(false);
+                          }}
                         >
-                          <ThemedText
-                            style={[
-                              styles.puestoItemText,
-                              isSelected && styles.puestoItemTextSelected,
-                            ]}
-                          >
-                            {puesto.nombre}
+                          <Picker.Item label="Seleccione empresa..." value={0} />
+                          {empresaOptions.map((e) => (
+                            <Picker.Item key={e.id} label={e.nombre} value={e.id} />
+                          ))}
+                        </Picker>
+                      </ThemedView>
+                    </ThemedView>
+
+                    <ThemedView style={styles.structureGroup}>
+                      <ThemedText style={styles.smallLabel}>Cliente</ThemedText>
+                      <ThemedView style={styles.pickerWrapper}>
+                        <Picker
+                          enabled={selectedEmpresaId !== null && clienteOptions.length > 0}
+                          selectedValue={selectedClienteId ?? 0}
+                          onValueChange={(v) => {
+                            const next = Number(v) || 0;
+                            setSelectedClienteId(next === 0 ? null : next);
+                            setSelectedDivisionId(null);
+                            setSelectedContratoId(null);
+                            setSelectedSucursalId(null);
+                            setSelectedPuestoId(null);
+                            setHasConfirmedPuestos(false);
+                            setIsSelectedPuestosExpanded(false);
+                          }}
+                        >
+                          <Picker.Item label={selectedEmpresaId ? 'Seleccione cliente...' : 'Seleccione empresa primero'} value={0} />
+                          {clienteOptions.map((c) => (
+                            <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                          ))}
+                        </Picker>
+                      </ThemedView>
+                      {selectedEmpresaId !== null && clienteOptions.length === 0 && (
+                        <ThemedText style={styles.emptyText}>No hay clientes disponibles para esta empresa.</ThemedText>
+                      )}
+                    </ThemedView>
+
+                    <ThemedView style={styles.structureGroup}>
+                      <ThemedText style={styles.smallLabel}>División</ThemedText>
+                      <ThemedView style={styles.pickerWrapper}>
+                        <Picker
+                          enabled={selectedClienteId !== null && divisionOptions.length > 0}
+                          selectedValue={selectedDivisionId ?? 0}
+                          onValueChange={(v) => {
+                            const next = Number(v) || 0;
+                            setSelectedDivisionId(next === 0 ? null : next);
+                            setSelectedContratoId(null);
+                            setSelectedSucursalId(null);
+                            setSelectedPuestoId(null);
+                            setHasConfirmedPuestos(false);
+                            setIsSelectedPuestosExpanded(false);
+                          }}
+                        >
+                          <Picker.Item label={selectedClienteId ? 'Seleccione división...' : 'Seleccione cliente primero'} value={0} />
+                          {divisionOptions.map((d) => (
+                            <Picker.Item key={d.id} label={d.nombre} value={d.id} />
+                          ))}
+                        </Picker>
+                      </ThemedView>
+                      {selectedClienteId !== null && divisionOptions.length === 0 && (
+                        <ThemedText style={styles.emptyText}>Este cliente no tiene divisiones con contratos.</ThemedText>
+                      )}
+                    </ThemedView>
+
+                    <ThemedView style={styles.structureGroup}>
+                      <ThemedText style={styles.smallLabel}>Contrato</ThemedText>
+                      <ThemedView style={styles.pickerWrapper}>
+                        <Picker
+                          enabled={selectedDivisionId !== null && contratoOptions.length > 0}
+                          selectedValue={selectedContratoId ?? 0}
+                          onValueChange={(v) => {
+                            const next = Number(v) || 0;
+                            setSelectedContratoId(next === 0 ? null : next);
+                            setSelectedSucursalId(null);
+                            setSelectedPuestoId(null);
+                            setHasConfirmedPuestos(false);
+                            setIsSelectedPuestosExpanded(false);
+                          }}
+                        >
+                          <Picker.Item label={selectedDivisionId ? 'Seleccione contrato...' : 'Seleccione división primero'} value={0} />
+                          {contratoOptions.map((c) => (
+                            <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                          ))}
+                        </Picker>
+                      </ThemedView>
+                      {selectedDivisionId !== null && contratoOptions.length === 0 && (
+                        <ThemedText style={styles.emptyText}>Esta división no tiene contratos para el cliente seleccionado.</ThemedText>
+                      )}
+                    </ThemedView>
+
+                    <ThemedView style={styles.structureGroup}>
+                      <ThemedText style={styles.smallLabel}>Sucursal (Corpo)</ThemedText>
+                      <ThemedView style={styles.pickerWrapper}>
+                        <Picker
+                          enabled={selectedContratoId !== null && sucursalOptions.length > 0}
+                          selectedValue={selectedSucursalId ?? 0}
+                          onValueChange={(v) => {
+                            const next = Number(v) || 0;
+                            setSelectedSucursalId(next === 0 ? null : next);
+                            setSelectedPuestoId(null);
+                            setHasConfirmedPuestos(false);
+                            setIsSelectedPuestosExpanded(false);
+                          }}
+                        >
+                          <Picker.Item label={selectedContratoId ? 'Seleccione sucursal...' : 'Seleccione contrato primero'} value={0} />
+                          {sucursalOptions.map((s) => (
+                            <Picker.Item key={s.id} label={s.nombre} value={s.id} />
+                          ))}
+                        </Picker>
+                      </ThemedView>
+                      {selectedContratoId !== null && sucursalOptions.length === 0 && (
+                        <ThemedText style={styles.emptyText}>Este contrato no tiene sucursales.</ThemedText>
+                      )}
+                    </ThemedView>
+
+                    <ThemedView style={styles.structureGroup}>
+                      <ThemedText style={styles.smallLabel}>Puesto</ThemedText>
+                      <ThemedView style={styles.pickerWrapper}>
+                        <Picker
+                          enabled={selectedSucursalId !== null && puestoOptions.length > 0}
+                          selectedValue={selectedPuestoId ?? 0}
+                          onValueChange={(v) => {
+                            const next = Number(v) || 0;
+                            setSelectedPuestoId(next === 0 ? null : next);
+                            setHasConfirmedPuestos(false);
+                            setIsSelectedPuestosExpanded(false);
+                          }}
+                        >
+                          <Picker.Item label={selectedSucursalId ? 'Seleccione puesto (opcional)' : 'Seleccione sucursal primero'} value={0} />
+                          {puestoOptions.map((p) => (
+                            <Picker.Item key={p.id} label={p.nombre} value={p.id} />
+                          ))}
+                        </Picker>
+                      </ThemedView>
+                      {selectedSucursalId !== null && puestoOptions.length === 0 && (
+                        <ThemedText style={styles.emptyText}>Esta sucursal no tiene puestos.</ThemedText>
+                      )}
+                    </ThemedView>
+
+                    <ThemedView style={styles.treeActionsRow}>
+                      <TouchableOpacity style={styles.treeActionPrimary} onPress={applyPuestosFromTree}>
+                        <Ionicons name="checkmark-circle-outline" size={18} color="#FFFFFF" />
+                        <ThemedText style={styles.treeActionPrimaryText}>Confirmar</ThemedText>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.treeActionSecondary}
+                        onPress={() => {
+                          setSelectedPuestos([]);
+                          setHasConfirmedPuestos(false);
+                          setIsSelectedPuestosExpanded(false);
+                        }}
+                      >
+                        <Ionicons name="trash-outline" size={18} color="#007AFF" />
+                        <ThemedText style={styles.treeActionSecondaryText}>Limpiar</ThemedText>
+                      </TouchableOpacity>
+                    </ThemedView>
+
+                    <ThemedText style={styles.signatureHintMuted}>
+                      Seleccionados: {selectedPuestos.length} | En el filtro: {filteredPuestosFromTree.length}
+                    </ThemedText>
+
+                    {hasConfirmedPuestos && selectedPuestosUi.length > 0 && (
+                      <ThemedView style={styles.selectedPuestosBox}>
+                        <TouchableOpacity
+                          style={styles.selectedPuestosHeader}
+                          onPress={() => setIsSelectedPuestosExpanded((p) => !p)}
+                        >
+                          <ThemedText style={styles.selectedPuestosHeaderText}>
+                            Puestos seleccionados ({selectedPuestosUi.length})
                           </ThemedText>
+                          <Ionicons
+                            name={isSelectedPuestosExpanded ? 'chevron-up' : 'chevron-down'}
+                            size={18}
+                            color="#007AFF"
+                          />
                         </TouchableOpacity>
-                      );
-                    })}
-                  </ThemedView>
+
+                        {isSelectedPuestosExpanded && (
+                          <>
+                            {selectedPuestosUi.length <= 150 ? (
+                              <ThemedView style={styles.puestosList}>
+                                {selectedPuestosUi.map((puesto) => {
+                                  const isSelected = selectedPuestos.includes(puesto.id);
+                                  return (
+                                    <TouchableOpacity
+                                      key={puesto.id}
+                                      style={[styles.puestoItem, isSelected && styles.puestoItemSelected]}
+                                      onPress={() => togglePuestoSelection(puesto.id)}
+                                    >
+                                      <ThemedText style={[styles.puestoItemText, isSelected && styles.puestoItemTextSelected]}>
+                                        {puesto.nombre}
+                                      </ThemedText>
+                                    </TouchableOpacity>
+                                  );
+                                })}
+                              </ThemedView>
+                            ) : (
+                              <ThemedText style={styles.emptyText}>
+                                Hay {selectedPuestosUi.length} puestos seleccionados. Filtra más y confirma por partes para verlos como etiquetas.
+                              </ThemedText>
+                            )}
+                          </>
+                        )}
+                      </ThemedView>
+                    )}
+
+                    {filteredPuestosFromTree.length > 150 && (
+                      <ThemedText style={styles.emptyText}>
+                        Hay {filteredPuestosFromTree.length} puestos en este nivel. Filtra más o pulsa “Confirmar”.
+                      </ThemedText>
+                    )}
+                  </>
                 )}
               </ThemedView>
 
@@ -1943,6 +2426,7 @@ export default function JobManualsScreen() {
                       return (selectedManual?.visualizaciones || []).map((firma) => {
                         const quizAnswers = parseQuizAnswersFromVisualization((firma as any)?.quiz_answear);
                         const hasQuizAnswers = quizAnswers.length > 0;
+                        const visFiles = ((firma as any)?.files || []) as ManualFileRemote[];
 
                         const approved = firma.approved ?? null;
                         const approvedPending = !!(firma as any)?.approved_pending;
@@ -1969,6 +2453,80 @@ export default function JobManualsScreen() {
                               <ThemedText style={styles.quizReviewStatusText}>
                                 Estado del quiz: {statusLabel}
                               </ThemedText>
+                            )}
+
+                            {/* Archivos adjuntos de la visualización */}
+                            {visFiles.length > 0 && (
+                              <ThemedView style={{ marginTop: 10 }}>
+                                <ThemedText style={styles.viewerSectionTitle}>Evidencias</ThemedText>
+
+                                {visFiles.some(f => f.type === 'image') && selectedManual && (
+                                  <ThemedView style={{ marginTop: 6 }}>
+                                    <ThemedText style={styles.quizQuestionMeta}>Imágenes</ThemedText>
+                                    {visFiles
+                                      .filter(f => f.type === 'image')
+                                      .map(file => (
+                                        <ManualImageViewer
+                                          key={`vis_${firma.id}_${file.id}`}
+                                          imageUrl={buildVisualizationFileUrl(selectedManual.id, firma.id, file)}
+                                        />
+                                      ))}
+                                  </ThemedView>
+                                )}
+
+                                {visFiles.some(f => f.type === 'audio') && selectedManual && (
+                                  <ThemedView style={{ marginTop: 6 }}>
+                                    <ThemedText style={styles.quizQuestionMeta}>Audios</ThemedText>
+                                    {visFiles
+                                      .filter(f => f.type === 'audio')
+                                      .map(file => (
+                                        <ManualAudioPlayer
+                                          key={`vis_${firma.id}_${file.id}`}
+                                          sourceUrl={buildVisualizationFileUrl(selectedManual.id, firma.id, file)}
+                                          label={getRemoteFileDisplayName(file)}
+                                        />
+                                      ))}
+                                  </ThemedView>
+                                )}
+
+                                {visFiles.some(f => f.type === 'video') && selectedManual && (
+                                  <ThemedView style={{ marginTop: 6 }}>
+                                    <ThemedText style={styles.quizQuestionMeta}>Videos</ThemedText>
+                                    {visFiles
+                                      .filter(f => f.type === 'video')
+                                      .map(file => (
+                                        <ManualVideoPlayer
+                                          key={`vis_${firma.id}_${file.id}`}
+                                          sourceUrl={buildVisualizationFileUrl(selectedManual.id, firma.id, file)}
+                                        />
+                                      ))}
+                                  </ThemedView>
+                                )}
+
+                                {visFiles.some(f => f.type === 'document') && selectedManual && (
+                                  <ThemedView style={{ marginTop: 6 }}>
+                                    <ThemedText style={styles.quizQuestionMeta}>Documentos</ThemedText>
+                                    {visFiles
+                                      .filter(f => f.type === 'document')
+                                      .map(file => (
+                                        <TouchableOpacity
+                                          key={`vis_${firma.id}_${file.id}`}
+                                          style={styles.documentRow}
+                                          onPress={() => {
+                                            const url = buildVisualizationFileUrl(selectedManual.id, firma.id, file);
+                                            if (url) Linking.openURL(url);
+                                            else Alert.alert('Error', 'URL inválida para descargar el archivo');
+                                          }}
+                                        >
+                                          <Ionicons name="document-text-outline" size={20} color="#007AFF" />
+                                          <ThemedText numberOfLines={1} style={styles.documentText}>
+                                            {getRemoteFileDisplayName(file)}
+                                          </ThemedText>
+                                        </TouchableOpacity>
+                                      ))}
+                                  </ThemedView>
+                                )}
+                              </ThemedView>
                             )}
 
                             {hasQuizConfigured && (
@@ -2304,6 +2862,77 @@ export default function JobManualsScreen() {
                   ) : (
                     <ThemedView style={styles.signatureRow}>
                       <ThemedText style={styles.signatureText}>Firma lista</ThemedText>
+
+                      {/* Evidencias (archivos) para la visualización */}
+                      <ThemedView style={{ width: '100%', marginTop: 10 }}>
+                        <ThemedText style={styles.signatureHintMuted}>
+                          Evidencias (opcional): puedes adjuntar imágenes, audios, videos o documentos.
+                        </ThemedText>
+
+                        <ThemedView style={styles.fileIconButtonsRow}>
+                          <TouchableOpacity style={styles.fileIconButton} onPress={() => handleAddViewFile('image')}>
+                            <Ionicons name="image-outline" size={20} color="#007AFF" />
+                          </TouchableOpacity>
+                          <TouchableOpacity style={styles.fileIconButton} onPress={() => handleAddViewFile('audio')}>
+                            <Ionicons name="mic-outline" size={20} color="#007AFF" />
+                          </TouchableOpacity>
+                          <TouchableOpacity style={styles.fileIconButton} onPress={() => handleAddViewFile('video')}>
+                            <Ionicons name="videocam-outline" size={20} color="#007AFF" />
+                          </TouchableOpacity>
+                          <TouchableOpacity style={styles.fileIconButton} onPress={() => handleAddViewFile('document')}>
+                            <Ionicons name="document-text-outline" size={20} color="#007AFF" />
+                          </TouchableOpacity>
+                        </ThemedView>
+
+                        {(viewTextFiles.length + viewImageFiles.length + viewAudioFiles.length + viewVideoFiles.length) > 0 && (
+                          <ThemedView style={styles.filesList}>
+                            {viewImageFiles.map(file => (
+                              <ThemedView key={file.id} style={styles.fileRow}>
+                                <Image
+                                  source={{ uri: `data:image/${file.extension || 'jpeg'};base64,${file.base64}` }}
+                                  style={styles.filePreviewImage}
+                                  resizeMode="cover"
+                                />
+                                <ThemedText numberOfLines={1} style={styles.fileName}>{file.name}</ThemedText>
+                                <TouchableOpacity onPress={() => removeViewLocalFile('image', file.id)}>
+                                  <Ionicons name="trash" size={16} color="#FF3B30" />
+                                </TouchableOpacity>
+                              </ThemedView>
+                            ))}
+
+                            {viewAudioFiles.map(file => (
+                              <ThemedView key={file.id} style={styles.fileRow}>
+                                <Ionicons name="musical-notes-outline" size={16} color="#007AFF" />
+                                <ThemedText numberOfLines={1} style={styles.fileName}>{file.name}</ThemedText>
+                                <TouchableOpacity onPress={() => removeViewLocalFile('audio', file.id)}>
+                                  <Ionicons name="trash" size={16} color="#FF3B30" />
+                                </TouchableOpacity>
+                              </ThemedView>
+                            ))}
+
+                            {viewVideoFiles.map(file => (
+                              <ThemedView key={file.id} style={styles.fileRow}>
+                                <Ionicons name="videocam-outline" size={16} color="#007AFF" />
+                                <ThemedText numberOfLines={1} style={styles.fileName}>{file.name}</ThemedText>
+                                <TouchableOpacity onPress={() => removeViewLocalFile('video', file.id)}>
+                                  <Ionicons name="trash" size={16} color="#FF3B30" />
+                                </TouchableOpacity>
+                              </ThemedView>
+                            ))}
+
+                            {viewTextFiles.map(file => (
+                              <ThemedView key={file.id} style={styles.fileRow}>
+                                <Ionicons name="document-text-outline" size={16} color="#007AFF" />
+                                <ThemedText numberOfLines={1} style={styles.fileName}>{file.name}</ThemedText>
+                                <TouchableOpacity onPress={() => removeViewLocalFile('document', file.id)}>
+                                  <Ionicons name="trash" size={16} color="#FF3B30" />
+                                </TouchableOpacity>
+                              </ThemedView>
+                            ))}
+                          </ThemedView>
+                        )}
+                      </ThemedView>
+
                       <TouchableOpacity
                         style={[styles.signatureActionButton, isSigningManual && styles.formButtonDisabled]}
                         onPress={async () => {
@@ -2361,6 +2990,7 @@ export default function JobManualsScreen() {
                               : null;
 
                             const isConnected = await getConnectionStatus();
+                            const visualizationFilesStr = buildVisualizationFilesPayload();
 
                             if (isConnected) {
                               const proceed = await new Promise<boolean>((resolve) => {
@@ -2379,6 +3009,7 @@ export default function JobManualsScreen() {
                                 id: selectedManual.id,
                                 firma: viewSignature,
                                 quizAnswear: quizAnswearStr,
+                                files: visualizationFilesStr,
                                 refreshAccessToken,
                                 logout,
                                 marcaId,
@@ -2408,6 +3039,7 @@ export default function JobManualsScreen() {
                                 type: 'sign',
                                 firma: viewSignature,
                                 quizAnswear: quizAnswearStr,
+                                files: visualizationFilesStr,
                                 marcaId,
                               });
                               await AsyncStorage.setItem('job_manuals_actions', JSON.stringify(actions));
@@ -2426,6 +3058,17 @@ export default function JobManualsScreen() {
                               approved: null,
                               created_at: new Date(horaAccionUse).toISOString(),
                               updated_at: new Date(horaAccionUse).toISOString(),
+                              files: [...viewTextFiles, ...viewImageFiles, ...viewAudioFiles, ...viewVideoFiles].map((f) => ({
+                                id: Date.now() + Math.random(),
+                                id_local: f.id,
+                                type: f.type,
+                                extension: f.extension,
+                                name: f.name,
+                                original_name: f.name,
+                                base64: f.base64,
+                                mimeType: f.mimeType,
+                                url: '',
+                              })),
                             };
 
                             setSelectedManual(prev => {
@@ -2462,6 +3105,10 @@ export default function JobManualsScreen() {
                           } finally {
                             setIsSigningManual(false);
                             setViewSignature(null);
+                            setViewTextFiles([]);
+                            setViewImageFiles([]);
+                            setViewAudioFiles([]);
+                            setViewVideoFiles([]);
                           }
                         }}
                         disabled={isSigningManual}
@@ -2760,6 +3407,86 @@ const styles = StyleSheet.create({
     minHeight: 80,
     textAlignVertical: 'top',
   },
+  signatureHintMuted: {
+    fontSize: 12,
+    color: '#666666',
+    marginTop: 6,
+    marginBottom: 8,
+    fontWeight: '600',
+  },
+  structureGroup: {
+    marginTop: 10,
+  },
+  smallLabel: {
+    fontSize: 12,
+    color: '#333333',
+    fontWeight: '700',
+    marginBottom: 6,
+  },
+  pickerWrapper: {
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    backgroundColor: '#FFFFFF',
+    overflow: 'hidden',
+  },
+  treeActionsRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 10,
+    marginBottom: 6,
+  },
+  treeActionPrimary: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 10,
+    borderRadius: 8,
+    backgroundColor: '#007AFF',
+  },
+  treeActionPrimaryText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  treeActionSecondary: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#007AFF',
+    backgroundColor: '#FFFFFF',
+  },
+  treeActionSecondaryText: {
+    color: '#007AFF',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  selectedPuestosBox: {
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 10,
+    padding: 10,
+    backgroundColor: '#FFFFFF',
+  },
+  selectedPuestosHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 6,
+  },
+  selectedPuestosHeaderText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#007AFF',
+  },
   puestosList: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -2820,6 +3547,21 @@ const styles = StyleSheet.create({
     height: 40,
     borderRadius: 4,
     backgroundColor: '#F0F0F0',
+  },
+  fileIconButtonsRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 8,
+  },
+  fileIconButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    backgroundColor: '#F8F9FA',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   signatureButtons: {
     flexDirection: 'row',
@@ -3022,9 +3764,9 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
   signatureRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    gap: 10,
     marginTop: 6,
   },
   signatureText: {
