@@ -92,7 +92,7 @@ export default function RolePermissionsScreen() {
                 } else {
                     // If refresh fails, logout the user
                     await logout();
-                    Alert.alert('Error', 'Sesión expirada. Por favor inicie sesión nuevamente.');
+                    Alert.alert('3', 'Sesión expirada. Por favor inicie sesión nuevamente.');
                     return;
                 }
             }

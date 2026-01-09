@@ -118,7 +118,6 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         };
 
         if (empleado_plaza && empleado_plaza.plaza_id && empleado_plaza.division_id) {
-
             const division = await prisma.n_division.findFirst({
                 where: {
                     id: empleado_plaza.division_id

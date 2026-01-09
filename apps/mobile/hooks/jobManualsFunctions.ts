@@ -24,6 +24,7 @@ type SignJobManualParams = {
   id: number;
   firma: string;
   quizAnswear?: string | null;
+  files?: string | null;
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
   marcaId: number;
@@ -173,6 +174,7 @@ export const signJobManual = async ({
   id,
   firma,
   quizAnswear,
+  files,
   refreshAccessToken,
   logout,
   marcaId,
@@ -198,13 +200,13 @@ export const signJobManual = async ({
       'Content-Type': 'application/json',
       'ngrok-skip-browser-warning': '69420',
     },
-    body: JSON.stringify({ firma_empleado: firma, marca_id: marcaId, quiz_answear: quizAnswear ?? null }),
+    body: JSON.stringify({ firma_empleado: firma, marca_id: marcaId, quiz_answear: quizAnswear ?? null, files: files ?? null }),
   });
 
   if (response.status === 401 || response.status === 403) {
     const refreshed = await refreshAccessToken();
     if (refreshed) {
-      return signJobManual({ id, firma, refreshAccessToken, logout, marcaId });
+      return signJobManual({ id, firma, quizAnswear, files, refreshAccessToken, logout, marcaId });
     } else {
       await logout();
       return { status: false, message: 'Sesión expirada' };

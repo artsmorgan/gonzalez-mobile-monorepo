@@ -269,7 +269,7 @@ export default function NotesScreen() {
           if (refreshed) {
             return fetchCategories();
           } else {
-            Alert.alert('Error', 'Sesión expirada. Por favor inicie sesión nuevamente.');
+            Alert.alert('6', 'Sesión expirada. Por favor inicie sesión nuevamente.');
             await logout();
             return;
           }
@@ -369,7 +369,7 @@ export default function NotesScreen() {
           if (refreshed) {
             return fetchPuestosCorpo();
           } else {
-            Alert.alert('Error', 'Sesión expirada. Por favor inicie sesión nuevamente.');
+            Alert.alert('7', 'Sesión expirada. Por favor inicie sesión nuevamente.');
             await logout();
             return;
           }
@@ -472,7 +472,7 @@ export default function NotesScreen() {
           if (refreshed) {
             return fetchNotes();
           } else {
-            Alert.alert('Error', 'Sesión expirada. Por favor inicie sesión nuevamente.');
+            Alert.alert('8', 'Sesión expirada. Por favor inicie sesión nuevamente.');
             await logout();
             return;
           }
@@ -816,7 +816,7 @@ export default function NotesScreen() {
                 if (refreshed) {
                   return deleteNote(noteId);
                 } else {
-                  Alert.alert('Error', 'Sesión expirada. Por favor inicie sesión nuevamente.');
+                  Alert.alert('9', 'Sesión expirada. Por favor inicie sesión nuevamente.');
                   await logout();
                   return;
                 }
@@ -1076,7 +1076,7 @@ const getActionIcon = (action: string) => {
         if (refreshed) {
           return fetchChanges(noteId);
         } else {
-          Alert.alert('Error', 'Sesión expirada. Por favor inicie sesión nuevamente.');
+          Alert.alert('10', 'Sesión expirada. Por favor inicie sesión nuevamente.');
           await logout();
           return;
         }

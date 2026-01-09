@@ -69,7 +69,7 @@ module.exports = {
       API_SERVER: process.env.EXPO_PUBLIC_API_SERVER || 
                   process.env.API_SERVER || 
                   process.env.NEXT_PUBLIC_API_SERVER ||
-                  "https://api-gonzalez-mobile-monorepo-production.up.railway.app", // Local dev fallback
+                  "https://0477fedce1e1.ngrok-free.app", // Local dev fallback
       APP_MODE: process.env.APP_MODE || process.env.NODE_ENV || "dev",
       router: {},
       eas: {

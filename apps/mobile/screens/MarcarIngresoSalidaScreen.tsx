@@ -502,14 +502,22 @@ export default function MarcarIngresoSalidaScreen() {
               getEmployeesCorpo(attendanceData.marca.corpo.id),
               getIncidents(attendanceData.marca.id),
               getIncidentsClassifications(),
+              getDocumentTypes(),
               getExecutives(),
               getSurveys(attendanceData.marca.id),
               getPuestosCorpo(attendanceData.marca.corpo.id),
               getTrainings(attendanceData.marca.id),
               getVoiceNotes(attendanceData.marca.id),
               getArticulos(),
-              getJobManuals(attendanceData.marca.id)
+              getJobManuals(attendanceData.marca.id),
+              getLlaves(attendanceData.marca.id),
+              getBitacoraVehiculoDetenido(attendanceData.marca.id),
+              getDocumentosEntregados(attendanceData.marca.id),
             ]);
+
+            //if (attendanceData.marca.roleDivision.division.nombre !== 'OPERATIVO') {
+              await getMainStructure();
+            //}
           }
         }
         else {
@@ -562,6 +570,120 @@ export default function MarcarIngresoSalidaScreen() {
     const data = await response.json();
     if (data.status) {
       await AsyncStorage.setItem('job_manuals_cache', JSON.stringify(data.manuals));
+    }
+  }
+
+  const getMainStructure = async () => {
+    await AsyncStorage.removeItem('main_structure_cache');
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+    const token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      throw new Error('No authentication token found');
+    }
+    const response = await fetch(`${apiUrl}/api/main-structure`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status} getMainStructure`);
+    }
+    const data = await response.json();
+    if (data.status) {
+      await AsyncStorage.setItem('main_structure_cache', JSON.stringify(data.structure));
+    }
+  }
+
+  const getBitacoraVehiculoDetenido = async (marcaId: number) => {
+    // Eliminar actions
+    await AsyncStorage.removeItem('bitacora_vehiculo_detenido_actions');
+    await AsyncStorage.removeItem('bitacora_vehiculo_detenido_cache');
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+    const token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      throw new Error('No authentication token found');
+    }
+    const response = await fetch(`${apiUrl}/api/bitacora-vehiculo-detenido?m=${marcaId}`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status} getBitacoraVehiculoDetenido`);
+    }
+    const data = await response.json();
+    if (data.status) {
+      await AsyncStorage.setItem('bitacora_vehiculo_detenido_cache', JSON.stringify(data.data));
+    }
+  }
+
+  const getDocumentosEntregados = async (marcaId: number) => {
+    // Eliminar actions
+    await AsyncStorage.removeItem('documentos_entregados_actions');
+    await AsyncStorage.removeItem('documentos_entregados_cache');
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+    const token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      throw new Error('No authentication token found');
+    }
+    const response = await fetch(`${apiUrl}/api/documentos-entregados?m=${marcaId}`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status} getDocumentosEntregados`);
+    }
+    const data = await response.json();
+    if (data.status) {
+      await AsyncStorage.setItem('documentos_entregados_cache', JSON.stringify(data.data));
+    }
+  }
+
+  const getLlaves = async (marcaId: number) => {
+    // Eliminar actions
+    await AsyncStorage.removeItem('llaves_actions');
+    await AsyncStorage.removeItem('llaves_cache');
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+    const token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      throw new Error('No authentication token found');
+    }
+    const response = await fetch(`${apiUrl}/api/llaves?m=${marcaId}`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status} getLlaves`);
+    }
+    const data = await response.json();
+    if (data.status) {
+      await AsyncStorage.setItem('llaves_cache', JSON.stringify(data.data));
     }
   }
 
@@ -822,6 +944,34 @@ export default function MarcarIngresoSalidaScreen() {
     const data = await response.json();
     if (data.status) {
       await AsyncStorage.setItem('incidents_classifications_cache', JSON.stringify(data.classifications));
+    }
+  }
+  
+  const getDocumentTypes = async () => {
+    // Eliminar actions
+    await AsyncStorage.removeItem('document_types_cache');
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+    const token = await AsyncStorage.getItem('access_token');
+      if (!token) {
+        throw new Error('No authentication token found');
+    }
+    const response = await fetch(`${apiUrl}/api/document-types`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status} getDocumentTypes`);
+    }
+    const data = await response.json();
+    if (data.status) {
+      await AsyncStorage.setItem('document_types_cache', JSON.stringify(data.documentTypes));
     }
   }
 
