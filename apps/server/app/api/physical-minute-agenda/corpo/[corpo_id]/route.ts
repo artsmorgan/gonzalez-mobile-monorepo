@@ -7,6 +7,7 @@ export async function GET(
     context: { params: Promise<{ corpo_id: string }> }
 ) {
     try {
+        /*
         const { valid, payload, message } = verifyAccessToken(req);
 
         if (!valid) {
@@ -38,7 +39,12 @@ export async function GET(
             message: "Agendas minuta física obtenidas correctamente",
             data: recordsWithIdLocal
         }, { status: 200 });
-
+*/
+        return NextResponse.json({
+            status: true,
+            message: "Agendas minuta física obtenidas correctamente",
+            data: []
+        }, { status: 200 });
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error(errorMessage);

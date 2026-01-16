@@ -63,6 +63,7 @@ interface CurrentMarca {
   puesto: {
     id: number;
     nombre: string;
+    tiene_relevo: boolean;
   };
   plaza: {
     id: number;
@@ -80,6 +81,7 @@ interface Note {
   description: string;
   division: string | null;
   categoria_id: number | null;
+  relevancia: string | null;
   empleado: string;
   updated_at: string;
   id_local: string;
@@ -92,6 +94,7 @@ interface EditingNote {
   description: string;
   division: string | null;
   categoria_id: number | null;
+  relevancia: 'Baja' | 'Media' | 'Alta';
 }
 
 interface Change {
@@ -100,6 +103,7 @@ interface Change {
   created_at: string;
   empleado: string;
   categoria: string | null;
+  relevancia: string | null;
 }
 
 interface ChangesResponse {
@@ -150,6 +154,7 @@ export default function NotesScreen() {
     description: '',
     division: null,
     categoria_id: null,
+    relevancia: 'Baja',
   });
   
   // Form refs for text inputs
@@ -162,6 +167,7 @@ export default function NotesScreen() {
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<number | string>('all');
+  const [selectedRelevancia, setSelectedRelevancia] = useState<string>('all');
   const [empleadoFilter, setEmpleadoFilter] = useState('');
   const [isFiltersExpanded, setIsFiltersExpanded] = useState(false);
   
@@ -593,6 +599,7 @@ export default function NotesScreen() {
                 description: descriptionRef.current,
                 division: newNote.division,
                 categoria_id: newNote.categoria_id,
+                relevancia: newNote.relevancia,
                 puestos: JSON.stringify(puestosArray)
               };
 
@@ -612,7 +619,7 @@ export default function NotesScreen() {
                 if (data.status) {
                   Alert.alert('Éxito', data.message || 'Nota creada correctamente');
                   setIsCreating(false);
-                  setNewNote({ id: null, id_local: '', titulo: '', description: '', division: null, categoria_id: null });
+                  setNewNote({ id: null, id_local: '', titulo: '', description: '', division: null, categoria_id: null, relevancia: 'Baja' });
                   setSelectedPuestos([]);
                   fetchNotes();
                 } else {
@@ -645,6 +652,7 @@ export default function NotesScreen() {
                   description: descriptionRef.current,
                   division: newNote.division,
                   categoria_id: newNote.categoria_id,
+                  relevancia: newNote.relevancia,
                   empleado: employee?.name || 'Desconocido',
                   updated_at: new Date(horaAccion).toISOString(),
                   id_local: localId,
@@ -655,7 +663,7 @@ export default function NotesScreen() {
 
                 Alert.alert('Modo Offline', 'Nota creada localmente. Se sincronizará cuando haya conexión.');
                 setIsCreating(false);
-                setNewNote({ id: null, id_local: '', titulo: '', description: '', division: null, categoria_id: null });
+                setNewNote({ id: null, id_local: '', titulo: '', description: '', division: null, categoria_id: null, relevancia: 'Baja' });
                 setSelectedPuestos([]);
                 fetchNotes();
               }
@@ -697,6 +705,7 @@ export default function NotesScreen() {
                 description: descriptionRef.current,
                 division: editingNote.division,
                 categoria_id: editingNote.categoria_id,
+                relevancia: editingNote.relevancia,
               };
 
               // Verificar conectividad
@@ -759,6 +768,7 @@ export default function NotesScreen() {
                     description: descriptionRef.current,
                     division: editingNote.division,
                     categoria_id: editingNote.categoria_id,
+                    relevancia: editingNote.relevancia,
                   };
                   await AsyncStorage.setItem('notes_cache', JSON.stringify(cache));
                 }
@@ -871,6 +881,7 @@ const getActionIcon = (action: string) => {
       description: note.description,
       division: note.division,
       categoria_id: note.categoria_id,
+      relevancia: (note.relevancia || 'Baja') as 'Baja' | 'Media' | 'Alta',
     });
     // Initialize refs with note values
     tituloRef.current = note.titulo;
@@ -887,7 +898,7 @@ const getActionIcon = (action: string) => {
 
   const startCreating = async () => {
     setIsCreating(true);
-    setNewNote({ id: null, id_local: '', titulo: '', description: '', division: divisions[0] || null, categoria_id: null });
+    setNewNote({ id: null, id_local: '', titulo: '', description: '', division: divisions[0] || null, categoria_id: null, relevancia: 'Baja' });
     // Initialize refs
     tituloRef.current = '';
     descriptionRef.current = '';
@@ -922,7 +933,7 @@ const getActionIcon = (action: string) => {
 
   const cancelCreating = () => {
     setIsCreating(false);
-    setNewNote({ id: null, id_local: '', titulo: '', description: '', division: null, categoria_id: null });
+    setNewNote({ id: null, id_local: '', titulo: '', description: '', division: null, categoria_id: null, relevancia: 'Baja' });
     setSelectedPuestos([]);
   };
 
@@ -977,11 +988,16 @@ const getActionIcon = (action: string) => {
       (selectedCategory === 'none' && !note.categoria_id) ||
       note.categoria_id === selectedCategory;
     
+    const matchesRelevancia = 
+      selectedRelevancia === 'all' || 
+      (selectedRelevancia === 'none' && !note.relevancia) ||
+      note.relevancia === selectedRelevancia;
+    
     const matchesEmpleado = 
       !empleadoFilter || 
       note.empleado.toLowerCase().includes(empleadoFilter.toLowerCase());
     
-    return matchesSearch && matchesDivision && matchesDate && matchesCategory && matchesEmpleado;
+    return matchesSearch && matchesDivision && matchesDate && matchesCategory && matchesRelevancia && matchesEmpleado;
   });
 
   // Handle menu press from header
@@ -1020,6 +1036,7 @@ const getActionIcon = (action: string) => {
     setSelectedDivision('all');
     setSelectedDate(null);
     setSelectedCategory('all');
+    setSelectedRelevancia('all');
     setEmpleadoFilter('');
   };
 
@@ -1168,6 +1185,21 @@ const getActionIcon = (action: string) => {
               </ThemedView>
             </ThemedView>
 
+            <ThemedView style={styles.inputGroup}>
+              <ThemedText style={styles.inputLabel}>Relevancia:</ThemedText>
+              <ThemedView style={styles.pickerContainer}>
+                <Picker
+                  selectedValue={editingNote.relevancia}
+                  onValueChange={(value) => setEditingNote({ ...editingNote, relevancia: value as 'Baja' | 'Media' | 'Alta' })}
+                  style={styles.picker}
+                >
+                  <Picker.Item label="Baja" value="Baja" />
+                  <Picker.Item label="Media" value="Media" />
+                  <Picker.Item label="Alta" value="Alta" />
+                </Picker>
+              </ThemedView>
+            </ThemedView>
+
             <ThemedView style={styles.buttonRow}>
               <TouchableOpacity style={styles.confirmButton} onPress={() => updateNote(note.id)}>
                 <ThemedText style={styles.confirmButtonText}>{getActionIcon('confirm')}</ThemedText>
@@ -1193,6 +1225,13 @@ const getActionIcon = (action: string) => {
                       <ThemedText style={styles.categoryText}>{getCategoryName(note.categoria_id)}</ThemedText>
                     </ThemedView>
                   )}
+                  {note.relevancia && (
+                    <ThemedView style={styles.changeRelevanciaBadge}>
+                      <ThemedText style={styles.categoryText}>Relevancia: {note.relevancia}</ThemedText>
+                    </ThemedView>
+                  )}
+                </ThemedView>
+                <ThemedView style={styles.noteMetadata}>
                   <ThemedText style={styles.noteDate}>{formatDate(note.updated_at)}</ThemedText>
                 </ThemedView>
               </ThemedView>
@@ -1283,6 +1322,21 @@ const getActionIcon = (action: string) => {
                 {categories.map((category) => (
                   <Picker.Item key={category.id} label={category.nombre} value={category.id} />
                 ))}
+              </Picker>
+            </ThemedView>
+          </ThemedView>
+
+          <ThemedView style={styles.inputGroup}>
+            <ThemedText style={styles.inputLabel}>Relevancia:</ThemedText>
+            <ThemedView style={styles.pickerContainer}>
+              <Picker
+                selectedValue={newNote.relevancia}
+                onValueChange={(value) => setNewNote({ ...newNote, relevancia: value as 'Baja' | 'Media' | 'Alta' })}
+                style={styles.picker}
+              >
+                <Picker.Item label="Baja" value="Baja" />
+                <Picker.Item label="Media" value="Media" />
+                <Picker.Item label="Alta" value="Alta" />
               </Picker>
             </ThemedView>
           </ThemedView>
@@ -1504,6 +1558,24 @@ const getActionIcon = (action: string) => {
                   </ThemedView>
                 </ThemedView>
 
+                {/* Relevancia Filter */}
+                <ThemedView style={styles.filterGroupSearch}>
+                  <ThemedText style={styles.filterLabel}>Relevancia:</ThemedText>
+                  <ThemedView style={styles.pickerContainer}>
+                    <Picker
+                      selectedValue={selectedRelevancia}
+                      onValueChange={(value) => setSelectedRelevancia(value)}
+                      style={styles.picker}
+                    >
+                      <Picker.Item label="Todas las relevancias" value="all" />
+                      <Picker.Item label="Sin relevancia" value="none" />
+                      <Picker.Item label="Baja" value="Baja" />
+                      <Picker.Item label="Media" value="Media" />
+                      <Picker.Item label="Alta" value="Alta" />
+                    </Picker>
+                  </ThemedView>
+                </ThemedView>
+
                 {/* Empleado Filter */}
                 <ThemedView style={styles.filterGroupSearch}>
                   <ThemedText style={styles.filterLabel}>Último cambio por:</ThemedText>
@@ -1602,6 +1674,15 @@ const getActionIcon = (action: string) => {
                       <ThemedView style={styles.changeCategoryContainer}>
                         <ThemedView style={styles.changeCategoryBadge}>
                           <ThemedText style={styles.changeCategoryText}>{change.categoria}</ThemedText>
+                        </ThemedView>
+                      </ThemedView>
+                    )}
+                    
+                    {/* Relevancia */}
+                    {change.relevancia && (
+                      <ThemedView style={styles.changeCategoryContainer}>
+                        <ThemedView style={styles.changeRelevanciaBadge}>
+                          <ThemedText style={styles.changeRelevanciaText}>Relevancia: {change.relevancia}</ThemedText>
                         </ThemedView>
                       </ThemedView>
                     )}
@@ -2172,6 +2253,18 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
   },
   changeCategoryText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  changeRelevanciaBadge: {
+    backgroundColor: '#FF9500',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 4,
+    alignSelf: 'flex-start',
+  },
+  changeRelevanciaText: {
     color: '#fff',
     fontSize: 12,
     fontWeight: '600',

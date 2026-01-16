@@ -30,6 +30,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     const body = await req.json();
     const {
       tipo,
+      uso_id,
       informacion_general,
       informacion_revision,
       movimientos_vehiculos,
@@ -41,6 +42,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       where: { id },
       data: {
         tipo: typeof tipo === "string" ? tipo : existing.tipo,
+        uso_id: uso_id !== undefined ? (uso_id ? Number(uso_id) : null) : (existing as any).uso_id ?? null,
         informacion_general: informacion_general !== undefined ? normalizeToStringifiedJson(informacion_general) : existing.informacion_general,
         informacion_revision: informacion_revision !== undefined ? normalizeToStringifiedJson(informacion_revision) : existing.informacion_revision,
         movimientos_vehiculos: movimientos_vehiculos !== undefined ? normalizeToStringifiedJson(movimientos_vehiculos) : existing.movimientos_vehiculos,
@@ -51,6 +53,18 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         created_by: existing.created_by ?? (parseInt(String((payload as any)?.id ?? 0)) || 0),
       },
     });
+
+    // Si se setea `uso_id`, actualizamos el uso con `bitacora_id`
+    if (uso_id) {
+      try {
+        await prisma.c_usos_vehiculos_corporativos.update({
+          where: { id: Number(uso_id) },
+          data: { bitacora_id: id },
+        });
+      } catch {
+        // ignore
+      }
+    }
 
     return NextResponse.json({ status: true, message: "Bitácora actualizada correctamente" }, { status: 200 });
   } catch (error: unknown) {

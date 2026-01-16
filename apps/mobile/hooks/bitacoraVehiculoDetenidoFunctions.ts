@@ -23,6 +23,9 @@ export type ListBitacoraResponse = { status: boolean; data?: BitacoraVehiculoDet
 
 type ListParams = {
   marcaId: number;
+  empresaId?: number;
+  clienteId?: number;
+  sucursalId?: number;
   refreshAccessToken?: () => Promise<boolean>;
   logout?: () => Promise<any>;
 };
@@ -62,11 +65,25 @@ async function getToken(refreshAccessToken?: () => Promise<boolean>) {
   return token;
 }
 
-export async function listBitacoraVehiculoDetenido({ marcaId, refreshAccessToken, logout }: ListParams): Promise<ListBitacoraResponse> {
+export async function listBitacoraVehiculoDetenido({
+  marcaId,
+  empresaId,
+  clienteId,
+  sucursalId,
+  refreshAccessToken,
+  logout,
+}: ListParams): Promise<ListBitacoraResponse> {
   try {
     const apiUrl = getApiUrl();
     const token = await getToken(refreshAccessToken);
-    const response = await fetch(`${apiUrl}/api/bitacora-vehiculo-detenido?m=${marcaId}`, {
+    const params = new URLSearchParams();
+    if (marcaId) params.set('m', String(marcaId));
+    // si vienen ids directos, los mandamos también (el server prioriza estos cuando están completos)
+    if (typeof empresaId === 'number') params.set('empresa_id', String(empresaId));
+    if (typeof clienteId === 'number') params.set('cliente_id', String(clienteId));
+    if (typeof sucursalId === 'number') params.set('sucursal_id', String(sucursalId));
+
+    const response = await fetch(`${apiUrl}/api/bitacora-vehiculo-detenido?${params.toString()}`, {
       method: 'GET',
       headers: {
         'Authorization': `Bearer ${token}`,

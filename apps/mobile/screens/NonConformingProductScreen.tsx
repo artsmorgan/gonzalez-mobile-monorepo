@@ -1,441 +1,915 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  TextInput,
-  Alert,
   ActivityIndicator,
+  Alert,
+  Dimensions,
+  Image,
+  Linking,
+  Modal,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  TextInput,
+  TouchableOpacity,
   View,
 } from 'react-native';
-import { ThemedText } from '@/components/ThemedText';
-import { ThemedView } from '@/components/ThemedView';
-import { useAuth } from '@/contexts/AuthContext';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import Constants from 'expo-constants';
+import * as Network from 'expo-network';
+import * as DocumentPicker from 'expo-document-picker';
+import * as Location from 'expo-location';
+import DateTimePicker from '@react-native-community/datetimepicker';
+import SignatureScreen from 'react-native-signature-canvas';
+import { Picker } from '@react-native-picker/picker';
+import Ionicons from '@expo/vector-icons/build/Ionicons';
+import { jwtDecode } from 'jwt-decode';
+import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
+import { useVideoPlayer, VideoView } from 'expo-video';
+
 import AppHeader from '@/components/AppHeader';
 import AppFooter from '@/components/AppFooter';
 import SlideMenu from '@/components/SlideMenu';
-import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { ThemedText } from '@/components/ThemedText';
+import { ThemedView } from '@/components/ThemedView';
+import { useAuth } from '@/contexts/AuthContext';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { RootStackParamList } from '../App';
-import Constants from 'expo-constants';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import Ionicons from '@expo/vector-icons/build/Ionicons';
-import * as Network from 'expo-network';
-import { createNonConformingProduct, updateNonConformingProduct, deleteNonConformingProduct, listNonConformingProductByCorpo } from '@/hooks/evaluationFunctions';
+import type { RootStackParamList } from '../App';
 import { eventBus } from '@/hooks/eventBus';
+import getHoraAccion from '@/hooks/getHoraAccion';
+import { useQRScanner } from '@/hooks/useQRScanner';
+import { createNonConformingProduct, deleteNonConformingProduct, listNonConformingProductByCorpo, updateNonConformingProduct } from '@/hooks/evaluationFunctions';
 
-type NonConformingProductScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'NonConformingProduct'>;
+type Nav = NativeStackNavigationProp<RootStackParamList, 'NonConformingProduct'>;
 
-interface NonConformingProduct {
+type MainStructureSucursalNode = { id: number; nombre: string };
+type MainStructureContratoNode = { id: number; nombre: string; sucursales: MainStructureSucursalNode[] };
+type MainStructureDivisionNode = { id: number; nombre: string; contratos: MainStructureContratoNode[] };
+type MainStructureClienteNode = { id: number; nombre: string; division: MainStructureDivisionNode[] };
+type MainStructureEmpresaNode = { id: number; nombre: string; clientes: MainStructureClienteNode[] };
+type MainStructureTree = MainStructureEmpresaNode[];
+
+type LocalFile = {
   id: string;
-  id_local: string;
-  cliente: string | null;
-  numero_corpo: string | null;
-  responsable_cuenta: string | null;
-  macroactividad: string | null;
-  actividad: string | null;
-  tipo_servicio_no_conforme: string | null;
-  tipo_registro: string | null;
-  responsable_registro: string | null;
-  acciones_seguir: string | null;
-  responsable_corregir: string | null;
-  responsable_aprobar: string | null;
-  created_at: string;
-  synced?: boolean;
-}
+  type: 'image' | 'audio' | 'video' | 'document';
+  name: string;
+  extension: string;
+  base64: string;
+  mimeType?: string;
+};
 
-interface EditingNonConformingProduct {
-  id: string | null;
+type PncFile = {
+  id?: number;
+  id_local?: string;
+  type: 'image' | 'audio' | 'video' | 'document' | string;
+  extension: string;
+  name: string;
+  original_name?: string;
+  base64?: string;
+  mimeType?: string;
+};
+
+type PncRecord = {
+  id: number | string;
   id_local: string;
-  cliente: string;
-  numero_corpo: string;
+  cliente_id: number;
+  corpo_id: number;
+  fecha_identificacion: string;
   responsable_cuenta: string;
-  macroactividad: string;
-  actividad: string;
   tipo_servicio_no_conforme: string;
-  tipo_registro: string;
-  responsable_registro: string;
-  acciones_seguir: string;
-  responsable_corregir: string;
+  persona_identifico_pnc: string;
+  firma_persona_identifico_pnc: string;
+  descripcion: string;
+  persona_origino_pnc: string;
+  firma_persona_origino_pnc: string;
+  accion_implementada: string;
+  fecha_solucion: string;
   responsable_aprobar: string;
-}
+  firma_responsable: string;
+  created_at: string;
+  files?: PncFile[];
+  synced?: boolean;
+  type?: string; // cache marker
+};
+
+const guessMimeType = (file: { type?: string; extension?: string; mimeType?: string }) => {
+  if (file.mimeType) return file.mimeType;
+  const ext = String(file.extension || '').replace('.', '').toLowerCase();
+  const t = String(file.type || '').toLowerCase();
+  if (t === 'image') return `image/${ext || 'jpeg'}`;
+  if (t === 'audio') return `audio/${ext || 'mpeg'}`;
+  if (t === 'video') return `video/${ext || 'mp4'}`;
+  if (t === 'document') {
+    if (ext === 'pdf') return 'application/pdf';
+    if (ext === 'csv') return 'text/csv';
+    if (ext === 'txt') return 'text/plain';
+    return `application/${ext || 'octet-stream'}`;
+  }
+  return 'application/octet-stream';
+};
+
+type FirmaData = {
+  sessionId: string;
+  empleadoId: string;
+  latitud: string;
+  longitud: string;
+  timestamp: string;
+};
+
+const dateToLocalString = (d: Date): string => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+
+const getBase64Only = (value: string | null | undefined): string => {
+  if (!value) return '';
+  const s = String(value);
+  if (s.startsWith('data:')) {
+    const parts = s.split(',');
+    return parts.length > 1 ? parts.slice(1).join(',') : '';
+  }
+  return s;
+};
+
+const formatSignatureForDisplay = (value: string | null | undefined): string | null => {
+  if (!value) return null;
+  const s = String(value);
+  if (s.startsWith('data:')) return s;
+  return `data:image/png;base64,${s}`;
+};
+
+const decodeFirmaHash = (hash?: string | null) => {
+  try {
+    if (!hash || String(hash).trim().length === 0) return null;
+    const decoded = atob(String(hash));
+    const parts = decoded.split(':');
+    if (parts.length !== 5) return null;
+    const [sessionId, empleadoId, latitud, longitud, timestamp] = parts;
+    return { sessionId, empleadoId, latitud, longitud, timestamp };
+  } catch {
+    return null;
+  }
+};
 
 export default function NonConformingProductScreen() {
+  const navigation = useNavigation<Nav>();
   const { employee, refreshAccessToken, logout } = useAuth();
+  const { scanQR, QRScannerComponent } = useQRScanner();
+
   const [isMenuVisible, setIsMenuVisible] = useState(false);
-  const navigation = useNavigation<NonConformingProductScreenNavigationProp>();
 
-  // Data states
-  const [nonConformingProducts, setNonConformingProducts] = useState<NonConformingProduct[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [hasCurrentMarca, setHasCurrentMarca] = useState<boolean>(false);
+  const [hasCurrentMarca, setHasCurrentMarca] = useState(true);
+  const [marcaDivisionId, setMarcaDivisionId] = useState<number | null>(null);
+  const [marcaCorpoId, setMarcaCorpoId] = useState<number | null>(null);
+  const [marcaClienteId, setMarcaClienteId] = useState<number | null>(null);
 
-  // Editing state
-  const [editingRecord, setEditingRecord] = useState<EditingNonConformingProduct | null>(null);
+  // estructura
+  const [structure, setStructure] = useState<MainStructureTree>([]);
+  const [isStructureLoading, setIsStructureLoading] = useState(false);
 
-  // Creating state
+  const [selectedEmpresaId, setSelectedEmpresaId] = useState<number | null>(null);
+  const [selectedClienteId, setSelectedClienteId] = useState<number | null>(null);
+  const [selectedDivisionId, setSelectedDivisionId] = useState<number | null>(null);
+  const [selectedContratoId, setSelectedContratoId] = useState<number | null>(null);
+  const [selectedSucursalId, setSelectedSucursalId] = useState<number | null>(null);
+
+  // lista
+  const [records, setRecords] = useState<PncRecord[]>([]);
+  // Collapsable por tarjeta (similar a MutuosAcuerdosScreen)
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  // crear/editar
   const [isCreating, setIsCreating] = useState(false);
+  const [editing, setEditing] = useState<{ id: number | string; id_local?: string } | null>(null);
 
-  // Form states
-  const [cliente, setCliente] = useState('');
-  const [numeroCorpo, setNumeroCorpo] = useState('');
+  // form
+  const [fechaIdentificacion, setFechaIdentificacion] = useState<Date>(new Date());
+  const [showFechaIdentPicker, setShowFechaIdentPicker] = useState(false);
+  const [fechaSolucion, setFechaSolucion] = useState<Date>(new Date());
+  const [showFechaSolPicker, setShowFechaSolPicker] = useState(false);
+
   const [responsableCuenta, setResponsableCuenta] = useState('');
-  const [macroactividad, setMacroactividad] = useState('');
-  const [actividad, setActividad] = useState('');
   const [tipoServicioNoConforme, setTipoServicioNoConforme] = useState('');
-  const [tipoRegistro, setTipoRegistro] = useState('');
-  const [responsableRegistro, setResponsableRegistro] = useState('');
-  const [accionesSeguir, setAccionesSeguir] = useState('');
-  const [responsableCorregir, setResponsableCorregir] = useState('');
+  const [personaIdentifico, setPersonaIdentifico] = useState('');
+  const [firmaPersonaIdentifico, setFirmaPersonaIdentifico] = useState<string>('');
+  const [descripcion, setDescripcion] = useState('');
+  const [personaOrigino, setPersonaOrigino] = useState('');
+  const [firmaPersonaOrigino, setFirmaPersonaOrigino] = useState<string>('');
+  const [accionImplementada, setAccionImplementada] = useState('');
   const [responsableAprobar, setResponsableAprobar] = useState('');
 
-  // Expanded details state
-  const [expandedRecordIds, setExpandedRecordIds] = useState<string[]>([]);
+  // firma responsable (QR/generar)
+  const [firmaResponsable, setFirmaResponsable] = useState<FirmaData | null>(null);
+  const [isGeneratingFirma, setIsGeneratingFirma] = useState(false);
+  const [location, setLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+
+  // adjuntos
+  const [imageFiles, setImageFiles] = useState<LocalFile[]>([]);
+  const [audioFiles, setAudioFiles] = useState<LocalFile[]>([]);
+  const [videoFiles, setVideoFiles] = useState<LocalFile[]>([]);
+  const [documentFiles, setDocumentFiles] = useState<LocalFile[]>([]);
+
+  // modal firma dibujada
+  const [signatureModalVisible, setSignatureModalVisible] = useState(false);
+  const signatureRef = useRef<any>(null);
+  const [signatureKey, setSignatureKey] = useState(0);
+  const [signatureTarget, setSignatureTarget] = useState<'identifico' | 'origino' | null>(null);
+
+  const signatureWebStyle = `
+    .m-signature-pad { box-shadow: none; border: none; }
+    .m-signature-pad--body { border: 1px solid #E0E0E0; background: #FFFFFF; }
+    .m-signature-pad--footer { display: none; margin: 0px; }
+    body,html { width: 100%; height: 100%; }
+    canvas { background: #FFFFFF; }
+  `;
 
   const getConnectionStatus = async (): Promise<boolean> => {
-    const networkState = await Network.getNetworkStateAsync();
-    return networkState.isConnected && networkState.isInternetReachable ? true : false;
+    try {
+      const state = await Network.getNetworkStateAsync();
+      return !!(state.isConnected && state.isInternetReachable);
+    } catch {
+      return false;
+    }
   };
 
-  const generateRandomId = (): string => {
-    return `local-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  const loadMarcaContext = async () => {
+    const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+    if (!currentMarcaStr) {
+      setHasCurrentMarca(false);
+      setMarcaDivisionId(null);
+      setMarcaCorpoId(null);
+      setMarcaClienteId(null);
+      return null;
+    }
+    try {
+      const current = JSON.parse(currentMarcaStr);
+      if (!current) {
+        setHasCurrentMarca(false);
+        return null;
+      }
+      setHasCurrentMarca(true);
+      const divIdRaw = current?.roleDivision?.division?.id;
+      const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
+      const clienteIdRaw = current?.cliente?.id ?? current?.cliente_id;
+      setMarcaDivisionId(divIdRaw !== undefined && divIdRaw !== null ? Number(divIdRaw) : null);
+      setMarcaCorpoId(corpoIdRaw !== undefined && corpoIdRaw !== null ? Number(corpoIdRaw) : null);
+      setMarcaClienteId(clienteIdRaw !== undefined && clienteIdRaw !== null ? Number(clienteIdRaw) : null);
+      return current;
+    } catch {
+      setHasCurrentMarca(false);
+      setMarcaDivisionId(null);
+      setMarcaCorpoId(null);
+      setMarcaClienteId(null);
+      return null;
+    }
   };
 
-  useFocusEffect(
-    useCallback(() => {
-      fetchNonConformingProducts();
-    }, [])
-  );
+  const fetchMainStructure = useCallback(async () => {
+    setIsStructureLoading(true);
+    try {
+      const cacheStr = await AsyncStorage.getItem('main_structure_cache');
+      if (cacheStr) {
+        try {
+          const parsed = JSON.parse(cacheStr);
+          if (Array.isArray(parsed)) setStructure(parsed);
+        } catch {
+          // ignore
+        }
+      }
 
+      const isConnected = await getConnectionStatus();
+      if (!isConnected) return;
+
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) return;
+
+      let token = await AsyncStorage.getItem('access_token');
+      if (!token) {
+        const refreshed = await refreshAccessToken();
+        if (!refreshed) return;
+        token = await AsyncStorage.getItem('access_token');
+      }
+      if (!token) return;
+
+      const response = await fetch(`${apiUrl}/api/main-structure`, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': '69420',
+        },
+      });
+
+      if (response.status === 401 || response.status === 403) {
+        const refreshed = await refreshAccessToken();
+        if (refreshed) return fetchMainStructure();
+        await logout();
+        return;
+      }
+
+      if (!response.ok) return;
+      const data = await response.json();
+      const incoming = data?.structure;
+      if (data?.status && Array.isArray(incoming)) {
+        setStructure(incoming);
+        await AsyncStorage.setItem('main_structure_cache', JSON.stringify(incoming));
+      }
+    } catch (e) {
+      console.error('Error fetching main structure (PNC):', e);
+    } finally {
+      setIsStructureLoading(false);
+    }
+  }, [refreshAccessToken, logout]);
+
+  // --------- estructura: opciones ---------
+  const empresaOptions = useMemo(() => structure.map((e) => ({ id: e.id, nombre: e.nombre })), [structure]);
+
+  const selectedEmpresaNode = useMemo(() => {
+    if (selectedEmpresaId === null) return null;
+    return structure.find((e) => e.id === selectedEmpresaId) ?? null;
+  }, [structure, selectedEmpresaId]);
+
+  const clienteOptions = useMemo(() => {
+    if (!selectedEmpresaNode) return [];
+    return (selectedEmpresaNode.clientes || []).map((c) => ({ id: c.id, nombre: c.nombre }));
+  }, [selectedEmpresaNode]);
+
+  const selectedClienteNode = useMemo(() => {
+    if (!selectedEmpresaNode || selectedClienteId === null) return null;
+    return selectedEmpresaNode.clientes.find((c) => c.id === selectedClienteId) ?? null;
+  }, [selectedEmpresaNode, selectedClienteId]);
+
+  const divisionOptions = useMemo(() => {
+    if (!selectedClienteNode) return [];
+    return (selectedClienteNode.division || []).map((d) => ({ id: d.id, nombre: d.nombre }));
+  }, [selectedClienteNode]);
+
+  const selectedDivisionNode = useMemo(() => {
+    if (!selectedClienteNode || selectedDivisionId === null) return null;
+    return (selectedClienteNode.division || []).find((d) => d.id === selectedDivisionId) ?? null;
+  }, [selectedClienteNode, selectedDivisionId]);
+
+  const contratoOptions = useMemo(() => {
+    if (!selectedDivisionNode) return [];
+    return (selectedDivisionNode.contratos || []).map((c) => ({ id: c.id, nombre: c.nombre }));
+  }, [selectedDivisionNode]);
+
+  const selectedContratoNode = useMemo(() => {
+    if (!selectedDivisionNode || selectedContratoId === null) return null;
+    return (selectedDivisionNode.contratos || []).find((c) => c.id === selectedContratoId) ?? null;
+  }, [selectedDivisionNode, selectedContratoId]);
+
+  const sucursalOptions = useMemo(() => {
+    if (!selectedContratoNode) return [];
+    return (selectedContratoNode.sucursales || []).map((s) => ({ id: s.id, nombre: s.nombre }));
+  }, [selectedContratoNode]);
+
+  const handleEmpresaChange = (empresaId: number | null) => {
+    setSelectedEmpresaId(empresaId);
+    setSelectedClienteId(null);
+    setSelectedDivisionId(null);
+    setSelectedContratoId(null);
+    setSelectedSucursalId(null);
+  };
+
+  const handleClienteChange = (clienteId: number | null) => {
+    setSelectedClienteId(clienteId);
+    // división se fuerza por marca, sin recursividad
+    setSelectedDivisionId(marcaDivisionId !== null ? Number(marcaDivisionId) : null);
+    setSelectedContratoId(null);
+    setSelectedSucursalId(null);
+  };
+
+  // mantener división fija (marca)
   useEffect(() => {
-    const handler = () => {
-      fetchNonConformingProducts();
-    };
+    if (marcaDivisionId !== null) {
+      setSelectedDivisionId(Number(marcaDivisionId));
+    }
+  }, [marcaDivisionId]);
 
-    eventBus.on('connectionRestored', handler);
-    return () => {
-      eventBus.off('connectionRestored', handler);
-    };
+  // preselección por marca (cliente/corpo) cuando haya estructura
+  useEffect(() => {
+    if (!structure.length) return;
+    if (!marcaClienteId || !marcaCorpoId) return;
+    if (!marcaDivisionId) return;
+
+    // si el usuario ya escogió manualmente, no pisar
+    if (selectedEmpresaId || selectedClienteId || selectedContratoId || selectedSucursalId) return;
+
+    const empresaFound = structure.find((e) => (e.clientes || []).some((c) => c.id === Number(marcaClienteId))) ?? null;
+    const clienteFound = empresaFound?.clientes?.find((c) => c.id === Number(marcaClienteId)) ?? null;
+    const divisionFound = clienteFound?.division?.find((d) => d.id === Number(marcaDivisionId)) ?? null;
+    const contratoFound = divisionFound?.contratos?.find((ct) => (ct.sucursales || []).some((s) => s.id === Number(marcaCorpoId))) ?? null;
+
+    if (empresaFound) setSelectedEmpresaId(empresaFound.id);
+    if (clienteFound) setSelectedClienteId(clienteFound.id);
+    setSelectedDivisionId(Number(marcaDivisionId));
+    if (contratoFound) setSelectedContratoId(contratoFound.id);
+    setSelectedSucursalId(Number(marcaCorpoId));
+  }, [structure, marcaClienteId, marcaCorpoId, marcaDivisionId, selectedEmpresaId, selectedClienteId, selectedContratoId, selectedSucursalId]);
+
+  // --------- location ---------
+  useEffect(() => {
+    (async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') return;
+        const loc = await Location.getCurrentPositionAsync({});
+        setLocation({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
+      } catch {
+        // ignore
+      }
+    })();
   }, []);
 
-  const fetchNonConformingProducts = async () => {
+  // --------- CRUD + cache ---------
+  const fetchRecords = useCallback(async () => {
     try {
       setIsLoading(true);
       setError(null);
 
-      const currentMarca = await AsyncStorage.getItem('current_marca');
-      if (!currentMarca) {
-        setHasCurrentMarca(false);
+      const current = await loadMarcaContext();
+      if (!current) {
         setIsLoading(false);
         return;
       }
 
-      setHasCurrentMarca(true);
-      const currentMarcaData = JSON.parse(currentMarca);
-      const corpoId = currentMarcaData.corpo?.id?.toString();
+      await fetchMainStructure();
 
+      const corpoId = marcaCorpoId ?? Number(current?.corpo?.id ?? current?.corpo_id ?? 0);
       if (!corpoId) {
-        setError('No se encontró el ID del corpo');
+        setError('No se encontró el ID de la sucursal (corpo) en la marca actual');
         setIsLoading(false);
         return;
       }
+
+      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+      const cache = cacheStr ? JSON.parse(cacheStr) : [];
+
+      const localCacheAll: PncRecord[] = cache.filter((item: any) => item.type === 'non_conforming_product');
+      const localCache: PncRecord[] = localCacheAll.filter((r: any) => Number(r.corpo_id) === Number(corpoId));
+      const localOnly = localCache.filter((r: any) => !r?.synced || String(r?.id_local || '').startsWith('local-'));
 
       const isConnected = await getConnectionStatus();
+      if (!isConnected) {
+        setRecords(localCache);
+        return;
+      }
 
-      if (isConnected) {
-        const result = await listNonConformingProductByCorpo({
-          corpo_id: corpoId,
+      const res = await listNonConformingProductByCorpo({
+        corpo_id: String(corpoId),
           refreshAccessToken,
           logout,
         });
 
-        if (result.status && result.data) {
-          setNonConformingProducts(result.data as NonConformingProduct[]);
-        } else {
-          setNonConformingProducts([]);
-        }
-      } else {
-        const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-        if (cacheStr) {
-          const cache = JSON.parse(cacheStr);
-          const productsCache = cache.filter((item: any) => item.type === 'non_conforming_product');
-          setNonConformingProducts(productsCache);
-        } else {
-          setNonConformingProducts([]);
-        }
+      if (!res.status) {
+        setRecords(localCache);
+        return;
       }
-    } catch (err) {
-      console.error('Error fetching non-conforming products:', err);
-      setError('Error al cargar los productos no conformes');
-      try {
-        const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-        if (cacheStr) {
-          const cache = JSON.parse(cacheStr);
-          const productsCache = cache.filter((item: any) => item.type === 'non_conforming_product');
-          setNonConformingProducts(productsCache);
-        }
-      } catch (cacheErr) {
-        console.error('Error loading from cache:', cacheErr);
-      }
+
+      const serverItems: PncRecord[] = Array.isArray(res.data) ? (res.data as any) : [];
+      const merged: PncRecord[] = [
+        ...localOnly.map((r: any) => ({ ...r, synced: false })),
+        ...serverItems.map((r: any) => ({ ...r, synced: true })),
+      ];
+
+      setRecords(merged);
+
+      const withoutThis = cache.filter((item: any) => !(item.type === 'non_conforming_product' && Number(item.corpo_id) === Number(corpoId)));
+      await AsyncStorage.setItem('evaluations_cache', JSON.stringify([...withoutThis, ...merged.map((r: any) => ({ ...r, type: 'non_conforming_product' }))]));
+    } catch (e: any) {
+      console.error('Error fetching PNC:', e);
+      setError(e?.message || 'Error al cargar productos no conformes');
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [fetchMainStructure, refreshAccessToken, logout, marcaCorpoId]);
 
-  const startCreating = () => {
-    setIsCreating(true);
-    setCliente('');
-    setNumeroCorpo('');
+  useFocusEffect(
+    useCallback(() => {
+      fetchRecords();
+      const handler = () => fetchRecords();
+      eventBus.on('connectionRestored', handler);
+      return () => eventBus.off('connectionRestored', handler);
+    }, [fetchRecords])
+  );
+
+  const resetForm = () => {
+    setFechaIdentificacion(new Date());
+    setFechaSolucion(new Date());
     setResponsableCuenta('');
-    setMacroactividad('');
-    setActividad('');
     setTipoServicioNoConforme('');
-    setTipoRegistro('');
-    setResponsableRegistro('');
-    setAccionesSeguir('');
-    setResponsableCorregir('');
+    setPersonaIdentifico('');
+    setFirmaPersonaIdentifico('');
+    setDescripcion('');
+    setPersonaOrigino('');
+    setFirmaPersonaOrigino('');
+    setAccionImplementada('');
     setResponsableAprobar('');
+    setFirmaResponsable(null);
+    setImageFiles([]);
+    setAudioFiles([]);
+    setVideoFiles([]);
+    setDocumentFiles([]);
   };
 
-  const cancelCreating = () => {
+  const startCreate = () => {
+    setIsCreating(true);
+    setEditing(null);
+    resetForm();
+    // si ya tenemos defaults por marca, mantenerlos (no limpiar selects)
+  };
+
+  const startEditing = (r: PncRecord) => {
+    setIsCreating(true);
+    setEditing({ id: r.id, id_local: r.id_local });
+
+    // reconstruir jerarquía como MutuosAcuerdos: empresa/contrato desde cliente+corpo
+    const empresaFound = structure.find((e) => (e.clientes || []).some((c) => c.id === r.cliente_id)) ?? null;
+    if (empresaFound) setSelectedEmpresaId(empresaFound.id);
+    setSelectedClienteId(r.cliente_id);
+    if (marcaDivisionId) setSelectedDivisionId(Number(marcaDivisionId));
+
+    const clienteNode = empresaFound?.clientes?.find((c) => c.id === r.cliente_id);
+    const divisionNode = clienteNode?.division?.find((d) => d.id === Number(marcaDivisionId)) ?? null;
+    const contratoFound = divisionNode?.contratos?.find((ct) => (ct.sucursales || []).some((s) => s.id === r.corpo_id)) ?? null;
+    if (contratoFound) setSelectedContratoId(contratoFound.id);
+    setSelectedSucursalId(r.corpo_id);
+
+    setFechaIdentificacion(r.fecha_identificacion ? new Date(String(r.fecha_identificacion)) : new Date());
+    setFechaSolucion(r.fecha_solucion ? new Date(String(r.fecha_solucion)) : new Date());
+    setResponsableCuenta(r.responsable_cuenta || '');
+    setTipoServicioNoConforme(r.tipo_servicio_no_conforme || '');
+    setPersonaIdentifico(r.persona_identifico_pnc || '');
+    setFirmaPersonaIdentifico(formatSignatureForDisplay(r.firma_persona_identifico_pnc) || r.firma_persona_identifico_pnc || '');
+    setDescripcion(r.descripcion || '');
+    setPersonaOrigino(r.persona_origino_pnc || '');
+    setFirmaPersonaOrigino(formatSignatureForDisplay(r.firma_persona_origino_pnc) || r.firma_persona_origino_pnc || '');
+    setAccionImplementada(r.accion_implementada || '');
+    setResponsableAprobar(r.responsable_aprobar || '');
+
+    setFirmaResponsable(null);
+    setImageFiles([]);
+    setAudioFiles([]);
+    setVideoFiles([]);
+    setDocumentFiles([]);
+  };
+
+  const cancelCreateOrEdit = () => {
     setIsCreating(false);
+    setEditing(null);
+    resetForm();
   };
 
-  const startEditing = (record: NonConformingProduct) => {
-    setEditingRecord({
-      id: record.id,
-      id_local: record.id_local,
-      cliente: record.cliente || '',
-      numero_corpo: record.numero_corpo || '',
-      responsable_cuenta: record.responsable_cuenta || '',
-      macroactividad: record.macroactividad || '',
-      actividad: record.actividad || '',
-      tipo_servicio_no_conforme: record.tipo_servicio_no_conforme || '',
-      tipo_registro: record.tipo_registro || '',
-      responsable_registro: record.responsable_registro || '',
-      acciones_seguir: record.acciones_seguir || '',
-      responsable_corregir: record.responsable_corregir || '',
-      responsable_aprobar: record.responsable_aprobar || '',
+  const toggleExpanded = (key: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
     });
-    setCliente(record.cliente || '');
-    setNumeroCorpo(record.numero_corpo || '');
-    setResponsableCuenta(record.responsable_cuenta || '');
-    setMacroactividad(record.macroactividad || '');
-    setActividad(record.actividad || '');
-    setTipoServicioNoConforme(record.tipo_servicio_no_conforme || '');
-    setTipoRegistro(record.tipo_registro || '');
-    setResponsableRegistro(record.responsable_registro || '');
-    setAccionesSeguir(record.acciones_seguir || '');
-    setResponsableCorregir(record.responsable_corregir || '');
-    setResponsableAprobar(record.responsable_aprobar || '');
   };
 
-  const cancelEditing = () => {
-    setEditingRecord(null);
+  // --------- firmas ---------
+  const openSignatureModal = (target: 'identifico' | 'origino') => {
+    setSignatureTarget(target);
+    setSignatureKey((k) => k + 1);
+    setSignatureModalVisible(true);
   };
 
-  const saveNonConformingProduct = async () => {
-    const currentMarca = await AsyncStorage.getItem('current_marca');
-    if (!currentMarca) {
-      Alert.alert('Error', 'No se encontró la marca actual');
+  const handleSignatureOK = (sig: string) => {
+    if (!signatureTarget) return;
+    if (signatureTarget === 'identifico') setFirmaPersonaIdentifico(sig);
+    if (signatureTarget === 'origino') setFirmaPersonaOrigino(sig);
+    setSignatureTarget(null);
+    setSignatureModalVisible(false);
+  };
+
+  const generateFirmaResponsable = async () => {
+    if (!employee) return Alert.alert('Error', 'No se pudo obtener el empleado');
+    if (!location) return Alert.alert('Error', 'No se pudo obtener la ubicación');
+
+    setIsGeneratingFirma(true);
+    try {
+      const token = await AsyncStorage.getItem('access_token');
+      if (!token) throw new Error('No authentication token found');
+
+      const decoded: any = jwtDecode(token);
+      const sessionId = decoded.sessionId;
+      const horaAccion = await getHoraAccion();
+      if (!horaAccion) throw new Error('Hora de acción not found');
+
+      const hash = btoa(`${sessionId}:${employee.id}:${location.latitude}:${location.longitude}:${horaAccion}`);
+      const decodedHash = decodeFirmaHash(hash);
+      if (!decodedHash) throw new Error('Firma inválida');
+
+      setFirmaResponsable(decodedHash);
+    } catch (e) {
+      console.error('Error generating firma responsable:', e);
+      Alert.alert('Error', 'No se pudo generar la firma');
+    } finally {
+      setIsGeneratingFirma(false);
+    }
+  };
+
+  const handleScanQR = async () => {
+    try {
+      const qrData = await scanQR();
+      if (!qrData) return;
+      const decoded = decodeFirmaHash(qrData);
+      if (!decoded) {
+        Alert.alert('Error', 'El QR no tiene la estructura esperada');
+      return;
+    }
+      setFirmaResponsable(decoded);
+    } catch (e) {
+      console.error('Error reading QR:', e);
+      Alert.alert('Error', 'No se pudo leer el QR');
+    }
+  };
+
+  // --------- archivos ---------
+  const handleAddFile = async (type: LocalFile['type']) => {
+    try {
+      let pickerTypes: string | string[] | undefined;
+      switch (type) {
+        case 'image':
+          pickerTypes = ['image/*'];
+          break;
+        case 'audio':
+          pickerTypes = ['audio/*'];
+          break;
+        case 'video':
+          pickerTypes = ['video/*'];
+          break;
+        case 'document':
+          pickerTypes = [
+            'application/pdf',
+            'application/msword',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'application/vnd.ms-excel',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'text/plain',
+            'text/csv',
+          ];
+          break;
+      }
+
+      const result = await DocumentPicker.getDocumentAsync({
+        type: pickerTypes,
+        multiple: false,
+        copyToCacheDirectory: true,
+      });
+      if (result.canceled || !result.assets || result.assets.length === 0) return;
+
+      const asset = result.assets[0];
+      const response = await fetch(asset.uri);
+      const blob = await response.blob();
+
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const r = reader.result;
+          if (typeof r === 'string') {
+            const parts = r.split(',');
+            resolve(parts.length > 1 ? parts[1] : parts[0]);
+          } else reject(new Error('No se pudo leer el archivo'));
+        };
+        reader.onerror = () => reject(reader.error ?? new Error('Error al leer el archivo'));
+        reader.readAsDataURL(blob);
+      });
+
+      let extension = '';
+      if (asset.name && asset.name.includes('.')) extension = asset.name.split('.').pop() || '';
+      else if (asset.mimeType && asset.mimeType.includes('/')) extension = asset.mimeType.split('/').pop() || '';
+
+      const localId = `local_file_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      const newFile: LocalFile = {
+        id: localId,
+        type,
+        name: asset.name || `archivo.${extension || 'dat'}`,
+        extension: extension || 'dat',
+        base64,
+        mimeType: asset.mimeType,
+      };
+
+      if (type === 'image') setImageFiles((p) => [...p, newFile]);
+      else if (type === 'audio') setAudioFiles((p) => [...p, newFile]);
+      else if (type === 'video') setVideoFiles((p) => [...p, newFile]);
+      else setDocumentFiles((p) => [...p, newFile]);
+    } catch (e) {
+      console.error('Error picking file (PNC):', e);
+      Alert.alert('Error', 'No se pudo seleccionar el archivo.');
+    }
+  };
+
+  const removeLocalFile = (type: LocalFile['type'], id: string) => {
+    if (type === 'image') setImageFiles((p) => p.filter((f) => f.id !== id));
+    else if (type === 'audio') setAudioFiles((p) => p.filter((f) => f.id !== id));
+    else if (type === 'video') setVideoFiles((p) => p.filter((f) => f.id !== id));
+    else setDocumentFiles((p) => p.filter((f) => f.id !== id));
+  };
+
+  const buildArchivosPayload = () => {
+    const files = [...imageFiles, ...audioFiles, ...videoFiles, ...documentFiles];
+    return files.map((f) => ({
+      type: f.type,
+      extension: f.extension,
+      original_name: f.name,
+      file_base64: f.base64,
+      mimeType: f.mimeType,
+    }));
+  };
+
+  const buildFileUrl = (pncId: number | undefined, file: PncFile) => {
+    const hasLocalId = file.id_local !== undefined && file.id_local !== null && String(file.id_local).trim().length > 0;
+    if (hasLocalId && file.base64) {
+      const mime = guessMimeType(file);
+      return `data:${mime};base64,${file.base64}`;
+    }
+
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (apiUrl && pncId) {
+      if (file.type === 'image') return `${apiUrl}/api/non-conforming-product/${pncId}/get-image/${encodeURIComponent(file.name)}`;
+      if (file.type === 'audio') return `${apiUrl}/api/non-conforming-product/${pncId}/get-audio/${encodeURIComponent(file.name)}`;
+      if (file.type === 'video') return `${apiUrl}/api/non-conforming-product/${pncId}/get-video/${encodeURIComponent(file.name)}`;
+      return `${apiUrl}/api/non-conforming-product/${pncId}/get-file/${encodeURIComponent(file.name)}`;
+    }
+    return '';
+  };
+
+  // --------- validación / requestData ---------
+  const validateForm = () => {
+    if (!hasCurrentMarca) return 'Debes tener una marca activa para usar este módulo.';
+    if (!selectedEmpresaId || !selectedClienteId || !selectedSucursalId) return 'Empresa, Cliente y Sucursal son obligatorios';
+    if (!selectedDivisionId) return 'No se pudo determinar la división (marca actual)';
+    if (!responsableCuenta.trim()) return 'Responsable de la cuenta es requerido';
+    if (!tipoServicioNoConforme.trim()) return 'Tipo de servicio no conforme es requerido';
+    if (!personaIdentifico.trim()) return 'Persona que identificó el PNC es requerida';
+    if (!getBase64Only(firmaPersonaIdentifico)) return 'Firma de persona que identificó el PNC es requerida';
+    if (!descripcion.trim()) return 'Descripción es requerida';
+    if (!personaOrigino.trim()) return 'Persona que originó el PNC es requerida';
+    if (!getBase64Only(firmaPersonaOrigino)) return 'Firma de persona que originó el PNC es requerida';
+    if (!accionImplementada.trim()) return 'Acción implementada es requerida';
+    if (!responsableAprobar.trim()) return 'Responsable de aprobar es requerido';
+    const firmaHash = firmaResponsable
+      ? btoa(`${firmaResponsable.sessionId}:${firmaResponsable.empleadoId}:${firmaResponsable.latitud}:${firmaResponsable.longitud}:${firmaResponsable.timestamp}`)
+      : '';
+    if (!firmaHash.trim()) return 'Firma del responsable (QR o Generar) es requerida';
+    return null;
+  };
+
+  const buildRequestData = () => {
+    const firmaHash = firmaResponsable
+      ? btoa(`${firmaResponsable.sessionId}:${firmaResponsable.empleadoId}:${firmaResponsable.latitud}:${firmaResponsable.longitud}:${firmaResponsable.timestamp}`)
+      : '';
+    return {
+      cliente_id: selectedClienteId,
+      corpo_id: selectedSucursalId,
+      fecha_identificacion: dateToLocalString(fechaIdentificacion),
+      responsable_cuenta: responsableCuenta.trim(),
+      tipo_servicio_no_conforme: tipoServicioNoConforme.trim(),
+      persona_identifico_pnc: personaIdentifico.trim(),
+      firma_persona_identifico_pnc: getBase64Only(firmaPersonaIdentifico),
+      descripcion: descripcion.trim(),
+      persona_origino_pnc: personaOrigino.trim(),
+      firma_persona_origino_pnc: getBase64Only(firmaPersonaOrigino),
+      accion_implementada: accionImplementada.trim(),
+      fecha_solucion: dateToLocalString(fechaSolucion),
+      responsable_aprobar: responsableAprobar.trim(),
+      firma_responsable: firmaHash,
+      archivos: buildArchivosPayload(),
+    };
+  };
+
+  const handleSave = async () => {
+    const validationError = validateForm();
+    if (validationError) {
+      Alert.alert('Error', validationError);
       return;
     }
 
-    const currentMarcaData = JSON.parse(currentMarca);
-
-    Alert.alert(
-      'Confirmar',
-      '¿Estás seguro de que deseas guardar este producto no conforme?',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Confirmar',
-          onPress: async () => {
-            try {
-              const requestData = {
-                marca_id: currentMarcaData.id,
-                cliente: cliente.trim() || null,
-                numero_corpo: numeroCorpo.trim() || null,
-                responsable_cuenta: responsableCuenta.trim() || null,
-                macroactividad: macroactividad.trim() || null,
-                actividad: actividad.trim() || null,
-                tipo_servicio_no_conforme: tipoServicioNoConforme.trim() || null,
-                tipo_registro: tipoRegistro.trim() || null,
-                responsable_registro: responsableRegistro.trim() || null,
-                acciones_seguir: accionesSeguir.trim() || null,
-                responsable_corregir: responsableCorregir.trim() || null,
-                responsable_aprobar: responsableAprobar.trim() || null,
-              };
-
+    const requestData: any = buildRequestData();
               const isConnected = await getConnectionStatus();
 
+    // CREATE
+    if (!editing) {
               if (isConnected) {
-                const result = await createNonConformingProduct({
-                  requestData,
-                  refreshAccessToken,
-                  logout,
-                });
-
-                if (result.status) {
-                  Alert.alert('Éxito', 'Producto no conforme guardado correctamente');
-                  cancelCreating();
-                  fetchNonConformingProducts();
+        const res = await createNonConformingProduct({ requestData, refreshAccessToken, logout });
+        if (res.status) {
+          Alert.alert('Éxito', 'Registro creado correctamente');
+          cancelCreateOrEdit();
+          await fetchRecords();
                 } else {
-                  Alert.alert('Error', result.message || 'Error al guardar el producto no conforme');
-                }
-              } else {
-                const localId = generateRandomId();
+          Alert.alert('Error', res.message || 'No se pudo crear el registro');
+        }
+        return;
+      }
 
-                const actionsStr = await AsyncStorage.getItem('evaluations_actions');
-                const actions = actionsStr ? JSON.parse(actionsStr) : [];
-                actions.push({
-                  id: localId,
-                  action: 'create',
-                  type: 'non_conforming_product',
-                  payload: requestData,
-                  synced: false,
-                });
-                await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+      const localId = `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      const nowIso = new Date().toISOString();
 
-                const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                const cache = cacheStr ? JSON.parse(cacheStr) : [];
+      const localFiles: PncFile[] = (requestData.archivos || []).map((f: any) => ({
+        id_local: `local_file_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
+        type: f.type,
+        extension: f.extension,
+        name: f.original_name || `archivo.${f.extension || 'dat'}`,
+        original_name: f.original_name,
+        base64: f.file_base64,
+        mimeType: f.mimeType,
+      }));
 
-                const newRecordCache: NonConformingProduct = {
+      const localItem: PncRecord = {
                   id: '',
                   id_local: localId,
-                  cliente: cliente.trim() || null,
-                  numero_corpo: numeroCorpo.trim() || null,
-                  responsable_cuenta: responsableCuenta.trim() || null,
-                  macroactividad: macroactividad.trim() || null,
-                  actividad: actividad.trim() || null,
-                  tipo_servicio_no_conforme: tipoServicioNoConforme.trim() || null,
-                  tipo_registro: tipoRegistro.trim() || null,
-                  responsable_registro: responsableRegistro.trim() || null,
-                  acciones_seguir: accionesSeguir.trim() || null,
-                  responsable_corregir: responsableCorregir.trim() || null,
-                  responsable_aprobar: responsableAprobar.trim() || null,
-                  created_at: new Date().toISOString(),
+        cliente_id: requestData.cliente_id,
+        corpo_id: requestData.corpo_id,
+        fecha_identificacion: requestData.fecha_identificacion,
+        responsable_cuenta: requestData.responsable_cuenta,
+        tipo_servicio_no_conforme: requestData.tipo_servicio_no_conforme,
+        persona_identifico_pnc: requestData.persona_identifico_pnc,
+        firma_persona_identifico_pnc: requestData.firma_persona_identifico_pnc,
+        descripcion: requestData.descripcion,
+        persona_origino_pnc: requestData.persona_origino_pnc,
+        firma_persona_origino_pnc: requestData.firma_persona_origino_pnc,
+        accion_implementada: requestData.accion_implementada,
+        fecha_solucion: requestData.fecha_solucion,
+        responsable_aprobar: requestData.responsable_aprobar,
+        firma_responsable: requestData.firma_responsable,
+        created_at: nowIso,
+        files: localFiles,
                   synced: false,
                 };
 
-                cache.push({ ...newRecordCache, type: 'non_conforming_product' });
+      const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+      const actions = actionsStr ? JSON.parse(actionsStr) : [];
+      actions.push({ id: localId, action: 'create', type: 'non_conforming_product', payload: requestData, synced: false });
+      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+
+      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+      const cache = cacheStr ? JSON.parse(cacheStr) : [];
+      cache.push({ ...localItem, type: 'non_conforming_product' });
                 await AsyncStorage.setItem('evaluations_cache', JSON.stringify(cache));
 
-                Alert.alert('Modo Offline', 'Producto no conforme registrado localmente. Se sincronizará cuando haya conexión.');
-                cancelCreating();
-                fetchNonConformingProducts();
-              }
-            } catch (err) {
-              console.error('Error saving non-conforming product:', err);
-              Alert.alert('Error', 'No se pudo guardar el producto no conforme');
-            }
-          },
-        },
-      ]
-    );
-  };
+      Alert.alert('Guardado (offline)', 'El registro se sincronizará cuando vuelva la conexión.');
+      cancelCreateOrEdit();
+      await fetchRecords();
+      return;
+    }
 
-  const updateNonConformingProductHandler = async () => {
-    if (!editingRecord) return;
+    // UPDATE
+    const recordId = editing.id || editing.id_local;
+    const isLocal = String(editing.id).startsWith('local-') || (editing.id_local && String(editing.id_local).startsWith('local-'));
+    const willReplaceFiles = (imageFiles.length + audioFiles.length + videoFiles.length + documentFiles.length) > 0;
 
-    Alert.alert(
-      'Confirmar',
-      '¿Estás seguro de que deseas actualizar este producto no conforme?',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Confirmar',
-          onPress: async () => {
-            try {
-              const requestData = {
-                cliente: cliente.trim() || null,
-                numero_corpo: numeroCorpo.trim() || null,
-                responsable_cuenta: responsableCuenta.trim() || null,
-                macroactividad: macroactividad.trim() || null,
-                actividad: actividad.trim() || null,
-                tipo_servicio_no_conforme: tipoServicioNoConforme.trim() || null,
-                tipo_registro: tipoRegistro.trim() || null,
-                responsable_registro: responsableRegistro.trim() || null,
-                acciones_seguir: accionesSeguir.trim() || null,
-                responsable_corregir: responsableCorregir.trim() || null,
-                responsable_aprobar: responsableAprobar.trim() || null,
-              };
+    const requestDataUpdate: any = {
+      ...buildRequestData(),
+    };
+    if (!willReplaceFiles) {
+      // no mandar archivos para no disparar reemplazo total
+      delete requestDataUpdate.archivos;
+    }
 
-              const isConnected = await getConnectionStatus();
-              const recordId = editingRecord.id || editingRecord.id_local;
-
-              if (isConnected && editingRecord.id && !editingRecord.id.startsWith('local-')) {
-                const result = await updateNonConformingProduct({
-                  id: editingRecord.id,
-                  requestData,
-                  refreshAccessToken,
-                  logout,
-                });
-
-                if (result.status) {
-                  Alert.alert('Éxito', 'Producto no conforme actualizado correctamente');
-                  cancelEditing();
-                  fetchNonConformingProducts();
+    if (isConnected && !isLocal && editing.id && !String(editing.id).startsWith('local-')) {
+      const res = await updateNonConformingProduct({ id: String(editing.id), requestData: requestDataUpdate, refreshAccessToken, logout });
+      if (res.status) {
+        Alert.alert('Éxito', 'Registro actualizado correctamente');
+        cancelCreateOrEdit();
+        await fetchRecords();
                 } else {
-                  Alert.alert('Error', result.message || 'Error al actualizar el producto no conforme');
-                }
-              } else {
+        Alert.alert('Error', res.message || 'No se pudo actualizar el registro');
+      }
+      return;
+    }
+
+    // offline update (incluye local)
+    {
                 const actionsStr = await AsyncStorage.getItem('evaluations_actions');
                 const actions = actionsStr ? JSON.parse(actionsStr) : [];
-                actions.push({
-                  id: recordId,
-                  action: 'update',
-                  type: 'non_conforming_product',
-                  payload: requestData,
-                  synced: false,
-                });
+      actions.push({ id: recordId, action: 'update', type: 'non_conforming_product', payload: requestDataUpdate, synced: false });
                 await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
 
                 const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                if (cacheStr) {
-                  const cache = JSON.parse(cacheStr);
+      const cache = cacheStr ? JSON.parse(cacheStr) : [];
                   const updatedCache = cache.map((item: any) => {
-                    if ((item.id === recordId || item.id_local === recordId) && item.type === 'non_conforming_product') {
-                      return {
-                        ...item,
-                        cliente: cliente.trim() || null,
-                        numero_corpo: numeroCorpo.trim() || null,
-                        responsable_cuenta: responsableCuenta.trim() || null,
-                        macroactividad: macroactividad.trim() || null,
-                        actividad: actividad.trim() || null,
-                        tipo_servicio_no_conforme: tipoServicioNoConforme.trim() || null,
-                        tipo_registro: tipoRegistro.trim() || null,
-                        responsable_registro: responsableRegistro.trim() || null,
-                        acciones_seguir: accionesSeguir.trim() || null,
-                        responsable_corregir: responsableCorregir.trim() || null,
-                        responsable_aprobar: responsableAprobar.trim() || null,
-                      };
-                    }
-                    return item;
+        if (item.type !== 'non_conforming_product') return item;
+        if (!(item.id === recordId || item.id_local === recordId)) return item;
+        return { ...item, ...requestDataUpdate, synced: false };
                   });
                   await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                }
 
-                Alert.alert('Modo Offline', 'Producto no conforme actualizado localmente. Se sincronizará cuando haya conexión.');
-                cancelEditing();
-                fetchNonConformingProducts();
-              }
-            } catch (err) {
-              console.error('Error updating non-conforming product:', err);
-              Alert.alert('Error', 'No se pudo actualizar el producto no conforme');
-            }
-          },
-        },
-      ]
-    );
+      Alert.alert('Guardado (offline)', 'Los cambios se sincronizarán cuando vuelva la conexión.');
+      cancelCreateOrEdit();
+      await fetchRecords();
+    }
   };
 
-  const deleteNonConformingProductHandler = async (record: NonConformingProduct) => {
-    Alert.alert(
-      'Confirmar',
-      '¿Estás seguro de que deseas eliminar este producto no conforme?',
-      [
+  const handleDelete = async (r: PncRecord) => {
+    Alert.alert('Confirmar', '¿Deseas eliminar este registro?', [
         { text: 'Cancelar', style: 'cancel' },
         {
           text: 'Eliminar',
@@ -443,222 +917,309 @@ export default function NonConformingProductScreen() {
           onPress: async () => {
             try {
               const isConnected = await getConnectionStatus();
-              const recordId = record.id || record.id_local;
+            const recordId = r.id || r.id_local;
+            const isLocal = String(r.id_local || '').startsWith('local-') || String(r.id || '').startsWith('local-') || !r.synced;
 
-              if (isConnected && record.id && !record.id.startsWith('local-')) {
-                const result = await deleteNonConformingProduct({
-                  id: record.id,
-                  refreshAccessToken,
-                  logout,
-                });
-
-                if (result.status) {
-                  Alert.alert('Éxito', 'Producto no conforme eliminado correctamente');
-                  fetchNonConformingProducts();
-                } else {
-                  Alert.alert('Error', result.message || 'Error al eliminar el producto no conforme');
+            if (isConnected && !isLocal && r.id && !String(r.id).startsWith('local-')) {
+              const res = await deleteNonConformingProduct({ id: String(r.id), refreshAccessToken, logout });
+              if (!res.status) {
+                Alert.alert('Error', res.message || 'No se pudo eliminar');
+                return;
                 }
               } else {
                 const actionsStr = await AsyncStorage.getItem('evaluations_actions');
                 const actions = actionsStr ? JSON.parse(actionsStr) : [];
-                actions.push({
-                  id: recordId,
-                  action: 'delete',
-                  type: 'non_conforming_product',
-                  payload: {},
-                  synced: false,
-                });
+              actions.push({ id: recordId, action: 'delete', type: 'non_conforming_product', payload: {}, synced: false });
                 await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+            }
 
                 const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                if (cacheStr) {
-                  const cache = JSON.parse(cacheStr);
-                  const updatedCache = cache.filter((item: any) => !(item.id === recordId || item.id_local === recordId));
+            const cache = cacheStr ? JSON.parse(cacheStr) : [];
+            const updatedCache = cache.filter((item: any) => !(item.type === 'non_conforming_product' && (item.id === recordId || item.id_local === recordId)));
                   await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                }
 
-                Alert.alert('Modo Offline', 'Producto no conforme eliminado localmente. Se sincronizará cuando haya conexión.');
-                fetchNonConformingProducts();
-              }
-            } catch (err) {
-              console.error('Error deleting non-conforming product:', err);
-              Alert.alert('Error', 'No se pudo eliminar el producto no conforme');
+            Alert.alert('Éxito', 'Registro eliminado');
+            await fetchRecords();
+          } catch (e) {
+            console.error('Error deleting PNC:', e);
+            Alert.alert('Error', 'No se pudo eliminar');
             }
           },
         },
-      ]
+    ]);
+  };
+
+  // --------- UI helpers ---------
+  const renderLocalFilesList = () => {
+    const all = [...imageFiles, ...audioFiles, ...videoFiles, ...documentFiles];
+    if (all.length === 0) return null;
+
+    return (
+      <ThemedView style={styles.filesList}>
+        {imageFiles.map((file) => (
+          <ThemedView key={file.id} style={styles.fileRow}>
+            <Image
+              source={{ uri: `data:${guessMimeType({ type: 'image', extension: file.extension, mimeType: file.mimeType })};base64,${file.base64}` }}
+              style={styles.filePreviewImage}
+              resizeMode="cover"
+            />
+            <ThemedText numberOfLines={1} style={styles.fileName}>{file.name}</ThemedText>
+            <TouchableOpacity onPress={() => removeLocalFile('image', file.id)}>
+              <Ionicons name="trash" size={16} color="#FF3B30" />
+            </TouchableOpacity>
+        </ThemedView>
+        ))}
+
+        {audioFiles.map((file) => (
+          <ThemedView key={file.id} style={styles.mediaBlock}>
+            <ThemedText style={styles.mediaLabel} numberOfLines={1}>Audio: {file.name}</ThemedText>
+            <PncAudioPlayer
+              sourceUrl={`data:${guessMimeType({ type: 'audio', extension: file.extension, mimeType: file.mimeType })};base64,${file.base64}`}
+            />
+            <TouchableOpacity style={styles.removeMediaBtn} onPress={() => removeLocalFile('audio', file.id)}>
+              <Ionicons name="trash" size={16} color="#FF3B30" />
+              <ThemedText style={styles.removeMediaText}>Quitar</ThemedText>
+            </TouchableOpacity>
+        </ThemedView>
+        ))}
+
+        {videoFiles.map((file) => (
+          <ThemedView key={file.id} style={styles.mediaBlock}>
+            <ThemedText style={styles.mediaLabel} numberOfLines={1}>Video: {file.name}</ThemedText>
+            <PncVideoPlayer
+              sourceUrl={`data:${guessMimeType({ type: 'video', extension: file.extension, mimeType: file.mimeType })};base64,${file.base64}`}
+            />
+            <TouchableOpacity style={styles.removeMediaBtn} onPress={() => removeLocalFile('video', file.id)}>
+              <Ionicons name="trash" size={16} color="#FF3B30" />
+              <ThemedText style={styles.removeMediaText}>Quitar</ThemedText>
+            </TouchableOpacity>
+        </ThemedView>
+        ))}
+
+        {documentFiles.map((file) => (
+          <ThemedView key={file.id} style={styles.fileRow}>
+            <Ionicons name="document-text-outline" size={16} color="#007AFF" />
+            <ThemedText numberOfLines={1} style={styles.fileName}>{file.name}</ThemedText>
+            <TouchableOpacity onPress={() => removeLocalFile('document', file.id)}>
+              <Ionicons name="trash" size={16} color="#FF3B30" />
+            </TouchableOpacity>
+        </ThemedView>
+        ))}
+      </ThemedView>
     );
   };
 
-  const toggleExpanded = (recordId: string) => {
-    if (expandedRecordIds.includes(recordId)) {
-      setExpandedRecordIds(expandedRecordIds.filter(id => id !== recordId));
-    } else {
-      setExpandedRecordIds([...expandedRecordIds, recordId]);
-    }
-  };
+  const renderForm = () => {
+    const decodedFirma = firmaResponsable
+      ? firmaResponsable
+      : decodeFirmaHash(
+          editing
+            ? (records.find((r) => String(r.id) === String(editing.id) || String(r.id_local) === String(editing.id_local))?.firma_responsable || '')
+            : ''
+        );
 
-  const renderForm = (isEditing: boolean = false) => {
+    const divisionName =
+      selectedClienteId && selectedDivisionId
+        ? (divisionOptions.find((d) => d.id === selectedDivisionId)?.nombre || 'División')
+        : 'Seleccione cliente primero';
+
     return (
       <ThemedView style={styles.formCard}>
-        <ThemedText style={styles.formTitle}>
-          {isEditing ? 'Editar Producto No Conforme' : 'Nuevo Producto No Conforme'}
-        </ThemedText>
+        <ThemedText style={styles.formTitle}>{editing ? 'Editar registro' : 'Nuevo registro'}</ThemedText>
 
-        {/* Cliente */}
-        <ThemedView style={styles.formGroup}>
-          <ThemedText style={styles.formLabel}>Cliente</ThemedText>
-          <TextInput
-            style={styles.formInput}
-            placeholder="Cliente"
-            placeholderTextColor="#999"
-            value={cliente}
-            onChangeText={setCliente}
-          />
+        {isStructureLoading ? (
+          <ThemedView style={styles.inlineLoading}>
+            <ActivityIndicator size="small" color="#007AFF" />
+            <ThemedText style={styles.inlineLoadingText}>Cargando estructura...</ThemedText>
+        </ThemedView>
+        ) : null}
+
+        <ThemedText style={styles.sectionTitle}>Jerarquía (hasta sucursal)</ThemedText>
+
+        <ThemedText style={styles.label}>Empresa *</ThemedText>
+        <ThemedView style={styles.pickerWrapper}>
+          <Picker selectedValue={selectedEmpresaId ?? 0} onValueChange={(v) => handleEmpresaChange(Number(v) || null)} style={styles.picker}>
+            <Picker.Item label="Seleccione empresa..." value={0} />
+            {empresaOptions.map((e) => (
+              <Picker.Item key={e.id} label={e.nombre} value={e.id} />
+            ))}
+          </Picker>
         </ThemedView>
 
-        {/* # de Corpo */}
-        <ThemedView style={styles.formGroup}>
-          <ThemedText style={styles.formLabel}># de Corpo</ThemedText>
-          <TextInput
-            style={styles.formInput}
-            placeholder="# de Corpo"
-            placeholderTextColor="#999"
-            value={numeroCorpo}
-            onChangeText={setNumeroCorpo}
-          />
-        </ThemedView>
-
-        {/* Responsable de la cuenta */}
-        <ThemedView style={styles.formGroup}>
-          <ThemedText style={styles.formLabel}>Responsable de la cuenta</ThemedText>
-          <TextInput
-            style={styles.formInput}
-            placeholder="Responsable de la cuenta"
-            placeholderTextColor="#999"
-            value={responsableCuenta}
-            onChangeText={setResponsableCuenta}
-          />
-        </ThemedView>
-
-        {/* Macroactividad */}
-        <ThemedView style={styles.formGroup}>
-          <ThemedText style={styles.formLabel}>Macroactividad</ThemedText>
-          <TextInput
-            style={styles.formInput}
-            placeholder="Macroactividad"
-            placeholderTextColor="#999"
-            value={macroactividad}
-            onChangeText={setMacroactividad}
-          />
-        </ThemedView>
-
-        {/* Actividad */}
-        <ThemedView style={styles.formGroup}>
-          <ThemedText style={styles.formLabel}>Actividad</ThemedText>
-          <TextInput
-            style={styles.formInput}
-            placeholder="Actividad"
-            placeholderTextColor="#999"
-            value={actividad}
-            onChangeText={setActividad}
-          />
-        </ThemedView>
-
-        {/* Tipo de Servicio no Conforme */}
-        <ThemedView style={styles.formGroup}>
-          <ThemedText style={styles.formLabel}>Tipo de Servicio no Conforme</ThemedText>
-          <TextInput
-            style={styles.formInput}
-            placeholder="Tipo de Servicio no Conforme"
-            placeholderTextColor="#999"
-            value={tipoServicioNoConforme}
-            onChangeText={setTipoServicioNoConforme}
-          />
-        </ThemedView>
-
-        {/* Tipo de registro */}
-        <ThemedView style={styles.formGroup}>
-          <ThemedText style={styles.formLabel}>Tipo de registro y Responsable de registro del PNC identificado</ThemedText>
-          <TextInput
-            style={styles.formInput}
-            placeholder="Tipo de registro"
-            placeholderTextColor="#999"
-            value={tipoRegistro}
-            onChangeText={setTipoRegistro}
-          />
-        </ThemedView>
-
-        {/* Responsable de registro */}
-        <ThemedView style={styles.formGroup}>
-          <ThemedText style={styles.formLabel}>Responsable de registro</ThemedText>
-          <TextInput
-            style={styles.formInput}
-            placeholder="Responsable de registro"
-            placeholderTextColor="#999"
-            value={responsableRegistro}
-            onChangeText={setResponsableRegistro}
-          />
-        </ThemedView>
-
-        {/* Acciones a seguir */}
-        <ThemedView style={styles.formGroup}>
-          <ThemedText style={styles.formLabel}>Acciones a seguir según las desviaciones encontradas</ThemedText>
-          <TextInput
-            style={[styles.formInput, styles.textArea]}
-            placeholder="Indicar a quién debe comunicarse sobre el producto no conforme identificado así como las acciones específicas que se tomarán al respecto del PNC"
-            placeholderTextColor="#999"
-            multiline
-            numberOfLines={6}
-            textAlignVertical="top"
-            value={accionesSeguir}
-            onChangeText={setAccionesSeguir}
-          />
-        </ThemedView>
-
-        {/* Responsable de corregir */}
-        <ThemedView style={styles.formGroup}>
-          <ThemedText style={styles.formLabel}>Responsable de tomar acción para corregir los productos no conformes identificados</ThemedText>
-          <TextInput
-            style={[styles.formInput, styles.textArea]}
-            placeholder="Responsable de tomar acción para corregir"
-            placeholderTextColor="#999"
-            multiline
-            numberOfLines={4}
-            textAlignVertical="top"
-            value={responsableCorregir}
-            onChangeText={setResponsableCorregir}
-          />
-        </ThemedView>
-
-        {/* Responsable de aprobar */}
-        <ThemedView style={styles.formGroup}>
-          <ThemedText style={styles.formLabel}>Responsable de aprobar la acción (Si ha reproceso)</ThemedText>
-          <TextInput
-            style={[styles.formInput, styles.textArea]}
-            placeholder="Responsable de aprobar la acción"
-            placeholderTextColor="#999"
-            multiline
-            numberOfLines={4}
-            textAlignVertical="top"
-            value={responsableAprobar}
-            onChangeText={setResponsableAprobar}
-          />
-        </ThemedView>
-
-        {/* Action Buttons */}
-        <ThemedView style={styles.actionButtons}>
-          <TouchableOpacity
-            style={[styles.actionButton, styles.cancelButton]}
-            onPress={isEditing ? cancelEditing : cancelCreating}
+        <ThemedText style={styles.label}>Cliente *</ThemedText>
+        <ThemedView style={styles.pickerWrapper}>
+          <Picker
+            selectedValue={selectedClienteId ?? 0}
+            onValueChange={(v) => handleClienteChange(Number(v) || null)}
+            enabled={selectedEmpresaId !== null && clienteOptions.length > 0}
+            style={styles.picker}
           >
-            <ThemedText style={styles.actionButtonText}>Cancelar</ThemedText>
+            <Picker.Item label={selectedEmpresaId ? 'Seleccione cliente...' : 'Seleccione empresa primero'} value={0} />
+            {clienteOptions.map((c) => (
+              <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+            ))}
+          </Picker>
+        </ThemedView>
+
+        <ThemedText style={styles.label}>División (automática)</ThemedText>
+        <ThemedView style={styles.pickerWrapper}>
+          <Picker selectedValue={selectedDivisionId ?? 0} onValueChange={() => {}} enabled={false} style={styles.picker}>
+            <Picker.Item label={divisionName} value={0} />
+          </Picker>
+        </ThemedView>
+
+        <ThemedText style={styles.label}>Contrato</ThemedText>
+        <ThemedView style={styles.pickerWrapper}>
+          <Picker
+            selectedValue={selectedContratoId ?? 0}
+            onValueChange={(v) => {
+              const next = Number(v) || null;
+              setSelectedContratoId(next);
+              setSelectedSucursalId(null);
+            }}
+            enabled={selectedDivisionId !== null && contratoOptions.length > 0}
+            style={styles.picker}
+          >
+            <Picker.Item label={selectedDivisionId ? 'Seleccione contrato...' : 'Seleccione cliente primero'} value={0} />
+            {contratoOptions.map((c) => (
+              <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+            ))}
+          </Picker>
+        </ThemedView>
+
+        <ThemedText style={styles.label}>Sucursal *</ThemedText>
+        <ThemedView style={styles.pickerWrapper}>
+          <Picker
+            selectedValue={selectedSucursalId ?? 0}
+            onValueChange={(v) => setSelectedSucursalId(Number(v) || null)}
+            enabled={selectedContratoId !== null && sucursalOptions.length > 0}
+            style={styles.picker}
+          >
+            <Picker.Item label={selectedContratoId ? 'Seleccione sucursal...' : 'Seleccione contrato primero'} value={0} />
+            {sucursalOptions.map((s) => (
+              <Picker.Item key={s.id} label={s.nombre} value={s.id} />
+            ))}
+          </Picker>
+        </ThemedView>
+
+        <ThemedText style={styles.sectionTitle}>Datos</ThemedText>
+
+        <ThemedText style={styles.label}>Fecha identificación *</ThemedText>
+        <TouchableOpacity style={styles.dateButton} onPress={() => setShowFechaIdentPicker(true)} activeOpacity={0.85}>
+          <ThemedText style={styles.dateButtonText}>{dateToLocalString(fechaIdentificacion)}</ThemedText>
+          <Ionicons name="calendar-outline" size={18} color="#007AFF" />
+        </TouchableOpacity>
+        {showFechaIdentPicker && (
+          <DateTimePicker
+            value={fechaIdentificacion}
+            mode="date"
+            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+            onChange={(_, d) => {
+              setShowFechaIdentPicker(false);
+              if (d) setFechaIdentificacion(d);
+            }}
+          />
+        )}
+
+        <ThemedText style={styles.label}>Responsable de la cuenta *</ThemedText>
+        <TextInput style={styles.input} value={responsableCuenta} onChangeText={setResponsableCuenta} placeholder="Responsable de la cuenta" placeholderTextColor="#999" />
+
+        <ThemedText style={styles.label}>Tipo de servicio no conforme *</ThemedText>
+        <TextInput style={styles.input} value={tipoServicioNoConforme} onChangeText={setTipoServicioNoConforme} placeholder="Tipo de servicio no conforme" placeholderTextColor="#999" />
+
+        <ThemedText style={styles.label}>Persona que identificó el PNC *</ThemedText>
+        <TextInput style={styles.input} value={personaIdentifico} onChangeText={setPersonaIdentifico} placeholder="Nombre" placeholderTextColor="#999" />
+
+        <ThemedText style={styles.label}>Firma persona que identificó el PNC *</ThemedText>
+        {formatSignatureForDisplay(firmaPersonaIdentifico) ? (
+          <Image source={{ uri: formatSignatureForDisplay(firmaPersonaIdentifico)! }} style={styles.signaturePreview} resizeMode="contain" />
+        ) : null}
+        <TouchableOpacity style={styles.signatureButton} onPress={() => openSignatureModal('identifico')} activeOpacity={0.85}>
+          <Ionicons name="create-outline" size={18} color="#007AFF" />
+          <ThemedText style={styles.signatureButtonText}>{firmaPersonaIdentifico ? 'Editar firma' : 'Agregar firma'}</ThemedText>
+        </TouchableOpacity>
+
+        <ThemedText style={styles.label}>Descripción *</ThemedText>
+        <TextInput style={[styles.input, styles.textArea]} value={descripcion} onChangeText={setDescripcion} placeholder="Descripción" placeholderTextColor="#999" multiline />
+
+        <ThemedText style={styles.label}>Persona que originó el PNC *</ThemedText>
+        <TextInput style={styles.input} value={personaOrigino} onChangeText={setPersonaOrigino} placeholder="Nombre" placeholderTextColor="#999" />
+
+        <ThemedText style={styles.label}>Firma persona que originó el PNC *</ThemedText>
+        {formatSignatureForDisplay(firmaPersonaOrigino) ? (
+          <Image source={{ uri: formatSignatureForDisplay(firmaPersonaOrigino)! }} style={styles.signaturePreview} resizeMode="contain" />
+        ) : null}
+        <TouchableOpacity style={styles.signatureButton} onPress={() => openSignatureModal('origino')} activeOpacity={0.85}>
+          <Ionicons name="create-outline" size={18} color="#007AFF" />
+          <ThemedText style={styles.signatureButtonText}>{firmaPersonaOrigino ? 'Editar firma' : 'Agregar firma'}</ThemedText>
+        </TouchableOpacity>
+
+        <ThemedText style={styles.label}>Acción implementada *</ThemedText>
+        <TextInput style={[styles.input, styles.textArea]} value={accionImplementada} onChangeText={setAccionImplementada} placeholder="Acción implementada" placeholderTextColor="#999" multiline />
+
+        <ThemedText style={styles.label}>Fecha solución *</ThemedText>
+        <TouchableOpacity style={styles.dateButton} onPress={() => setShowFechaSolPicker(true)} activeOpacity={0.85}>
+          <ThemedText style={styles.dateButtonText}>{dateToLocalString(fechaSolucion)}</ThemedText>
+          <Ionicons name="calendar-outline" size={18} color="#007AFF" />
+        </TouchableOpacity>
+        {showFechaSolPicker && (
+          <DateTimePicker
+            value={fechaSolucion}
+            mode="date"
+            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+            onChange={(_, d) => {
+              setShowFechaSolPicker(false);
+              if (d) setFechaSolucion(d);
+            }}
+          />
+        )}
+
+        <ThemedText style={styles.label}>Responsable de aprobar *</ThemedText>
+        <TextInput style={styles.input} value={responsableAprobar} onChangeText={setResponsableAprobar} placeholder="Responsable de aprobar" placeholderTextColor="#999" />
+
+        <ThemedText style={styles.sectionTitle}>Adjuntos</ThemedText>
+        <ThemedView style={styles.fileIconButtonsRow}>
+          <TouchableOpacity style={styles.fileIconButton} onPress={() => handleAddFile('image')}>
+            <Ionicons name="image-outline" size={20} color="#007AFF" />
           </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.actionButton, styles.saveButton]}
-            onPress={isEditing ? updateNonConformingProductHandler : saveNonConformingProduct}
-          >
-            <ThemedText style={styles.actionButtonText}>Guardar</ThemedText>
+          <TouchableOpacity style={styles.fileIconButton} onPress={() => handleAddFile('audio')}>
+            <Ionicons name="mic-outline" size={20} color="#007AFF" />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.fileIconButton} onPress={() => handleAddFile('video')}>
+            <Ionicons name="videocam-outline" size={20} color="#007AFF" />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.fileIconButton} onPress={() => handleAddFile('document')}>
+            <Ionicons name="document-text-outline" size={20} color="#007AFF" />
+          </TouchableOpacity>
+        </ThemedView>
+        {renderLocalFilesList()}
+
+        <ThemedText style={styles.sectionTitle}>Firma del responsable *</ThemedText>
+        <ThemedView style={styles.signatureButtonsRow}>
+          <TouchableOpacity style={[styles.signatureBlueButton, isGeneratingFirma && styles.signatureDisabled]} onPress={generateFirmaResponsable} disabled={isGeneratingFirma} activeOpacity={0.85}>
+            {isGeneratingFirma ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Ionicons name="finger-print" size={18} color="#FFFFFF" />}
+            <ThemedText style={styles.signatureBlueButtonText}>{isGeneratingFirma ? 'Generando...' : 'Generar'}</ThemedText>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.signatureBlueButton} onPress={handleScanQR} activeOpacity={0.85}>
+            <Ionicons name="qr-code" size={18} color="#FFFFFF" />
+            <ThemedText style={styles.signatureBlueButtonText}>Escanear QR</ThemedText>
+          </TouchableOpacity>
+        </ThemedView>
+        {decodedFirma ? (
+          <ThemedView style={styles.firmaInfoBox}>
+            <ThemedText style={styles.firmaInfoText}>Empleado: {decodedFirma.empleadoId}</ThemedText>
+            <ThemedText style={styles.firmaInfoText}>Timestamp: {decodedFirma.timestamp}</ThemedText>
+          </ThemedView>
+        ) : (
+          <ThemedText style={styles.helpText}>Pendiente</ThemedText>
+        )}
+
+        <ThemedView style={styles.actionButtons}>
+          <TouchableOpacity style={[styles.actionButton, styles.cancelButton]} onPress={cancelCreateOrEdit} activeOpacity={0.85}>
+            <Ionicons name="close" size={22} color="#FFFFFF" />
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.actionButton, styles.saveButton]} onPress={handleSave} activeOpacity={0.85}>
+            <Ionicons name="checkmark" size={22} color="#FFFFFF" />
           </TouchableOpacity>
         </ThemedView>
       </ThemedView>
@@ -669,13 +1230,13 @@ export default function NonConformingProductScreen() {
     if (isLoading) {
       return (
         <ThemedView style={styles.centerContainer}>
-          <ActivityIndicator size="large" color="#FF9500" />
-          <ThemedText style={styles.loadingText}>Cargando productos no conformes...</ThemedText>
+          <ActivityIndicator size="large" color="#007AFF" />
+          <ThemedText style={styles.loadingText}>Cargando registros...</ThemedText>
         </ThemedView>
       );
     }
 
-    if (error && nonConformingProducts.length === 0) {
+    if (error && records.length === 0) {
       return (
         <ThemedView style={styles.centerContainer}>
           <ThemedText style={styles.errorText}>{error}</ThemedText>
@@ -683,124 +1244,148 @@ export default function NonConformingProductScreen() {
       );
     }
 
-    if (nonConformingProducts.length === 0) {
+    if (records.length === 0) {
       return (
         <ThemedView style={styles.centerContainer}>
-          <ThemedText style={styles.emptyText}>No hay productos no conformes registrados</ThemedText>
+          <ThemedText style={styles.emptyText}>No hay registros</ThemedText>
         </ThemedView>
       );
     }
 
     return (
       <ThemedView style={styles.listContainer}>
-        {nonConformingProducts.map((record) => {
-          const recordId = record.id || record.id_local;
-          const isExpanded = expandedRecordIds.includes(recordId);
-          const isOffline = !record.synced || record.id_local;
+        {records.map((r) => {
+          const recordKey = String(r.id || r.id_local);
+          const isExpanded = expanded.has(recordKey);
+          const isOffline = !r.synced || String(r.id_local || '').startsWith('local-');
+          const pncId = typeof r.id === 'number' ? r.id : undefined;
+
+          const files = Array.isArray(r.files) ? r.files : [];
+          const imageFilesRemote = files.filter((f) => f.type === 'image');
+          const audioFilesRemote = files.filter((f) => f.type === 'audio');
+          const videoFilesRemote = files.filter((f) => f.type === 'video');
+          const documentFilesRemote = files.filter((f) => f.type === 'document' || (f.type !== 'image' && f.type !== 'audio' && f.type !== 'video'));
 
           return (
-            <ThemedView key={recordId} style={styles.listItem}>
-              <TouchableOpacity
-                style={styles.listItemHeader}
-                onPress={() => toggleExpanded(recordId)}
-              >
-                <ThemedView style={styles.listItemHeaderContent}>
-                  <ThemedText style={styles.listItemTitle}>
-                    {record.cliente || 'Sin cliente'}
+            <ThemedView key={recordKey} style={styles.card}>
+              <ThemedText style={styles.cardTitle}>
+                {r.tipo_servicio_no_conforme || '—'}
                   </ThemedText>
-                  <ThemedText style={styles.listItemSubtitle}>
-                    {record.macroactividad || 'Sin macroactividad'} - {record.actividad || 'Sin actividad'}
+
+              <ThemedText style={styles.cardLine}>
+                <ThemedText style={styles.cardLabel}>Fecha identificación: </ThemedText>
+                <ThemedText style={styles.cardValue}>{r.fecha_identificacion.split('T')[0] || '—'}</ThemedText>
                   </ThemedText>
-                </ThemedView>
-                <ThemedView style={styles.listItemActions}>
-                  {isOffline && (
-                    <ThemedView style={styles.offlineBadge}>
-                      <ThemedText style={styles.offlineBadgeText}>Offline</ThemedText>
-                    </ThemedView>
-                  )}
-                  <Ionicons
-                    name={isExpanded ? 'chevron-up' : 'chevron-down'}
-                    size={24}
-                    color="#000000"
-                  />
-                </ThemedView>
+              <ThemedText style={styles.cardLine}>
+                <ThemedText style={styles.cardLabel}>Responsable: </ThemedText>
+                <ThemedText style={styles.cardValue}>{r.responsable_cuenta || '—'}</ThemedText>
+              </ThemedText>
+
+              <TouchableOpacity style={styles.collapseButton} onPress={() => toggleExpanded(recordKey)} activeOpacity={0.85}>
+                <ThemedText style={styles.collapseButtonText}>{isExpanded ? 'Ocultar detalles' : 'Ver detalles'}</ThemedText>
+                <Ionicons name={isExpanded ? 'chevron-up' : 'chevron-down'} size={18} color="#007AFF" />
               </TouchableOpacity>
 
               {isExpanded && (
-                <ThemedView style={styles.listItemDetails}>
-                  <ThemedText style={styles.detailText}>
-                    <ThemedText style={styles.detailLabel}>Cliente: </ThemedText>
-                    {record.cliente || 'No especificado'}
-                  </ThemedText>
-                  <ThemedText style={styles.detailText}>
-                    <ThemedText style={styles.detailLabel}># de Corpo: </ThemedText>
-                    {record.numero_corpo || 'No especificado'}
-                  </ThemedText>
-                  <ThemedText style={styles.detailText}>
-                    <ThemedText style={styles.detailLabel}>Responsable de la cuenta: </ThemedText>
-                    {record.responsable_cuenta || 'No especificado'}
-                  </ThemedText>
-                  <ThemedText style={styles.detailText}>
-                    <ThemedText style={styles.detailLabel}>Macroactividad: </ThemedText>
-                    {record.macroactividad || 'No especificado'}
-                  </ThemedText>
-                  <ThemedText style={styles.detailText}>
-                    <ThemedText style={styles.detailLabel}>Actividad: </ThemedText>
-                    {record.actividad || 'No especificado'}
-                  </ThemedText>
-                  <ThemedText style={styles.detailText}>
-                    <ThemedText style={styles.detailLabel}>Tipo de Servicio no Conforme: </ThemedText>
-                    {record.tipo_servicio_no_conforme || 'No especificado'}
-                  </ThemedText>
-                  <ThemedText style={styles.detailText}>
-                    <ThemedText style={styles.detailLabel}>Tipo de registro: </ThemedText>
-                    {record.tipo_registro || 'No especificado'}
-                  </ThemedText>
-                  <ThemedText style={styles.detailText}>
-                    <ThemedText style={styles.detailLabel}>Responsable de registro: </ThemedText>
-                    {record.responsable_registro || 'No especificado'}
-                  </ThemedText>
-                  {record.acciones_seguir && (
-                    <ThemedText style={styles.detailText}>
-                      <ThemedText style={styles.detailLabel}>Acciones a seguir: </ThemedText>
-                      {record.acciones_seguir}
-                    </ThemedText>
-                  )}
-                  {record.responsable_corregir && (
-                    <ThemedText style={styles.detailText}>
-                      <ThemedText style={styles.detailLabel}>Responsable de corregir: </ThemedText>
-                      {record.responsable_corregir}
-                    </ThemedText>
-                  )}
-                  {record.responsable_aprobar && (
-                    <ThemedText style={styles.detailText}>
-                      <ThemedText style={styles.detailLabel}>Responsable de aprobar: </ThemedText>
-                      {record.responsable_aprobar}
-                    </ThemedText>
-                  )}
-                  <ThemedText style={styles.detailText}>
-                    <ThemedText style={styles.detailLabel}>Fecha: </ThemedText>
-                    {new Date(record.created_at).toLocaleDateString('es-CR')}
-                  </ThemedText>
+                <ThemedView style={styles.collapseContent}>
+                  <ThemedText style={styles.sectionTitle}>Tipo servicio no conforme</ThemedText>
+                  <ThemedText style={styles.detailText}>{r.tipo_servicio_no_conforme || '—'}</ThemedText>
 
-                  <ThemedView style={styles.listItemButtons}>
+                  <ThemedText style={styles.sectionTitle}>Descripción</ThemedText>
+                  <ThemedText style={styles.detailText}>{r.descripcion || '—'}</ThemedText>
+
+                  <ThemedText style={styles.sectionTitle}>Acción implementada</ThemedText>
+                  <ThemedText style={styles.detailText}>{r.accion_implementada || '—'}</ThemedText>
+
+                  <ThemedText style={styles.sectionTitle}>Adjuntos</ThemedText>
+
+                  {imageFilesRemote.length > 0 ? (
+                    <>
+                      <ThemedText style={styles.mediaLabel}>Imágenes</ThemedText>
+                      <ThemedView style={styles.imagesList}>
+                        {imageFilesRemote.map((f, idx) => {
+                          const uri = buildFileUrl(pncId, f);
+                          return (
+                            <ThemedView key={`${recordKey}_img_${idx}`} style={styles.imageWideWrap}>
+                              <Image source={{ uri }} style={styles.imageWide} resizeMode="contain" />
+                </ThemedView>
+                          );
+                        })}
+                    </ThemedView>
+                    </>
+                  ) : null}
+
+                  {audioFilesRemote.length > 0 ? (
+                    <>
+                      <ThemedText style={styles.mediaLabel}>Audios</ThemedText>
+                      {audioFilesRemote.map((f, idx) => {
+                        const uri = buildFileUrl(pncId, f);
+                        const label = (f.original_name || f.name || `audio_${idx}`).trim();
+                        return (
+                          <ThemedView key={`${recordKey}_aud_${idx}`} style={styles.mediaBlock}>
+                            <ThemedText style={styles.mediaLabel} numberOfLines={1}>{label}</ThemedText>
+                            <PncAudioPlayer sourceUrl={uri} />
+                </ThemedView>
+                        );
+                      })}
+                    </>
+                  ) : null}
+
+                  {videoFilesRemote.length > 0 ? (
+                    <>
+                      <ThemedText style={styles.mediaLabel}>Videos</ThemedText>
+                      {videoFilesRemote.map((f, idx) => {
+                        const uri = buildFileUrl(pncId, f);
+                        const label = (f.original_name || f.name || `video_${idx}`).trim();
+                        return (
+                          <ThemedView key={`${recordKey}_vid_${idx}`} style={styles.mediaBlock}>
+                            <ThemedText style={styles.mediaLabel} numberOfLines={1}>{label}</ThemedText>
+                            <PncVideoPlayer sourceUrl={uri} />
+                          </ThemedView>
+                        );
+                      })}
+                    </>
+                  ) : null}
+
+                  {documentFilesRemote.length > 0 ? (
+                    <>
+                      <ThemedText style={styles.mediaLabel}>Archivos</ThemedText>
+                      {documentFilesRemote.map((f, idx) => {
+                        const uri = buildFileUrl(pncId, f);
+                        const label = (f.original_name || f.name || `archivo_${idx}`).trim();
+                        return (
                     <TouchableOpacity
-                      style={[styles.listItemButton, styles.editButton]}
-                      onPress={() => startEditing(record)}
-                    >
-                      <Ionicons name="pencil" size={20} color="#FFFFFF" />
-                      <ThemedText style={styles.listItemButtonText}>Editar</ThemedText>
+                            key={`${recordKey}_doc_${idx}`}
+                            style={styles.fileRow}
+                            onPress={async () => {
+                              if (!uri) return;
+                              try {
+                                await Linking.openURL(uri);
+                              } catch {
+                                Alert.alert('Error', 'No se pudo abrir el archivo');
+                              }
+                            }}
+                          >
+                            <ThemedText numberOfLines={1} style={styles.fileName}>{label}</ThemedText>
+                            <Ionicons name="open-outline" size={18} color="#007AFF" />
                     </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[styles.listItemButton, styles.deleteButton]}
-                      onPress={() => deleteNonConformingProductHandler(record)}
-                    >
-                      <Ionicons name="trash" size={20} color="#FFFFFF" />
-                      <ThemedText style={styles.listItemButtonText}>Eliminar</ThemedText>
-                    </TouchableOpacity>
-                  </ThemedView>
+                        );
+                      })}
+                    </>
+                  ) : null}
                 </ThemedView>
               )}
+
+              <ThemedView style={styles.actionsRow}>
+                <TouchableOpacity style={[styles.actionBtn, styles.editBtn]} onPress={() => startEditing(r)} activeOpacity={0.85}>
+                  <Ionicons name="pencil" size={18} color="#FFFFFF" />
+                  <ThemedText style={styles.actionBtnText}>Editar</ThemedText>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.actionBtn, styles.deleteBtn]} onPress={() => handleDelete(r)} activeOpacity={0.85}>
+                  <Ionicons name="trash" size={18} color="#FFFFFF" />
+                  <ThemedText style={styles.actionBtnText}>Eliminar</ThemedText>
+                </TouchableOpacity>
+              </ThemedView>
             </ThemedView>
           );
         })}
@@ -810,238 +1395,378 @@ export default function NonConformingProductScreen() {
 
   return (
     <ThemedView style={styles.container}>
-      <AppHeader onMenuPress={() => setIsMenuVisible(true)} title="Producto No Conforme y Matriz" />
+      <AppHeader title="Producto no conforme" onMenuPress={() => setIsMenuVisible(true)} />
 
-      <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
-        {!hasCurrentMarca && (
-          <ThemedView style={styles.warningContainer}>
-            <ThemedText style={styles.warningText}>
-              No se encontró la marca actual. Por favor, marca tu entrada primero.
+      <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
+        <ThemedView style={styles.content}>
+          {error ? <ThemedText style={styles.errorText}>{error}</ThemedText> : null}
+
+          <ThemedView style={styles.titleContainer}>
+            <ThemedText type="title" style={styles.title}>
+              <Ionicons name="alert-circle" size={22} color="#000000" /> Producto no conforme
             </ThemedText>
+            <ThemedText style={styles.subtitle}>Registro con adjuntos y firmas (offline + sync)</ThemedText>
           </ThemedView>
-        )}
 
-        {hasCurrentMarca && (
-          <>
-            {!isCreating && !editingRecord && (
-              <TouchableOpacity style={styles.createButton} onPress={startCreating}>
-                <Ionicons name="add-circle" size={24} color="#FFFFFF" />
-                <ThemedText style={styles.createButtonText}>Nuevo Producto No Conforme</ThemedText>
+          {!hasCurrentMarca ? (
+            <ThemedView style={styles.emptyContainer}>
+              <ThemedText style={styles.errorText}>Debes tener una marca activa para usar este módulo.</ThemedText>
+            </ThemedView>
+          ) : null}
+
+          {!isCreating && hasCurrentMarca ? (
+            <TouchableOpacity style={styles.createButton} onPress={startCreate} activeOpacity={0.85}>
+              <ThemedText style={styles.createButtonText}>
+                <Ionicons name="add" size={20} color="#FFFFFF" /> Nuevo registro
+              </ThemedText>
               </TouchableOpacity>
-            )}
+          ) : null}
 
-            {isCreating && renderForm(false)}
-            {editingRecord && renderForm(true)}
-            {!isCreating && !editingRecord && renderList()}
-          </>
-        )}
+          {isCreating ? renderForm() : renderList()}
+        </ThemedView>
       </ScrollView>
 
       <AppFooter />
-      <SlideMenu
-        isVisible={isMenuVisible}
-        onClose={() => setIsMenuVisible(false)}
-        onHomePress={() => navigation.navigate('Home')}
-        currentRoute="NonConformingProduct"
-      />
+      <SlideMenu isVisible={isMenuVisible} onClose={() => setIsMenuVisible(false)} onHomePress={() => navigation.navigate('Home')} currentRoute="NonConformingProduct" />
+
+      {/* Modal firma dibujada */}
+      <Modal visible={signatureModalVisible} transparent animationType="fade">
+        <ThemedView style={styles.signatureOverlay}>
+          <ThemedView style={styles.signatureContainer}>
+            <ThemedText style={styles.signatureTitle}>Firma</ThemedText>
+            <View style={styles.signaturePad}>
+              <SignatureScreen
+                key={signatureKey}
+                ref={signatureRef}
+                onOK={handleSignatureOK}
+                webStyle={signatureWebStyle}
+                autoClear={false}
+                backgroundColor="transparent"
+                descriptionText=""
+              />
+            </View>
+            <ThemedView style={styles.signatureButtons}>
+              <TouchableOpacity style={[styles.signatureActionBtn, styles.signatureCancel]} onPress={() => setSignatureModalVisible(false)} activeOpacity={0.85}>
+                <ThemedText style={styles.signatureActionText}>Cerrar</ThemedText>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.signatureActionBtn, styles.signatureSave]} onPress={() => signatureRef.current?.readSignature?.()} activeOpacity={0.85}>
+                <ThemedText style={styles.signatureActionText}>Guardar</ThemedText>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.signatureActionBtn, styles.signatureClear]} onPress={() => signatureRef.current?.clearSignature?.()} activeOpacity={0.85}>
+                <ThemedText style={styles.signatureActionText}>Limpiar</ThemedText>
+              </TouchableOpacity>
+            </ThemedView>
+          </ThemedView>
+        </ThemedView>
+      </Modal>
+
+      {QRScannerComponent}
     </ThemedView>
   );
 }
 
+// --- Media Players (igual a JobManualsScreen) ---
+function PncAudioPlayer({ sourceUrl }: { sourceUrl: string }) {
+  const player = useAudioPlayer(sourceUrl);
+  const status = useAudioPlayerStatus(player);
+  const [isPlaying, setIsPlaying] = useState(false);
+
+  const duration = status.duration ?? 0;
+  const position = status.currentTime ?? 0;
+
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const togglePlayPause = () => {
+    if (!player) return;
+    try {
+      if (!isPlaying) {
+        player.play();
+        setIsPlaying(true);
+      } else {
+        player.pause();
+        setIsPlaying(false);
+      }
+    } catch (e) {
+      console.error('Error controlling audio player (PNC):', e);
+    }
+  };
+
+  const resetAudio = () => {
+    if (!player) return;
+    try {
+      player.seekTo(0);
+      player.pause();
+      setIsPlaying(false);
+    } catch (e) {
+      console.error('Error resetting audio player (PNC):', e);
+    }
+  };
+
+  useEffect(() => {
+    if (!status.playing && isPlaying && position >= duration && duration > 0) {
+      setIsPlaying(false);
+    }
+  }, [status.playing, position, duration, isPlaying]);
+
+  useEffect(() => {
+    if (status.playing !== isPlaying) {
+      setIsPlaying(status.playing);
+    }
+  }, [status.playing]);
+
+  return (
+    <ThemedView style={styles.audioPlayer}>
+      <TouchableOpacity style={styles.playButton} onPress={togglePlayPause}>
+        <Ionicons name={isPlaying ? 'pause' : 'play'} size={24} color="#007AFF" />
+      </TouchableOpacity>
+      <ThemedText style={styles.audioTime}>
+        {formatTime(position)} / {formatTime(duration)}
+      </ThemedText>
+      <TouchableOpacity style={styles.resetAudioButton} onPress={resetAudio}>
+        <Ionicons name="refresh" size={22} color="#FFFFFF" />
+      </TouchableOpacity>
+    </ThemedView>
+  );
+}
+
+function PncVideoPlayer({ sourceUrl }: { sourceUrl: string }) {
+  const player = useVideoPlayer(sourceUrl);
+  const maxContainerWidth = Dimensions.get('window').width - 64;
+
+  return (
+    <View
+      style={{
+        marginBottom: 8,
+        overflow: 'hidden',
+        borderRadius: 8,
+        backgroundColor: '#000000',
+        width: maxContainerWidth,
+        maxWidth: '100%',
+        alignSelf: 'center',
+        position: 'relative',
+      }}
+    >
+      <VideoView
+        player={player}
+        style={{
+          width: '100%',
+          aspectRatio: 16 / 9,
+          backgroundColor: '#000000',
+        }}
+        contentFit="contain"
+        nativeControls={true}
+        allowsFullscreen={false}
+        allowsPictureInPicture={false}
+      />
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  scrollView: {
-    flex: 1,
-  },
-  scrollContent: {
-    padding: 16,
-  },
-  warningContainer: {
-    backgroundColor: '#FFE5E5',
-    padding: 16,
-    borderRadius: 8,
-    marginBottom: 16,
-  },
-  warningText: {
-    color: '#D32F2F',
-    fontSize: 14,
-    textAlign: 'center',
-  },
+  container: { flex: 1 },
+  scrollView: { flex: 1 },
+  scrollContent: { padding: 16 },
+  content: { gap: 12 },
+
+  titleContainer: { gap: 4, marginBottom: 6, alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#E0E0E0', paddingBottom: 16 },
+  title: { color: '#000000', fontSize: 22, fontWeight: 'bold' },
+  subtitle: { color: '#666666' },
+
+  emptyContainer: { paddingVertical: 12 },
+
   createButton: {
-    backgroundColor: '#FF9500',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 16,
+    backgroundColor: '#007AFF',
+    paddingVertical: 12,
     borderRadius: 8,
+    alignItems: 'center',
     marginBottom: 16,
-    gap: 8,
   },
-  createButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
+  createButtonText: { color: '#FFFFFF', fontWeight: '700' },
+
+  formCard: { backgroundColor: '#FFFFFF', borderRadius: 8, padding: 16, marginBottom: 12, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 4, elevation: 2 },
+  formTitle: { fontSize: 18, fontWeight: '700', color: '#000000', marginBottom: 8 },
+
+  inlineLoading: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8 },
+  inlineLoadingText: { color: '#666666' },
+
+  sectionTitle: { fontSize: 16, fontWeight: '700', color: '#000000', marginTop: 8, marginBottom: 6 },
+  label: { fontSize: 14, fontWeight: '600', color: '#000000', marginTop: 10, marginBottom: 6 },
+
+  pickerWrapper: { borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 10, overflow: 'hidden', backgroundColor: '#FFFFFF' },
+  picker: { backgroundColor: '#FFFFFF' },
+
+  input: { borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 10, padding: 12, color: '#000000', backgroundColor: '#FFFFFF' },
+  textArea: { minHeight: 90, textAlignVertical: 'top' as any },
+
+  dateButton: {
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
   },
-  formCard: {
+  dateButtonText: { color: '#000000', fontWeight: '600' },
+
+  signaturePreview: { height: 140, borderRadius: 10, borderWidth: 1, borderColor: '#E0E0E0', marginBottom: 10 },
+  signatureButton: { flexDirection: 'row', gap: 10, alignItems: 'center', paddingVertical: 10 },
+  signatureButtonText: { color: '#007AFF', fontWeight: '700' },
+
+  fileIconButtonsRow: { flexDirection: 'row', gap: 10, marginTop: 6 },
+  fileIconButton: { width: 42, height: 42, borderRadius: 12, borderWidth: 1, borderColor: '#E0E0E0', alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFFFFF' },
+
+  filesList: { marginTop: 10, gap: 8 },
+  fileRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 6 },
+  filePreviewImage: { width: 44, height: 44, borderRadius: 8, backgroundColor: '#F2F2F2' },
+  fileName: { flex: 1, color: '#000000' },
+
+  signatureButtonsRow: { flexDirection: 'row', gap: 10, marginTop: 8 },
+  signatureBlueButton: { flexDirection: 'row', gap: 8, alignItems: 'center', backgroundColor: '#007AFF', paddingVertical: 10, paddingHorizontal: 12, borderRadius: 10, flex: 1, justifyContent: 'center' },
+  signatureBlueButtonText: { color: '#FFFFFF', fontWeight: '700' },
+  signatureDisabled: { opacity: 0.6 },
+  firmaInfoBox: { marginTop: 10, padding: 12, borderRadius: 10, backgroundColor: '#F5F9FF', borderWidth: 1, borderColor: '#D7E8FF' },
+  firmaInfoText: { color: '#000000' },
+  helpText: { color: '#666666' },
+
+  actionButtons: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 16, gap: 12 },
+  actionButton: { flex: 1, paddingVertical: 12, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  cancelButton: { backgroundColor: '#FF3B30' },
+  saveButton: { backgroundColor: '#34C759' },
+
+  // Lista (tarjetas estilo MutuosAcuerdosScreen)
+  listContainer: { gap: 12 },
+
+  card: {
     backgroundColor: '#FFFFFF',
     borderRadius: 8,
     padding: 16,
-    marginBottom: 16,
+    marginBottom: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    elevation: 2,
   },
-  formTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    marginBottom: 16,
-    color: '#000000',
+  cardTitle: { fontSize: 16, fontWeight: '800', color: '#000000', marginBottom: 10 },
+  cardLine: { marginBottom: 6 },
+  cardLabel: { fontWeight: '800', color: '#000000' },
+  cardValue: { color: '#000000' },
+  detailText: { color: '#000000', marginBottom: 8 },
+
+
+  collapseButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    marginTop: 8,
+    backgroundColor: '#FAFAFA',
   },
-  formGroup: {
-    marginBottom: 16,
+  collapseButtonText: { color: '#007AFF', fontWeight: '800' },
+  collapseContent: { marginTop: 12 },
+
+  actionsRow: { flexDirection: 'row', gap: 12, marginTop: 14 },
+  actionBtn: { flex: 1, flexDirection: 'row', gap: 8, alignItems: 'center', justifyContent: 'center', paddingVertical: 12, borderRadius: 10 },
+  editBtn: { backgroundColor: '#007AFF' },
+  deleteBtn: { backgroundColor: '#FF3B30' },
+  actionBtnText: { color: '#FFFFFF', fontWeight: '800' },
+
+  // Media (audio/video) similar a JobManualsScreen
+  mediaBlock: {
+    backgroundColor: '#FFF',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    padding: 12,
+    marginTop: 10,
   },
-  formLabel: {
+  mediaLabel: {
     fontSize: 14,
     fontWeight: '600',
-    marginBottom: 8,
     color: '#000000',
+    marginBottom: 8,
   },
-  formInput: {
+  removeMediaBtn: {
+    marginTop: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  removeMediaText: {
+    color: '#FF3B30',
+    fontWeight: '700',
+  },
+  audioPlayer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: '#FFF',
+    padding: 12,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: '#DDD',
-    borderRadius: 8,
-    padding: 12,
-    fontSize: 16,
-    color: '#000000',
-    backgroundColor: '#FFFFFF',
   },
-  textArea: {
-    minHeight: 100,
-  },
-  actionButtons: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 16,
-    gap: 12,
-  },
-  actionButton: {
+  playButton: { padding: 8 },
+  audioTime: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#007AFF',
     flex: 1,
-    padding: 16,
-    borderRadius: 8,
+  },
+  resetAudioButton: {
+    flexDirection: 'row',
     alignItems: 'center',
-  },
-  cancelButton: {
-    backgroundColor: '#CCCCCC',
-  },
-  saveButton: {
-    backgroundColor: '#FF9500',
-  },
-  actionButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  listContainer: {
-    gap: 12,
-  },
-  listItem: {
-    backgroundColor: '#FFFFFF',
+    justifyContent: 'center',
+    padding: 8,
     borderRadius: 8,
+    backgroundColor: '#007AFF',
+  },
+
+  imagesList: {
+    marginTop: 8,
+    gap: 12,
+    marginBottom: 10,
+  },
+  imageWideWrap: {
+    width: '100%',
+    borderRadius: 12,
     overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    backgroundColor: '#F2F2F2',
   },
-  listItemHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 16,
+  imageWide: {
+    width: '100%',
+    height: 220,
+    backgroundColor: '#F2F2F2',
   },
-  listItemHeaderContent: {
-    flex: 1,
-  },
-  listItemTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#000000',
-    marginBottom: 4,
-  },
-  listItemSubtitle: {
-    fontSize: 14,
-    color: '#666',
-  },
-  listItemActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  offlineBadge: {
-    backgroundColor: '#FF9800',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 4,
-  },
-  offlineBadgeText: {
-    color: '#FFFFFF',
-    fontSize: 10,
-    fontWeight: '600',
-  },
-  listItemDetails: {
-    padding: 16,
-    borderTopWidth: 1,
-    borderTopColor: '#EEE',
-  },
-  detailText: {
-    fontSize: 14,
-    color: '#000000',
-    marginBottom: 8,
-  },
-  detailLabel: {
-    fontWeight: '600',
-  },
-  listItemButtons: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 16,
-    gap: 12,
-  },
-  listItemButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 12,
-    borderRadius: 8,
-    gap: 8,
-  },
-  editButton: {
-    backgroundColor: '#4CAF50',
-  },
-  deleteButton: {
-    backgroundColor: '#F44336',
-  },
-  listItemButtonText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  centerContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 32,
-  },
-  loadingText: {
-    marginTop: 16,
-    fontSize: 16,
-    color: '#666',
-  },
-  errorText: {
-    fontSize: 16,
-    color: '#F44336',
-    textAlign: 'center',
-  },
-  emptyText: {
-    fontSize: 16,
-    color: '#666',
-    textAlign: 'center',
-  },
+
+  centerContainer: { paddingVertical: 30, alignItems: 'center', justifyContent: 'center' },
+  loadingText: { marginTop: 12, color: '#666666' },
+  errorText: { color: '#FF3B30', fontWeight: '700' },
+  emptyText: { color: '#666666' },
+
+  signatureOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', padding: 16 },
+  signatureContainer: { backgroundColor: '#FFFFFF', borderRadius: 12, padding: 12 },
+  signatureTitle: { fontSize: 16, fontWeight: '800', color: '#000000', marginBottom: 10 },
+  signaturePad: { height: 280, borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 10, overflow: 'hidden' },
+  signatureButtons: { flexDirection: 'row', gap: 10, marginTop: 12 },
+  signatureActionBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: 'center' },
+  signatureCancel: { backgroundColor: '#CCCCCC' },
+  signatureSave: { backgroundColor: '#34C759' },
+  signatureClear: { backgroundColor: '#607D8B' },
+  signatureActionText: { color: '#FFFFFF', fontWeight: '800' },
 });
+
 

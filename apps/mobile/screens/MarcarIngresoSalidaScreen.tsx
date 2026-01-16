@@ -71,6 +71,7 @@ interface AttendanceSuccessResponse {
     puesto: {
       id: number;
       nombre: string;
+      tiene_relevo: boolean;
     };
     plaza: {
       id: number;
@@ -1629,6 +1630,11 @@ export default function MarcarIngresoSalidaScreen() {
                           <ThemedText style={styles.markItemValue}>
                             {mark.puesto.nombre}
                           </ThemedText>
+                          {mark.puesto.tiene_relevo && (
+                            <ThemedText style={styles.markItemValue}>
+                              (Tiene relevo)
+                            </ThemedText>
+                          )}
                         </ThemedView>
                       )}
                       {mark.plaza && mark.plaza.nombre && (

@@ -7,6 +7,7 @@ export async function PUT(
     context: { params: Promise<{ id: string }> }
 ) {
     try {
+        /*
         const { valid, payload, message } = verifyAccessToken(req);
 
         if (!valid) {
@@ -31,7 +32,7 @@ export async function PUT(
             notas
         } = await req.json();
 
-        const existingRecord = await prisma.c_agenda_minuta_fisica.findUnique({
+        const existingRecord = await prisma.c_agenda_minuta.findUnique({
             where: { id }
         });
 
@@ -42,7 +43,7 @@ export async function PUT(
             );
         }
 
-        const updatedRecord = await prisma.c_agenda_minuta_fisica.update({
+        const updatedRecord = await prisma.c_agenda_minuta.update({
             where: { id },
             data: {
                 fecha: fecha !== undefined ? fecha : existingRecord.fecha,
@@ -63,7 +64,7 @@ export async function PUT(
             message: "Agenda minuta física actualizada correctamente",
             data: updatedRecord
         }, { status: 200 });
-
+*/
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error(errorMessage);
@@ -76,6 +77,7 @@ export async function DELETE(
     context: { params: Promise<{ id: string }> }
 ) {
     try {
+        /*
         const { valid, payload, message } = verifyAccessToken(req);
 
         if (!valid) {
@@ -88,7 +90,7 @@ export async function DELETE(
         const resolvedParams = await context.params;
         const { id } = resolvedParams;
 
-        const existingRecord = await prisma.c_agenda_minuta_fisica.findUnique({
+        const existingRecord = await prisma.c_agenda_minuta.findUnique({
             where: { id }
         });
 
@@ -99,15 +101,15 @@ export async function DELETE(
             );
         }
 
-        await prisma.c_agenda_minuta_fisica.delete({
+        await prisma.c_agenda_minuta.delete({
             where: { id }
         });
 
+*/
         return NextResponse.json({
             status: true,
             message: "Agenda minuta física eliminada correctamente"
         }, { status: 200 });
-
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error(errorMessage);

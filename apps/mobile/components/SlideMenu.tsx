@@ -229,6 +229,11 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
     navigation.navigate('Incidents');
   };
 
+  const handleMutuosAcuerdosPress = () => {
+    onClose();
+    navigation.navigate('MutuosAcuerdos');
+  };
+
   const handleBitacoraVehiculosDetenidosPress = () => {
     onClose();
     navigation.navigate('BitacoraVehiculosDetenidos');
@@ -274,6 +279,16 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
     navigation.navigate('ComplaintsMaster');
   };
 
+  const handleNonConformingProductPress = () => {
+    onClose();
+    navigation.navigate('NonConformingProduct');
+  };
+
+  const handleCorporateVehiclesPress = () => {
+    onClose();
+    navigation.navigate('CorporateVehicles');
+  };
+
   const handleInductionTourRecordPress = () => {
     onClose();
     navigation.navigate('InductionTourRecord');
@@ -282,6 +297,11 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
   const handleGeneralInductionRegisterPress = () => {
     onClose();
     navigation.navigate('GeneralInductionRegister');
+  };
+  
+  const handlePhysicalMinuteAgendaPress = () => {
+    onClose();
+    navigation.navigate('PhysicalMinuteAgenda');
   };
 
   const handlePermitRequestPress = () => {
@@ -302,6 +322,11 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
   const handleActaEntregaProductosPress = () => {
     onClose();
     navigation.navigate('ActaEntregaProductos');
+  };
+  
+  const handleEntregaPuestosPress = () => {
+    onClose();
+    navigation.navigate('EntregaPuestos');
   };
 
   const isActiveRoute = (route: string) => {
@@ -325,8 +350,12 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
       case 'visitors': return <Ionicons name="people" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'staffevaluations': return <Ionicons name="clipboard" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'incidents': return <Ionicons name="warning" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'mutuos-acuerdos': return <Ionicons name="document-text" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'non-conforming-product': return <Ionicons name="alert-circle" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'corporate-vehicles': return <Ionicons name="car-sport" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'bitacora-vehiculos-detenidos': return <Ionicons name="car-sport" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'llaves': return <Ionicons name="key" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'entrega-puestos': return <Ionicons name="document-text" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'documentos-entregados': return <Ionicons name="document-text" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'apreciacion-vulnerabilidad': return <Ionicons name="shield-checkmark" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'surveys': return <Ionicons name="document-text" size={20} color={isActive ? '#007AFF' : '#000000'} />;
@@ -340,6 +369,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
       case 'permit-request': return <Ionicons name="document-text" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'opening-closing-position': return <Ionicons name="business" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'acta-entrega-productos': return <Ionicons name="clipboard" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'physical-minute-agenda': return <Ionicons name="document-text" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'logout': return <Ionicons name="log-out" size={20} color={isActive ? '#007AFF' : '#ffffff'} />;
     }
   };
@@ -650,6 +680,31 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
             <TouchableOpacity 
               style={[
                 styles.menuItem, 
+                isActiveRoute('MutuosAcuerdos') && styles.activeMenuItem
+              ]} 
+              onPress={handleMutuosAcuerdosPress}
+            >
+              <ThemedText 
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('MutuosAcuerdos') && styles.activeMenuItemText
+                ]}
+              >
+                {getActionIcon('mutuos-acuerdos', isActiveRoute('MutuosAcuerdos'))}
+              </ThemedText>
+              <ThemedText 
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('MutuosAcuerdos') && styles.activeMenuItemText
+                ]}
+              >
+                Mutuos acuerdos
+              </ThemedText>
+            </TouchableOpacity>
+
+            <TouchableOpacity 
+              style={[
+                styles.menuItem, 
                 isActiveRoute('BitacoraVehiculosDetenidos') && styles.activeMenuItem
               ]} 
               onPress={handleBitacoraVehiculosDetenidosPress}
@@ -694,6 +749,56 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                 ]}
               >
                 Llaves
+              </ThemedText>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={[
+                styles.menuItem,
+                isActiveRoute('PhysicalMinuteAgenda') && styles.activeMenuItem
+              ]}
+              onPress={handlePhysicalMinuteAgendaPress}
+            >
+              <ThemedText
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('PhysicalMinuteAgenda') && styles.activeMenuItemText
+                ]}
+              >
+                {getActionIcon('physical-minute-agenda', isActiveRoute('PhysicalMinuteAgenda'))}
+              </ThemedText>
+              <ThemedText
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('PhysicalMinuteAgenda') && styles.activeMenuItemText
+                ]}
+              >
+                Agenda minuta
+              </ThemedText>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={[
+                styles.menuItem,
+                isActiveRoute('EntregaPuestos') && styles.activeMenuItem
+              ]}
+              onPress={handleEntregaPuestosPress}
+            >
+              <ThemedText
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('EntregaPuestos') && styles.activeMenuItemText
+                ]}
+              >
+                {getActionIcon('entrega-puestos', isActiveRoute('EntregaPuestos'))}
+              </ThemedText>
+              <ThemedText
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('EntregaPuestos') && styles.activeMenuItemText
+                ]}
+              >
+                Entrega de Puestos
               </ThemedText>
             </TouchableOpacity>
 
@@ -868,6 +973,56 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                 ]}
               >
                 Maestro de Quejas y reclamos
+              </ThemedText>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.menuItem,
+                isActiveRoute('NonConformingProduct') && styles.activeMenuItem
+              ]}
+              onPress={handleNonConformingProductPress}
+            >
+              <ThemedText 
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('NonConformingProduct') && styles.activeMenuItemText
+                ]}
+              >
+                {getActionIcon('non-conforming-product', isActiveRoute('NonConformingProduct'))}
+              </ThemedText>
+              <ThemedText 
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('NonConformingProduct') && styles.activeMenuItemText
+                ]}
+              >
+                Producto no conforme
+              </ThemedText>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.menuItem,
+                isActiveRoute('CorporateVehicles') && styles.activeMenuItem
+              ]}
+              onPress={handleCorporateVehiclesPress}
+            >
+              <ThemedText
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('CorporateVehicles') && styles.activeMenuItemText
+                ]}
+              >
+                {getActionIcon('corporate-vehicles', isActiveRoute('CorporateVehicles'))}
+              </ThemedText>
+              <ThemedText
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('CorporateVehicles') && styles.activeMenuItemText
+                ]}
+              >
+                Vehículos corporativos
               </ThemedText>
             </TouchableOpacity>
             

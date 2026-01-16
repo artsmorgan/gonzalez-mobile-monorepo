@@ -1,123 +1,210 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  TextInput,
-  Alert,
   ActivityIndicator,
-  Platform,
-  Modal,
-  View,
+  Alert,
   Image,
+  Modal,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import SignatureScreen from "react-native-signature-canvas";
+import { Picker } from '@react-native-picker/picker';
+import SignatureScreen from 'react-native-signature-canvas';
+import Ionicons from '@expo/vector-icons/build/Ionicons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Network from 'expo-network';
+import * as Location from 'expo-location';
+import { jwtDecode } from 'jwt-decode';
+
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
-import { useAuth } from '@/contexts/AuthContext';
 import AppHeader from '@/components/AppHeader';
 import AppFooter from '@/components/AppFooter';
 import SlideMenu from '@/components/SlideMenu';
-import { useNavigation, useFocusEffect } from '@react-navigation/native';
-import { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { RootStackParamList } from '../App';
+import { useAuth } from '@/contexts/AuthContext';
 import Constants from 'expo-constants';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import Ionicons from '@expo/vector-icons/build/Ionicons';
-import * as Network from 'expo-network';
-import { createPhysicalMinuteAgenda, updatePhysicalMinuteAgenda, deletePhysicalMinuteAgenda, listPhysicalMinuteAgendaByCorpo } from '@/hooks/evaluationFunctions';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+
+import { RootStackParamList } from '../App';
 import { eventBus } from '@/hooks/eventBus';
+import getHoraAccion from '@/hooks/getHoraAccion';
+import { useQRScanner } from '@/hooks/useQRScanner';
+import { createAgendaMinuta, deleteAgendaMinuta, listAgendaMinutaByCorpo, updateAgendaMinuta } from '@/hooks/evaluationFunctions';
 
 type PhysicalMinuteAgendaScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'PhysicalMinuteAgenda'>;
 
-interface PhysicalMinuteAgenda {
-  id: string;
+type StructureEmpresa = { id: number; codigo?: string; nombre: string; clientes?: any[] };
+type StructureDivision = { id: number; nombre: string; contratos?: any[] };
+type StructureCliente = { id: number; nombre: string; division?: StructureDivision[] };
+type StructureContrato = { id: number; nombre: string; sucursales?: any[] };
+type StructureSucursal = { id: number; nombre: string; nro_sucursal?: string | number; puestos?: any[] };
+type StructurePuesto = { id: number; nombre: string; codigo?: string | number };
+
+type AgendaMinutaRecord = {
+  id: number | string;
   id_local: string;
-  fecha: string | null;
-  puesto: string | null;
-  hora_inicio: string | null;
-  hora_fin: string | null;
-  elaborado_por: string | null;
-  minuta_numero: string | null;
-  presentes: string | null;
-  observaciones: string | null;
-  temas_tratados: string | null;
-  notas: string | null;
+  cliente_id: number;
+  corpo_id: number;
+  puesto_id: number;
+  numero: number;
+  titulo: string;
+  fecha: string | Date;
+  hora_inicio: string | Date;
+  hora_fin: string | Date;
+  autor: string;
+  participantes: string;
+  acuerdos: string;
+  observaciones: string;
+  firma_responsable: string;
   created_at: string;
   synced?: boolean;
-}
+  cliente_nombre?: string | null;
+  corpo_nombre?: string | null;
+  puesto_nombre?: string | null;
+};
 
-interface Presente {
-  nombre: string;
-  cargo: string;
-  firma: string;
-}
+type ParticipanteItem = { id_local: string; nombre: string; cedula: string; firma: string | null };
+type AcuerdoItem = { id_local: string; texto: string };
 
-interface TemaTratado {
-  asunto: string;
-  comentario: string;
-  acuerdo: string;
-}
+type AcuerdosPayload = {
+  items: AcuerdoItem[];
+  meta?: {
+    empresa_id?: number | null;
+    cliente_id?: number | null;
+    division_id?: number | null;
+    division_nombre?: string | null;
+    contrato_id?: number | null;
+    contrato_nombre?: string | null;
+    sucursal_id?: number | null;
+    sucursal_nombre?: string | null;
+    puesto_id?: number | null;
+    puesto_nombre?: string | null;
+  };
+};
 
-interface EditingPhysicalMinuteAgenda {
-  id: string | null;
-  id_local: string;
-  fecha: string;
-  puesto: string;
-  hora_inicio: string;
-  hora_fin: string;
-  elaborado_por: string;
-  minuta_numero: string;
-  presentes: string;
-  observaciones: string;
-  temas_tratados: string;
-  notas: string;
-}
+const generateRandomId = (): string => `local-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+const getConnectionStatus = async (): Promise<boolean> => {
+  const networkState = await Network.getNetworkStateAsync();
+  return networkState.isConnected && networkState.isInternetReachable ? true : false;
+};
+
+const formatDateISO = (date: Date): string => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const formatTimeHHmm = (date: Date): string => {
+  const hh = String(date.getHours()).padStart(2, '0');
+  const mm = String(date.getMinutes()).padStart(2, '0');
+  return `${hh}:${mm}`;
+};
+
+const safeJsonParse = <T,>(value: any, fallback: T): T => {
+  try {
+    if (!value) return fallback;
+    if (typeof value === 'string') return JSON.parse(value) as T;
+    return value as T;
+  } catch {
+    return fallback;
+  }
+};
+
+const parseAcuerdosPayload = (value: any): { items: AcuerdoItem[]; meta: AcuerdosPayload['meta'] | null } => {
+  const parsed = safeJsonParse<any>(value, null);
+  if (!parsed) return { items: [], meta: null };
+  if (Array.isArray(parsed)) return { items: parsed as AcuerdoItem[], meta: null };
+  if (typeof parsed === 'object' && Array.isArray(parsed.items)) {
+    return { items: parsed.items as AcuerdoItem[], meta: (parsed.meta || null) as any };
+  }
+  return { items: [], meta: null };
+};
+
+const formatSignatureForDisplay = (signature: string | null): string | null => {
+  if (!signature) return null;
+  if (signature.startsWith('data:')) return signature;
+  return `data:image/png;base64,${signature}`;
+};
+
+const decodeFirmaHash = (hash?: string | null) => {
+  try {
+    if (!hash || String(hash).trim().length === 0) return null;
+    const decoded = atob(String(hash));
+    const parts = decoded.split(':');
+    if (parts.length !== 5) return null;
+    const [sessionId, empleadoId, latitud, longitud, timestamp] = parts;
+    return { sessionId, empleadoId, latitud, longitud, timestamp };
+  } catch {
+    return null;
+  }
+};
 
 export default function PhysicalMinuteAgendaScreen() {
   const { employee, refreshAccessToken, logout } = useAuth();
-  const [isMenuVisible, setIsMenuVisible] = useState(false);
   const navigation = useNavigation<PhysicalMinuteAgendaScreenNavigationProp>();
+  const [isMenuVisible, setIsMenuVisible] = useState(false);
 
-  // Data states
-  const [agendas, setAgendas] = useState<PhysicalMinuteAgenda[]>([]);
+  const { scanQR, QRScannerComponent } = useQRScanner();
+
+  // list
+  const [records, setRecords] = useState<AgendaMinutaRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [hasCurrentMarca, setHasCurrentMarca] = useState<boolean>(false);
 
-  // Editing state
-  const [editingRecord, setEditingRecord] = useState<EditingPhysicalMinuteAgenda | null>(null);
+  // structure
+  const [structure, setStructure] = useState<any[]>([]);
+  const [isStructureLoading, setIsStructureLoading] = useState(false);
+  const [selectedEmpresaId, setSelectedEmpresaId] = useState<number | null>(null);
+  const [selectedClienteId, setSelectedClienteId] = useState<number | null>(null);
+  const [selectedDivisionId, setSelectedDivisionId] = useState<number | null>(null);
+  const [selectedContratoId, setSelectedContratoId] = useState<number | null>(null);
+  const [selectedSucursalId, setSelectedSucursalId] = useState<number | null>(null);
+  const [selectedPuestoId, setSelectedPuestoId] = useState<number | null>(null);
+  const isRestoringHierarchyRef = useRef(false);
 
-  // Creating state
+  // create/edit mode
   const [isCreating, setIsCreating] = useState(false);
+  const [editingRecord, setEditingRecord] = useState<AgendaMinutaRecord | null>(null);
 
-  // Form states
-  const [fecha, setFecha] = useState('');
-  const [puesto, setPuesto] = useState('');
-  const [horaInicio, setHoraInicio] = useState('');
-  const [horaFin, setHoraFin] = useState('');
-  const [elaboradoPor, setElaboradoPor] = useState('');
-  const [minutaNumero, setMinutaNumero] = useState('');
-  const [presentes, setPresentes] = useState<Presente[]>([]);
-  const [observaciones, setObservaciones] = useState('');
-  const [temasTratados, setTemasTratados] = useState<TemaTratado[]>([]);
-  const [notas, setNotas] = useState('');
-
-  // Date/Time picker states
+  // form
+  const [numero, setNumero] = useState('');
+  const [titulo, setTitulo] = useState('');
+  const [fecha, setFecha] = useState<Date>(new Date());
   const [showDatePicker, setShowDatePicker] = useState(false);
+  const [horaInicio, setHoraInicio] = useState<Date>(new Date());
+  const [horaFin, setHoraFin] = useState<Date>(new Date());
   const [showTimePickerInicio, setShowTimePickerInicio] = useState(false);
   const [showTimePickerFin, setShowTimePickerFin] = useState(false);
+  const [autor, setAutor] = useState('');
+  const [observaciones, setObservaciones] = useState('');
 
-  // Signature modal states
+  const [participantes, setParticipantes] = useState<ParticipanteItem[]>([]);
+  const [acuerdos, setAcuerdos] = useState<AcuerdoItem[]>([]);
+
+  // participantes signature modal
   const [isSignatureModalVisible, setIsSignatureModalVisible] = useState(false);
-  const [currentPresenteIndex, setCurrentPresenteIndex] = useState<number | null>(null);
+  const [currentParticipanteId, setCurrentParticipanteId] = useState<string | null>(null);
   const signatureRef = useRef<any>(null);
   const [signatureKey, setSignatureKey] = useState(0);
   const [tempSignature, setTempSignature] = useState<string | null>(null);
 
-  // Expanded details state
-  const [expandedRecordIds, setExpandedRecordIds] = useState<string[]>([]);
+  // firma responsable (QR)
+  const [firmaResponsable, setFirmaResponsable] = useState<string>('');
+  const [isGeneratingFirma, setIsGeneratingFirma] = useState(false);
+  const [location, setLocation] = useState<Location.LocationObject | null>(null);
+
+  // UI collapsables in list items
+  const [expandedParticipantesById, setExpandedParticipantesById] = useState<Record<string, boolean>>({});
+  const [expandedAcuerdosById, setExpandedAcuerdosById] = useState<Record<string, boolean>>({});
+  const [expandedFirmaById, setExpandedFirmaById] = useState<Record<string, boolean>>({});
 
   const signatureWebStyle = `
     body, html {
@@ -158,47 +245,365 @@ export default function PhysicalMinuteAgendaScreen() {
     }
   `;
 
-  const getConnectionStatus = async (): Promise<boolean> => {
-    const networkState = await Network.getNetworkStateAsync();
-    return networkState.isConnected && networkState.isInternetReachable ? true : false;
-  };
+  const fetchMainStructure = useCallback(async () => {
+    setIsStructureLoading(true);
+    try {
+      const cacheStr = await AsyncStorage.getItem('main_structure_cache');
+      if (cacheStr) {
+        try {
+          const parsed = JSON.parse(cacheStr);
+          if (Array.isArray(parsed)) setStructure(parsed);
+        } catch {
+          // ignore
+        }
+      }
 
-  const generateRandomId = (): string => {
-    return `local-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-  };
+      const isConnected = await getConnectionStatus();
+      if (!isConnected) return;
 
-  const formatDate = (date: Date): string => {
-    const day = date.getDate().toString().padStart(2, '0');
-    const month = (date.getMonth() + 1).toString().padStart(2, '0');
-    const year = date.getFullYear();
-    return `${day}/${month}/${year}`;
-  };
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) throw new Error('Server URL not configured');
 
-  const formatTime = (date: Date): string => {
-    const hours = date.getHours().toString().padStart(2, '0');
-    const minutes = date.getMinutes().toString().padStart(2, '0');
-    return `${hours}:${minutes}`;
-  };
+      let token = await AsyncStorage.getItem('access_token');
+      if (!token) {
+        const refreshed = await refreshAccessToken();
+        if (!refreshed) return;
+        token = await AsyncStorage.getItem('access_token');
+      }
 
-  useFocusEffect(
-    useCallback(() => {
-      fetchAgendas();
-    }, [])
-  );
+      const response = await fetch(`${apiUrl}/api/main-structure`, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': '69420',
+        },
+      });
+
+      if (response.status === 401 || response.status === 403) {
+        const refreshed = await refreshAccessToken();
+        if (refreshed) return fetchMainStructure();
+        await logout();
+        return;
+      }
+
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+      const data = await response.json();
+      const incoming = data?.structure;
+      if (data?.status && Array.isArray(incoming)) {
+        setStructure(incoming);
+        await AsyncStorage.setItem('main_structure_cache', JSON.stringify(incoming));
+      }
+    } catch (e) {
+      console.error('Error fetching main structure for agenda-minuta:', e);
+    } finally {
+      setIsStructureLoading(false);
+    }
+  }, [refreshAccessToken, logout]);
+
+  const selectedEmpresaNode = useMemo<StructureEmpresa | null>(() => {
+    if (selectedEmpresaId === null) return null;
+    return (structure.find((e: any) => e.id === selectedEmpresaId) as StructureEmpresa) ?? null;
+  }, [structure, selectedEmpresaId]);
+
+  const clienteNodes = useMemo<StructureCliente[]>(() => {
+    return (selectedEmpresaNode?.clientes ?? []) as StructureCliente[];
+  }, [selectedEmpresaNode]);
+
+  const selectedClienteNode = useMemo<StructureCliente | null>(() => {
+    if (selectedClienteId === null) return null;
+    return (clienteNodes.find((c: any) => c.id === selectedClienteId) as StructureCliente) ?? null;
+  }, [clienteNodes, selectedClienteId]);
+
+  const divisionNodes = useMemo<StructureDivision[]>(() => {
+    return (selectedClienteNode?.division ?? []) as StructureDivision[];
+  }, [selectedClienteNode]);
+
+  const selectedDivisionNode = useMemo<StructureDivision | null>(() => {
+    if (selectedDivisionId === null) return null;
+    return (divisionNodes.find((d: any) => d.id === selectedDivisionId) as StructureDivision) ?? null;
+  }, [divisionNodes, selectedDivisionId]);
+
+  const contratoNodes = useMemo<StructureContrato[]>(() => {
+    return (selectedDivisionNode?.contratos ?? []) as StructureContrato[];
+  }, [selectedDivisionNode]);
+
+  const selectedContratoNode = useMemo<StructureContrato | null>(() => {
+    if (selectedContratoId === null) return null;
+    return (contratoNodes.find((c: any) => c.id === selectedContratoId) as StructureContrato) ?? null;
+  }, [contratoNodes, selectedContratoId]);
+
+  const sucursalNodes = useMemo<StructureSucursal[]>(() => {
+    return (selectedContratoNode?.sucursales ?? []) as StructureSucursal[];
+  }, [selectedContratoNode]);
+
+  const selectedSucursalNode = useMemo<StructureSucursal | null>(() => {
+    if (selectedSucursalId === null) return null;
+    return (sucursalNodes.find((s: any) => s.id === selectedSucursalId) as StructureSucursal) ?? null;
+  }, [sucursalNodes, selectedSucursalId]);
+
+  const puestoNodes = useMemo<StructurePuesto[]>(() => {
+    return (selectedSucursalNode?.puestos ?? []) as StructurePuesto[];
+  }, [selectedSucursalNode]);
+
+  // cascade clear
+  useEffect(() => {
+    if (isRestoringHierarchyRef.current) return;
+    setSelectedClienteId(null);
+    setSelectedDivisionId(null);
+    setSelectedContratoId(null);
+    setSelectedSucursalId(null);
+    setSelectedPuestoId(null);
+  }, [selectedEmpresaId]);
 
   useEffect(() => {
-    const handler = () => {
-      fetchAgendas();
-    };
+    if (isRestoringHierarchyRef.current) return;
+    setSelectedDivisionId(null);
+    setSelectedContratoId(null);
+    setSelectedSucursalId(null);
+    setSelectedPuestoId(null);
+  }, [selectedClienteId]);
 
-    eventBus.on('connectionRestored', handler);
-    return () => {
-      eventBus.off('connectionRestored', handler);
-    };
-  }, []);
+  useEffect(() => {
+    if (isRestoringHierarchyRef.current) return;
+    setSelectedContratoId(null);
+    setSelectedSucursalId(null);
+    setSelectedPuestoId(null);
+  }, [selectedDivisionId]);
 
+  useEffect(() => {
+    if (isRestoringHierarchyRef.current) return;
+    setSelectedSucursalId(null);
+    setSelectedPuestoId(null);
+  }, [selectedContratoId]);
 
-  const fetchAgendas = async () => {
+  useEffect(() => {
+    if (isRestoringHierarchyRef.current) return;
+    setSelectedPuestoId(null);
+  }, [selectedSucursalId]);
+
+  const empresaOptions = useMemo(() => {
+    return structure.map((e: any) => ({
+      id: e.id as number,
+      label: `${e.codigo ? `${e.codigo} - ` : ''}${e.nombre}`,
+    }));
+  }, [structure]);
+
+  const clienteOptions = useMemo(() => {
+    return clienteNodes.map((c: any) => ({ id: c.id as number, label: c.nombre as string }));
+  }, [clienteNodes]);
+
+  const divisionOptions = useMemo(() => {
+    return divisionNodes.map((d: any) => ({ id: d.id as number, label: d.nombre as string }));
+  }, [divisionNodes]);
+
+  const contratoOptions = useMemo(() => {
+    return contratoNodes.map((c: any) => ({ id: c.id as number, label: c.nombre as string }));
+  }, [contratoNodes]);
+
+  const sucursalOptions = useMemo(() => {
+    return sucursalNodes.map((s: any) => ({
+      id: s.id as number,
+      label: `${s.nro_sucursal ? `${s.nro_sucursal} - ` : ''}${s.nombre}`,
+    }));
+  }, [sucursalNodes]);
+
+  const puestoOptions = useMemo(() => {
+    return puestoNodes.map((p: any) => ({
+      id: p.id as number,
+      label: `${p.codigo ? `${p.codigo} - ` : ''}${p.nombre}`,
+    }));
+  }, [puestoNodes]);
+
+  const resetForm = () => {
+    setSelectedEmpresaId(null);
+    setSelectedClienteId(null);
+    setSelectedDivisionId(null);
+    setSelectedContratoId(null);
+    setSelectedSucursalId(null);
+    setSelectedPuestoId(null);
+    setNumero('');
+    setTitulo('');
+    setFecha(new Date());
+    setHoraInicio(new Date());
+    setHoraFin(new Date());
+    setAutor('');
+    setObservaciones('');
+    setParticipantes([]);
+    setAcuerdos([]);
+    setFirmaResponsable('');
+  };
+
+  const startCreate = () => {
+    setEditingRecord(null);
+    setIsCreating(true);
+    resetForm();
+  };
+
+  const cancelCreateOrEdit = () => {
+    setIsCreating(false);
+    setEditingRecord(null);
+  };
+
+  const startEditing = (r: AgendaMinutaRecord) => {
+    setIsCreating(true);
+    setEditingRecord(r);
+
+    const { meta } = parseAcuerdosPayload(r.acuerdos);
+    isRestoringHierarchyRef.current = true;
+    setSelectedEmpresaId((meta?.empresa_id ?? null) as any);
+    setSelectedClienteId((meta?.cliente_id ?? r.cliente_id ?? null) as any);
+    setSelectedDivisionId((meta?.division_id ?? null) as any);
+    setSelectedContratoId((meta?.contrato_id ?? null) as any);
+    setSelectedSucursalId((meta?.sucursal_id ?? r.corpo_id ?? null) as any);
+    setSelectedPuestoId((meta?.puesto_id ?? r.puesto_id ?? null) as any);
+    setTimeout(() => {
+      isRestoringHierarchyRef.current = false;
+    }, 0);
+
+    setNumero(String(r.numero ?? ''));
+    setTitulo(String(r.titulo ?? ''));
+    setAutor(String(r.autor ?? ''));
+    setObservaciones(String(r.observaciones ?? ''));
+
+    const fechaParsed = r.fecha instanceof Date ? r.fecha : new Date(String(r.fecha));
+    setFecha(Number.isNaN(fechaParsed.getTime()) ? new Date() : fechaParsed);
+
+    const hi = r.hora_inicio instanceof Date ? r.hora_inicio : new Date(String(r.hora_inicio));
+    const hf = r.hora_fin instanceof Date ? r.hora_fin : new Date(String(r.hora_fin));
+    setHoraInicio(Number.isNaN(hi.getTime()) ? new Date() : hi);
+    setHoraFin(Number.isNaN(hf.getTime()) ? new Date() : hf);
+
+    const parsedParticipantes = safeJsonParse<ParticipanteItem[]>(r.participantes, []);
+    const parsedAcuerdos = parseAcuerdosPayload(r.acuerdos).items;
+    setParticipantes(
+      parsedParticipantes.map((p) => ({
+        id_local: p.id_local || generateRandomId(),
+        nombre: p.nombre || '',
+        cedula: p.cedula || '',
+        firma: p.firma ?? null,
+      }))
+    );
+    setAcuerdos(
+      (parsedAcuerdos || []).map((a) => ({
+        id_local: a.id_local || generateRandomId(),
+        texto: a.texto || '',
+      }))
+    );
+    setFirmaResponsable(r.firma_responsable || '');
+  };
+
+  const requestLocation = async () => {
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') return null;
+      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      setLocation(loc);
+      return loc;
+    } catch {
+      return null;
+    }
+  };
+
+  const handleGenerateFirmaResponsable = async () => {
+    if (isGeneratingFirma) return;
+    setIsGeneratingFirma(true);
+    try {
+      const loc = location ?? (await requestLocation());
+      if (!loc || !employee) {
+        Alert.alert('Error', 'No se pudo obtener ubicación o usuario');
+        return;
+      }
+      const token = await AsyncStorage.getItem('access_token');
+      if (!token) throw new Error('No authentication token found');
+      const decodedToken: any = jwtDecode(token);
+      const sessionId = decodedToken.sessionId;
+      const timestamp = await getHoraAccion();
+      const hash = btoa(`${sessionId}:${employee.id}:${loc.coords.latitude}:${loc.coords.longitude}:${timestamp}`);
+      setFirmaResponsable(hash);
+    } catch (e: any) {
+      Alert.alert('Error', e?.message || 'No se pudo generar la firma');
+    } finally {
+      setIsGeneratingFirma(false);
+    }
+  };
+
+  const handleScanFirmaResponsable = async () => {
+    try {
+      const qrData = await scanQR();
+      if (!qrData) return;
+      setFirmaResponsable(qrData);
+    } catch {
+      Alert.alert('Error', 'No se pudo escanear el QR');
+    }
+  };
+
+  const openParticipanteSignature = (id_local: string) => {
+    setCurrentParticipanteId(id_local);
+    setIsSignatureModalVisible(true);
+    setTempSignature(null);
+    setSignatureKey((p) => p + 1);
+  };
+
+  const closeSignatureModal = () => {
+    setIsSignatureModalVisible(false);
+    setCurrentParticipanteId(null);
+    setTempSignature(null);
+    setSignatureKey((p) => p + 1);
+  };
+
+  const clearSignatureInModal = () => {
+    setTempSignature(null);
+    setSignatureKey((p) => p + 1);
+    if (signatureRef.current) signatureRef.current.clearSignature();
+  };
+
+  const handleSignature = (sig: string) => {
+    setTempSignature(sig);
+  };
+
+  const handleSignatureRead = (sig: string) => {
+    if (!sig || !currentParticipanteId) {
+      Alert.alert('Error', 'No se pudo obtener la firma. Intente nuevamente.');
+      return;
+    }
+    setParticipantes((prev) =>
+      prev.map((p) => (p.id_local === currentParticipanteId ? { ...p, firma: sig } : p))
+    );
+    closeSignatureModal();
+  };
+
+  const acceptSignature = () => {
+    if (signatureRef.current) signatureRef.current.readSignature();
+    else if (tempSignature) handleSignatureRead(tempSignature);
+    else Alert.alert('Error', 'Debe dibujar una firma antes de aceptar');
+  };
+
+  const addParticipante = () => {
+    setParticipantes((prev) => [...prev, { id_local: generateRandomId(), nombre: '', cedula: '', firma: null }]);
+  };
+
+  const removeParticipante = (id_local: string) => {
+    setParticipantes((prev) => prev.filter((p) => p.id_local !== id_local));
+  };
+
+  const updateParticipante = (id_local: string, patch: Partial<ParticipanteItem>) => {
+    setParticipantes((prev) => prev.map((p) => (p.id_local === id_local ? { ...p, ...patch } : p)));
+  };
+
+  const addAcuerdo = () => {
+    setAcuerdos((prev) => [...prev, { id_local: generateRandomId(), texto: '' }]);
+  };
+
+  const removeAcuerdo = (id_local: string) => {
+    setAcuerdos((prev) => prev.filter((a) => a.id_local !== id_local));
+  };
+
+  const updateAcuerdo = (id_local: string, patch: Partial<AcuerdoItem>) => {
+    setAcuerdos((prev) => prev.map((a) => (a.id_local === id_local ? { ...a, ...patch } : a)));
+  };
+
+  const fetchRecords = useCallback(async () => {
     try {
       setIsLoading(true);
       setError(null);
@@ -214,6 +619,8 @@ export default function PhysicalMinuteAgendaScreen() {
       const currentMarcaData = JSON.parse(currentMarca);
       const corpoId = currentMarcaData.corpo?.id?.toString();
 
+      await fetchMainStructure();
+
       if (!corpoId) {
         setError('No se encontró el ID del corpo');
         setIsLoading(false);
@@ -221,1006 +628,389 @@ export default function PhysicalMinuteAgendaScreen() {
       }
 
       const isConnected = await getConnectionStatus();
-
       if (isConnected) {
-        const result = await listPhysicalMinuteAgendaByCorpo({
-          corpo_id: corpoId,
-          refreshAccessToken,
-          logout,
-        });
-
-        if (result.status && result.data) {
-          setAgendas(result.data as PhysicalMinuteAgenda[]);
-        } else {
-          setAgendas([]);
-        }
+        const result = await listAgendaMinutaByCorpo({ corpo_id: corpoId, refreshAccessToken, logout });
+        if (result.status && result.data) setRecords(result.data as AgendaMinutaRecord[]);
+        else setRecords([]);
       } else {
         const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-        if (cacheStr) {
-          const cache = JSON.parse(cacheStr);
-          const agendasCache = cache.filter((item: any) => item.type === 'physical_minute_agenda');
-          setAgendas(agendasCache);
-        } else {
-          setAgendas([]);
-        }
+        const cache = cacheStr ? JSON.parse(cacheStr) : [];
+        setRecords(cache.filter((item: any) => item.type === 'agenda_minuta'));
       }
     } catch (err) {
-      console.error('Error fetching agendas:', err);
-      setError('Error al cargar las agendas minuta física');
+      console.error('Error fetching agenda minuta:', err);
+      setError('Error al cargar la agenda minuta');
       try {
         const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-        if (cacheStr) {
-          const cache = JSON.parse(cacheStr);
-          const agendasCache = cache.filter((item: any) => item.type === 'physical_minute_agenda');
-          setAgendas(agendasCache);
-        }
-      } catch (cacheErr) {
-        console.error('Error loading from cache:', cacheErr);
+        const cache = cacheStr ? JSON.parse(cacheStr) : [];
+        setRecords(cache.filter((item: any) => item.type === 'agenda_minuta'));
+      } catch {
+        // ignore
       }
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [fetchMainStructure, refreshAccessToken, logout]);
 
-  const startCreating = () => {
-    setIsCreating(true);
-    setFecha('');
-    setPuesto('');
-    setHoraInicio('');
-    setHoraFin('');
-    setElaboradoPor('');
-    setMinutaNumero('');
-    setPresentes([]);
-    setObservaciones('');
-    setTemasTratados([]);
-    setNotas('');
-  };
+  useFocusEffect(
+    useCallback(() => {
+      fetchRecords();
+      eventBus.on('connectionRestored', fetchRecords);
+      return () => {
+        eventBus.off('connectionRestored', fetchRecords);
+      };
+    }, [fetchRecords])
+  );
 
-  const cancelCreating = () => {
-    setIsCreating(false);
-  };
-
-  const startEditing = (record: PhysicalMinuteAgenda) => {
-    // Parse presentes and temas_tratados from JSON string to arrays
-    let presentesArray: Presente[] = [];
-    if (record.presentes) {
-      try {
-        presentesArray = JSON.parse(record.presentes);
-      } catch (e) {
-        console.error('Error parsing presentes:', e);
-        presentesArray = [];
-      }
+  const buildRequestPayload = () => {
+    if (!selectedClienteId || !selectedDivisionId || !selectedContratoId || !selectedSucursalId || !selectedPuestoId) {
+      throw new Error('Debe completar la jerarquía hasta Puesto');
     }
+    const numeroNum = parseInt(numero.trim(), 10);
+    if (Number.isNaN(numeroNum) || numeroNum <= 0) throw new Error('El número debe ser válido');
+    if (!titulo.trim()) throw new Error('El título es requerido');
+    if (!autor.trim()) throw new Error('El autor es requerido');
+    if (!firmaResponsable.trim()) throw new Error('La firma responsable es requerida');
 
-    let temasTratadosArray: TemaTratado[] = [];
-    if (record.temas_tratados) {
-      try {
-        temasTratadosArray = JSON.parse(record.temas_tratados);
-      } catch (e) {
-        console.error('Error parsing temas_tratados:', e);
-        temasTratadosArray = [];
-      }
-    }
+    const sucursalNombre = selectedSucursalNode
+      ? `${selectedSucursalNode.nro_sucursal ? `${selectedSucursalNode.nro_sucursal} - ` : ''}${selectedSucursalNode.nombre}`
+      : null;
+    const puestoNode = puestoNodes.find((p: any) => p.id === selectedPuestoId) ?? null;
+    const puestoNombre = puestoNode
+      ? `${puestoNode.codigo ? `${puestoNode.codigo} - ` : ''}${puestoNode.nombre}`
+      : null;
 
-    setEditingRecord({
-      id: record.id,
-      id_local: record.id_local,
-      fecha: record.fecha || '',
-      puesto: record.puesto || '',
-      hora_inicio: record.hora_inicio || '',
-      hora_fin: record.hora_fin || '',
-      elaborado_por: record.elaborado_por || '',
-      minuta_numero: record.minuta_numero || '',
-      presentes: record.presentes || '',
-      observaciones: record.observaciones || '',
-      temas_tratados: record.temas_tratados || '',
-      notas: record.notas || '',
-    });
-    setFecha(record.fecha || '');
-    setPuesto(record.puesto || '');
-    setHoraInicio(record.hora_inicio || '');
-    setHoraFin(record.hora_fin || '');
-    setElaboradoPor(record.elaborado_por || '');
-    setMinutaNumero(record.minuta_numero || '');
-    setPresentes(presentesArray);
-    setObservaciones(record.observaciones || '');
-    setTemasTratados(temasTratadosArray);
-    setNotas(record.notas || '');
+    const acuerdosPayload: AcuerdosPayload = {
+      items: acuerdos,
+      meta: {
+        empresa_id: selectedEmpresaId,
+        cliente_id: selectedClienteId,
+        division_id: selectedDivisionId,
+        division_nombre: selectedDivisionNode?.nombre ?? null,
+        contrato_id: selectedContratoId,
+        contrato_nombre: selectedContratoNode?.nombre ?? null,
+        sucursal_id: selectedSucursalId,
+        sucursal_nombre: sucursalNombre,
+        puesto_id: selectedPuestoId,
+        puesto_nombre: puestoNombre,
+      },
+    };
+
+    return {
+      cliente_id: selectedClienteId,
+      corpo_id: selectedSucursalId,
+      puesto_id: selectedPuestoId,
+      numero: numeroNum,
+      titulo: titulo.trim(),
+      fecha: formatDateISO(fecha),
+      hora_inicio: formatTimeHHmm(horaInicio),
+      hora_fin: formatTimeHHmm(horaFin),
+      autor: autor.trim(),
+      participantes: JSON.stringify(participantes),
+      acuerdos: JSON.stringify(acuerdosPayload),
+      observaciones: observaciones.trim() || ' ',
+      firma_responsable: firmaResponsable,
+    };
   };
 
-  const cancelEditing = () => {
-    setEditingRecord(null);
-  };
+  const saveHandler = async () => {
+    Alert.alert('Confirmar', editingRecord ? '¿Actualizar agenda minuta?' : '¿Guardar agenda minuta?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Confirmar',
+        onPress: async () => {
+          try {
+            const payload = buildRequestPayload();
+            const isConnected = await getConnectionStatus();
 
-  const handleDateChange = (event: any, selectedDate?: Date) => {
-    if (Platform.OS === 'android') {
-      setShowDatePicker(false);
-    }
-    if (selectedDate) {
-      setFecha(formatDate(selectedDate));
-    }
-  };
-
-  const handleTimeChangeInicio = (event: any, selectedTime?: Date) => {
-    if (Platform.OS === 'android') {
-      setShowTimePickerInicio(false);
-    }
-    if (selectedTime) {
-      setHoraInicio(formatTime(selectedTime));
-    }
-  };
-
-  const handleTimeChangeFin = (event: any, selectedTime?: Date) => {
-    if (Platform.OS === 'android') {
-      setShowTimePickerFin(false);
-    }
-    if (selectedTime) {
-      setHoraFin(formatTime(selectedTime));
-    }
-  };
-
-  const openSignatureModal = (index: number) => {
-    setCurrentPresenteIndex(index);
-    setIsSignatureModalVisible(true);
-    setTempSignature(null);
-    setSignatureKey(prev => prev + 1);
-  };
-
-  const closeSignatureModal = () => {
-    setIsSignatureModalVisible(false);
-    setCurrentPresenteIndex(null);
-    setTempSignature(null);
-    setSignatureKey(prev => prev + 1);
-  };
-
-  const clearSignatureInModal = () => {
-    setTempSignature(null);
-    setSignatureKey(prev => prev + 1);
-    if (signatureRef.current) {
-      signatureRef.current.clearSignature();
-    }
-  };
-
-  const acceptSignature = () => {
-    if (signatureRef.current) {
-      signatureRef.current.readSignature();
-    } else if (tempSignature) {
-      handleSignatureRead(tempSignature);
-    } else {
-      Alert.alert('Error', 'Debe dibujar una firma antes de aceptar');
-    }
-  };
-
-  const handleSignatureRead = (signature: string) => {
-    if (signature && currentPresenteIndex !== null) {
-      const newPresentes = [...presentes];
-      newPresentes[currentPresenteIndex].firma = signature;
-      setPresentes(newPresentes);
-      setIsSignatureModalVisible(false);
-      setCurrentPresenteIndex(null);
-      setTempSignature(null);
-    } else {
-      Alert.alert('Error', 'No se pudo obtener la firma. Por favor, intente nuevamente.');
-    }
-  };
-
-  const handleSignature = (signature: string) => {
-    setTempSignature(signature);
-  };
-
-  const saveAgenda = async () => {
-    const currentMarca = await AsyncStorage.getItem('current_marca');
-    if (!currentMarca) {
-      Alert.alert('Error', 'No se encontró la marca actual');
-      return;
-    }
-
-    const currentMarcaData = JSON.parse(currentMarca);
-
-    Alert.alert(
-      'Confirmar',
-      '¿Estás seguro de que deseas guardar esta agenda minuta física?',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Confirmar',
-          onPress: async () => {
-            try {
-              const requestData = {
-                marca_id: currentMarcaData.id,
-                fecha: fecha.trim() || null,
-                puesto: puesto.trim() || null,
-                hora_inicio: horaInicio.trim() || null,
-                hora_fin: horaFin.trim() || null,
-                elaborado_por: elaboradoPor.trim() || null,
-                minuta_numero: minutaNumero.trim() || null,
-                presentes: presentes.length > 0 ? JSON.stringify(presentes) : null,
-                observaciones: observaciones.trim() || null,
-                temas_tratados: temasTratados.length > 0 ? JSON.stringify(temasTratados) : null,
-                notas: notas.trim() || null,
-              };
-
-              const isConnected = await getConnectionStatus();
-
+            if (editingRecord && editingRecord.id) {
               if (isConnected) {
-                const result = await createPhysicalMinuteAgenda({
-                  requestData,
-                  refreshAccessToken,
-                  logout,
-                });
-
-                if (result.status) {
-                  Alert.alert('Éxito', 'Agenda minuta física guardada correctamente');
-                  cancelCreating();
-                  fetchAgendas();
-                } else {
-                  Alert.alert('Error', result.message || 'Error al guardar la agenda minuta física');
-                }
-              } else {
-                const localId = generateRandomId();
-
-                const actionsStr = await AsyncStorage.getItem('evaluations_actions');
-                const actions = actionsStr ? JSON.parse(actionsStr) : [];
-                actions.push({
-                  id: localId,
-                  action: 'create',
-                  type: 'physical_minute_agenda',
-                  payload: requestData,
-                  synced: false,
-                });
-                await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
-
-                const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                const cache = cacheStr ? JSON.parse(cacheStr) : [];
-
-                const newRecordCache: PhysicalMinuteAgenda = {
-                  id: '',
-                  id_local: localId,
-                  fecha: fecha.trim() || null,
-                  puesto: puesto.trim() || null,
-                  hora_inicio: horaInicio.trim() || null,
-                  hora_fin: horaFin.trim() || null,
-                  elaborado_por: elaboradoPor.trim() || null,
-                  minuta_numero: minutaNumero.trim() || null,
-                  presentes: presentes.length > 0 ? JSON.stringify(presentes) : null,
-                  observaciones: observaciones.trim() || null,
-                  temas_tratados: temasTratados.length > 0 ? JSON.stringify(temasTratados) : null,
-                  notas: notas.trim() || null,
-                  created_at: new Date().toISOString(),
-                  synced: false,
-                };
-
-                cache.push({ ...newRecordCache, type: 'physical_minute_agenda' });
-                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(cache));
-
-                Alert.alert('Modo Offline', 'Agenda minuta física registrada localmente. Se sincronizará cuando haya conexión.');
-                cancelCreating();
-                fetchAgendas();
-              }
-            } catch (err) {
-              console.error('Error saving agenda:', err);
-              Alert.alert('Error', 'No se pudo guardar la agenda minuta física');
-            }
-          },
-        },
-      ]
-    );
-  };
-
-  const updateAgendaHandler = async () => {
-    if (!editingRecord) return;
-
-    Alert.alert(
-      'Confirmar',
-      '¿Estás seguro de que deseas actualizar esta agenda minuta física?',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Confirmar',
-          onPress: async () => {
-            try {
-              const requestData = {
-                fecha: fecha.trim() || null,
-                puesto: puesto.trim() || null,
-                hora_inicio: horaInicio.trim() || null,
-                hora_fin: horaFin.trim() || null,
-                elaborado_por: elaboradoPor.trim() || null,
-                minuta_numero: minutaNumero.trim() || null,
-                presentes: presentes.length > 0 ? JSON.stringify(presentes) : null,
-                observaciones: observaciones.trim() || null,
-                temas_tratados: temasTratados.length > 0 ? JSON.stringify(temasTratados) : null,
-                notas: notas.trim() || null,
-              };
-
-              const isConnected = await getConnectionStatus();
-              const recordId = editingRecord.id || editingRecord.id_local;
-
-              if (isConnected && editingRecord.id && !editingRecord.id.startsWith('local-')) {
-                const result = await updatePhysicalMinuteAgenda({
+                const res = await updateAgendaMinuta({
                   id: editingRecord.id,
-                  requestData,
+                  requestData: payload,
                   refreshAccessToken,
                   logout,
                 });
+                if (res.status) {
+                  Alert.alert('Éxito', 'Agenda minuta actualizada correctamente');
+                  cancelCreateOrEdit();
+                  fetchRecords();
+                  return;
+                }
 
-                if (result.status) {
-                  Alert.alert('Éxito', 'Agenda minuta física actualizada correctamente');
-                  cancelEditing();
-                  fetchAgendas();
+                // fallback offline on 503
+                const msg = String(res.message || '');
+                if (msg.includes('503')) {
+                  // queue offline update
                 } else {
-                  Alert.alert('Error', result.message || 'Error al actualizar la agenda minuta física');
+                  Alert.alert('Error', res.message || 'No se pudo actualizar');
+                  return;
                 }
-              } else {
-                const actionsStr = await AsyncStorage.getItem('evaluations_actions');
-                const actions = actionsStr ? JSON.parse(actionsStr) : [];
-                actions.push({
-                  id: recordId,
-                  action: 'update',
-                  type: 'physical_minute_agenda',
-                  payload: requestData,
-                  synced: false,
-                });
-                await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
-
-                const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                if (cacheStr) {
-                  const cache = JSON.parse(cacheStr);
-                  const updatedCache = cache.map((item: any) => {
-                    if ((item.id === recordId || item.id_local === recordId) && item.type === 'physical_minute_agenda') {
-                      return {
-                        ...item,
-                        fecha: fecha.trim() || null,
-                        puesto: puesto.trim() || null,
-                        hora_inicio: horaInicio.trim() || null,
-                        hora_fin: horaFin.trim() || null,
-                        elaborado_por: elaboradoPor.trim() || null,
-                        minuta_numero: minutaNumero.trim() || null,
-                        presentes: presentes.length > 0 ? JSON.stringify(presentes) : null,
-                        observaciones: observaciones.trim() || null,
-                        temas_tratados: temasTratados.length > 0 ? JSON.stringify(temasTratados) : null,
-                        notas: notas.trim() || null,
-                      };
-                    }
-                    return item;
-                  });
-                  await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                }
-
-                Alert.alert('Modo Offline', 'Agenda minuta física actualizada localmente. Se sincronizará cuando haya conexión.');
-                cancelEditing();
-                fetchAgendas();
               }
-            } catch (err) {
-              console.error('Error updating agenda:', err);
-              Alert.alert('Error', 'No se pudo actualizar la agenda minuta física');
-            }
-          },
-        },
-      ]
-    );
-  };
 
-  const deleteAgendaHandler = async (record: PhysicalMinuteAgenda) => {
-    Alert.alert(
-      'Confirmar',
-      '¿Estás seguro de que deseas eliminar esta agenda minuta física?',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Eliminar',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              const isConnected = await getConnectionStatus();
-              const recordId = record.id || record.id_local;
+              const localId = String(editingRecord.id_local || generateRandomId());
+              const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+              const actions = actionsStr ? JSON.parse(actionsStr) : [];
+              actions.push({ id: localId, action: 'update', type: 'agenda_minuta', payload, synced: false, remote_id: editingRecord.id });
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
 
-              if (isConnected && record.id && !record.id.startsWith('local-')) {
-                const result = await deletePhysicalMinuteAgenda({
-                  id: record.id,
-                  refreshAccessToken,
-                  logout,
-                });
-
-                if (result.status) {
-                  Alert.alert('Éxito', 'Agenda minuta física eliminada correctamente');
-                  fetchAgendas();
-                } else {
-                  Alert.alert('Error', result.message || 'Error al eliminar la agenda minuta física');
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              const cache = cacheStr ? JSON.parse(cacheStr) : [];
+              const updatedCache = cache.map((it: any) => {
+                if ((it.id === editingRecord.id || it.id_local === localId) && it.type === 'agenda_minuta') {
+                  return {
+                    ...it,
+                    ...payload,
+                    id_local: localId,
+                    synced: false,
+                    type: 'agenda_minuta',
+                  };
                 }
+                return it;
+              });
+              await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              Alert.alert('Modo Offline', 'Actualizado offline. Se sincronizará cuando haya conexión.');
+              cancelCreateOrEdit();
+              fetchRecords();
+              return;
+            }
+
+            // create
+            if (isConnected) {
+              const res = await createAgendaMinuta({ requestData: payload, refreshAccessToken, logout });
+              if (res.status) {
+                Alert.alert('Éxito', 'Agenda minuta guardada correctamente');
+                cancelCreateOrEdit();
+                fetchRecords();
               } else {
-                const actionsStr = await AsyncStorage.getItem('evaluations_actions');
-                const actions = actionsStr ? JSON.parse(actionsStr) : [];
-                actions.push({
-                  id: recordId,
-                  action: 'delete',
-                  type: 'physical_minute_agenda',
-                  payload: {},
-                  synced: false,
-                });
-                await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
-
-                const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                if (cacheStr) {
-                  const cache = JSON.parse(cacheStr);
-                  const updatedCache = cache.filter((item: any) => !(item.id === recordId || item.id_local === recordId));
-                  await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                }
-
-                Alert.alert('Modo Offline', 'Agenda minuta física eliminada localmente. Se sincronizará cuando haya conexión.');
-                fetchAgendas();
+                Alert.alert('Error', res.message || 'No se pudo guardar');
               }
-            } catch (err) {
-              console.error('Error deleting agenda:', err);
-              Alert.alert('Error', 'No se pudo eliminar la agenda minuta física');
+              return;
             }
-          },
+
+            const localId = generateRandomId();
+            const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+            const actions = actionsStr ? JSON.parse(actionsStr) : [];
+            actions.push({ id: localId, action: 'create', type: 'agenda_minuta', payload, synced: false });
+            await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+
+            const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+            const cache = cacheStr ? JSON.parse(cacheStr) : [];
+            const newCacheRecord: AgendaMinutaRecord = {
+              id: '',
+              id_local: localId,
+              cliente_id: payload.cliente_id,
+              corpo_id: payload.corpo_id,
+              puesto_id: payload.puesto_id,
+              numero: payload.numero,
+              titulo: payload.titulo,
+              fecha: payload.fecha,
+              hora_inicio: payload.hora_inicio,
+              hora_fin: payload.hora_fin,
+              autor: payload.autor,
+              participantes: payload.participantes,
+              acuerdos: payload.acuerdos,
+              observaciones: payload.observaciones,
+              firma_responsable: payload.firma_responsable,
+              created_at: new Date().toISOString(),
+              synced: false,
+            };
+            cache.push({ ...newCacheRecord, type: 'agenda_minuta' });
+            await AsyncStorage.setItem('evaluations_cache', JSON.stringify(cache));
+            Alert.alert('Modo Offline', 'Agenda minuta registrada localmente. Se sincronizará cuando haya conexión.');
+            cancelCreateOrEdit();
+            fetchRecords();
+          } catch (e: any) {
+            Alert.alert('Error', e?.message || 'No se pudo guardar');
+          }
         },
-      ]
-    );
+      },
+    ]);
   };
 
-  const toggleExpanded = (recordId: string) => {
-    if (expandedRecordIds.includes(recordId)) {
-      setExpandedRecordIds(expandedRecordIds.filter(id => id !== recordId));
-    } else {
-      setExpandedRecordIds([...expandedRecordIds, recordId]);
-    }
-  };
+  const deleteHandler = async (r: AgendaMinutaRecord) => {
+    Alert.alert('Confirmar', '¿Eliminar agenda minuta?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Eliminar',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            const isConnected = await getConnectionStatus();
+            if (isConnected && r.id) {
+              const res = await deleteAgendaMinuta({ id: r.id, refreshAccessToken, logout });
+              if (res.status) {
+                Alert.alert('Éxito', 'Eliminado');
+                fetchRecords();
+                return;
+              }
+            }
 
-  const renderForm = (isEditing: boolean = false) => {
-    return (
-      <ThemedView style={styles.formCard}>
-        <ThemedText style={styles.formTitle}>
-          {isEditing ? 'Editar Agenda Minuta Física' : 'Nueva Agenda Minuta Física'}
-        </ThemedText>
+            const localId = String(r.id_local || generateRandomId());
+            const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+            const actions = actionsStr ? JSON.parse(actionsStr) : [];
+            actions.push({ id: localId, action: 'delete', type: 'agenda_minuta', payload: { id: r.id }, synced: false });
+            await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
 
-        {/* Fecha */}
-        <ThemedView style={styles.formGroup}>
-          <ThemedText style={styles.formLabel}>Fecha</ThemedText>
-          <TouchableOpacity
-            style={styles.dateButton}
-            onPress={() => setShowDatePicker(true)}
-          >
-            <ThemedText style={styles.dateButtonText}>
-              {fecha || 'Seleccionar fecha'}
-            </ThemedText>
-            <Ionicons name="calendar" size={20} color="#007AFF" />
-          </TouchableOpacity>
-          {showDatePicker && (
-            <DateTimePicker
-              value={fecha ? new Date(fecha.split('/').reverse().join('-')) : new Date()}
-              mode="date"
-              display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-              onChange={handleDateChange}
-            />
-          )}
-        </ThemedView>
-
-        {/* Puesto */}
-        <ThemedView style={styles.formGroup}>
-          <ThemedText style={styles.formLabel}>Puesto</ThemedText>
-          <TextInput
-            style={styles.formInput}
-            placeholder="Puesto"
-            placeholderTextColor="#999"
-            value={puesto}
-            onChangeText={setPuesto}
-          />
-        </ThemedView>
-
-        {/* Hora inicio */}
-        <ThemedView style={styles.formGroup}>
-          <ThemedText style={styles.formLabel}>Hora inicio</ThemedText>
-          <TouchableOpacity
-            style={styles.dateButton}
-            onPress={() => setShowTimePickerInicio(true)}
-          >
-            <ThemedText style={styles.dateButtonText}>
-              {horaInicio || 'Seleccionar hora'}
-            </ThemedText>
-            <Ionicons name="time" size={20} color="#007AFF" />
-          </TouchableOpacity>
-          {showTimePickerInicio && (
-            <DateTimePicker
-              value={horaInicio ? new Date(`2000-01-01T${horaInicio}:00`) : new Date()}
-              mode="time"
-              display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-              onChange={handleTimeChangeInicio}
-            />
-          )}
-        </ThemedView>
-
-        {/* Hora Fin */}
-        <ThemedView style={styles.formGroup}>
-          <ThemedText style={styles.formLabel}>Hora Fin</ThemedText>
-          <TouchableOpacity
-            style={styles.dateButton}
-            onPress={() => setShowTimePickerFin(true)}
-          >
-            <ThemedText style={styles.dateButtonText}>
-              {horaFin || 'Seleccionar hora'}
-            </ThemedText>
-            <Ionicons name="time" size={20} color="#007AFF" />
-          </TouchableOpacity>
-          {showTimePickerFin && (
-            <DateTimePicker
-              value={horaFin ? new Date(`2000-01-01T${horaFin}:00`) : new Date()}
-              mode="time"
-              display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-              onChange={handleTimeChangeFin}
-            />
-          )}
-        </ThemedView>
-
-        {/* Elaborado por */}
-        <ThemedView style={styles.formGroup}>
-          <ThemedText style={styles.formLabel}>Elaborado por</ThemedText>
-          <TextInput
-            style={styles.formInput}
-            placeholder="Elaborado por"
-            placeholderTextColor="#999"
-            value={elaboradoPor}
-            onChangeText={setElaboradoPor}
-          />
-        </ThemedView>
-
-        {/* Minuta N° */}
-        <ThemedView style={styles.formGroup}>
-          <ThemedText style={styles.formLabel}>Minuta N°</ThemedText>
-          <TextInput
-            style={styles.formInput}
-            placeholder="Minuta N°"
-            placeholderTextColor="#999"
-            value={minutaNumero}
-            onChangeText={setMinutaNumero}
-          />
-        </ThemedView>
-
-        {/* Presentes */}
-        <ThemedView style={styles.formGroup}>
-          <ThemedText style={styles.formLabel}>Presentes</ThemedText>
-          {presentes.map((presente, index) => (
-            <ThemedView key={index} style={styles.presenteItem}>
-              <ThemedView style={styles.presenteRow}>
-                <ThemedView style={styles.presenteInputContainer}>
-                  <ThemedText style={styles.presenteLabel}>Nombre</ThemedText>
-                  <TextInput
-                    style={styles.formInput}
-                    placeholder="Nombre"
-                    placeholderTextColor="#999"
-                    value={presente.nombre}
-                    onChangeText={(text) => {
-                      const newPresentes = [...presentes];
-                      newPresentes[index].nombre = text;
-                      setPresentes(newPresentes);
-                    }}
-                  />
-                </ThemedView>
-                <ThemedView style={styles.presenteInputContainer}>
-                  <ThemedText style={styles.presenteLabel}>Cargo que desempeña</ThemedText>
-                  <TextInput
-                    style={styles.formInput}
-                    placeholder="Cargo"
-                    placeholderTextColor="#999"
-                    value={presente.cargo}
-                    onChangeText={(text) => {
-                      const newPresentes = [...presentes];
-                      newPresentes[index].cargo = text;
-                      setPresentes(newPresentes);
-                    }}
-                  />
-                </ThemedView>
-                <TouchableOpacity
-                  style={styles.removePresenteButton}
-                  onPress={() => {
-                    const newPresentes = presentes.filter((_, i) => i !== index);
-                    setPresentes(newPresentes);
-                  }}
-                >
-                  <Ionicons name="trash" size={20} color="#F44336" />
-                </TouchableOpacity>
-              </ThemedView>
-              {presente.firma && (
-                <ThemedView style={styles.signaturePreviewContainer}>
-                  <Image
-                    source={{ 
-                      uri: presente.firma.startsWith('data:') 
-                        ? presente.firma 
-                        : `data:image/png;base64,${presente.firma}` 
-                    }}
-                    style={styles.signaturePreview}
-                  />
-                </ThemedView>
-              )}
-              <TouchableOpacity
-                style={styles.signatureButton}
-                onPress={() => openSignatureModal(index)}
-              >
-                <Ionicons name="create" size={20} color="#007AFF" />
-                <ThemedText style={styles.signatureButtonText}>
-                  {presente.firma ? 'Cambiar Firma' : 'Agregar Firma'}
-                </ThemedText>
-              </TouchableOpacity>
-            </ThemedView>
-          ))}
-          <TouchableOpacity
-            style={styles.addButton}
-            onPress={() => {
-              setPresentes([...presentes, { nombre: '', cargo: '', firma: '' }]);
-            }}
-          >
-            <Ionicons name="add-circle" size={20} color="#4CAF50" />
-            <ThemedText style={styles.addButtonText}>Agregar Presente</ThemedText>
-          </TouchableOpacity>
-        </ThemedView>
-
-        {/* Observaciones */}
-        <ThemedView style={styles.formGroup}>
-          <ThemedText style={styles.formLabel}>Observaciones</ThemedText>
-          <TextInput
-            style={[styles.formInput, styles.textArea]}
-            placeholder="Observaciones"
-            placeholderTextColor="#999"
-            multiline
-            numberOfLines={4}
-            textAlignVertical="top"
-            value={observaciones}
-            onChangeText={setObservaciones}
-          />
-        </ThemedView>
-
-        {/* Temas Tratados */}
-        <ThemedView style={styles.formGroup}>
-          <ThemedText style={styles.formLabel}>Temas Tratados</ThemedText>
-          {temasTratados.map((tema, index) => (
-            <ThemedView key={index} style={styles.temaItem}>
-              <ThemedView style={styles.temaRow}>
-                <ThemedView style={styles.temaInputContainer}>
-                  <ThemedText style={styles.temaLabel}>Asunto</ThemedText>
-                  <TextInput
-                    style={[styles.formInput, styles.textArea]}
-                    placeholder="Asunto"
-                    placeholderTextColor="#999"
-                    multiline
-                    numberOfLines={2}
-                    textAlignVertical="top"
-                    value={tema.asunto}
-                    onChangeText={(text) => {
-                      const newTemas = [...temasTratados];
-                      newTemas[index].asunto = text;
-                      setTemasTratados(newTemas);
-                    }}
-                  />
-                </ThemedView>
-                <TouchableOpacity
-                  style={styles.removeTemaButton}
-                  onPress={() => {
-                    const newTemas = temasTratados.filter((_, i) => i !== index);
-                    setTemasTratados(newTemas);
-                  }}
-                >
-                  <Ionicons name="trash" size={20} color="#F44336" />
-                </TouchableOpacity>
-              </ThemedView>
-              <ThemedView style={styles.temaInputContainer}>
-                <ThemedText style={styles.temaLabel}>Comentario</ThemedText>
-                <TextInput
-                  style={[styles.formInput, styles.textArea]}
-                  placeholder="Comentario"
-                  placeholderTextColor="#999"
-                  multiline
-                  numberOfLines={2}
-                  textAlignVertical="top"
-                  value={tema.comentario}
-                  onChangeText={(text) => {
-                    const newTemas = [...temasTratados];
-                    newTemas[index].comentario = text;
-                    setTemasTratados(newTemas);
-                  }}
-                />
-              </ThemedView>
-              <ThemedView style={styles.temaInputContainer}>
-                <ThemedText style={styles.temaLabel}>Acuerdo</ThemedText>
-                <TextInput
-                  style={[styles.formInput, styles.textArea]}
-                  placeholder="Acuerdo"
-                  placeholderTextColor="#999"
-                  multiline
-                  numberOfLines={2}
-                  textAlignVertical="top"
-                  value={tema.acuerdo}
-                  onChangeText={(text) => {
-                    const newTemas = [...temasTratados];
-                    newTemas[index].acuerdo = text;
-                    setTemasTratados(newTemas);
-                  }}
-                />
-              </ThemedView>
-            </ThemedView>
-          ))}
-          <TouchableOpacity
-            style={styles.addButton}
-            onPress={() => {
-              setTemasTratados([...temasTratados, { asunto: '', comentario: '', acuerdo: '' }]);
-            }}
-          >
-            <Ionicons name="add-circle" size={20} color="#4CAF50" />
-            <ThemedText style={styles.addButtonText}>Agregar Tema Tratado</ThemedText>
-          </TouchableOpacity>
-        </ThemedView>
-
-        {/* Notas */}
-        <ThemedView style={styles.formGroup}>
-          <ThemedText style={styles.formLabel}>Notas</ThemedText>
-          <TextInput
-            style={[styles.formInput, styles.textArea]}
-            placeholder="Notas"
-            placeholderTextColor="#999"
-            multiline
-            numberOfLines={4}
-            textAlignVertical="top"
-            value={notas}
-            onChangeText={setNotas}
-          />
-        </ThemedView>
-
-        {/* Action Buttons */}
-        <ThemedView style={styles.actionButtons}>
-          <TouchableOpacity
-            style={[styles.actionButton, styles.cancelButton]}
-            onPress={isEditing ? cancelEditing : cancelCreating}
-          >
-            <ThemedText style={styles.actionButtonText}>Cancelar</ThemedText>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.actionButton, styles.saveButton]}
-            onPress={isEditing ? updateAgendaHandler : saveAgenda}
-          >
-            <ThemedText style={styles.actionButtonText}>Guardar</ThemedText>
-          </TouchableOpacity>
-        </ThemedView>
-
-        {/* Signature Modal */}
-        <Modal
-          visible={isSignatureModalVisible}
-          animationType="fade"
-          transparent={true}
-          onRequestClose={closeSignatureModal}
-        >
-          <ThemedView style={styles.modalOverlay}>
-            <ThemedView style={styles.modalContainer}>
-              <ThemedView style={styles.modalHeader}>
-                <ThemedText style={styles.modalTitle}>Dibujar Firma</ThemedText>
-                <TouchableOpacity onPress={closeSignatureModal}>
-                  <Ionicons name="close" size={24} color="#333" />
-                </TouchableOpacity>
-              </ThemedView>
-              
-              <View style={styles.modalSignatureContainer}>
-                <SignatureScreen
-                  ref={signatureRef}
-                  onOK={handleSignatureRead}
-                  descriptionText="Dibuja la firma en el área blanca"
-                  clearText=""
-                  confirmText=""
-                  webStyle={signatureWebStyle}
-                  key={signatureKey}
-                />
-              </View>
-              
-              <ThemedView style={styles.modalActions}>
-                <TouchableOpacity style={styles.modalClearButton} onPress={clearSignatureInModal}>
-                  <Ionicons name="trash" size={20} color="#000000" />
-                  <ThemedText style={styles.modalClearButtonText}>Limpiar</ThemedText>
-                </TouchableOpacity>
-                
-                <TouchableOpacity style={styles.modalAcceptButton} onPress={acceptSignature}>
-                  <Ionicons name="checkmark" size={20} color="#000000" />
-                  <ThemedText style={styles.modalAcceptButtonText}>Aceptar</ThemedText>
-                </TouchableOpacity>
-              </ThemedView>
-            </ThemedView>
-          </ThemedView>
-        </Modal>
-      </ThemedView>
-    );
+            const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+            const cache = cacheStr ? JSON.parse(cacheStr) : [];
+            const updatedCache = cache.filter((it: any) => !(it.type === 'agenda_minuta' && (it.id_local === localId || it.id === r.id)));
+            await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+            Alert.alert('Modo Offline', 'Eliminado offline. Se sincronizará cuando haya conexión.');
+            fetchRecords();
+          } catch (e: any) {
+            Alert.alert('Error', e?.message || 'No se pudo eliminar');
+          }
+        },
+      },
+    ]);
   };
 
   const renderList = () => {
     if (isLoading) {
       return (
-        <ThemedView style={styles.centerContainer}>
-          <ActivityIndicator size="large" color="#FF9500" />
-          <ThemedText style={styles.loadingText}>Cargando agendas minuta física...</ThemedText>
+        <ThemedView style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#007AFF" />
+          <ThemedText style={styles.loadingText}>Cargando agendas...</ThemedText>
         </ThemedView>
       );
     }
 
-    if (error && agendas.length === 0) {
+    if (error) {
       return (
-        <ThemedView style={styles.centerContainer}>
+        <ThemedView style={styles.errorContainer}>
           <ThemedText style={styles.errorText}>{error}</ThemedText>
         </ThemedView>
       );
     }
 
-    if (agendas.length === 0) {
+    if (records.length === 0) {
       return (
-        <ThemedView style={styles.centerContainer}>
-          <ThemedText style={styles.emptyText}>No hay agendas minuta física registradas</ThemedText>
+        <ThemedView style={styles.emptyContainer}>
+          <ThemedText style={styles.emptyText}>No hay agendas minuta.</ThemedText>
         </ThemedView>
       );
     }
 
     return (
       <ThemedView style={styles.listContainer}>
-        {agendas.map((record) => {
-          const recordId = record.id || record.id_local;
-          const isExpanded = expandedRecordIds.includes(recordId);
-          const isOffline = !record.synced || record.id_local;
-
-          let presentesArray: Presente[] = [];
-          if (record.presentes) {
-            try {
-              presentesArray = JSON.parse(record.presentes);
-            } catch (e) {
-              presentesArray = [];
-            }
-          }
-
-          let temasTratadosArray: TemaTratado[] = [];
-          if (record.temas_tratados) {
-            try {
-              temasTratadosArray = JSON.parse(record.temas_tratados);
-            } catch (e) {
-              temasTratadosArray = [];
-            }
-          }
+        {records.map((r) => {
+          const itemKey = String(r.id || r.id_local || '');
+          const participantesArr = safeJsonParse<any[]>(r.participantes, []);
+          const { items: acuerdosArr, meta: acuerdosMeta } = parseAcuerdosPayload(r.acuerdos);
+          const fechaTxt = r.fecha ? String(r.fecha).split('T')[0] : '—';
+          const isParticipantesOpen = !!expandedParticipantesById[itemKey];
+          const isAcuerdosOpen = !!expandedAcuerdosById[itemKey];
+          const isFirmaOpen = !!expandedFirmaById[itemKey];
 
           return (
-            <ThemedView key={recordId} style={styles.listItem}>
-              <TouchableOpacity
-                style={styles.listItemHeader}
-                onPress={() => toggleExpanded(recordId)}
-              >
-                <ThemedView style={styles.listItemHeaderContent}>
-                  <ThemedText style={styles.listItemTitle}>
-                    {record.puesto || 'Sin puesto'} - {record.fecha || 'Sin fecha'}
-                  </ThemedText>
-                  <ThemedText style={styles.listItemSubtitle}>
-                    Minuta N°: {record.minuta_numero || 'N/A'}
-                  </ThemedText>
+            <ThemedView key={itemKey} style={styles.listItem}>
+              <ThemedView style={styles.listItemHeader}>
+                <ThemedView style={styles.listItemContent}>
+                  <ThemedText style={styles.listItemTitle}>{r.titulo || 'Agenda minuta'}</ThemedText>
+                  <ThemedText style={styles.listItemSubtitle}># {r.numero}</ThemedText>
+                  {!!acuerdosMeta?.division_nombre && <ThemedText style={styles.listItemSubtitle}>División: {acuerdosMeta.division_nombre}</ThemedText>}
+                  {!!acuerdosMeta?.contrato_nombre && <ThemedText style={styles.listItemSubtitle}>Contrato: {acuerdosMeta.contrato_nombre}</ThemedText>}
+                  <ThemedText style={styles.listItemSubtitle}>Sucursal: {r.corpo_nombre || acuerdosMeta?.sucursal_nombre || String(r.corpo_id)}</ThemedText>
+                  <ThemedText style={styles.listItemSubtitle}>Puesto: {r.puesto_nombre || acuerdosMeta?.puesto_nombre || String(r.puesto_id)}</ThemedText>
+                  <ThemedText style={styles.listItemSubtitle}>Fecha: {fechaTxt}</ThemedText>
                 </ThemedView>
-                <ThemedView style={styles.listItemActions}>
-                  {isOffline && (
-                    <ThemedView style={styles.offlineBadge}>
-                      <ThemedText style={styles.offlineBadgeText}>Offline</ThemedText>
-                    </ThemedView>
-                  )}
-                  <Ionicons
-                    name={isExpanded ? 'chevron-up' : 'chevron-down'}
-                    size={24}
-                    color="#000000"
-                  />
-                </ThemedView>
-              </TouchableOpacity>
+              </ThemedView>
 
-              {isExpanded && (
-                <ThemedView style={styles.listItemDetails}>
-                  <ThemedText style={styles.detailText}>
-                    <ThemedText style={styles.detailLabel}>Fecha: </ThemedText>
-                    {record.fecha || 'No especificado'}
-                  </ThemedText>
-                  <ThemedText style={styles.detailText}>
-                    <ThemedText style={styles.detailLabel}>Puesto: </ThemedText>
-                    {record.puesto || 'No especificado'}
-                  </ThemedText>
-                  <ThemedText style={styles.detailText}>
-                    <ThemedText style={styles.detailLabel}>Hora inicio: </ThemedText>
-                    {record.hora_inicio || 'No especificado'}
-                  </ThemedText>
-                  <ThemedText style={styles.detailText}>
-                    <ThemedText style={styles.detailLabel}>Hora Fin: </ThemedText>
-                    {record.hora_fin || 'No especificado'}
-                  </ThemedText>
-                  <ThemedText style={styles.detailText}>
-                    <ThemedText style={styles.detailLabel}>Elaborado por: </ThemedText>
-                    {record.elaborado_por || 'No especificado'}
-                  </ThemedText>
-                  <ThemedText style={styles.detailText}>
-                    <ThemedText style={styles.detailLabel}>Minuta N°: </ThemedText>
-                    {record.minuta_numero || 'No especificado'}
-                  </ThemedText>
-
-                  {presentesArray.length > 0 && (
-                    <ThemedView style={styles.sectionContainer}>
-                      <ThemedText style={styles.sectionTitle}>Presentes:</ThemedText>
-                      {presentesArray.map((presente, index) => (
-                        <ThemedView key={index} style={styles.presenteDetailItem}>
-                          <ThemedText style={styles.detailText}>
-                            <ThemedText style={styles.detailLabel}>Nombre: </ThemedText>
-                            {presente.nombre || 'N/A'}
-                          </ThemedText>
-                          <ThemedText style={styles.detailText}>
-                            <ThemedText style={styles.detailLabel}>Cargo: </ThemedText>
-                            {presente.cargo || 'N/A'}
-                          </ThemedText>
-                          {presente.firma && (
-                            <ThemedView style={styles.signaturePreviewContainer}>
-                              <Image
-                                source={{ 
-                                  uri: presente.firma.startsWith('data:') 
-                                    ? presente.firma 
-                                    : `data:image/png;base64,${presente.firma}` 
-                                }}
-                                style={styles.signaturePreview}
-                              />
-                            </ThemedView>
-                          )}
-                        </ThemedView>
-                      ))}
-                    </ThemedView>
-                  )}
-
-                  {record.observaciones && (
-                    <ThemedText style={styles.detailText}>
-                      <ThemedText style={styles.detailLabel}>Observaciones: </ThemedText>
-                      {record.observaciones}
-                    </ThemedText>
-                  )}
-
-                  {temasTratadosArray.length > 0 && (
-                    <ThemedView style={styles.sectionContainer}>
-                      <ThemedText style={styles.sectionTitle}>Temas Tratados:</ThemedText>
-                      {temasTratadosArray.map((tema, index) => (
-                        <ThemedView key={index} style={styles.temaDetailItem}>
-                          <ThemedText style={styles.detailText}>
-                            <ThemedText style={styles.detailLabel}>Asunto: </ThemedText>
-                            {tema.asunto || 'N/A'}
-                          </ThemedText>
-                          <ThemedText style={styles.detailText}>
-                            <ThemedText style={styles.detailLabel}>Comentario: </ThemedText>
-                            {tema.comentario || 'N/A'}
-                          </ThemedText>
-                          <ThemedText style={styles.detailText}>
-                            <ThemedText style={styles.detailLabel}>Acuerdo: </ThemedText>
-                            {tema.acuerdo || 'N/A'}
-                          </ThemedText>
-                        </ThemedView>
-                      ))}
-                    </ThemedView>
-                  )}
-
-                  {record.notas && (
-                    <ThemedText style={styles.detailText}>
-                      <ThemedText style={styles.detailLabel}>Notas: </ThemedText>
-                      {record.notas}
-                    </ThemedText>
-                  )}
-
-                  <ThemedText style={styles.detailText}>
-                    <ThemedText style={styles.detailLabel}>Fecha de creación: </ThemedText>
-                    {new Date(record.created_at).toLocaleDateString('es-CR')}
-                  </ThemedText>
-
-                  <ThemedView style={styles.listItemButtons}>
-                    <TouchableOpacity
-                      style={[styles.listItemButton, styles.editButton]}
-                      onPress={() => startEditing(record)}
-                    >
-                      <Ionicons name="pencil" size={20} color="#FFFFFF" />
-                      <ThemedText style={styles.listItemButtonText}>Editar</ThemedText>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[styles.listItemButton, styles.deleteButton]}
-                      onPress={() => deleteAgendaHandler(record)}
-                    >
-                      <Ionicons name="trash" size={20} color="#FFFFFF" />
-                      <ThemedText style={styles.listItemButtonText}>Eliminar</ThemedText>
-                    </TouchableOpacity>
+              <ThemedView style={styles.listItemDetails}>
+                <TouchableOpacity
+                  style={styles.collapseButton}
+                  onPress={() => setExpandedParticipantesById((prev) => ({ ...prev, [itemKey]: !prev[itemKey] }))}
+                  activeOpacity={0.8}
+                >
+                  <ThemedText style={styles.collapseButtonText}>Participantes ({participantesArr.length})</ThemedText>
+                  <Ionicons name={isParticipantesOpen ? 'chevron-up' : 'chevron-down'} size={18} color="#007AFF" />
+                </TouchableOpacity>
+                {isParticipantesOpen && (
+                  <ThemedView style={styles.collapsableContent}>
+                    {participantesArr.length === 0 ? (
+                      <ThemedText style={styles.detailLine}>—</ThemedText>
+                    ) : (
+                      participantesArr.map((p: any, idx: number) => {
+                        const sigUri = formatSignatureForDisplay(p?.firma || null);
+                        return (
+                          <ThemedView key={String(p?.id_local || idx)} style={styles.personDetailCard}>
+                            <ThemedText style={styles.personDetailTitle}>{String(p?.nombre || '').trim() || '—'}</ThemedText>
+                            <ThemedText style={styles.detailLine}>Cédula: {String(p?.cedula || '').trim() || '—'}</ThemedText>
+                            {sigUri ? (
+                              <Image source={{ uri: sigUri }} style={styles.signaturePreview} resizeMode="contain" />
+                            ) : (
+                              <ThemedText style={styles.detailLine}>Firma: No</ThemedText>
+                            )}
+                          </ThemedView>
+                        );
+                      })
+                    )}
                   </ThemedView>
+                )}
+
+                <TouchableOpacity
+                  style={styles.collapseButton}
+                  onPress={() => setExpandedAcuerdosById((prev) => ({ ...prev, [itemKey]: !prev[itemKey] }))}
+                  activeOpacity={0.8}
+                >
+                  <ThemedText style={styles.collapseButtonText}>Acuerdos ({acuerdosArr.length})</ThemedText>
+                  <Ionicons name={isAcuerdosOpen ? 'chevron-up' : 'chevron-down'} size={18} color="#007AFF" />
+                </TouchableOpacity>
+                {isAcuerdosOpen && (
+                  <ThemedView style={styles.collapsableContent}>
+                    {acuerdosArr.length === 0 ? (
+                      <ThemedText style={styles.detailLine}>—</ThemedText>
+                    ) : (
+                      acuerdosArr.map((a: any, idx: number) => (
+                        <ThemedText key={String(a?.id_local || idx)} style={styles.detailLine}>
+                          - {String(a?.texto || '').trim() || '—'}
+                        </ThemedText>
+                      ))
+                    )}
+                  </ThemedView>
+                )}
+
+                <TouchableOpacity
+                  style={styles.collapseButton}
+                  onPress={() => setExpandedFirmaById((prev) => ({ ...prev, [itemKey]: !prev[itemKey] }))}
+                  activeOpacity={0.8}
+                >
+                  <ThemedText style={styles.collapseButtonText}>Firma responsable</ThemedText>
+                  <Ionicons name={isFirmaOpen ? 'chevron-up' : 'chevron-down'} size={18} color="#007AFF" />
+                </TouchableOpacity>
+                {isFirmaOpen && (
+                  <ThemedView style={styles.collapsableContent}>
+                    {!r.firma_responsable ? (
+                      <ThemedText style={styles.detailLine}>—</ThemedText>
+                    ) : (() => {
+                      const info = decodeFirmaHash(r.firma_responsable);
+                      if (!info) return <ThemedText style={styles.detailLine}>QR sin información decodificable.</ThemedText>;
+                      return (
+                        <>
+                          <ThemedText style={styles.detailLine}>Sesión: {info.sessionId}</ThemedText>
+                          <ThemedText style={styles.detailLine}>Empleado: {info.empleadoId}</ThemedText>
+                          <ThemedText style={styles.detailLine}>
+                            Lat/Lng: {info.latitud}, {info.longitud}
+                          </ThemedText>
+                          <ThemedText style={styles.detailLine}>Hora: {info.timestamp}</ThemedText>
+                        </>
+                      );
+                    })()}
+                  </ThemedView>
+                )}
+
+                <ThemedView style={styles.actionButtons}>
+                  <TouchableOpacity style={[styles.listItemButton, styles.editButton]} onPress={() => startEditing(r)} activeOpacity={0.85}>
+                    <Ionicons name="pencil" size={18} color="#FFFFFF" />
+                    <ThemedText style={styles.buttonText}>Editar</ThemedText>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={[styles.listItemButton, styles.deleteButton]} onPress={() => deleteHandler(r)} activeOpacity={0.85}>
+                    <Ionicons name="trash" size={18} color="#FFFFFF" />
+                    <ThemedText style={styles.buttonText}>Eliminar</ThemedText>
+                  </TouchableOpacity>
                 </ThemedView>
-              )}
+              </ThemedView>
             </ThemedView>
           );
         })}
@@ -1228,453 +1018,567 @@ export default function PhysicalMinuteAgendaScreen() {
     );
   };
 
-  return (
-    <ThemedView style={styles.container}>
-      <AppHeader onMenuPress={() => setIsMenuVisible(true)} title="Agenda Minuta Física" />
-
+  const renderForm = () => {
+    return (
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
-        {!hasCurrentMarca && (
-          <ThemedView style={styles.warningContainer}>
-            <ThemedText style={styles.warningText}>
-              No se encontró la marca actual. Por favor, marca tu entrada primero.
-            </ThemedText>
-          </ThemedView>
-        )}
+        <ThemedView style={styles.content}>
+          <ThemedView style={styles.formCard}>
+            <ThemedText style={styles.formTitle}>{editingRecord ? 'Editar agenda' : 'Nueva agenda'}</ThemedText>
 
-        {hasCurrentMarca && (
-          <>
-            {!isCreating && !editingRecord && (
-              <TouchableOpacity style={styles.createButton} onPress={startCreating}>
-                <Ionicons name="add-circle" size={24} color="#FFFFFF" />
-                <ThemedText style={styles.createButtonText}>Nueva Agenda</ThemedText>
-              </TouchableOpacity>
+            {!!isStructureLoading && (
+              <ThemedView style={styles.inlineLoading}>
+                <ActivityIndicator size="small" color="#007AFF" />
+                <ThemedText style={styles.inlineLoadingText}>Cargando estructura...</ThemedText>
+              </ThemedView>
             )}
 
-            {isCreating && renderForm(false)}
-            {editingRecord && renderForm(true)}
-            {!isCreating && !editingRecord && renderList()}
-          </>
-        )}
-      </ScrollView>
+            <ThemedText style={styles.formSectionTitle}>Jerarquía</ThemedText>
 
+            <ThemedText style={styles.label}>Empresa</ThemedText>
+            <View style={styles.pickerWrapper}>
+              <Picker selectedValue={selectedEmpresaId} onValueChange={(v) => setSelectedEmpresaId(v)} style={styles.picker}>
+                <Picker.Item label="Seleccione empresa" value={null} />
+                {empresaOptions.map((o) => (
+                  <Picker.Item key={o.id} label={o.label} value={o.id} />
+                ))}
+              </Picker>
+            </View>
+
+            <ThemedText style={styles.label}>Cliente</ThemedText>
+            <View style={styles.pickerWrapper}>
+              <Picker
+                selectedValue={selectedClienteId}
+                enabled={selectedEmpresaId !== null && clienteOptions.length > 0}
+                onValueChange={(v) => setSelectedClienteId(v)}
+                style={styles.picker}
+              >
+                <Picker.Item label={selectedEmpresaId === null ? 'Seleccione empresa primero' : 'Seleccione cliente'} value={null} />
+                {clienteOptions.map((o) => (
+                  <Picker.Item key={o.id} label={o.label} value={o.id} />
+                ))}
+              </Picker>
+            </View>
+
+            <ThemedText style={styles.label}>División</ThemedText>
+            <View style={styles.pickerWrapper}>
+              <Picker
+                selectedValue={selectedDivisionId}
+                enabled={selectedClienteId !== null && divisionOptions.length > 0}
+                onValueChange={(v) => setSelectedDivisionId(v)}
+                style={styles.picker}
+              >
+                <Picker.Item label={selectedClienteId === null ? 'Seleccione cliente primero' : 'Seleccione división'} value={null} />
+                {divisionOptions.map((o) => (
+                  <Picker.Item key={o.id} label={o.label} value={o.id} />
+                ))}
+              </Picker>
+            </View>
+
+            <ThemedText style={styles.label}>Contrato</ThemedText>
+            <View style={styles.pickerWrapper}>
+              <Picker
+                selectedValue={selectedContratoId}
+                enabled={selectedDivisionId !== null && contratoOptions.length > 0}
+                onValueChange={(v) => setSelectedContratoId(v)}
+                style={styles.picker}
+              >
+                <Picker.Item label={selectedDivisionId === null ? 'Seleccione división primero' : 'Seleccione contrato'} value={null} />
+                {contratoOptions.map((o) => (
+                  <Picker.Item key={o.id} label={o.label} value={o.id} />
+                ))}
+              </Picker>
+            </View>
+
+            <ThemedText style={styles.label}>Sucursal</ThemedText>
+            <View style={styles.pickerWrapper}>
+              <Picker
+                selectedValue={selectedSucursalId}
+                enabled={selectedContratoId !== null && sucursalOptions.length > 0}
+                onValueChange={(v) => setSelectedSucursalId(v)}
+                style={styles.picker}
+              >
+                <Picker.Item label={selectedContratoId === null ? 'Seleccione contrato primero' : 'Seleccione sucursal'} value={null} />
+                {sucursalOptions.map((o) => (
+                  <Picker.Item key={o.id} label={o.label} value={o.id} />
+                ))}
+              </Picker>
+            </View>
+
+            <ThemedText style={styles.label}>Puesto</ThemedText>
+            <View style={styles.pickerWrapper}>
+              <Picker
+                selectedValue={selectedPuestoId}
+                enabled={selectedSucursalId !== null && puestoOptions.length > 0}
+                onValueChange={(v) => setSelectedPuestoId(v)}
+                style={styles.picker}
+              >
+                <Picker.Item label={selectedSucursalId === null ? 'Seleccione sucursal primero' : 'Seleccione puesto'} value={null} />
+                {puestoOptions.map((o) => (
+                  <Picker.Item key={o.id} label={o.label} value={o.id} />
+                ))}
+              </Picker>
+            </View>
+
+            <ThemedText style={styles.formSectionTitle}>Datos</ThemedText>
+
+            <ThemedText style={styles.label}>Número</ThemedText>
+            <TextInput style={styles.input} value={numero} onChangeText={setNumero} keyboardType="number-pad" placeholder="Ej: 1" />
+
+            <ThemedText style={styles.label}>Título</ThemedText>
+            <TextInput style={styles.input} value={titulo} onChangeText={setTitulo} placeholder="Título" />
+
+            <ThemedText style={styles.label}>Fecha</ThemedText>
+            <TouchableOpacity style={styles.dateButton} onPress={() => setShowDatePicker(true)} activeOpacity={0.85}>
+              <ThemedText style={styles.dateButtonText}>{formatDateISO(fecha)}</ThemedText>
+              <Ionicons name="calendar" size={18} color="#007AFF" />
+            </TouchableOpacity>
+            {showDatePicker && (
+              <DateTimePicker
+                value={fecha}
+                mode="date"
+                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                onChange={(_, d) => {
+                  if (Platform.OS === 'android') setShowDatePicker(false);
+                  if (d) setFecha(d);
+                }}
+              />
+            )}
+
+            <ThemedText style={styles.label}>Hora inicio</ThemedText>
+            <TouchableOpacity style={styles.dateButton} onPress={() => setShowTimePickerInicio(true)} activeOpacity={0.85}>
+              <ThemedText style={styles.dateButtonText}>{formatTimeHHmm(horaInicio)}</ThemedText>
+              <Ionicons name="time" size={18} color="#007AFF" />
+            </TouchableOpacity>
+            {showTimePickerInicio && (
+              <DateTimePicker
+                value={horaInicio}
+                mode="time"
+                is24Hour
+                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                onChange={(_, d) => {
+                  if (Platform.OS === 'android') setShowTimePickerInicio(false);
+                  if (d) setHoraInicio(d);
+                }}
+              />
+            )}
+
+            <ThemedText style={styles.label}>Hora fin</ThemedText>
+            <TouchableOpacity style={styles.dateButton} onPress={() => setShowTimePickerFin(true)} activeOpacity={0.85}>
+              <ThemedText style={styles.dateButtonText}>{formatTimeHHmm(horaFin)}</ThemedText>
+              <Ionicons name="time" size={18} color="#007AFF" />
+            </TouchableOpacity>
+            {showTimePickerFin && (
+              <DateTimePicker
+                value={horaFin}
+                mode="time"
+                is24Hour
+                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                onChange={(_, d) => {
+                  if (Platform.OS === 'android') setShowTimePickerFin(false);
+                  if (d) setHoraFin(d);
+                }}
+              />
+            )}
+
+            <ThemedText style={styles.label}>Autor</ThemedText>
+            <TextInput style={styles.input} value={autor} onChangeText={setAutor} placeholder="Autor" />
+
+            <ThemedText style={styles.label}>Observaciones</ThemedText>
+            <TextInput style={[styles.input, styles.textArea]} value={observaciones} onChangeText={setObservaciones} placeholder="Observaciones" multiline />
+
+            <ThemedText style={styles.formSectionTitle}>Participantes</ThemedText>
+            {participantes.length === 0 ? <ThemedText style={styles.emptyTextSmall}>—</ThemedText> : null}
+            {participantes.map((p, idx) => {
+              const sigUri = formatSignatureForDisplay(p.firma);
+              const displayName = p.nombre.trim() || `Participante ${idx + 1}`;
+              return (
+                <ThemedView key={p.id_local} style={styles.expandItem}>
+                  <ThemedView style={styles.expandHeader}>
+                    <ThemedView style={styles.expandHeaderContent}>
+                      <ThemedText style={styles.expandHeaderText}>{displayName}</ThemedText>
+                      {!!p.cedula && <ThemedText style={styles.expandHeaderSubText}>Cédula: {p.cedula}</ThemedText>}
+                    </ThemedView>
+                    <ThemedView style={styles.expandHeaderActions}>
+                      <TouchableOpacity onPress={() => removeParticipante(p.id_local)} style={styles.removeExpandButton} activeOpacity={0.85}>
+                        <Ionicons name="trash" size={20} color="#FF3B30" />
+                      </TouchableOpacity>
+                    </ThemedView>
+                  </ThemedView>
+
+                  <ThemedView style={styles.expandContent}>
+                    <ThemedText style={styles.label}>Nombre</ThemedText>
+                    <TextInput style={styles.input} value={p.nombre} onChangeText={(t) => updateParticipante(p.id_local, { nombre: t })} placeholder="Nombre" />
+
+                    <ThemedText style={styles.label}>Cédula</ThemedText>
+                    <TextInput style={styles.input} value={p.cedula} onChangeText={(t) => updateParticipante(p.id_local, { cedula: t })} placeholder="Cédula" />
+
+                    <ThemedText style={styles.formSectionTitle}>Firma</ThemedText>
+                    <TouchableOpacity style={styles.signatureButton} onPress={() => openParticipanteSignature(p.id_local)} activeOpacity={0.85}>
+                      <Ionicons name="create-outline" size={18} color="#007AFF" />
+                      <ThemedText style={styles.signatureButtonText}>{p.firma ? 'Editar firma' : 'Agregar firma'}</ThemedText>
+                    </TouchableOpacity>
+                    {sigUri ? <Image source={{ uri: sigUri }} style={styles.signaturePreview} resizeMode="contain" /> : null}
+                  </ThemedView>
+                </ThemedView>
+              );
+            })}
+            <TouchableOpacity style={styles.addButton} onPress={addParticipante} activeOpacity={0.85}>
+              <Ionicons name="add-circle" size={20} color="#4CAF50" />
+              <ThemedText style={styles.addButtonText}>Agregar participante</ThemedText>
+            </TouchableOpacity>
+
+            <ThemedText style={styles.formSectionTitle}>Acuerdos</ThemedText>
+            {acuerdos.length === 0 ? <ThemedText style={styles.emptyTextSmall}>—</ThemedText> : null}
+            {acuerdos.map((a, idx) => {
+              const title = `Acuerdo ${idx + 1}`;
+              return (
+                <ThemedView key={a.id_local} style={styles.expandItem}>
+                  <ThemedView style={styles.expandHeader}>
+                    <ThemedView style={styles.expandHeaderContent}>
+                      <ThemedText style={styles.expandHeaderText}>{title}</ThemedText>
+                    </ThemedView>
+                    <ThemedView style={styles.expandHeaderActions}>
+                      <TouchableOpacity onPress={() => removeAcuerdo(a.id_local)} style={styles.removeExpandButton} activeOpacity={0.85}>
+                        <Ionicons name="trash" size={20} color="#FF3B30" />
+                      </TouchableOpacity>
+                    </ThemedView>
+                  </ThemedView>
+                  <ThemedView style={styles.expandContent}>
+                    <ThemedText style={styles.label}>Detalle</ThemedText>
+                    <TextInput
+                      style={[styles.input, styles.textArea]}
+                      value={a.texto}
+                      onChangeText={(t) => updateAcuerdo(a.id_local, { texto: t })}
+                      placeholder="Escriba el acuerdo"
+                      multiline
+                    />
+                  </ThemedView>
+                </ThemedView>
+              );
+            })}
+            <TouchableOpacity style={styles.addButton} onPress={addAcuerdo} activeOpacity={0.85}>
+              <Ionicons name="add-circle" size={20} color="#4CAF50" />
+              <ThemedText style={styles.addButtonText}>Agregar acuerdo</ThemedText>
+            </TouchableOpacity>
+
+            <ThemedText style={styles.formSectionTitle}>Firma responsable *</ThemedText>
+            <ThemedText style={styles.smallHint}>Debe generar una firma (GPS + sesión) o escanear un QR.</ThemedText>
+            <ThemedView style={styles.firmaButtonsRow}>
+              <TouchableOpacity
+                style={[styles.firmaBlueButton, isGeneratingFirma ? styles.signatureQRButtonDisabled : null]}
+                onPress={handleGenerateFirmaResponsable}
+                activeOpacity={0.85}
+                disabled={isGeneratingFirma}
+              >
+                <Ionicons name="finger-print" size={18} color="#FFFFFF" />
+                <ThemedText style={styles.firmaBlueButtonText}>{isGeneratingFirma ? 'Generando...' : 'Generar'}</ThemedText>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.firmaBlueButton} onPress={handleScanFirmaResponsable} activeOpacity={0.85}>
+                <Ionicons name="qr-code" size={18} color="#FFFFFF" />
+                <ThemedText style={styles.firmaBlueButtonText}>Escanear</ThemedText>
+              </TouchableOpacity>
+            </ThemedView>
+
+            {firmaResponsable ? (
+              <ThemedView style={styles.firmaInfoBox}>
+                <ThemedView style={styles.firmaInfoHeader}>
+                  <ThemedText style={styles.firmaInfoTitle}>Información de la firma:</ThemedText>
+                  <TouchableOpacity onPress={() => setFirmaResponsable('')} style={styles.firmaTinyTrash} activeOpacity={0.85}>
+                    <Ionicons name="trash" size={18} color="#FF3B30" />
+                  </TouchableOpacity>
+                </ThemedView>
+                {(() => {
+                  const info = decodeFirmaHash(firmaResponsable);
+                  if (!info) return <ThemedText style={styles.firmaInfoText}>Formato no decodificable</ThemedText>;
+                  return (
+                    <>
+                      <ThemedText style={styles.firmaInfoText}>Sesión: {info.sessionId}</ThemedText>
+                      <ThemedText style={styles.firmaInfoText}>Empleado: {info.empleadoId}</ThemedText>
+                      <ThemedText style={styles.firmaInfoText}>
+                        Lat: {info.latitud} | Long: {info.longitud}
+                      </ThemedText>
+                      <ThemedText style={styles.firmaInfoText}>Hora: {info.timestamp}</ThemedText>
+                    </>
+                  );
+                })()}
+              </ThemedView>
+            ) : (
+              <ThemedText style={styles.emptyTextSmall}>Aún no hay firma responsable.</ThemedText>
+            )}
+
+            <ThemedView style={styles.actionButtons}>
+              <TouchableOpacity style={[styles.listItemButton, styles.saveButton]} onPress={saveHandler} activeOpacity={0.85}>
+                <Ionicons name="save" size={18} color="#FFFFFF" />
+                <ThemedText style={styles.buttonText}>{editingRecord ? 'Actualizar' : 'Guardar'}</ThemedText>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.listItemButton, styles.cancelButton]} onPress={cancelCreateOrEdit} activeOpacity={0.85}>
+                <Ionicons name="close" size={18} color="#FFFFFF" />
+                <ThemedText style={styles.buttonText}>Cancelar</ThemedText>
+              </TouchableOpacity>
+            </ThemedView>
+          </ThemedView>
+        </ThemedView>
+      </ScrollView>
+    );
+  };
+
+  return (
+    <ThemedView style={styles.screen}>
+      <AppHeader title="Agenda minuta" onMenuPress={() => setIsMenuVisible(true)} />
+      <SlideMenu isVisible={isMenuVisible} onClose={() => setIsMenuVisible(false)} currentRoute="PhysicalMinuteAgenda" onHomePress={() => navigation.navigate('Home')} />
+
+      {!hasCurrentMarca ? (
+        <ThemedView style={styles.noMarcaContainer}>
+          <ThemedText style={styles.noMarcaText}>Debe seleccionar una marca para continuar.</ThemedText>
+        </ThemedView>
+      ) : isCreating ? (
+        renderForm()
+      ) : (
+        <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
+          <ThemedView style={styles.content}>
+            <ThemedView style={styles.titleContainer}>
+              <ThemedText type="title" style={styles.title}>
+                Agenda minuta
+              </ThemedText>
+              <ThemedText style={styles.subtitle}>Registra y consulta agendas de minuta por puesto</ThemedText>
+            </ThemedView>
+
+            <TouchableOpacity style={styles.createButton} onPress={startCreate} activeOpacity={0.85}>
+              <ThemedText style={styles.createButtonText}>
+                <Ionicons name="add" size={18} color="#FFFFFF" />
+              </ThemedText>
+            </TouchableOpacity>
+
+            {renderList()}
+          </ThemedView>
+        </ScrollView>
+      )}
+
+      {/* Signature modal */}
+      <Modal visible={isSignatureModalVisible} transparent animationType="fade" onRequestClose={closeSignatureModal}>
+        <View style={styles.signatureModalOverlay}>
+          <View style={styles.signatureModalContainer}>
+            <View style={styles.signatureModalHeader}>
+              <ThemedText style={styles.signatureModalTitle}>Firma</ThemedText>
+              <TouchableOpacity onPress={closeSignatureModal} activeOpacity={0.85}>
+                <Ionicons name="close" size={22} color="#000000" />
+              </TouchableOpacity>
+            </View>
+            <View style={styles.signatureCanvasWrapper}>
+              <SignatureScreen
+                key={signatureKey}
+                ref={signatureRef}
+                onOK={handleSignatureRead}
+                webStyle={signatureWebStyle}
+                autoClear={false}
+                backgroundColor="#FFFFFF"
+              />
+            </View>
+            <View style={styles.signatureModalButtons}>
+              <TouchableOpacity style={[styles.signatureModalButton, styles.signatureClearButton]} onPress={clearSignatureInModal} activeOpacity={0.85}>
+                <ThemedText style={styles.signatureModalButtonText}>Limpiar</ThemedText>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.signatureModalButton, styles.signatureAcceptButton]} onPress={acceptSignature} activeOpacity={0.85}>
+                <ThemedText style={[styles.signatureModalButtonText, styles.signatureAcceptButtonText]}>Aceptar</ThemedText>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {QRScannerComponent}
       <AppFooter />
-      <SlideMenu
-        isVisible={isMenuVisible}
-        onClose={() => setIsMenuVisible(false)}
-        onHomePress={() => navigation.navigate('Home')}
-        currentRoute="PhysicalMinuteAgenda"
-      />
     </ThemedView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  scrollView: {
-    flex: 1,
-  },
-  scrollContent: {
-    padding: 16,
-  },
-  warningContainer: {
-    backgroundColor: '#FFE5E5',
-    padding: 16,
-    borderRadius: 8,
-    marginBottom: 16,
-  },
-  warningText: {
-    color: '#D32F2F',
-    fontSize: 14,
-    textAlign: 'center',
-  },
-  createButton: {
-    backgroundColor: '#FF9500',
-    flexDirection: 'row',
+  // Estructura visual tipo LlavesScreen
+  screen: { flex: 1, backgroundColor: '#F2F2F7' },
+  container: { flex: 1 },
+  scrollView: { flex: 1, backgroundColor: '#FFFFFF' },
+  scrollContent: { padding: 16, paddingBottom: 30, backgroundColor: '#FFFFFF' },
+  content: { width: '100%', maxWidth: 800, alignSelf: 'center', backgroundColor: '#FFFFFF' },
+  titleContainer: {
     alignItems: 'center',
-    justifyContent: 'center',
-    padding: 16,
-    borderRadius: 8,
-    marginBottom: 16,
-    gap: 8,
+    marginBottom: 18,
+    paddingBottom: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
   },
-  createButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
-  },
+  title: { fontSize: 22, fontWeight: 'bold', textAlign: 'center', marginBottom: 8 },
+  subtitle: { fontSize: 14, opacity: 0.7, textAlign: 'center' },
+
+  createButton: { backgroundColor: '#007AFF', padding: 14, borderRadius: 10, alignItems: 'center', marginBottom: 12 },
+  createButtonText: { color: '#FFFFFF', fontSize: 16, fontWeight: '800' },
+
+  noMarcaContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 16 },
+  noMarcaText: { color: '#000', opacity: 0.7, fontSize: 14 },
+
+  // Form (como ComplaintsMasterScreen)
   formCard: {
-    backgroundColor: '#FFFFFF',
+    width: '100%',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
     borderRadius: 8,
+    backgroundColor: '#fff',
     padding: 16,
-    marginBottom: 16,
+    gap: 8,
+    marginBottom: 20,
   },
   formTitle: {
     fontSize: 20,
     fontWeight: 'bold',
-    marginBottom: 16,
-    color: '#000000',
-  },
-  formGroup: {
-    marginBottom: 16,
-  },
-  formLabel: {
-    fontSize: 14,
-    fontWeight: '600',
+    color: '#007AFF',
     marginBottom: 8,
-    color: '#000000',
+    textAlign: 'center',
   },
-  formInput: {
+
+  sectionContainer: { marginBottom: 16, backgroundColor: '#FFFFFF', borderRadius: 14, borderWidth: 1, borderColor: '#E5E5EA', overflow: 'hidden' },
+  sectionHeader: { padding: 14, backgroundColor: '#F5F5F5', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  sectionTitle: { fontSize: 16, fontWeight: '800', color: '#000000' },
+  sectionBody: { padding: 14 },
+  inlineLoading: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  inlineLoadingText: { fontSize: 12, color: '#000', opacity: 0.6 },
+
+  label: { marginTop: 10, marginBottom: 6, fontSize: 13, fontWeight: '700', color: '#000000' },
+  input: {
     borderWidth: 1,
-    borderColor: '#DDD',
-    borderRadius: 8,
+    borderColor: '#E0E0E0',
+    borderRadius: 10,
     padding: 12,
-    fontSize: 16,
-    color: '#000000',
     backgroundColor: '#FFFFFF',
+    color: '#000',
   },
-  textArea: {
-    minHeight: 100,
-  },
+  textArea: { minHeight: 90, textAlignVertical: 'top' as any },
+
+  pickerWrapper: { borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 10, overflow: 'hidden', backgroundColor: '#FFFFFF', justifyContent: 'center' },
+  picker: { height: 54, width: '100%', color: '#000', fontSize: 16 },
+
   dateButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     borderWidth: 1,
-    borderColor: '#DDD',
-    borderRadius: 8,
+    borderColor: '#E0E0E0',
+    borderRadius: 10,
     padding: 12,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#F9F9F9',
   },
-  dateButtonText: {
-    fontSize: 16,
-    color: '#000000',
-  },
-  presenteItem: {
-    marginBottom: 12,
-    padding: 12,
-    backgroundColor: '#F5F5F5',
-    borderRadius: 8,
-  },
-  presenteRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: 8,
-    marginBottom: 8,
-  },
-  presenteInputContainer: {
-    flex: 1,
-  },
-  presenteLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    marginBottom: 4,
-    color: '#000000',
-  },
-  removePresenteButton: {
-    padding: 8,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
+  dateButtonText: { fontSize: 16, color: '#000000' },
+
+  emptyTextSmall: { color: '#000', opacity: 0.6 },
+  smallHint: { color: '#000', opacity: 0.6, marginBottom: 8 },
+  formSectionTitle: { marginTop: 6, fontSize: 14, fontWeight: '800', color: '#007AFF', marginBottom: 6 },
+
+  // expandables
+  expandItem: { marginBottom: 14, backgroundColor: '#FFFFFF', borderRadius: 10, borderWidth: 1, borderColor: '#E0E0E0', overflow: 'hidden' },
+  expandHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 14, backgroundColor: '#F5F5F5' },
+  expandHeaderContent: { flex: 1, marginRight: 10 },
+  expandHeaderText: { fontSize: 15, fontWeight: '700', color: '#000000' },
+  expandHeaderSubText: { marginTop: 4, fontSize: 13, color: '#000', opacity: 0.7 },
+  expandHeaderActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  removeExpandButton: { padding: 4 },
+  expandContent: { padding: 14 },
+
   signatureButton: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 10,
+    borderWidth: 1,
+    borderColor: '#007AFF',
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    backgroundColor: '#FFFFFF',
+    marginBottom: 10,
+  },
+  signatureButtonText: { color: '#007AFF', fontWeight: '700' },
+  signaturePreview: { width: '100%', height: 140, backgroundColor: '#FFFFFF', borderRadius: 8, borderWidth: 1, borderColor: '#E0E0E0', marginTop: 10 },
+
+  // agreements/participants list display
+  personDetailCard: { width: '100%', borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 10, padding: 10, backgroundColor: '#FFFFFF', marginBottom: 12 },
+  personDetailTitle: { fontSize: 14, fontWeight: '800', color: '#000000', marginBottom: 6 },
+
+  // add button
+  addButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 12, backgroundColor: '#E8F5E9', borderRadius: 10, marginTop: 10, gap: 8 },
+  addButtonText: { color: '#4CAF50', fontSize: 14, fontWeight: '700' },
+
+  // firma responsable
+  signatureQRButtonDisabled: { opacity: 0.6 },
+  firmaButtonsRow: { flexDirection: 'row', gap: 10, marginTop: 10 },
+  firmaBlueButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'center',
-    padding: 12,
-    backgroundColor: '#E3F2FD',
-    borderRadius: 8,
+    backgroundColor: '#007AFF',
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 10,
     gap: 8,
-    marginTop: 8,
   },
-  signatureButtonText: {
-    color: '#007AFF',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  signaturePreviewContainer: {
-    width: '100%',
-    marginBottom: 8,
-    padding: 8,
-    backgroundColor: '#F5F5F5',
+  firmaBlueButtonText: { color: '#FFFFFF', fontSize: 14, fontWeight: '800' },
+  firmaInfoBox: { marginTop: 10, borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 10, padding: 12, backgroundColor: '#FFFFFF' },
+  firmaInfoHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  firmaInfoTitle: { fontSize: 14, fontWeight: '800', color: '#000000' },
+  firmaTinyTrash: { padding: 4 },
+  firmaInfoText: { fontSize: 13, color: '#000000', opacity: 0.8, marginBottom: 4 },
+
+  // list
+  listContainer: { marginTop: 10 },
+  listItem: { backgroundColor: '#FFFFFF', borderRadius: 14, borderWidth: 1, borderColor: '#E5E5EA', marginBottom: 12, overflow: 'hidden' },
+  listItemHeader: { padding: 16 },
+  listItemContent: {},
+  listItemTitle: { fontSize: 16, fontWeight: '800', color: '#000' },
+  listItemSubtitle: { marginTop: 4, fontSize: 13, color: '#000', opacity: 0.7 },
+  unsyncedBadge: { marginTop: 8, fontSize: 12, fontWeight: '800', color: '#FF9500' },
+  listItemDetails: { borderTopWidth: 1, borderTopColor: '#EEE', padding: 16 },
+
+  collapseButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 8,
+    paddingHorizontal: 10,
     borderRadius: 8,
     borderWidth: 1,
     borderColor: '#E0E0E0',
-  },
-  signaturePreview: {
-    width: '100%',
-    height: 100,
-    borderRadius: 4,
-    resizeMode: 'contain',
-  },
-  temaItem: {
-    marginBottom: 12,
-    padding: 12,
-    backgroundColor: '#F5F5F5',
-    borderRadius: 8,
-  },
-  temaRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 8,
-    marginBottom: 8,
-  },
-  temaInputContainer: {
-    flex: 1,
-    marginBottom: 8,
-  },
-  temaLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    marginBottom: 4,
-    color: '#000000',
-  },
-  removeTemaButton: {
-    padding: 8,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  addButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 12,
-    backgroundColor: '#E8F5E9',
-    borderRadius: 8,
-    gap: 8,
     marginTop: 8,
+    backgroundColor: '#FAFAFA',
   },
-  addButtonText: {
-    color: '#4CAF50',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  actionButtons: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 16,
-    gap: 12,
-  },
-  actionButton: {
-    flex: 1,
-    padding: 16,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  cancelButton: {
-    backgroundColor: '#CCCCCC',
-  },
-  saveButton: {
-    backgroundColor: '#FF9500',
-  },
-  actionButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  modalContainer: {
-    width: '90%',
-    maxWidth: 500,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    overflow: 'hidden',
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#DDD',
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#000000',
-  },
-  modalSignatureContainer: {
-    width: '100%',
-    height: 200,
-    marginHorizontal: 20,
-    marginVertical: 16,
-    borderWidth: 1,
-    borderColor: '#E0E0E0',
-    borderRadius: 8,
-    backgroundColor: '#FFFFFF',
-    overflow: 'hidden',
-    alignSelf: 'center',
-  },
-  modalActions: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    padding: 16,
-    borderTopWidth: 1,
-    borderTopColor: '#DDD',
-    gap: 12,
-  },
-  modalClearButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 12,
-    backgroundColor: '#FFE5E5',
-    borderRadius: 8,
-    gap: 8,
-  },
-  modalClearButtonText: {
-    color: '#F44336',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  modalAcceptButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 12,
-    backgroundColor: '#E8F5E9',
-    borderRadius: 8,
-    gap: 8,
-  },
-  modalAcceptButtonText: {
-    color: '#4CAF50',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  listContainer: {
-    gap: 12,
-  },
-  listItem: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 8,
-    overflow: 'hidden',
-  },
-  listItemHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 16,
-  },
-  listItemHeaderContent: {
-    flex: 1,
-  },
-  listItemTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#000000',
-    marginBottom: 4,
-  },
-  listItemSubtitle: {
-    fontSize: 14,
-    color: '#666',
-  },
-  listItemActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  offlineBadge: {
-    backgroundColor: '#FF9800',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 4,
-  },
-  offlineBadgeText: {
-    color: '#FFFFFF',
-    fontSize: 10,
-    fontWeight: '600',
-  },
-  listItemDetails: {
-    padding: 16,
-    borderTopWidth: 1,
-    borderTopColor: '#EEE',
-  },
-  detailText: {
-    fontSize: 14,
-    color: '#000000',
-    marginBottom: 8,
-  },
-  detailLabel: {
-    fontWeight: '600',
-  },
-  sectionContainer: {
-    marginTop: 12,
-    marginBottom: 12,
-    padding: 12,
-    backgroundColor: '#F9F9F9',
-    borderRadius: 8,
-  },
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#000000',
-    marginBottom: 8,
-  },
-  presenteDetailItem: {
-    marginBottom: 12,
-    paddingBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#EEE',
-  },
-  temaDetailItem: {
-    marginBottom: 12,
-    paddingBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#EEE',
-  },
-  listItemButtons: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 16,
-    gap: 12,
-  },
-  listItemButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 12,
-    borderRadius: 8,
-    gap: 8,
-  },
-  editButton: {
-    backgroundColor: '#4CAF50',
-  },
-  deleteButton: {
-    backgroundColor: '#F44336',
-  },
-  listItemButtonText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  centerContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 32,
-  },
-  loadingText: {
-    marginTop: 16,
-    fontSize: 16,
-    color: '#666',
-  },
-  errorText: {
-    fontSize: 16,
-    color: '#F44336',
-    textAlign: 'center',
-  },
-  emptyText: {
-    fontSize: 16,
-    color: '#666',
-    textAlign: 'center',
-  },
+  collapseButtonText: { fontSize: 13, fontWeight: '700', color: '#007AFF' },
+  collapsableContent: { marginTop: 8, padding: 10, borderRadius: 8, backgroundColor: '#F8F9FA' },
+  detailLine: { marginBottom: 6, color: '#000' },
+
+  actionButtons: { flexDirection: 'row', justifyContent: 'space-between', gap: 12, marginTop: 10 },
+  listItemButton: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 12, borderRadius: 10 },
+  editButton: { backgroundColor: '#007AFF' },
+  deleteButton: { backgroundColor: '#FF3B30' },
+  saveButton: { backgroundColor: '#007AFF' },
+  cancelButton: { backgroundColor: '#8E8E93' },
+  buttonText: { color: '#FFFFFF', fontSize: 14, fontWeight: '800' },
+
+  // loading/empty/error
+  loadingContainer: { padding: 20, alignItems: 'center' },
+  loadingText: { marginTop: 10, fontSize: 14, color: '#000', opacity: 0.7 },
+  errorContainer: { padding: 20, alignItems: 'center' },
+  errorText: { color: '#FF3B30', textAlign: 'center' },
+  emptyContainer: { padding: 20, alignItems: 'center' },
+  emptyText: { color: '#000', opacity: 0.7 },
+
+  // signature modal
+  signatureModalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 16 },
+  signatureModalContainer: { width: '100%', backgroundColor: '#FFFFFF', borderRadius: 14, overflow: 'hidden' },
+  signatureModalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 12, backgroundColor: '#F5F5F5' },
+  signatureModalTitle: { fontSize: 16, fontWeight: '800', color: '#000' },
+  signatureCanvasWrapper: { height: 260, backgroundColor: '#FFFFFF' },
+  signatureModalButtons: { flexDirection: 'row', justifyContent: 'space-between', gap: 10, padding: 12 },
+  signatureModalButton: { flex: 1, paddingVertical: 12, borderRadius: 10, alignItems: 'center' },
+  signatureClearButton: { backgroundColor: '#F2F2F7' },
+  signatureAcceptButton: { backgroundColor: '#007AFF' },
+  signatureModalButtonText: { fontSize: 14, fontWeight: '800', color: '#000' },
+  signatureAcceptButtonText: { color: '#FFFFFF' },
 });
+
 

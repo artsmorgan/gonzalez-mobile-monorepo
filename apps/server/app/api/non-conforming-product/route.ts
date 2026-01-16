@@ -2,102 +2,193 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessToken } from "../../../utils/verifyToken";
 import { toZonedTime } from "date-fns-tz";
 import { prisma } from "../../../utils/prismaClient";
+import fs from "fs";
+import path from "path";
+import { v4 as uuidv4 } from "uuid";
+
+export const runtime = "nodejs";
+
+type PncFileInput = {
+  type: string; // image | audio | video | document
+  extension: string;
+  original_name?: string;
+  file_base64: string;
+};
+
+function safeParseJson<T>(value: any, fallback: T): T {
+  try {
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (trimmed.length === 0) return fallback;
+      return JSON.parse(trimmed) as T;
+    }
+    if (value === null || value === undefined) return fallback;
+    return value as T;
+  } catch {
+    return fallback;
+  }
+}
+
+function normalizeBase64(b64: string): string {
+  if (!b64) return "";
+  const idx = b64.indexOf("base64,");
+  if (idx !== -1) return b64.slice(idx + "base64,".length);
+  return b64;
+}
+
+function parseDateOnly(input: any): Date | null {
+  if (!input) return null;
+  const s = String(input).trim();
+  if (s.length === 0) return null;
+  // aceptar YYYY-MM-DD
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return null;
+  return d;
+}
 
 export async function POST(req: NextRequest) {
-    try {
-        const { valid, payload, message } = verifyAccessToken(req);
+  try {
+    const { valid, payload, message } = verifyAccessToken(req);
 
-        if (!valid) {
-            return NextResponse.json(
-                { status: false, message: message },
-                { status: 401 }
-            );
-        }
-
-        const { 
-            marca_id, 
-            cliente,
-            numero_corpo,
-            responsable_cuenta,
-            macroactividad,
-            actividad,
-            tipo_servicio_no_conforme,
-            tipo_registro,
-            responsable_registro,
-            acciones_seguir,
-            responsable_corregir,
-            responsable_aprobar
-        } = await req.json();
-
-        if (!marca_id) {
-            return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 400 });
-        }
-
-        const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(marca_id) } });
-        if (!marcaDia) {
-            return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 404 });
-        }
-
-        if (!marcaDia.empleadoFijo_id) {
-            return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 404 });
-        }
-
-        // Autocompletar campos desde la marca
-        const new_record = await prisma.c_producto_no_conforme_matriz.create({
-            data: {
-                empresa_id: marcaDia.empresa_id?.toString() || null,
-                cliente_id: marcaDia.cliente_id?.toString() || null,
-                contrato_id: marcaDia.contrato_id?.toString() || null,
-                corpo_id: marcaDia.corpo_id?.toString() || null,
-                puesto_id: marcaDia.puesto_id?.toString() || null,
-                plaza_id: marcaDia.plaza_id?.toString() || null,
-                cliente: cliente || null,
-                numero_corpo: numero_corpo || null,
-                responsable_cuenta: responsable_cuenta || null,
-                macroactividad: macroactividad || null,
-                actividad: actividad || null,
-                tipo_servicio_no_conforme: tipo_servicio_no_conforme || null,
-                tipo_registro: tipo_registro || null,
-                responsable_registro: responsable_registro || null,
-                acciones_seguir: acciones_seguir || null,
-                responsable_corregir: responsable_corregir || null,
-                responsable_aprobar: responsable_aprobar || null,
-                created_at: toZonedTime(new Date(), "America/Costa_Rica"),
-                created_by: payload.id?.toString() || null
-            }
-        });
-
-        return NextResponse.json({ 
-            status: true, 
-            message: "Producto no conforme creado correctamente",
-            data: {
-                id: new_record.id,
-                empresa_id: new_record.empresa_id,
-                cliente_id: new_record.cliente_id,
-                contrato_id: new_record.contrato_id,
-                corpo_id: new_record.corpo_id,
-                puesto_id: new_record.puesto_id,
-                plaza_id: new_record.plaza_id,
-                cliente: new_record.cliente,
-                numero_corpo: new_record.numero_corpo,
-                responsable_cuenta: new_record.responsable_cuenta,
-                macroactividad: new_record.macroactividad,
-                actividad: new_record.actividad,
-                tipo_servicio_no_conforme: new_record.tipo_servicio_no_conforme,
-                tipo_registro: new_record.tipo_registro,
-                responsable_registro: new_record.responsable_registro,
-                acciones_seguir: new_record.acciones_seguir,
-                responsable_corregir: new_record.responsable_corregir,
-                responsable_aprobar: new_record.responsable_aprobar,
-                created_at: new_record.created_at,
-                created_by: new_record.created_by,
-            }
-        }, { status: 200 });
-
-    } catch (error: unknown) {
-        const errorMessage = error instanceof Error ? error.message : "Error desconocido";
-        console.error(errorMessage);
-        return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
+    if (!valid) {
+      return NextResponse.json({ status: false, message: message }, { status: 401 });
     }
+
+    const {
+      cliente_id,
+      corpo_id,
+      fecha_identificacion,
+      responsable_cuenta,
+      tipo_servicio_no_conforme,
+      persona_identifico_pnc,
+      firma_persona_identifico_pnc,
+      descripcion,
+      persona_origino_pnc,
+      firma_persona_origino_pnc,
+      accion_implementada,
+      fecha_solucion,
+      responsable_aprobar,
+      firma_responsable,
+      archivos,
+    } = await req.json();
+
+    const clienteId = Number(cliente_id);
+    const corpoId = Number(corpo_id);
+    if (!clienteId || !corpoId) {
+      return NextResponse.json({ status: false, message: "Cliente y Sucursal son requeridos" }, { status: 400 });
+    }
+
+    const fechaIdent = parseDateOnly(fecha_identificacion);
+    const fechaSol = parseDateOnly(fecha_solucion);
+    if (!fechaIdent || !fechaSol) {
+      return NextResponse.json({ status: false, message: "Fechas inválidas (identificación / solución)" }, { status: 400 });
+    }
+
+    if (!firma_responsable || String(firma_responsable).trim().length === 0) {
+      return NextResponse.json({ status: false, message: "La firma del responsable es requerida" }, { status: 400 });
+    }
+
+    if (!firma_persona_identifico_pnc || String(firma_persona_identifico_pnc).trim().length === 0) {
+      return NextResponse.json({ status: false, message: "La firma de la persona que identificó el PNC es requerida" }, { status: 400 });
+    }
+
+    if (!firma_persona_origino_pnc || String(firma_persona_origino_pnc).trim().length === 0) {
+      return NextResponse.json({ status: false, message: "La firma de la persona que originó el PNC es requerida" }, { status: 400 });
+    }
+
+    const createdAt = toZonedTime(new Date(), "America/Costa_Rica");
+
+    const newRecord = await prisma.c_producto_no_conforme.create({
+      data: {
+        cliente_id: clienteId,
+        corpo_id: corpoId,
+        fecha_identificacion: fechaIdent,
+        responsable_cuenta: String(responsable_cuenta ?? ""),
+        tipo_servicio_no_conforme: String(tipo_servicio_no_conforme ?? ""),
+        persona_identifico_pnc: String(persona_identifico_pnc ?? ""),
+        firma_persona_identifico_pnc: String(firma_persona_identifico_pnc ?? ""),
+        descripcion: String(descripcion ?? ""),
+        persona_origino_pnc: String(persona_origino_pnc ?? ""),
+        firma_persona_origino_pnc: String(firma_persona_origino_pnc ?? ""),
+        accion_implementada: String(accion_implementada ?? ""),
+        fecha_solucion: fechaSol,
+        responsable_aprobar: String(responsable_aprobar ?? ""),
+        firma_responsable: String(firma_responsable ?? ""),
+        created_at: createdAt,
+        created_by: payload.id?.toString() || "",
+      },
+      include: {
+        e_archivos_producto_no_conforme: true,
+      },
+    });
+
+    // Archivos anexos
+    let filesParsed: PncFileInput[] = [];
+    if (archivos) {
+      filesParsed = safeParseJson<PncFileInput[]>(archivos, []);
+    }
+
+    if (filesParsed.length > 0) {
+      const dir = path.join(process.cwd(), "public", "uploads", "non-conforming-product", `${newRecord.id}`);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+      for (const f of filesParsed) {
+        if (!f?.file_base64 || !f?.extension || !f?.type) continue;
+        let buffer: Buffer;
+        try {
+          buffer = Buffer.from(normalizeBase64(String(f.file_base64)), "base64");
+        } catch {
+          continue;
+        }
+
+        const ext = String(f.extension).replace(".", "").trim() || "dat";
+        const fileName = `${uuidv4()}.${ext}`;
+        fs.writeFileSync(path.join(dir, fileName), buffer);
+
+        const originalName =
+          typeof f.original_name === "string" && f.original_name.trim().length > 0
+            ? f.original_name.trim()
+            : fileName;
+
+        await prisma.e_archivos_producto_no_conforme.create({
+          data: {
+            name: fileName,
+            original_name: originalName,
+            type: String(f.type),
+            extension: ext,
+            pnc_id: newRecord.id,
+          },
+        });
+      }
+    }
+
+    const fullRecord = await prisma.c_producto_no_conforme.findUnique({
+      where: { id: newRecord.id },
+      include: { e_archivos_producto_no_conforme: true },
+    });
+
+    return NextResponse.json(
+      {
+        status: true,
+        message: "Producto no conforme creado correctamente",
+        data: {
+          ...(fullRecord ?? newRecord),
+          id_local: "",
+          files: ((fullRecord as any)?.e_archivos_producto_no_conforme || []).map((f: any) => ({
+            id: f.id,
+            name: f.name,
+            original_name: f.original_name,
+            type: f.type,
+            extension: f.extension,
+          })),
+        },
+      },
+      { status: 200 }
+    );
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+    console.error(errorMessage);
+    return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
+  }
 }
 

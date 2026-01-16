@@ -1442,18 +1442,27 @@ export const listVehicleMaintenanceByCorpo = async ({
 
 interface CreateNonConformingProductParams {
   requestData: {
-    marca_id: number;
-    cliente: string | null;
-    numero_corpo: string | null;
-    responsable_cuenta: string | null;
-    macroactividad: string | null;
-    actividad: string | null;
-    tipo_servicio_no_conforme: string | null;
-    tipo_registro: string | null;
-    responsable_registro: string | null;
-    acciones_seguir: string | null;
-    responsable_corregir: string | null;
-    responsable_aprobar: string | null;
+    cliente_id: number;
+    corpo_id: number;
+    fecha_identificacion: string; // YYYY-MM-DD
+    responsable_cuenta: string;
+    tipo_servicio_no_conforme: string;
+    persona_identifico_pnc: string;
+    firma_persona_identifico_pnc: string; // base64 o data-url
+    descripcion: string;
+    persona_origino_pnc: string;
+    firma_persona_origino_pnc: string; // base64 o data-url
+    accion_implementada: string;
+    fecha_solucion: string; // YYYY-MM-DD
+    responsable_aprobar: string;
+    firma_responsable: string; // hash (QR)
+    archivos?: Array<{
+      type: 'image' | 'audio' | 'video' | 'document' | string;
+      extension: string;
+      original_name?: string;
+      file_base64: string;
+      mimeType?: string;
+    }>;
   };
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
@@ -1462,17 +1471,27 @@ interface CreateNonConformingProductParams {
 interface UpdateNonConformingProductParams {
   id: string;
   requestData: {
-    cliente?: string | null;
-    numero_corpo?: string | null;
-    responsable_cuenta?: string | null;
-    macroactividad?: string | null;
-    actividad?: string | null;
-    tipo_servicio_no_conforme?: string | null;
-    tipo_registro?: string | null;
-    responsable_registro?: string | null;
-    acciones_seguir?: string | null;
-    responsable_corregir?: string | null;
-    responsable_aprobar?: string | null;
+    cliente_id?: number;
+    corpo_id?: number;
+    fecha_identificacion?: string; // YYYY-MM-DD
+    responsable_cuenta?: string;
+    tipo_servicio_no_conforme?: string;
+    persona_identifico_pnc?: string;
+    firma_persona_identifico_pnc?: string;
+    descripcion?: string;
+    persona_origino_pnc?: string;
+    firma_persona_origino_pnc?: string;
+    accion_implementada?: string;
+    fecha_solucion?: string; // YYYY-MM-DD
+    responsable_aprobar?: string;
+    firma_responsable?: string;
+    archivos?: Array<{
+      type: 'image' | 'audio' | 'video' | 'document' | string;
+      extension: string;
+      original_name?: string;
+      file_base64: string;
+      mimeType?: string;
+    }>;
   };
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
@@ -1486,6 +1505,89 @@ interface DeleteNonConformingProductParams {
 
 interface ListNonConformingProductByCorpoParams {
   corpo_id: string;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+interface ListCorporateVehiclesByCorpoParams {
+  corpo_id: string;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+interface CreateCorporateVehicleParams {
+  requestData: {
+    cliente_id: number;
+    corpo_id: number; // sucursal_id
+    placa?: string;
+    tipo?: string;
+    kilometraje?: number;
+    prox_cambio_aceite?: number;
+    modelo?: string;
+    anno?: number;
+    descripcion?: string;
+    titulo_propiedad?: boolean;
+    rtv?: boolean;
+    marchamo?: boolean;
+    firma_responsable?: string;
+    imagenes?: Array<{
+      extension: string;
+      file_base64: string;
+    }>;
+  };
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+interface UpdateCorporateVehicleParams {
+  id: string;
+  requestData: CreateCorporateVehicleParams['requestData'];
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+interface DeleteCorporateVehicleParams {
+  id: string;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+export type CorporateVehicleUseRequest = {
+  nombre_conductor: string;
+  fecha: string; // ISO
+  hora_inicio: string; // ISO
+  hora_fin: string; // ISO
+  combustible_inicio: number;
+  combustible_fin: number;
+  km_inicio: number;
+  km_fin: number;
+  motivo: string;
+  firma_responsable: string;
+  // bitacora_id ignorado por solicitud
+};
+
+interface ListCorporateVehicleUsesParams {
+  vehiculo_id: string;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+interface CreateCorporateVehicleUseParams {
+  vehiculo_id: string;
+  requestData: CorporateVehicleUseRequest;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+interface UpdateCorporateVehicleUseParams {
+  use_id: string;
+  requestData: Partial<CorporateVehicleUseRequest>;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+interface DeleteCorporateVehicleUseParams {
+  use_id: string;
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }
@@ -1710,6 +1812,398 @@ export const listNonConformingProductByCorpo = async ({
       status: false,
       message: error instanceof Error ? error.message : 'Error al listar los productos no conformes',
       data: [],
+    };
+  }
+};
+
+export const createCorporateVehicle = async ({
+  requestData,
+  refreshAccessToken,
+  logout,
+}: CreateCorporateVehicleParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) throw new Error('Server URL not configured');
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) throw new Error('No authentication token found');
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/corporate-vehicles`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+      body: JSON.stringify(requestData),
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) return createCorporateVehicle({ requestData, refreshAccessToken, logout });
+      await logout();
+      throw new Error('Sesión expirada');
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error creating corporate vehicle:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al crear el vehículo corporativo',
+    };
+  }
+};
+
+export const updateCorporateVehicle = async ({
+  id,
+  requestData,
+  refreshAccessToken,
+  logout,
+}: UpdateCorporateVehicleParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) throw new Error('Server URL not configured');
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) throw new Error('No authentication token found');
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/corporate-vehicles/${id}`, {
+      method: 'PUT',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+      body: JSON.stringify(requestData),
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) return updateCorporateVehicle({ id, requestData, refreshAccessToken, logout });
+      await logout();
+      throw new Error('Sesión expirada');
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error updating corporate vehicle:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al actualizar el vehículo corporativo',
+    };
+  }
+};
+
+export const deleteCorporateVehicle = async ({
+  id,
+  refreshAccessToken,
+  logout,
+}: DeleteCorporateVehicleParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) throw new Error('Server URL not configured');
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) throw new Error('No authentication token found');
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/corporate-vehicles/${id}`, {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) return deleteCorporateVehicle({ id, refreshAccessToken, logout });
+      await logout();
+      throw new Error('Sesión expirada');
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error deleting corporate vehicle:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al eliminar el vehículo corporativo',
+    };
+  }
+};
+
+export const listCorporateVehiclesByCorpo = async ({
+  corpo_id,
+  refreshAccessToken,
+  logout,
+}: ListCorporateVehiclesByCorpoParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) throw new Error('Server URL not configured');
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) throw new Error('No authentication token found');
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/corporate-vehicles/corpo/${corpo_id}`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) return listCorporateVehiclesByCorpo({ corpo_id, refreshAccessToken, logout });
+      await logout();
+      throw new Error('Sesión expirada');
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error listing corporate vehicles:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al cargar vehículos corporativos',
+    };
+  }
+};
+
+export const listCorporateVehicleUses = async ({
+  vehiculo_id,
+  refreshAccessToken,
+  logout,
+}: ListCorporateVehicleUsesParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) throw new Error('Server URL not configured');
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) throw new Error('No authentication token found');
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/corporate-vehicles/${vehiculo_id}/uses`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) return listCorporateVehicleUses({ vehiculo_id, refreshAccessToken, logout });
+      await logout();
+      throw new Error('Sesión expirada');
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error listing corporate vehicle uses:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al listar los usos del vehículo',
+      data: [],
+    };
+  }
+};
+
+export const createCorporateVehicleUse = async ({
+  vehiculo_id,
+  requestData,
+  refreshAccessToken,
+  logout,
+}: CreateCorporateVehicleUseParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) throw new Error('Server URL not configured');
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) throw new Error('No authentication token found');
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/corporate-vehicles/${vehiculo_id}/uses`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+      body: JSON.stringify(requestData),
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) return createCorporateVehicleUse({ vehiculo_id, requestData, refreshAccessToken, logout });
+      await logout();
+      throw new Error('Sesión expirada');
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error creating corporate vehicle use:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al crear el uso del vehículo',
+    };
+  }
+};
+
+export const updateCorporateVehicleUse = async ({
+  use_id,
+  requestData,
+  refreshAccessToken,
+  logout,
+}: UpdateCorporateVehicleUseParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) throw new Error('Server URL not configured');
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) throw new Error('No authentication token found');
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/corporate-vehicles/uses/${use_id}`, {
+      method: 'PUT',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+      body: JSON.stringify(requestData),
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) return updateCorporateVehicleUse({ use_id, requestData, refreshAccessToken, logout });
+      await logout();
+      throw new Error('Sesión expirada');
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error updating corporate vehicle use:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al actualizar el uso del vehículo',
+    };
+  }
+};
+
+export const deleteCorporateVehicleUse = async ({
+  use_id,
+  refreshAccessToken,
+  logout,
+}: DeleteCorporateVehicleUseParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) throw new Error('Server URL not configured');
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) throw new Error('No authentication token found');
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/corporate-vehicles/uses/${use_id}`, {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) return deleteCorporateVehicleUse({ use_id, refreshAccessToken, logout });
+      await logout();
+      throw new Error('Sesión expirada');
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error deleting corporate vehicle use:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al eliminar el uso del vehículo',
     };
   }
 };
@@ -2359,59 +2853,50 @@ export const listCleanersControlByCorpo = async ({
   }
 };
 
-interface CreatePhysicalMinuteAgendaParams {
+interface CreateAgendaMinutaParams {
   requestData: {
-    marca_id: number;
-    fecha: string | null;
-    puesto: string | null;
-    hora_inicio: string | null;
-    hora_fin: string | null;
-    elaborado_por: string | null;
-    minuta_numero: string | null;
-    presentes: string | null;
-    observaciones: string | null;
-    temas_tratados: string | null;
-    notas: string | null;
+    cliente_id: number;
+    corpo_id: number;
+    puesto_id: number;
+    numero: number;
+    titulo: string;
+    fecha: string; // dd/MM/yyyy o ISO
+    hora_inicio: string; // HH:mm
+    hora_fin: string; // HH:mm
+    autor: string;
+    participantes: string; // JSON string
+    acuerdos: string; // JSON string
+    observaciones: string;
+    firma_responsable: string;
   };
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }
 
-interface UpdatePhysicalMinuteAgendaParams {
-  id: string;
-  requestData: {
-    fecha?: string | null;
-    puesto?: string | null;
-    hora_inicio?: string | null;
-    hora_fin?: string | null;
-    elaborado_por?: string | null;
-    minuta_numero?: string | null;
-    presentes?: string | null;
-    observaciones?: string | null;
-    temas_tratados?: string | null;
-    notas?: string | null;
-  };
+interface UpdateAgendaMinutaParams {
+  id: string | number;
+  requestData: Partial<CreateAgendaMinutaParams['requestData']>;
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }
 
-interface DeletePhysicalMinuteAgendaParams {
-  id: string;
+interface DeleteAgendaMinutaParams {
+  id: string | number;
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }
 
-interface ListPhysicalMinuteAgendaByCorpoParams {
+interface ListAgendaMinutaByCorpoParams {
   corpo_id: string;
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }
 
-export const createPhysicalMinuteAgenda = async ({
+export const createAgendaMinuta = async ({
   requestData,
   refreshAccessToken,
   logout,
-}: CreatePhysicalMinuteAgendaParams): Promise<ApiResponse> => {
+}: CreateAgendaMinutaParams): Promise<ApiResponse> => {
   try {
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) {
@@ -2427,7 +2912,7 @@ export const createPhysicalMinuteAgenda = async ({
       token = await AsyncStorage.getItem('access_token');
     }
 
-    const response = await fetch(`${apiUrl}/api/physical-minute-agenda`, {
+    const response = await fetch(`${apiUrl}/api/agenda-minuta`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${token}`,
@@ -2440,7 +2925,7 @@ export const createPhysicalMinuteAgenda = async ({
     if (response.status === 401 || response.status === 403) {
       const refreshed = await refreshAccessToken();
       if (refreshed) {
-        return createPhysicalMinuteAgenda({ requestData, refreshAccessToken, logout });
+        return createAgendaMinuta({ requestData, refreshAccessToken, logout });
       } else {
         await logout();
         throw new Error('Sesión expirada');
@@ -2455,20 +2940,20 @@ export const createPhysicalMinuteAgenda = async ({
     const data: ApiResponse = await response.json();
     return data;
   } catch (error) {
-    console.error('Error creating physical minute agenda:', error);
+    console.error('Error creating agenda minuta:', error);
     return {
       status: false,
-      message: error instanceof Error ? error.message : 'Error al crear la agenda minuta física',
+      message: error instanceof Error ? error.message : 'Error al crear la agenda minuta',
     };
   }
 };
 
-export const updatePhysicalMinuteAgenda = async ({
+export const updateAgendaMinuta = async ({
   id,
   requestData,
   refreshAccessToken,
   logout,
-}: UpdatePhysicalMinuteAgendaParams): Promise<ApiResponse> => {
+}: UpdateAgendaMinutaParams): Promise<ApiResponse> => {
   try {
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) {
@@ -2484,7 +2969,7 @@ export const updatePhysicalMinuteAgenda = async ({
       token = await AsyncStorage.getItem('access_token');
     }
 
-    const response = await fetch(`${apiUrl}/api/physical-minute-agenda/${id}`, {
+    const response = await fetch(`${apiUrl}/api/agenda-minuta/${id}`, {
       method: 'PUT',
       headers: {
         'Authorization': `Bearer ${token}`,
@@ -2497,7 +2982,7 @@ export const updatePhysicalMinuteAgenda = async ({
     if (response.status === 401 || response.status === 403) {
       const refreshed = await refreshAccessToken();
       if (refreshed) {
-        return updatePhysicalMinuteAgenda({ id, requestData, refreshAccessToken, logout });
+        return updateAgendaMinuta({ id, requestData, refreshAccessToken, logout });
       } else {
         await logout();
         throw new Error('Sesión expirada');
@@ -2512,19 +2997,19 @@ export const updatePhysicalMinuteAgenda = async ({
     const data: ApiResponse = await response.json();
     return data;
   } catch (error) {
-    console.error('Error updating physical minute agenda:', error);
+    console.error('Error updating agenda minuta:', error);
     return {
       status: false,
-      message: error instanceof Error ? error.message : 'Error al actualizar la agenda minuta física',
+      message: error instanceof Error ? error.message : 'Error al actualizar la agenda minuta',
     };
   }
 };
 
-export const deletePhysicalMinuteAgenda = async ({
+export const deleteAgendaMinuta = async ({
   id,
   refreshAccessToken,
   logout,
-}: DeletePhysicalMinuteAgendaParams): Promise<ApiResponse> => {
+}: DeleteAgendaMinutaParams): Promise<ApiResponse> => {
   try {
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) {
@@ -2540,7 +3025,7 @@ export const deletePhysicalMinuteAgenda = async ({
       token = await AsyncStorage.getItem('access_token');
     }
 
-    const response = await fetch(`${apiUrl}/api/physical-minute-agenda/${id}`, {
+    const response = await fetch(`${apiUrl}/api/agenda-minuta/${id}`, {
       method: 'DELETE',
       headers: {
         'Authorization': `Bearer ${token}`,
@@ -2552,7 +3037,7 @@ export const deletePhysicalMinuteAgenda = async ({
     if (response.status === 401 || response.status === 403) {
       const refreshed = await refreshAccessToken();
       if (refreshed) {
-        return deletePhysicalMinuteAgenda({ id, refreshAccessToken, logout });
+        return deleteAgendaMinuta({ id, refreshAccessToken, logout });
       } else {
         await logout();
         throw new Error('Sesión expirada');
@@ -2567,19 +3052,19 @@ export const deletePhysicalMinuteAgenda = async ({
     const data: ApiResponse = await response.json();
     return data;
   } catch (error) {
-    console.error('Error deleting physical minute agenda:', error);
+    console.error('Error deleting agenda minuta:', error);
     return {
       status: false,
-      message: error instanceof Error ? error.message : 'Error al eliminar la agenda minuta física',
+      message: error instanceof Error ? error.message : 'Error al eliminar la agenda minuta',
     };
   }
 };
 
-export const listPhysicalMinuteAgendaByCorpo = async ({
+export const listAgendaMinutaByCorpo = async ({
   corpo_id,
   refreshAccessToken,
   logout,
-}: ListPhysicalMinuteAgendaByCorpoParams): Promise<ApiResponse> => {
+}: ListAgendaMinutaByCorpoParams): Promise<ApiResponse> => {
   try {
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) {
@@ -2595,7 +3080,7 @@ export const listPhysicalMinuteAgendaByCorpo = async ({
       token = await AsyncStorage.getItem('access_token');
     }
 
-    const response = await fetch(`${apiUrl}/api/physical-minute-agenda/corpo/${corpo_id}`, {
+    const response = await fetch(`${apiUrl}/api/agenda-minuta/corpo/${corpo_id}`, {
       method: 'GET',
       headers: {
         'Authorization': `Bearer ${token}`,
@@ -2607,7 +3092,7 @@ export const listPhysicalMinuteAgendaByCorpo = async ({
     if (response.status === 401 || response.status === 403) {
       const refreshed = await refreshAccessToken();
       if (refreshed) {
-        return listPhysicalMinuteAgendaByCorpo({ corpo_id, refreshAccessToken, logout });
+        return listAgendaMinutaByCorpo({ corpo_id, refreshAccessToken, logout });
       } else {
         await logout();
         throw new Error('Sesión expirada');
@@ -2622,14 +3107,20 @@ export const listPhysicalMinuteAgendaByCorpo = async ({
     const data: ApiResponse = await response.json();
     return data;
   } catch (error) {
-    console.error('Error listing physical minute agenda:', error);
+    console.error('Error listing agenda minuta:', error);
     return {
       status: false,
-      message: error instanceof Error ? error.message : 'Error al listar las agendas minuta física',
+      message: error instanceof Error ? error.message : 'Error al listar las agendas minuta',
       data: [],
     };
   }
 };
+
+// Backwards-compatible aliases (antes: agenda minuta física)
+export const createPhysicalMinuteAgenda = createAgendaMinuta as any;
+export const updatePhysicalMinuteAgenda = updateAgendaMinuta as any;
+export const deletePhysicalMinuteAgenda = deleteAgendaMinuta as any;
+export const listPhysicalMinuteAgendaByCorpo = listAgendaMinutaByCorpo as any;
 
 interface CreateActionPlanParams {
   requestData: {

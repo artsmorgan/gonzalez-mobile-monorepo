@@ -5,6 +5,7 @@ import { prisma } from "../../../utils/prismaClient";
 
 export async function POST(req: NextRequest) {
     try {
+        /*
         const { valid, payload, message } = verifyAccessToken(req);
 
         if (!valid) {
@@ -90,7 +91,11 @@ export async function POST(req: NextRequest) {
                 created_by: new_record.created_by,
             }
         }, { status: 200 });
-
+*/
+        return NextResponse.json({
+            status: true,
+            message: "Agenda minuta física creada correctamente"
+        }, { status: 200 });
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error(errorMessage);

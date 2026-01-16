@@ -58,6 +58,7 @@ import EmployeeSatisfactionScreen from './screens/EmployeeSatisfactionScreen';
 import VehicleMaintenanceScreen from './screens/VehicleMaintenanceScreen';
 import NonConformingProductScreen from './screens/NonConformingProductScreen';
 import ComplaintsMasterScreen from './screens/ComplaintsMasterScreen';
+import CorporateVehiclesScreen from './screens/CorporateVehiclesScreen';
 import CleanersControlScreen from './screens/CleanersControlScreen';
 import PhysicalMinuteAgendaScreen from './screens/PhysicalMinuteAgendaScreen';
 import ActionPlanScreen from './screens/ActionPlanScreen';
@@ -104,6 +105,8 @@ import BitacoraVehiculosDetenidosScreen from './screens/BitacoraVehiculosDetenid
 import LlavesScreen from './screens/LlavesScreen';
 import DocumentosEntregadosScreen from './screens/DocumentosEntregadosScreen';
 import ApreciacionVulnerabilidadScreen from './screens/ApreciacionVulnerabilidadScreen';
+import MutuosAcuerdosScreen from './screens/MutuosAcuerdosScreen';
+import EntregaPuestosScreen from './screens/EntregaPuestosScreen';
 import { createStaffEvaluation, deleteStaffEvaluation } from './hooks/staffEvaluationsFunctions';
 
 export type RootStackParamList = {
@@ -136,6 +139,7 @@ export type RootStackParamList = {
   Visitors: undefined;
   Evaluations: undefined;
   Incidents: undefined;
+  MutuosAcuerdos: undefined;
   Notifications: undefined;
   Surveys: undefined;
   Trainings: undefined;
@@ -148,6 +152,7 @@ export type RootStackParamList = {
   VehicleMaintenance: undefined;
   NonConformingProduct: undefined;
   ComplaintsMaster: undefined;
+  CorporateVehicles: undefined;
   CleanersControl: undefined;
   PhysicalMinuteAgenda: undefined;
   ActionPlan: undefined;
@@ -182,10 +187,26 @@ export type RootStackParamList = {
   CommunicationPlanRequirements: undefined;
   JobManuals: undefined;
   StaffEvaluations: undefined;
-  BitacoraVehiculosDetenidos: undefined;
+  BitacoraVehiculosDetenidos:
+    | undefined
+    | {
+        prefill?: {
+          empresa_id?: number;
+          cliente_id: number;
+          division_id?: number;
+          contrato_id?: number;
+          sucursal_id: number;
+          vehiculo_id: number;
+          uso_id: number;
+          vehiculo_tipo?: string;
+          vehiculo_placa?: string;
+        };
+        returnTo?: keyof RootStackParamList;
+      };
   Llaves: undefined;
   DocumentosEntregados: undefined;
   ApreciacionVulnerabilidad: undefined;
+  EntregaPuestos: undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -217,6 +238,7 @@ function RootNavigator() {
       <Stack.Screen name="Visitors" component={VisitorsScreen} />
       <Stack.Screen name="Evaluations" component={EvaluationsScreen} />
       <Stack.Screen name="Incidents" component={IncidentsScreen} />
+      <Stack.Screen name="MutuosAcuerdos" component={MutuosAcuerdosScreen} />
       <Stack.Screen name="Notifications" component={NotificationsScreen} />
       {/* <Stack.Screen name="Surveys" component={SurveysScreen} /> */}
       <Stack.Screen name="Trainings" component={TrainingsScreen} />
@@ -229,6 +251,7 @@ function RootNavigator() {
       <Stack.Screen name="VehicleMaintenance" component={VehicleMaintenanceScreen} />
       <Stack.Screen name="NonConformingProduct" component={NonConformingProductScreen} />
       <Stack.Screen name="ComplaintsMaster" component={ComplaintsMasterScreen} />
+      <Stack.Screen name="CorporateVehicles" component={CorporateVehiclesScreen} />
       <Stack.Screen name="CleanersControl" component={CleanersControlScreen} />
       <Stack.Screen name="PhysicalMinuteAgenda" component={PhysicalMinuteAgendaScreen} />
       <Stack.Screen name="ActionPlan" component={ActionPlanScreen} />
@@ -267,6 +290,7 @@ function RootNavigator() {
       <Stack.Screen name="Llaves" component={LlavesScreen} />
       <Stack.Screen name="DocumentosEntregados" component={DocumentosEntregadosScreen} />
       <Stack.Screen name="ApreciacionVulnerabilidad" component={ApreciacionVulnerabilidadScreen} />
+      <Stack.Screen name="EntregaPuestos" component={EntregaPuestosScreen} />
     </Stack.Navigator>
   );
 }
@@ -336,6 +360,7 @@ function AppContent() {
           checkSurveysActionsCache(),
           checkTrainingsActionsCache(),
           checkIncidentsActionsCache(),
+          checkMutuosAcuerdosActionsCache(),
           checkIncidentContributionsActionsCache(),
           checkVoiceNotesActionsCache(),
           checkStaffEvaluationsActionsCache(),
@@ -1447,6 +1472,97 @@ function AppContent() {
                 await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
               }
             }
+          } else if (action.type === 'corporate_vehicle') {
+            console.log('Creando vehículo corporativo:', action.id);
+            const { createCorporateVehicle } = await import('@/hooks/evaluationFunctions');
+            const result = await createCorporateVehicle({
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
+
+            if (result.status) {
+              console.log('Vehículo corporativo creado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'corporate_vehicle'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if (item.id_local === action.id && item.type === 'corporate_vehicle') {
+                    return {
+                      ...item,
+                      synced: true,
+                      id: result.data?.id || item.id,
+                      images: result.data?.images || item.images || [],
+                    };
+                  }
+                  return item;
+                });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'corporate_vehicle_use') {
+            console.log('Creando uso de vehículo corporativo:', action.id);
+            const { createCorporateVehicleUse } = await import('@/hooks/evaluationFunctions');
+
+            const payload = action.payload || {};
+            const vehiculoIdRaw = payload.vehiculo_id;
+            let vehiculoId = typeof vehiculoIdRaw === 'number' ? vehiculoIdRaw : Number(vehiculoIdRaw || 0);
+
+            // Si el vehículo es local, intentamos resolverlo desde cache
+            if (!vehiculoId || String(vehiculoIdRaw || '').startsWith('local-')) {
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              const cache = cacheStr ? JSON.parse(cacheStr) : [];
+              const found = cache.find(
+                (item: any) => item.type === 'corporate_vehicle' && String(item.id_local) === String(vehiculoIdRaw) && typeof item.id === 'number'
+              );
+              if (!found?.id) {
+                // Aún no se ha sincronizado el vehículo; dejamos esta acción para el siguiente ciclo
+                continue;
+              }
+              vehiculoId = Number(found.id);
+            }
+
+            // requestData sin vehiculo_id
+            const { vehiculo_id: _ignore, ...requestData } = payload;
+            const result = await createCorporateVehicleUse({
+              vehiculo_id: String(vehiculoId),
+              requestData,
+              refreshAccessToken,
+              logout,
+            });
+
+            if (result.status) {
+              const updatedActions = actions.filter(
+                (a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'corporate_vehicle_use')
+              );
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+              // Actualizar cache: marcar uso como sincronizado + reemplazar id_local -> id
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if (item.type !== 'corporate_vehicle') return item;
+                  const matchVehicle =
+                    (typeof item.id === 'number' && Number(item.id) === Number(vehiculoId)) ||
+                    String(item.id_local) === String(vehiculoIdRaw);
+                  if (!matchVehicle) return item;
+
+                  const usos = Array.isArray(item.usos) ? item.usos : [];
+                  const newUsos = usos.map((u: any) => {
+                    if (String(u.id) === String(action.id) || String(u.id_local) === String(action.id)) {
+                      return { ...u, ...result.data, id: result.data?.id || u.id, synced: true };
+                    }
+                    return u;
+                  });
+                  return { ...item, usos: newUsos };
+                });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
           } else if (action.type === 'complaints_master') {
             console.log('Creando queja:', action.id);
             const { createComplaintsMaster } = await import('@/hooks/evaluationFunctions');
@@ -1504,26 +1620,26 @@ function AppContent() {
                 await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
               }
             }
-          } else if (action.type === 'physical_minute_agenda') {
-            console.log('Creando agenda minuta física:', action.id);
-            const { createPhysicalMinuteAgenda } = await import('@/hooks/evaluationFunctions');
-            const result = await createPhysicalMinuteAgenda({
+          } else if (action.type === 'agenda_minuta' || action.type === 'physical_minute_agenda') {
+            console.log('Creando agenda minuta:', action.id);
+            const { createAgendaMinuta } = await import('@/hooks/evaluationFunctions');
+            const result = await createAgendaMinuta({
               requestData: action.payload,
               refreshAccessToken,
               logout,
             });
 
             if (result.status) {
-              console.log('Agenda minuta física creada correctamente');
-              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'physical_minute_agenda'));
+              console.log('Agenda minuta creada correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && (a.type === 'agenda_minuta' || a.type === 'physical_minute_agenda')));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
                 const cache = JSON.parse(cacheStr);
                 const updatedCache = cache.map((item: any) => {
-                  if (item.id_local === action.id && item.type === 'physical_minute_agenda') {
-                    return { ...item, synced: true, id: result.data?.id || item.id };
+                  if (item.id_local === action.id && (item.type === 'agenda_minuta' || item.type === 'physical_minute_agenda')) {
+                    return { ...item, synced: true, id: result.data?.id || item.id, type: 'agenda_minuta' };
                   }
                   return item;
                 });
@@ -2323,7 +2439,7 @@ function AppContent() {
             if (result.status) {
               console.log('Evaluación creada correctamente');
               // Eliminar acción del array
-              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && (!a.type || (a.type !== 'mileage_control' && a.type !== 'uniform_request' && a.type !== 'routes_and_tours' && a.type !== 'employee_satisfaction' && a.type !== 'vehicle_maintenance' && a.type !== 'non_conforming_product' && a.type !== 'complaints_master' && a.type !== 'cleaners_control' && a.type !== 'physical_minute_agenda' && a.type !== 'action_plan' && a.type !== 'work_role' && a.type !== 'contract_basic_data' && a.type !== 'delivery_schedule' && a.type !== 'environmental_management_plan' && a.type !== 'cleaning_work_plan' && a.type !== 'special_situations_plan' && a.type !== 'cleaning_tasks_activities' && a.type !== 'risk_matrix' && a.type !== 'opportunity_matrix' && a.type !== 'process_indicator_matrix' && a.type !== 'monthly_work_role' && a.type !== 'permit_request' && a.type !== 'attendance_control' && a.type !== 'opening_closing_position' && a.type !== 'acta_entrega_producto' && a.type !== 'induction_tour_record' && a.type !== 'supervision_report' && a.type !== 'electric_brush_guide'))));
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && (!a.type || (a.type !== 'mileage_control' && a.type !== 'uniform_request' && a.type !== 'routes_and_tours' && a.type !== 'employee_satisfaction' && a.type !== 'vehicle_maintenance' && a.type !== 'non_conforming_product' && a.type !== 'complaints_master' && a.type !== 'cleaners_control' && a.type !== 'physical_minute_agenda' && a.type !== 'agenda_minuta' && a.type !== 'action_plan' && a.type !== 'work_role' && a.type !== 'contract_basic_data' && a.type !== 'delivery_schedule' && a.type !== 'environmental_management_plan' && a.type !== 'cleaning_work_plan' && a.type !== 'special_situations_plan' && a.type !== 'cleaning_tasks_activities' && a.type !== 'risk_matrix' && a.type !== 'opportunity_matrix' && a.type !== 'process_indicator_matrix' && a.type !== 'monthly_work_role' && a.type !== 'permit_request' && a.type !== 'attendance_control' && a.type !== 'opening_closing_position' && a.type !== 'acta_entrega_producto' && a.type !== 'induction_tour_record' && a.type !== 'supervision_report' && a.type !== 'electric_brush_guide'))));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
             }
           }
@@ -2449,6 +2565,99 @@ function AppContent() {
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'non_conforming_product'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
             }
+          } else if (action.type === 'corporate_vehicle') {
+            console.log('Actualizando vehículo corporativo:', action.id);
+            const { updateCorporateVehicle } = await import('@/hooks/evaluationFunctions');
+            const result = await updateCorporateVehicle({
+              id: action.id,
+              requestData: action.payload,
+              refreshAccessToken,
+              logout,
+            });
+
+            if (result.status) {
+              console.log('Vehículo corporativo actualizado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'corporate_vehicle'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if (item.type !== 'corporate_vehicle') return item;
+                  if (String(item.id) === String(action.id) || String(item.id_local) === String(action.id)) {
+                    return {
+                      ...item,
+                      ...action.payload,
+                      synced: true,
+                      images: result.data?.images || item.images || [],
+                    };
+                  }
+                  return item;
+                });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'corporate_vehicle_use') {
+            console.log('Actualizando uso de vehículo corporativo:', action.id);
+            const { updateCorporateVehicleUse } = await import('@/hooks/evaluationFunctions');
+
+            let useId: string | number = action.id;
+            const isLocalUse = String(useId).startsWith('local-');
+            const payload = action.payload || {};
+
+            // Si el uso es local, intentamos mapearlo al ID real usando el cache
+            if (isLocalUse) {
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              const cache = cacheStr ? JSON.parse(cacheStr) : [];
+              let foundServerUseId: number | null = null;
+              for (const item of cache) {
+                if (item.type !== 'corporate_vehicle') continue;
+                const usos = Array.isArray(item.usos) ? item.usos : [];
+                const foundUse = usos.find((u: any) => String(u.id_local) === String(useId) && typeof u.id === 'number');
+                if (foundUse?.id) {
+                  foundServerUseId = Number(foundUse.id);
+                  break;
+                }
+              }
+              if (!foundServerUseId) {
+                // Aún no se ha sincronizado el create de este uso; lo dejamos para el siguiente ciclo
+                continue;
+              }
+              useId = String(foundServerUseId);
+            }
+
+            const { vehiculo_id: _ignore, ...requestData } = payload;
+            const result = await updateCorporateVehicleUse({
+              use_id: String(useId),
+              requestData,
+              refreshAccessToken,
+              logout,
+            });
+
+            if (result.status) {
+              const updatedActions = actions.filter(
+                (a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'corporate_vehicle_use')
+              );
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+              // Actualizar cache: aplicar cambios al uso y marcar como synced
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if (item.type !== 'corporate_vehicle') return item;
+                  const usos = Array.isArray(item.usos) ? item.usos : [];
+                  const newUsos = usos.map((u: any) => {
+                    const matches = String(u.id) === String(useId) || String(u.id_local) === String(action.id);
+                    if (!matches) return u;
+                    return { ...u, ...payload, id: u.id, synced: true };
+                  });
+                  return { ...item, usos: newUsos };
+                });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
           } else if (action.type === 'complaints_master') {
             console.log('Actualizando queja:', action.id);
             const { updateComplaintsMaster } = await import('@/hooks/evaluationFunctions');
@@ -2479,19 +2688,19 @@ function AppContent() {
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'cleaners_control'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
             }
-          } else if (action.type === 'physical_minute_agenda') {
-            console.log('Actualizando agenda minuta física:', action.id);
-            const { updatePhysicalMinuteAgenda } = await import('@/hooks/evaluationFunctions');
-            const result = await updatePhysicalMinuteAgenda({
-              id: action.id,
+          } else if (action.type === 'agenda_minuta' || action.type === 'physical_minute_agenda') {
+            console.log('Actualizando agenda minuta:', action.id);
+            const { updateAgendaMinuta } = await import('@/hooks/evaluationFunctions');
+            const result = await updateAgendaMinuta({
+              id: action.remote_id || action.id,
               requestData: action.payload,
               refreshAccessToken,
               logout,
             });
 
             if (result.status) {
-              console.log('Agenda minuta física actualizada correctamente');
-              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'physical_minute_agenda'));
+              console.log('Agenda minuta actualizada correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && (a.type === 'agenda_minuta' || a.type === 'physical_minute_agenda')));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
             }
           } else if (action.type === 'action_plan') {
@@ -3097,6 +3306,84 @@ function AppContent() {
                 await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
               }
             }
+          } else if (action.type === 'corporate_vehicle') {
+            console.log('Eliminando vehículo corporativo:', action.id);
+            const { deleteCorporateVehicle } = await import('@/hooks/evaluationFunctions');
+            const result = await deleteCorporateVehicle({
+              id: action.id,
+              refreshAccessToken,
+              logout,
+            });
+
+            if (result.status) {
+              console.log('Vehículo corporativo eliminado correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'corporate_vehicle'));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.filter((item: any) => !(item.type === 'corporate_vehicle' && (String(item.id) === String(action.id) || String(item.id_local) === String(action.id))));
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
+          } else if (action.type === 'corporate_vehicle_use') {
+            console.log('Eliminando uso de vehículo corporativo:', action.id);
+            const { deleteCorporateVehicleUse } = await import('@/hooks/evaluationFunctions');
+
+            let useId: string | number = action.id;
+            const isLocalUse = String(useId).startsWith('local-');
+            const payload = action.payload || {};
+
+            // Si es local y nunca se sincronizó, no llamamos al server: solo limpiamos cache + acciones
+            if (isLocalUse) {
+              const updatedActions = actions.filter(
+                (a: any) =>
+                  !(
+                    (a.id === action.id && a.action === 'delete' && a.type === 'corporate_vehicle_use') ||
+                    (a.id === action.id && a.type === 'corporate_vehicle_use') // limpia create/update del mismo uso local
+                  )
+              );
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if (item.type !== 'corporate_vehicle') return item;
+                  const usos = Array.isArray(item.usos) ? item.usos : [];
+                  return { ...item, usos: usos.filter((u: any) => String(u.id) !== String(useId) && String(u.id_local) !== String(useId)) };
+                });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+              continue;
+            }
+
+            // Si no es local, intentamos eliminar en server
+            const result = await deleteCorporateVehicleUse({
+              use_id: String(useId),
+              refreshAccessToken,
+              logout,
+            });
+
+            if (result.status) {
+              const updatedActions = actions.filter(
+                (a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'corporate_vehicle_use')
+              );
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+              // Actualizar cache: remover uso
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if (item.type !== 'corporate_vehicle') return item;
+                  const usos = Array.isArray(item.usos) ? item.usos : [];
+                  return { ...item, usos: usos.filter((u: any) => String(u.id) !== String(useId)) };
+                });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            }
           } else if (action.type === 'complaints_master') {
             console.log('Eliminando queja:', action.id);
             const { deleteComplaintsMaster } = await import('@/hooks/evaluationFunctions');
@@ -3139,18 +3426,18 @@ function AppContent() {
                 await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
               }
             }
-          } else if (action.type === 'physical_minute_agenda') {
-            console.log('Eliminando agenda minuta física:', action.id);
-            const { deletePhysicalMinuteAgenda } = await import('@/hooks/evaluationFunctions');
-            const result = await deletePhysicalMinuteAgenda({
-              id: action.id,
+          } else if (action.type === 'agenda_minuta' || action.type === 'physical_minute_agenda') {
+            console.log('Eliminando agenda minuta:', action.id);
+            const { deleteAgendaMinuta } = await import('@/hooks/evaluationFunctions');
+            const result = await deleteAgendaMinuta({
+              id: action.remote_id || action.id,
               refreshAccessToken,
               logout,
             });
 
             if (result.status) {
-              console.log('Agenda minuta física eliminada correctamente');
-              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'physical_minute_agenda'));
+              console.log('Agenda minuta eliminada correctamente');
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && (a.type === 'agenda_minuta' || a.type === 'physical_minute_agenda')));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
@@ -4038,6 +4325,114 @@ function AppContent() {
         }
       } catch (error) {
         console.error('Error procesando acción de incidente:', error);
+      }
+    }
+  }
+
+  const checkMutuosAcuerdosActionsCache = async () => {
+    if (!employee) return;
+
+    const actionsStr = await AsyncStorage.getItem('mutuos_acuerdos_actions');
+    if (!actionsStr) return;
+
+    const actions = JSON.parse(actionsStr);
+    if (!actions || actions.length === 0) return;
+
+    console.log('Sincronizando acciones de mutuos acuerdos:', actions.length);
+
+    for (const action of actions) {
+      try {
+        if (action.type === 'create') {
+          const { createMutuoAcuerdo } = await import('@/hooks/mutuosAcuerdosFunctions');
+          const result = await createMutuoAcuerdo({
+            requestData: action.requestData,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result?.status) {
+            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'create'));
+            await AsyncStorage.setItem('mutuos_acuerdos_actions', JSON.stringify(updatedActions));
+
+            const newId = (result as any)?.data?.id;
+            if (newId) {
+              const cacheStr = await AsyncStorage.getItem('mutuos_acuerdos_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = Array.isArray(cache)
+                  ? cache.map((r: any) => {
+                      if (r?.id_local && r.id_local === action.id) {
+                        return {
+                          ...(result as any).data,
+                          id: newId,
+                          id_local: '',
+                          synced: true,
+                        };
+                      }
+                      return r;
+                    })
+                  : cache;
+                await AsyncStorage.setItem('mutuos_acuerdos_cache', JSON.stringify(updatedCache));
+              }
+            }
+          }
+        } else if (action.type === 'update') {
+          const { updateMutuoAcuerdo } = await import('@/hooks/mutuosAcuerdosFunctions');
+          const result = await updateMutuoAcuerdo({
+            id: action.id,
+            requestData: action.requestData,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result?.status) {
+            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'update'));
+            await AsyncStorage.setItem('mutuos_acuerdos_actions', JSON.stringify(updatedActions));
+          }
+        } else if (action.type === 'delete') {
+          const { deleteMutuoAcuerdo } = await import('@/hooks/mutuosAcuerdosFunctions');
+          const result = await deleteMutuoAcuerdo({
+            id: action.id,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result?.status) {
+            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'delete'));
+            await AsyncStorage.setItem('mutuos_acuerdos_actions', JSON.stringify(updatedActions));
+
+            const cacheStr = await AsyncStorage.getItem('mutuos_acuerdos_cache');
+            if (cacheStr) {
+              const cache = JSON.parse(cacheStr);
+              const updatedCache = Array.isArray(cache) ? cache.filter((r: any) => r?.id !== action.id) : cache;
+              await AsyncStorage.setItem('mutuos_acuerdos_cache', JSON.stringify(updatedCache));
+            }
+          }
+        } else if (action.type === 'sign') {
+          const { signMutuoAcuerdoEjecutivo } = await import('@/hooks/mutuosAcuerdosFunctions');
+          const result = await signMutuoAcuerdoEjecutivo({
+            id: action.id,
+            firma_ejecutivo_cuenta: action.firma_ejecutivo_cuenta,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result?.status) {
+            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'sign'));
+            await AsyncStorage.setItem('mutuos_acuerdos_actions', JSON.stringify(updatedActions));
+
+            const cacheStr = await AsyncStorage.getItem('mutuos_acuerdos_cache');
+            if (cacheStr) {
+              const cache = JSON.parse(cacheStr);
+              const updatedCache = Array.isArray(cache)
+                ? cache.map((r: any) => (r?.id === action.id ? { ...r, firma_ejecutivo_cuenta: action.firma_ejecutivo_cuenta, synced: true } : r))
+                : cache;
+              await AsyncStorage.setItem('mutuos_acuerdos_cache', JSON.stringify(updatedCache));
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error procesando acción de mutuos acuerdos:', error);
       }
     }
   }

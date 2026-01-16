@@ -46,7 +46,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
         const notas = await prisma.c_puesto_notas.findMany({ where: { puesto_id: puesto.id } });
 
-        const notas_return: { id: number, titulo: string, description: string, categoria_id: number | null, puesto_id: number, empleado: string, created_at: Date, updated_at: Date, id_local: string }[] = [];
+        const notas_return: { id: number, titulo: string, description: string, categoria_id: number | null, relevancia: string | null, puesto_id: number, empleado: string, created_at: Date, updated_at: Date, id_local: string }[] = [];
 
         for (const nota of notas) {
 
@@ -64,6 +64,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                 titulo: nota.titulo,
                 description: nota.description,
                 categoria_id: nota.categoria_id ?? null,
+                relevancia: nota.relevancia ?? null,
                 empleado: empleado_name,
                 puesto_id: nota.puesto_id,
                 created_at: nota.created_at,
@@ -92,7 +93,7 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
         const resolvedParams = await context.params;
         const id = parseInt(resolvedParams.id);
 
-        const { marca_id, empleado_id, titulo, description, categoria_id, puestos } = await req.json();
+        const { marca_id, empleado_id, titulo, description, categoria_id, relevancia, puestos } = await req.json();
 
         const created_at = toZonedTime(new Date(), "America/Costa_Rica");
         const updated_at = toZonedTime(new Date(), "America/Costa_Rica");
@@ -102,6 +103,9 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
 
         const puestos_parse: number[] = JSON.parse(puestos);
 
+        // Si relevancia no viene o es null, usar "Baja" por defecto
+        const relevanciaValue = relevancia || 'Baja';
+
         for (const puesto_id of puestos_parse) {
             const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: puesto_id } });
             if (!puesto) return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
@@ -109,9 +113,9 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
             const empleado = await prisma.c_empleado.findUnique({ where: { id: empleado_id } });
             if (!empleado) return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 200 });
 
-            const newNote = await prisma.c_puesto_notas.create({ data: { titulo, description, categoria_id: categoria_id, puesto_id, created_at, updated_at } });
+            const newNote = await prisma.c_puesto_notas.create({ data: { titulo, description, categoria_id: categoria_id, relevancia: relevanciaValue, puesto_id, created_at, updated_at } });
 
-            const bitacora = await prisma.c_puesto_notas_bitacora_cambios.create({ data: { nota_id: newNote.id, titulo, description, created_at, empleado_id, categoria: categoriaData.nombre } });
+            const bitacora = await prisma.c_puesto_notas_bitacora_cambios.create({ data: { nota_id: newNote.id, titulo, description, relevancia: relevanciaValue, created_at, empleado_id, categoria: categoriaData.nombre } });
 
             if (bitacora) {
                 const plazaIds = await prisma.e_estructura_plazas.findMany({ where: { puesto_id: puesto.id } });
