@@ -28,7 +28,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
         const changes = await prisma.c_puesto_notas_bitacora_cambios.findMany({ where: { nota_id: id_nota } });
 
-        const changes_return: { id: number, nota_id: number, empleado: string, titulo: string, description: string, categoria: string, created_at: Date }[] = [];
+        const changes_return: { id: number, nota_id: number, empleado: string, titulo: string, description: string, categoria: string, relevancia: string | null, created_at: Date }[] = [];
         for (const change of changes) {
             const empleado = await prisma.c_empleado.findUnique({ where: { id: change.empleado_id } });
             if (!empleado) continue;
@@ -39,6 +39,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                 titulo: change.titulo,
                 description: change.description,
                 categoria: change.categoria,
+                relevancia: change.relevancia ?? null,
                 created_at: change.created_at,
             });
         }

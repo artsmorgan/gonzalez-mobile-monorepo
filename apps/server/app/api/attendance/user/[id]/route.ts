@@ -205,7 +205,8 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             },
             puesto: {
                 id: puesto.id,
-                nombre: puesto.nombre
+                nombre: puesto.nombre,
+                tiene_relevo: puesto.tiene_relevo ?? false
             },
             plaza: {
                 id: plaza.id,

@@ -842,6 +842,8 @@ model c_incidente {
   cliente_id                  Int
   empresa_id                  Int
   estado                      Boolean
+  created_at                  DateTime              @db.DateTime(0)
+  created_by                  Int
   c_archivos_incidente        c_archivos_incidente[]
   c_contribucion_incidente    c_contribucion_incidente[]
   n_clasificacion_incidente   n_clasificacion_incidente  @relation(fields: [clasificacion], references: [id], onDelete: NoAction)
@@ -1009,27 +1011,37 @@ model c_planificacion_mantenimiento_vehiculo {
   created_by         String?
 }
 
-model c_producto_no_conforme_matriz {
-  id                        String   @id @default(uuid())
-  empresa_id                String?
-  cliente_id                String?
-  contrato_id               String?
-  corpo_id                  String?
-  puesto_id                 String?
-  plaza_id                  String?
-  cliente                   String?
-  numero_corpo              String?
-  responsable_cuenta        String?
-  macroactividad            String?
-  actividad                 String?
-  tipo_servicio_no_conforme String?
-  tipo_registro             String?
-  responsable_registro      String?
-  acciones_seguir           String?  @db.LongText
-  responsable_corregir      String?  @db.LongText
-  responsable_aprobar       String?  @db.LongText
-  created_at                DateTime @default(now())
-  created_by                String?
+model c_producto_no_conforme {
+  id                              Int      @id @default(autoincrement())
+  cliente_id                      Int
+  corpo_id                        Int
+  fecha_identificacion            DateTime @db.Date
+  responsable_cuenta              String   @db.VarChar(50)
+  tipo_servicio_no_conforme       String   @db.VarChar(50)
+  persona_identifico_pnc          String   @db.VarChar(255)
+  firma_persona_identifico_pnc    String   @db.LongText
+  descripcion                     String   @db.LongText
+  persona_origino_pnc             String   @db.VarChar(255)
+  firma_persona_origino_pnc       String   @db.LongText
+  accion_implementada             String   @db.LongText
+  fecha_solucion                  DateTime @db.Date
+  responsable_aprobar             String   @db.LongText
+  firma_responsable               String   @db.LongText
+  created_at                      DateTime @default(now())
+  created_by                      String
+  e_archivos_producto_no_conforme e_archivos_producto_no_conforme[]
+  e_estructura_cliente            e_estructura_cliente @relation(fields: [cliente_id], references: [id], onDelete: Cascade)
+  e_estructura_sucursal           e_estructura_sucursal @relation(fields: [corpo_id], references: [id], onDelete: Cascade)
+}
+
+model e_archivos_producto_no_conforme {
+  id               Int             @id @default(autoincrement())
+  name             String          @db.LongText
+  type             String          @db.VarChar(25)
+  extension        String          @db.VarChar(25)
+  pnc_id           Int
+  original_name    String          @db.LongText
+  c_producto_no_conforme  c_producto_no_conforme @relation(fields: [pnc_id], references: [id], onDelete: Cascade)
 }
 
 model c_acta_entre_producto {
@@ -1143,26 +1155,27 @@ model c_control_aseadores {
   created_by            String?
 }
 
-model c_agenda_minuta_fisica {
-  id             String   @id @default(uuid())
-  empresa_id     String?
-  cliente_id     String?
-  contrato_id    String?
-  corpo_id       String?
-  puesto_id      String?
-  plaza_id       String?
-  fecha          String?
-  puesto         String?
-  hora_inicio    String?
-  hora_fin       String?
-  elaborado_por  String?
-  minuta_numero  String?
-  presentes      String?  @db.LongText
-  observaciones  String?  @db.LongText
-  temas_tratados String?  @db.LongText
-  notas          String?  @db.LongText
-  created_at     DateTime @default(now())
-  created_by     String?
+model c_agenda_minuta {
+  id                    Int   @id @default(autoincrement())
+  cliente_id            Int
+  corpo_id              Int
+  puesto_id             Int
+  numero                Int
+  titulo                String   @db.VarChar(255)
+  fecha                 DateTime @db.Date
+  hora_inicio           DateTime @db.Time
+  hora_fin              DateTime @db.Time
+  autor                 String   @db.LongText
+  participantes         String   @db.LongText
+  acuerdos              String   @db.LongText
+  observaciones         String   @db.LongText
+  firma_responsable     String   @db.LongText
+  created_at            DateTime @default(now())
+  created_by            String
+
+  e_estructura_cliente e_estructura_cliente @relation(fields: [cliente_id], references: [id], onDelete: Cascade)
+  e_estructura_sucursal e_estructura_sucursal @relation(fields: [corpo_id], references: [id], onDelete: Cascade)
+  e_estructura_puesto e_estructura_puesto @relation(fields: [puesto_id], references: [id], onDelete: Cascade)
 }
 
 model c_plan_accion {
@@ -2565,6 +2578,7 @@ model c_bitacora_vehiculo_detenido {
   empresa_id            Int
   cliente_id            Int
   sucursal_id           Int
+  uso_id                Int?
   tipo                  String    @db.VarChar(52)
   informacion_general   String    @db.LongText
   informacion_revision  String    @db.LongText
@@ -2573,6 +2587,56 @@ model c_bitacora_vehiculo_detenido {
   firma_responsable     String    @db.LongText
   created_by            Int
   created_at            DateTime  @db.DateTime(0)
+}
+
+model c_vehiculos_corporativos {
+  id                    Int       @id @default(autoincrement())
+  cliente_id            Int
+  sucursal_id           Int
+  placa                 String    @db.VarChar(52)
+  tipo                  String    @db.VarChar(52)
+  kilometraje           Int
+  prox_cambio_aceite    Int
+  modelo                String    @db.VarChar(52)
+  anno                  Int
+  estado                String    @db.VarChar(25)
+  descripcion           String    @db.LongText
+  titulo_propiedad      Boolean   @default(true)
+  rtv                   Boolean   @default(true)
+  marchamo              Boolean   @default(true)
+  firma_responsable     String    @db.LongText
+  created_by            Int
+  created_at            DateTime  @db.DateTime(0)
+  c_imagenes_vehiculos_corporativos c_imagenes_vehiculos_corporativos[]
+  c_usos_vehiculos_corporativos c_usos_vehiculos_corporativos[]
+
+  e_estructura_cliente  e_estructura_cliente  @relation(fields: [cliente_id], references: [id], onDelete: Cascade)
+  e_estructura_sucursal e_estructura_sucursal @relation(fields: [sucursal_id], references: [id], onDelete: Cascade)
+}
+
+model c_imagenes_vehiculos_corporativos {
+  id                    Int                   @id @default(autoincrement())
+  name                  String                @db.LongText
+  vehiculo_id           Int
+  c_vehiculos_corporativos c_vehiculos_corporativos @relation(fields: [vehiculo_id], references: [id], onDelete: Cascade)
+}
+
+model c_usos_vehiculos_corporativos {
+  id                 Int              @id @default(autoincrement())
+  bitacora_id        Int?
+  vehiculo_id        Int
+  nombre_conductor   String     @db.VarChar(55)
+  fecha              DateTime   @db.DateTime
+  hora_inicio        DateTime   @db.Time
+  hora_fin           DateTime   @db.Time
+  combustible_inicio Int
+  combustible_fin    Int
+  km_inicio          Int
+  km_fin             Int
+  motivo             String     @db.LongText
+  firma_responsable  String     @db.LongText
+  
+  c_vehiculos_corporativos c_vehiculos_corporativos @relation(fields: [vehiculo_id], references: [id], onDelete: Cascade)
 }
 
 model consultor_actualizacion {
@@ -2678,6 +2742,7 @@ model d_empleado_otras_anotaciones {
 model c_puesto_notas {
   id                              Int                               @id @default(autoincrement())
   titulo                          String                            @db.VarChar(255)
+  relevancia                      String?                           @db.VarChar(16)
   description                     String                            @db.LongText
   categoria_id                    Int?
   puesto_id                       Int
@@ -2694,6 +2759,7 @@ model c_puesto_notas_bitacora_cambios {
   nota_id        Int
   empleado_id    Int
   titulo         String         @db.VarChar(255)
+  relevancia     String?        @db.VarChar(16)
   description    String         @db.LongText
   created_at     DateTime       @db.DateTime(0)
   categoria      String         @default("-")
@@ -2941,6 +3007,34 @@ model e_estructura_articulo_corpo_puesto_plan {
   @@index([articuloCP_id], map: "IDX_AAD537C4EDDDC6B")
 }
 
+model e_registro_entrega_puesto {
+  id                             Int      @id @default(autoincrement())
+  cliente_id                     Int
+  corpo_id                       Int
+  puesto_id                      Int
+  oficial_entrega                String   @db.VarChar(255)
+  fecha_entrada_entrega          DateTime @db.Date
+  fecha_salida_entrega           DateTime @db.Date
+  hora_entrada_entrega           DateTime @db.Time
+  hora_salida_entrega            DateTime @db.Time
+  turno_entrega                  String   @db.VarChar(55)
+  oficial_recibe                 String   @db.VarChar(255)
+  fecha_entrada_recibe           DateTime @db.Date
+  fecha_salida_recibe            DateTime @db.Date
+  hora_entrada_recibe            DateTime @db.Time
+  hora_salida_recibe             DateTime @db.Time
+  turno_recibe                   String   @db.VarChar(55)
+  articulos_puesto               String   @db.LongText
+  observaciones                  String   @db.LongText
+  firma_responsable              String   @db.LongText
+  created_at                     DateTime @db.DateTime(0)
+  created_by                     Int
+
+  e_estructura_cliente           e_estructura_cliente @relation(fields: [cliente_id], references: [id], onDelete: Cascade)
+  e_estructura_sucursal          e_estructura_sucursal @relation(fields: [corpo_id], references: [id], onDelete: Cascade)
+  e_estructura_puesto            e_estructura_puesto   @relation(fields: [puesto_id], references: [id], onDelete: Cascade)
+}
+
 model e_estructura_bitacora_acciones {
   id                     Int      @id @default(autoincrement())
   codigo_nombre          String   @db.VarChar(128)
@@ -2984,6 +3078,11 @@ model e_estructura_cliente {
   usuario_actualizacion        String?                        @db.VarChar(255)
   fecha_inactivacion           DateTime?                      @db.DateTime(0)
   usuario_inactivacion         String?                        @db.VarChar(255)
+  e_registro_entrega_puesto    e_registro_entrega_puesto[]
+  c_vehiculos_corporativos     c_vehiculos_corporativos[]
+  c_producto_no_conforme       c_producto_no_conforme[]
+  e_mutuos_acuerdos            e_mutuos_acuerdos[]
+  c_agenda_minuta              c_agenda_minuta[]
   c_registro_induccion_general c_registro_induccion_general[]
   c_apertura_cierre_puesto c_apertura_cierre_puesto[]
   c_boleta_apreciacion_vulnerabilidad c_boleta_apreciacion_vulnerabilidad[]
@@ -3215,6 +3314,25 @@ model e_estructura_horario_plaza_historial {
   @@index([plaza_id], map: "IDX_F4AAD92FEF34C0BD")
 }
 
+model e_mutuos_acuerdos {
+  id                              Int      @id @default(autoincrement())
+  cliente_id                      Int
+  corpo_id                        Int
+  ejecutivo_cuenta                Int   
+  fecha                           DateTime @db.Date
+  turno                           String   @db.VarChar(50)
+  informacion_oficial_interesado  String   @db.LongText
+  informacion_oficial_colaborador String   @db.LongText
+  motivo                          String   @db.LongText
+  firma_ejecutivo_cuenta          String   @db.LongText
+  firma_responsable               String   @db.LongText
+  created_at                      DateTime @db.DateTime
+  created_by                      Int
+  e_estructura_cliente            e_estructura_cliente @relation(fields: [cliente_id], references: [id], onDelete: NoAction)
+  e_estructura_sucursal           e_estructura_sucursal @relation(fields: [corpo_id], references: [id], onDelete: NoAction)
+  n_ejecutivo_cuenta              n_ejecutivo_cuenta @relation(fields: [ejecutivo_cuenta], references: [id], onDelete: NoAction)
+}
+
 model e_estructura_horariopuesto {
   id                             Int                              @id @default(autoincrement())
   titulo                         String                           @db.VarChar(100)
@@ -3331,6 +3449,8 @@ model e_estructura_puesto {
   fecha_inactivacion                         DateTime?                                    @db.DateTime(0)
   usuario_inactivacion                       String?                                      @db.VarChar(255)
   es_cubrevacaciones                         Boolean?
+  e_registro_entrega_puesto    e_registro_entrega_puesto[]
+  c_agenda_minuta              c_agenda_minuta[]
   c_apertura_cierre_puesto c_apertura_cierre_puesto[]
   c_boleta_apreciacion_vulnerabilidad c_boleta_apreciacion_vulnerabilidad[]
   c_empleado_plaza                           c_empleado_plaza[]
@@ -3465,6 +3585,11 @@ model e_estructura_sucursal {
   usuario_actualizacion                      String?                                      @db.VarChar(255)
   fecha_inactivacion                         DateTime?                                    @db.DateTime(0)
   usuario_inactivacion                       String?                                      @db.VarChar(255)
+  e_registro_entrega_puesto    e_registro_entrega_puesto[]
+  c_vehiculos_corporativos     c_vehiculos_corporativos[]
+  c_producto_no_conforme       c_producto_no_conforme[]
+  e_mutuos_acuerdos            e_mutuos_acuerdos[]
+  c_agenda_minuta              c_agenda_minuta[]
   c_registro_induccion_general c_registro_induccion_general[]
   c_apertura_cierre_puesto c_apertura_cierre_puesto[]
   c_boleta_apreciacion_vulnerabilidad c_boleta_apreciacion_vulnerabilidad[]
@@ -4306,6 +4431,7 @@ model n_educacion_universidad {
 model n_ejecutivo_cuenta {
   id                    Int                     @id @default(autoincrement())
   nombre                String                  @db.VarChar(64)
+  e_mutuos_acuerdos     e_mutuos_acuerdos[]
   c_empleado            c_empleado[]
   c_empleado_plaza      c_empleado_plaza[]
   c_incidente           c_incidente[]

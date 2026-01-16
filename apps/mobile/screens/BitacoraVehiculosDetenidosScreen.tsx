@@ -11,8 +11,9 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import type { RouteProp } from '@react-navigation/native';
 import { Picker } from '@react-native-picker/picker';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
@@ -21,6 +22,7 @@ import * as Network from 'expo-network';
 import * as Location from 'expo-location';
 import SignatureScreen from 'react-native-signature-canvas';
 import { jwtDecode } from 'jwt-decode';
+import Constants from 'expo-constants';
 
 import AppHeader from '@/components/AppHeader';
 import AppFooter from '@/components/AppFooter';
@@ -45,6 +47,8 @@ type Nav = NativeStackNavigationProp<RootStackParamList, 'BitacoraVehiculosDeten
 type TipoBitacora = 'Vehículo' | 'Bicicleta' | 'Motocicleta';
 type ReviewStatus = 'Bueno' | 'Malo' | 'No existe';
 type YesNo = 'Sí' | 'No';
+
+type MainStructureTree = any[];
 
 type MovimientoVehiculo = {
   movimiento: string;
@@ -390,8 +394,13 @@ const buildRevisionConfig = (tipo: TipoBitacora): RevisionEntry[] => {
 
 export default function BitacoraVehiculosDetenidosScreen() {
   const navigation = useNavigation<Nav>();
+  const route = useRoute<RouteProp<RootStackParamList, 'BitacoraVehiculosDetenidos'>>();
   const { employee, refreshAccessToken, logout } = useAuth();
   const { scanQR, QRScannerComponent } = useQRScanner();
+
+  const prefill = route.params?.prefill;
+  const returnTo = route.params?.returnTo;
+  const isPrefillMode = !!prefill;
 
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -415,6 +424,19 @@ export default function BitacoraVehiculosDetenidosScreen() {
   const [empresaNombre, setEmpresaNombre] = useState<string>('');
   const [clienteNombre, setClienteNombre] = useState<string>('');
   const [marcaId, setMarcaId] = useState<number | null>(null);
+
+  // estructura jerárquica (Empresa -> Cliente -> División -> Contrato -> Sucursal)
+  const [structure, setStructure] = useState<MainStructureTree>([]);
+  const [isStructureLoading, setIsStructureLoading] = useState(false);
+  const [selectedEmpresaId, setSelectedEmpresaId] = useState<number | null>(null);
+  const [selectedClienteId, setSelectedClienteId] = useState<number | null>(null);
+  const [selectedDivisionId, setSelectedDivisionId] = useState<number | null>(null);
+  const [selectedContratoId, setSelectedContratoId] = useState<number | null>(null);
+  const [selectedSucursalId, setSelectedSucursalId] = useState<number | null>(null);
+
+  // Vehículo corporativo / Uso (vinculación bitácora)
+  const [selectedCorporateVehicleId, setSelectedCorporateVehicleId] = useState<number | null>(null);
+  const [selectedCorporateUseId, setSelectedCorporateUseId] = useState<number | null>(null);
 
   const [generalValues, setGeneralValues] = useState<Record<string, any>>({});
   const [revisionValues, setRevisionValues] = useState<Record<string, any>>({});
@@ -470,6 +492,102 @@ export default function BitacoraVehiculosDetenidosScreen() {
 
   const generalConfig = useMemo(() => buildGeneralConfig(tipo), [tipo]);
   const revisionConfig = useMemo(() => buildRevisionConfig(tipo), [tipo]);
+
+  // jerarquía: opciones derivadas del cache
+  const empresas = useMemo(() => (Array.isArray(structure) ? structure : []), [structure]);
+  const clientes = useMemo(() => {
+    const emp = empresas.find((e: any) => Number(e.id) === Number(selectedEmpresaId));
+    return emp?.clientes || [];
+  }, [empresas, selectedEmpresaId]);
+  const divisiones = useMemo(() => {
+    const cli = clientes.find((c: any) => Number(c.id) === Number(selectedClienteId));
+    return cli?.division || cli?.divisiones || [];
+  }, [clientes, selectedClienteId]);
+  const contratos = useMemo(() => {
+    const div = divisiones.find((d: any) => Number(d.id) === Number(selectedDivisionId));
+    return div?.contratos || [];
+  }, [divisiones, selectedDivisionId]);
+  const sucursales = useMemo(() => {
+    const cont = contratos.find((c: any) => Number(c.id) === Number(selectedContratoId));
+    return cont?.sucursales || [];
+  }, [contratos, selectedContratoId]);
+
+  const selectedSucursalNode = useMemo(() => {
+    return sucursales.find((s: any) => Number(s.id) === Number(selectedSucursalId)) ?? null;
+  }, [sucursales, selectedSucursalId]);
+
+  const corporateVehicles = useMemo(() => {
+    const list = (selectedSucursalNode as any)?.vehiculos_corporativos || (selectedSucursalNode as any)?.c_vehiculos_corporativos || [];
+    return Array.isArray(list) ? list : [];
+  }, [selectedSucursalNode]);
+
+  const selectedCorporateVehicle = useMemo(() => {
+    return corporateVehicles.find((v: any) => Number(v.id) === Number(selectedCorporateVehicleId)) ?? null;
+  }, [corporateVehicles, selectedCorporateVehicleId]);
+
+  const availableCorporateUses = useMemo(() => {
+    const usos = (selectedCorporateVehicle as any)?.usos || (selectedCorporateVehicle as any)?.c_usos_vehiculos_corporativos || [];
+    const list = Array.isArray(usos) ? usos : [];
+    // solo los que NO tienen bitácora asignada
+    return list.filter((u: any) => u?.bitacora_id == null);
+  }, [selectedCorporateVehicle]);
+
+  const handleEmpresaChange = (empresaId: number | null) => {
+    setSelectedEmpresaId(empresaId);
+    setSelectedClienteId(null);
+    setSelectedDivisionId(null);
+    setSelectedContratoId(null);
+    setSelectedSucursalId(null);
+    setSelectedCorporateVehicleId(null);
+    setSelectedCorporateUseId(null);
+  };
+  const handleClienteChange = (clienteId: number | null) => {
+    setSelectedClienteId(clienteId);
+    setSelectedDivisionId(null);
+    setSelectedContratoId(null);
+    setSelectedSucursalId(null);
+    setSelectedCorporateVehicleId(null);
+    setSelectedCorporateUseId(null);
+  };
+  const handleDivisionChange = (divisionId: number | null) => {
+    setSelectedDivisionId(divisionId);
+    setSelectedContratoId(null);
+    setSelectedSucursalId(null);
+    setSelectedCorporateVehicleId(null);
+    setSelectedCorporateUseId(null);
+  };
+  const handleContratoChange = (contratoId: number | null) => {
+    setSelectedContratoId(contratoId);
+    setSelectedSucursalId(null);
+    setSelectedCorporateVehicleId(null);
+    setSelectedCorporateUseId(null);
+  };
+  const handleSucursalChange = (sucursalId: number | null) => {
+    setSelectedSucursalId(sucursalId);
+    setSelectedCorporateVehicleId(null);
+    setSelectedCorporateUseId(null);
+  };
+
+  const handleCorporateVehicleChange = (vehiculoId: number | null) => {
+    setSelectedCorporateVehicleId(vehiculoId);
+    setSelectedCorporateUseId(null);
+    const v = corporateVehicles.find((x: any) => Number(x.id) === Number(vehiculoId));
+    if (!v) return;
+    const t = String(v.tipo || '').trim() as TipoBitacora;
+    if (TYPE_OPTIONS.includes(t)) {
+      setTipo(t);
+      tipoRef.current = t;
+    }
+    // llenar placa en el campo del formulario
+    if (v.placa) {
+      // compat: en algunos registros antiguos se usa `numero_de_placa`
+      setGeneralValues((prev) => ({
+        ...prev,
+        numero_placa: String(v.placa),
+        numero_de_placa: String(v.placa),
+      }));
+    }
+  };
 
   const handleMenuPress = () => setIsMenuVisible(true);
   const handleMenuClose = () => setIsMenuVisible(false);
@@ -657,23 +775,70 @@ export default function BitacoraVehiculosDetenidosScreen() {
     setMarcaId(current.id);
     setEmpresaNombre(current?.empresa?.nombre ?? '');
     setClienteNombre(current?.cliente?.nombre ?? '');
+
+    // defaults (solo empresa/cliente; división/contrato/sucursal quedan manuales)
+    const marcaEmpresaId = Number(current?.empresa?.id ?? current?.empresa_id ?? 0) || null;
+    const marcaClienteId = Number(current?.cliente?.id ?? current?.cliente_id ?? 0) || null;
+    if (!selectedEmpresaId && marcaEmpresaId) setSelectedEmpresaId(marcaEmpresaId);
+    if (!selectedClienteId && marcaClienteId) setSelectedClienteId(marcaClienteId);
     return current;
   };
+
+  const fetchMainStructure = useCallback(async () => {
+    try {
+      setIsStructureLoading(true);
+      const cacheStr = await AsyncStorage.getItem('main_structure_cache');
+      if (cacheStr) {
+        const cached = JSON.parse(cacheStr);
+        if (Array.isArray(cached)) setStructure(cached);
+      }
+
+      const isConnected = await getConnectionStatus();
+      if (!isConnected) return;
+
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) return;
+      const token = await AsyncStorage.getItem('access_token');
+      const res = await fetch(`${apiUrl}/api/main-structure`, {
+        method: 'GET',
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': '69420',
+        },
+      });
+      const data = await res.json().catch(() => ({}));
+      const incoming = (data as any)?.structure ?? (data as any)?.data ?? [];
+      if (Array.isArray(incoming)) {
+        setStructure(incoming);
+        await AsyncStorage.setItem('main_structure_cache', JSON.stringify(incoming));
+      }
+    } catch {
+      // ignore
+    } finally {
+      setIsStructureLoading(false);
+    }
+  }, []);
 
   const fetchBitacoras = async () => {
     try {
       setIsLoading(true);
       setError(null);
       const current = await loadMarcaContext();
-      if (!current) {
+      if (!current && !isPrefillMode) {
         setIsLoading(false);
         return;
       }
 
+      await fetchMainStructure();
+
       const isConnected = await getConnectionStatus();
       if (isConnected) {
         const res = await listBitacoraVehiculoDetenido({
-          marcaId: current.id,
+          marcaId: current?.id ?? 0,
+          empresaId: selectedEmpresaId ?? undefined,
+          clienteId: selectedClienteId ?? undefined,
+          sucursalId: selectedSucursalId ?? undefined,
           refreshAccessToken,
           logout,
         });
@@ -709,6 +874,43 @@ export default function BitacoraVehiculosDetenidosScreen() {
     }, [])
   );
 
+  useFocusEffect(
+    useCallback(() => {
+      (async () => {
+        if (!prefill) return;
+        // Abre el formulario en modo creación con datos precargados
+        setIsCreating(true);
+        setEditing(null);
+
+        await fetchMainStructure();
+
+        if (prefill.empresa_id) setSelectedEmpresaId(Number(prefill.empresa_id));
+        setSelectedClienteId(Number(prefill.cliente_id));
+        if (prefill.division_id) setSelectedDivisionId(Number(prefill.division_id));
+        if (prefill.contrato_id) setSelectedContratoId(Number(prefill.contrato_id));
+        setSelectedSucursalId(Number(prefill.sucursal_id));
+
+        setSelectedCorporateVehicleId(Number(prefill.vehiculo_id));
+        setSelectedCorporateUseId(Number(prefill.uso_id));
+
+        const tipoCandidate = String(prefill.vehiculo_tipo || '').trim() as TipoBitacora;
+        const tipoNext: TipoBitacora = TYPE_OPTIONS.includes(tipoCandidate) ? tipoCandidate : 'Vehículo';
+        tipoRef.current = tipoNext;
+        setTipo(tipoNext);
+
+        // Inicializa defaults del formulario y luego fuerza placa/tipo
+        await resetForm(tipoNext);
+        if (prefill.vehiculo_placa) {
+          setGeneralValues((prev) => ({
+            ...prev,
+            numero_placa: String(prefill.vehiculo_placa),
+            numero_de_placa: String(prefill.vehiculo_placa),
+          }));
+        }
+      })();
+    }, [prefill])
+  );
+
   useEffect(() => {
     const handler = () => fetchBitacoras();
     eventBus.on('connectionRestored', handler);
@@ -735,8 +937,12 @@ export default function BitacoraVehiculosDetenidosScreen() {
     setTipo(tipoNext);
 
     const baseGeneral: Record<string, any> = {};
-    baseGeneral.empresa = current?.empresa?.nombre ?? empresaNombre ?? '';
-    baseGeneral.cliente = current?.cliente?.nombre ?? clienteNombre ?? '';
+    // empresa/cliente para display (readonly en config actual)
+    const empresas = Array.isArray(structure) ? structure : [];
+    const empNode = empresas.find((e: any) => Number(e.id) === Number(selectedEmpresaId));
+    const cliNode = (empNode?.clientes || []).find((c: any) => Number(c.id) === Number(selectedClienteId));
+    baseGeneral.empresa = empNode?.nombre ?? current?.empresa?.nombre ?? empresaNombre ?? '';
+    baseGeneral.cliente = cliNode?.nombre ?? current?.cliente?.nombre ?? clienteNombre ?? '';
     baseGeneral.fecha = dateToLocalString(new Date());
     baseGeneral.hora = timeToHHmm(new Date());
     setGeneralValues(baseGeneral);
@@ -805,6 +1011,9 @@ export default function BitacoraVehiculosDetenidosScreen() {
   const cancelCreating = () => {
     setIsCreating(false);
     setEditing(null);
+    if (returnTo) {
+      navigation.goBack();
+    }
   };
 
   const openSignatureModal = (key: string) => {
@@ -859,6 +1068,18 @@ export default function BitacoraVehiculosDetenidosScreen() {
   };
 
   const validateForm = () => {
+    if (!selectedClienteId) {
+      Alert.alert('Error', 'Debes seleccionar un cliente');
+      return false;
+    }
+    if (!selectedSucursalId) {
+      Alert.alert('Error', 'Debes seleccionar una sucursal');
+      return false;
+    }
+    if (isPrefillMode && !selectedCorporateUseId) {
+      Alert.alert('Error', 'Debes seleccionar el uso a vincular');
+      return false;
+    }
     for (const g of generalConfig) {
       if (!g.required) continue;
       const val = generalValues[g.key];
@@ -885,7 +1106,8 @@ export default function BitacoraVehiculosDetenidosScreen() {
 
   const buildPayload = async () => {
     const current = await loadMarcaContext();
-    if (!current?.id) throw new Error('Marca no encontrada');
+    // Si no hay marca activa, el server permite crear usando empresa/cliente/sucursal
+    const marca_id = current?.id ? Number(current.id) : undefined;
 
     const infoGeneralArr = generalConfig.map((g) => ({
       key: g.key,
@@ -916,7 +1138,11 @@ export default function BitacoraVehiculosDetenidosScreen() {
     }));
 
     return {
-      marca_id: current.id,
+      ...(marca_id ? { marca_id } : {}),
+      empresa_id: selectedEmpresaId,
+      cliente_id: selectedClienteId,
+      sucursal_id: selectedSucursalId,
+      uso_id: selectedCorporateUseId,
       tipo: tipoRef.current,
       informacion_general: infoGeneralArr,
       informacion_revision: infoRevisionArr,
@@ -925,6 +1151,54 @@ export default function BitacoraVehiculosDetenidosScreen() {
       firma_responsable: firmaResponsable,
     };
   };
+
+  const updateMainStructureCacheUseBitacora = useCallback(
+    async (params: {
+      sucursalId: number | null;
+      vehiculoId: number | null;
+      usoId: number | null;
+      bitacora: any;
+    }) => {
+      const { sucursalId, vehiculoId, usoId, bitacora } = params;
+      if (!sucursalId || !vehiculoId || !usoId) return;
+
+      const cacheStr = await AsyncStorage.getItem('main_structure_cache');
+      if (!cacheStr) return;
+      const tree = safeParse<any[]>(cacheStr, []);
+      if (!Array.isArray(tree) || tree.length === 0) return;
+
+      let changed = false;
+      for (const emp of tree) {
+        for (const cli of emp?.clientes || []) {
+          const divs = cli?.division || cli?.divisiones || [];
+          for (const div of divs) {
+            for (const ct of div?.contratos || []) {
+              for (const suc of ct?.sucursales || []) {
+                if (Number(suc?.id) !== Number(sucursalId)) continue;
+                const vehs = suc?.vehiculos_corporativos || suc?.c_vehiculos_corporativos || [];
+                for (const v of vehs) {
+                  if (Number(v?.id) !== Number(vehiculoId)) continue;
+                  const usos = v?.usos || v?.c_usos_vehiculos_corporativos || [];
+                  for (const u of usos) {
+                    if (Number(u?.id) !== Number(usoId)) continue;
+                    u.bitacora_id = bitacora?.id ?? bitacora?.id_local ?? null;
+                    u.bitacora = bitacora ?? null;
+                    changed = true;
+                    break;
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      if (!changed) return;
+      await AsyncStorage.setItem('main_structure_cache', JSON.stringify(tree));
+      setStructure(tree);
+    },
+    []
+  );
 
   const upsertOfflineCreateAction = async (localId: string, requestData: any) => {
     const actionsStr = await AsyncStorage.getItem('bitacora_vehiculo_detenido_actions');
@@ -951,9 +1225,25 @@ export default function BitacoraVehiculosDetenidosScreen() {
         if (isConnected) {
           const res = await createBitacoraVehiculoDetenido({ requestData, refreshAccessToken, logout });
           if (!res.status) throw new Error(res.message || 'No se pudo crear');
+
+          // si se vinculó a un uso, reflejarlo en main_structure_cache
+          if (selectedCorporateVehicleId && selectedCorporateUseId) {
+            await updateMainStructureCacheUseBitacora({
+              sucursalId: selectedSucursalId,
+              vehiculoId: selectedCorporateVehicleId,
+              usoId: selectedCorporateUseId,
+              bitacora: {
+                id: res.id,
+                tipo: tipoRef.current,
+                created_at: new Date().toISOString(),
+              },
+            });
+          }
+
           await fetchBitacoras();
           setIsCreating(false);
           Alert.alert('Éxito', 'Bitácora creada correctamente');
+          if (returnTo) navigation.goBack();
           return;
         }
 
@@ -967,9 +1257,9 @@ export default function BitacoraVehiculosDetenidosScreen() {
 
         const localItem: any = {
           id: 0,
-          empresa_id: 0,
-          cliente_id: 0,
-          sucursal_id: 0,
+          empresa_id: Number(selectedEmpresaId || 0),
+          cliente_id: Number(selectedClienteId || 0),
+          sucursal_id: Number(selectedSucursalId || 0),
           tipo: tipoRef.current,
           informacion_general: requestData.informacion_general,
           informacion_revision: requestData.informacion_revision,
@@ -981,11 +1271,27 @@ export default function BitacoraVehiculosDetenidosScreen() {
           id_local,
         };
 
+        // reflejar vínculo en main_structure_cache aun en offline (bitácora local)
+        if (selectedCorporateVehicleId && selectedCorporateUseId) {
+          await updateMainStructureCacheUseBitacora({
+            sucursalId: selectedSucursalId,
+            vehiculoId: selectedCorporateVehicleId,
+            usoId: selectedCorporateUseId,
+            bitacora: {
+              id: 0,
+              id_local,
+              tipo: tipoRef.current,
+              created_at: createdAt,
+            },
+          });
+        }
+
         const updatedCache = [localItem, ...cache.filter((b: any) => b.id_local !== id_local)];
         await AsyncStorage.setItem('bitacora_vehiculo_detenido_cache', JSON.stringify(updatedCache));
         setBitacoras(updatedCache);
         setIsCreating(false);
         Alert.alert('Modo offline', 'Bitácora guardada localmente. Se sincronizará cuando haya conexión.');
+        if (returnTo) navigation.goBack();
         return;
       }
 
@@ -1001,6 +1307,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
         await fetchBitacoras();
         setIsCreating(false);
         Alert.alert('Éxito', 'Bitácora actualizada correctamente');
+        if (returnTo) navigation.goBack();
         return;
       }
 
@@ -1017,6 +1324,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
       setBitacoras(updatedCache);
       setIsCreating(false);
       Alert.alert('Modo offline', 'Cambios guardados localmente. Se sincronizarán cuando haya conexión.');
+      if (returnTo) navigation.goBack();
     } catch (e: any) {
       Alert.alert('Error', e.message || 'No se pudo guardar');
     }
@@ -1145,7 +1453,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
     );
   }
 
-  if (!hasCurrentMarca) {
+  if (!hasCurrentMarca && !isPrefillMode) {
     return (
       <ThemedView style={styles.container}>
         <AppHeader onMenuPress={handleMenuPress} title="Vehículos detenidos" />
@@ -1258,6 +1566,114 @@ export default function BitacoraVehiculosDetenidosScreen() {
                 {editing ? 'Editar registro' : 'Nuevo registro'}
               </ThemedText>
 
+              <ThemedText style={styles.sectionTitle}>Estructura</ThemedText>
+              <ThemedText style={styles.label}>Empresa *</ThemedText>
+              <ThemedView style={styles.pickerContainer}>
+                <Picker
+                  selectedValue={selectedEmpresaId ?? 0}
+                  onValueChange={(v) => handleEmpresaChange(Number(v) || null)}
+                  style={styles.picker}
+                  enabled={!isPrefillMode}
+                >
+                  <Picker.Item label={isStructureLoading ? 'Cargando...' : 'Seleccione...'} value={0} />
+                  {empresas.map((e: any) => (
+                    <Picker.Item key={`emp_${e.id}`} label={String(e.nombre)} value={Number(e.id)} />
+                  ))}
+                </Picker>
+              </ThemedView>
+
+              <ThemedText style={styles.label}>Cliente *</ThemedText>
+              <ThemedView style={styles.pickerContainer}>
+                <Picker
+                  selectedValue={selectedClienteId ?? 0}
+                  onValueChange={(v) => handleClienteChange(Number(v) || null)}
+                  style={styles.picker}
+                  enabled={!isPrefillMode && !!selectedEmpresaId}
+                >
+                  <Picker.Item label={selectedEmpresaId ? 'Seleccione...' : 'Seleccione empresa primero'} value={0} />
+                  {clientes.map((c: any) => (
+                    <Picker.Item key={`cli_${c.id}`} label={String(c.nombre)} value={Number(c.id)} />
+                  ))}
+                </Picker>
+              </ThemedView>
+
+              <ThemedText style={styles.label}>División *</ThemedText>
+              <ThemedView style={styles.pickerContainer}>
+                <Picker
+                  selectedValue={selectedDivisionId ?? 0}
+                  onValueChange={(v) => handleDivisionChange(Number(v) || null)}
+                  style={styles.picker}
+                  enabled={!isPrefillMode && !!selectedClienteId}
+                >
+                  <Picker.Item label={selectedClienteId ? 'Seleccione...' : 'Seleccione cliente primero'} value={0} />
+                  {divisiones.map((d: any) => (
+                    <Picker.Item key={`div_${d.id}`} label={String(d.nombre)} value={Number(d.id)} />
+                  ))}
+                </Picker>
+              </ThemedView>
+
+              <ThemedText style={styles.label}>Contrato *</ThemedText>
+              <ThemedView style={styles.pickerContainer}>
+                <Picker
+                  selectedValue={selectedContratoId ?? 0}
+                  onValueChange={(v) => handleContratoChange(Number(v) || null)}
+                  style={styles.picker}
+                  enabled={!isPrefillMode && !!selectedDivisionId}
+                >
+                  <Picker.Item label={selectedDivisionId ? 'Seleccione...' : 'Seleccione división primero'} value={0} />
+                  {contratos.map((ct: any) => (
+                    <Picker.Item key={`ct_${ct.id}`} label={String(ct.nombre)} value={Number(ct.id)} />
+                  ))}
+                </Picker>
+              </ThemedView>
+
+              <ThemedText style={styles.label}>Sucursal *</ThemedText>
+              <ThemedView style={styles.pickerContainer}>
+                <Picker
+                  selectedValue={selectedSucursalId ?? 0}
+                  onValueChange={(v) => handleSucursalChange(Number(v) || null)}
+                  style={styles.picker}
+                  enabled={!isPrefillMode && !!selectedContratoId}
+                >
+                  <Picker.Item label={selectedContratoId ? 'Seleccione...' : 'Seleccione contrato primero'} value={0} />
+                  {sucursales.map((s: any) => (
+                    <Picker.Item key={`suc_${s.id}`} label={String(s.nombre)} value={Number(s.id)} />
+                  ))}
+                </Picker>
+              </ThemedView>
+
+              <ThemedText style={styles.sectionTitle}>Vinculación (Vehículos corporativos)</ThemedText>
+              <ThemedText style={styles.label}>Vehículo corporativo</ThemedText>
+              <ThemedView style={styles.pickerContainer}>
+                <Picker
+                  selectedValue={selectedCorporateVehicleId ?? 0}
+                  onValueChange={(v) => handleCorporateVehicleChange(Number(v) || null)}
+                  style={styles.picker}
+                  enabled={!isPrefillMode && !!selectedSucursalId}
+                >
+                  <Picker.Item label={selectedSucursalId ? 'Seleccione...' : 'Seleccione sucursal primero'} value={0} />
+                  {corporateVehicles.map((v: any) => (
+                    <Picker.Item key={`veh_${v.id}`} label={`${String(v.placa || '—')} (${String(v.tipo || '—')})`} value={Number(v.id)} />
+                  ))}
+                </Picker>
+              </ThemedView>
+
+              <ThemedText style={styles.label}>Uso (solo sin bitácora)</ThemedText>
+              <ThemedView style={styles.pickerContainer}>
+                <Picker
+                  selectedValue={selectedCorporateUseId ?? 0}
+                  onValueChange={(v) => setSelectedCorporateUseId(Number(v) || null)}
+                  style={styles.picker}
+                  enabled={!isPrefillMode && !!selectedCorporateVehicleId}
+                >
+                  <Picker.Item label={selectedCorporateVehicleId ? 'Seleccione...' : 'Seleccione vehículo primero'} value={0} />
+                  {availableCorporateUses.map((u: any) => {
+                    const label = `${String(u.nombre_conductor || '—')} - ${String(u.fecha || '').slice(0, 10)}`;
+                    return <Picker.Item key={`uso_${u.id}`} label={label} value={Number(u.id)} />;
+                  })}
+                </Picker>
+              </ThemedView>
+
               {/* Tipo */}
               <ThemedText style={styles.label}>Tipo *</ThemedText>
               <ThemedView style={styles.pickerContainer}>
@@ -1274,6 +1690,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
                     resetForm(next);
                   }}
                   style={styles.picker}
+                  enabled={!isPrefillMode}
                 >
                   {TYPE_OPTIONS.map((t) => (
                     <Picker.Item key={t} label={t} value={t} />
@@ -1379,6 +1796,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
                       onChangeText={(t) => setGeneralValues((prev) => ({ ...prev, [f.key]: t }))}
                       placeholder={f.label}
                       placeholderTextColor="#999"
+                      editable={!isPrefillMode || f.key !== 'numero_placa'}
                     />
                   </ThemedView>
                 );

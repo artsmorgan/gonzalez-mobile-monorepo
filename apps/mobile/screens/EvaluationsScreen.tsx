@@ -133,7 +133,7 @@ export default function EvaluationsScreen() {
               onPress={() => navigation.navigate('PhysicalMinuteAgenda' as never)}
             >
               <ThemedText style={styles.navButtonText}>
-                <Ionicons name="document-text" size={24} color="#FFFFFF" /> Agenda Minuta Física
+                <Ionicons name="document-text" size={24} color="#FFFFFF" /> Agenda minuta
               </ThemedText>
             </TouchableOpacity>
             <TouchableOpacity

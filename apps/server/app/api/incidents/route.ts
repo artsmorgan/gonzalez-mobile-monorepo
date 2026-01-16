@@ -217,6 +217,8 @@ export async function POST(req: NextRequest) {
                 cliente_id: marca.cliente_id,
                 empresa_id: marca.empresa_id,
                 estado: true,
+                created_at: createdAt,
+                created_by: parseInt(String(payload?.id ?? "0")),
             },
         });
 

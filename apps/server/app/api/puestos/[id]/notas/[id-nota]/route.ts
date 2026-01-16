@@ -51,7 +51,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         const id = parseInt(resolvedParams.id);
         const id_nota = parseInt(resolvedParams["id-nota"]);
 
-        const { marca_id, titulo, description, categoria_id, empleado_id } = await req.json();
+        const { marca_id, titulo, description, categoria_id, relevancia, empleado_id } = await req.json();
 
         const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id } });
         if (!puesto) return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
@@ -73,7 +73,10 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
         const updated_at = toZonedTime(new Date(), "America/Costa_Rica");
 
-        const updatedNota = await prisma.c_puesto_notas.update({ where: { id: id_nota }, data: { titulo, description, categoria_id: categoria_id, puesto_id: puesto.id, updated_at } });
+        // Si relevancia no viene o es null, usar "Baja" por defecto
+        const relevanciaValue = relevancia || 'Baja';
+
+        const updatedNota = await prisma.c_puesto_notas.update({ where: { id: id_nota }, data: { titulo, description, categoria_id: categoria_id, relevancia: relevanciaValue, puesto_id: puesto.id, updated_at } });
 
         if (updatedNota) {
             const all_plazas_puesto = await prisma.e_estructura_plazas.findMany({ where: { puesto_id: puesto.id } });
@@ -82,7 +85,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             }
         }
 
-        await prisma.c_puesto_notas_bitacora_cambios.create({ data: { nota_id: id_nota, titulo, description, created_at: updated_at, empleado_id: empleado.id, categoria: categoriaData.nombre } });
+        await prisma.c_puesto_notas_bitacora_cambios.create({ data: { nota_id: id_nota, titulo, description, relevancia: relevanciaValue, created_at: updated_at, empleado_id: empleado.id, categoria: categoriaData.nombre } });
 
         return NextResponse.json({ status: true, message: "Nota actualizada con éxito" }, { status: 200 });
     } catch (error: unknown) {
