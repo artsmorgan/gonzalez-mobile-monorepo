@@ -702,7 +702,6 @@ export default function ActionPlanScreen() {
                   placeholderTextColor="#999"
                   value={nombreLugar}
                   onChangeText={setNombreLugar}
-                  color="#000000"
                 />
               </ThemedView>
 
@@ -783,7 +782,6 @@ export default function ActionPlanScreen() {
                               textAlignVertical="top"
                               value={tarea.tarea}
                               onChangeText={(text) => updateTarea(index, 'tarea', text)}
-                              color="#000000"
                             />
                           </ThemedView>
 

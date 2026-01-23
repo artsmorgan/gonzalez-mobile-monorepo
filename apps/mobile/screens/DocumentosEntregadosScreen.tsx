@@ -487,9 +487,8 @@ export default function DocumentosEntregadosScreen() {
         if (d !== filterFecha) return false;
       }
       if (!q) return true;
-      const haystack = `${it.tipo_documento ?? ''} ${it.nombre_oficial_entrega ?? ''} ${it.nombre_oficial_recibe ?? ''} ${
-        it.descripcion ?? ''
-      }`.toLowerCase();
+      const haystack = `${it.tipo_documento ?? ''} ${it.nombre_oficial_entrega ?? ''} ${it.nombre_oficial_recibe ?? ''} ${it.descripcion ?? ''
+        }`.toLowerCase();
       return haystack.includes(q);
     });
   }, [docs, filterSearch, filterFecha]);
@@ -517,7 +516,7 @@ export default function DocumentosEntregadosScreen() {
   const clearSignatureInModal = () => {
     try {
       signatureRef.current?.clearSignature?.();
-    } catch {}
+    } catch { }
     setIsReadingSignature(false);
     setSignatureKey((k) => k + 1);
   };
@@ -587,32 +586,32 @@ export default function DocumentosEntregadosScreen() {
               <ThemedText style={styles.signatureHintMuted}>Aún no hay firma.</ThemedText>
             )}
 
-              <ThemedText style={styles.sectionTitle}>Firma responsable</ThemedText>
-              {!(it as any).firma_responsable ? (
-                <ThemedText style={styles.signatureHintMuted}>Aún no hay firma responsable.</ThemedText>
-              ) : (
-                <ThemedView style={[styles.firmaInfoBox, { marginTop: 10 }]}>
-                  <ThemedView style={{ flex: 1, paddingRight: 10 }}>
-                    <ThemedText style={styles.firmaInfoTitle}>Información de la firma:</ThemedText>
-                    {(() => {
-                      const info = decodeFirmaHash((it as any).firma_responsable);
-                      if (!info) {
-                        return <ThemedText style={styles.firmaInfoValue}>Formato no decodificable</ThemedText>;
-                      }
-                      return (
-                        <>
-                          <ThemedText style={styles.firmaInfoValue}>Sesión: {info.sessionId || 'N/A'}</ThemedText>
-                          <ThemedText style={styles.firmaInfoValue}>Empleado: {info.empleadoId || 'N/A'}</ThemedText>
-                          <ThemedText style={styles.firmaInfoValue}>
-                            Lat: {info.latitud || 'N/A'} | Long: {info.longitud || 'N/A'}
-                          </ThemedText>
-                          <ThemedText style={styles.firmaInfoValue}>Hora: {info.timestamp || 'N/A'}</ThemedText>
-                        </>
-                      );
-                    })()}
-                  </ThemedView>
+            <ThemedText style={styles.sectionTitle}>Firma responsable</ThemedText>
+            {!(it as any).firma_responsable ? (
+              <ThemedText style={styles.signatureHintMuted}>Aún no hay firma responsable.</ThemedText>
+            ) : (
+              <ThemedView style={[styles.firmaInfoBox, { marginTop: 10 }]}>
+                <ThemedView style={{ flex: 1, paddingRight: 10 }}>
+                  <ThemedText style={styles.firmaInfoTitle}>Información de la firma:</ThemedText>
+                  {(() => {
+                    const info = decodeFirmaHash((it as any).firma_responsable);
+                    if (!info) {
+                      return <ThemedText style={styles.firmaInfoValue}>Formato no decodificable</ThemedText>;
+                    }
+                    return (
+                      <>
+                        <ThemedText style={styles.firmaInfoValue}>Sesión: {info.sessionId || 'N/A'}</ThemedText>
+                        <ThemedText style={styles.firmaInfoValue}>Empleado: {info.empleadoId || 'N/A'}</ThemedText>
+                        <ThemedText style={styles.firmaInfoValue}>
+                          Lat: {info.latitud || 'N/A'} | Long: {info.longitud || 'N/A'}
+                        </ThemedText>
+                        <ThemedText style={styles.firmaInfoValue}>Hora: {info.timestamp || 'N/A'}</ThemedText>
+                      </>
+                    );
+                  })()}
                 </ThemedView>
-              )}
+              </ThemedView>
+            )}
           </ThemedView>
         )}
 
@@ -1238,7 +1237,6 @@ const styles = StyleSheet.create({
   },
   signatureButtonDisabled: { backgroundColor: '#999' },
   signatureButtonText: { color: '#FFFFFF', fontSize: 14, fontWeight: '600', marginLeft: 8 },
-  signatureHintMuted: { marginTop: 6, color: '#999' },
 
   firmaInfoBox: {
     marginTop: 10,

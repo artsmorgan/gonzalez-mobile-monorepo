@@ -252,29 +252,29 @@ export default function StaffEvaluationsScreen() {
       const baseQuestionsTitles =
         tipo === 'Aseo & limpieza'
           ? [
-              'Cumplimiento de Tareas',
-              'Limpieza del Área Asignada',
-              'Disponibilidad',
-              'Ausentismo',
-              'Incapacidades / Accidentes Laborales',
-              'Puntualidad / Llegadas Tardías',
-              'Actitud de Servicio',
-              'Quejas de Clientes',
-              'Relaciones con los compañeros y supervisores',
-              'Buena presentación personal',
-            ]
+            'Cumplimiento de Tareas',
+            'Limpieza del Área Asignada',
+            'Disponibilidad',
+            'Ausentismo',
+            'Incapacidades / Accidentes Laborales',
+            'Puntualidad / Llegadas Tardías',
+            'Actitud de Servicio',
+            'Quejas de Clientes',
+            'Relaciones con los compañeros y supervisores',
+            'Buena presentación personal',
+          ]
           : [
-              'Cumplimiento de Tareas',
-              'Vigilancia del Área Asignada',
-              'Disponibilidad',
-              'Ausentismo',
-              'Incapacidades / Accidentes Laborales',
-              'Puntualidad / Llegadas Tardías',
-              'Actitud de Servicio',
-              'Quejas de Clientes',
-              'Relaciones con los compañeros y supervisores',
-              'Buena presentación personal',
-            ];
+            'Cumplimiento de Tareas',
+            'Vigilancia del Área Asignada',
+            'Disponibilidad',
+            'Ausentismo',
+            'Incapacidades / Accidentes Laborales',
+            'Puntualidad / Llegadas Tardías',
+            'Actitud de Servicio',
+            'Quejas de Clientes',
+            'Relaciones con los compañeros y supervisores',
+            'Buena presentación personal',
+          ];
 
       const questions: EvaluationQuestion[] = baseQuestionsTitles.map((t) => ({
         title: t,
@@ -406,7 +406,8 @@ export default function StaffEvaluationsScreen() {
         if (!token) {
           const refreshed = await refreshAccessToken();
           if (!refreshed) {
-            throw new Error('No authentication token found');
+            if (logout) await logout();
+            throw new Error('Sesión expirada');
           }
           token = await AsyncStorage.getItem('access_token');
         }
@@ -420,6 +421,18 @@ export default function StaffEvaluationsScreen() {
             'ngrok-skip-browser-warning': '69420',
           },
         });
+
+        if (evalRes.status === 401) {
+          const refreshed = await refreshAccessToken();
+          if (refreshed) return fetchData();
+          await logout();
+          return;
+        }
+
+        if (evalRes.status === 403) {
+          if (logout) await logout();
+          throw new Error('Acceso denegado');
+        }
 
         if (!evalRes.ok) {
           throw new Error(`HTTP error! status: ${evalRes.status}`);
@@ -442,6 +455,18 @@ export default function StaffEvaluationsScreen() {
             'ngrok-skip-browser-warning': '69420',
           },
         });
+
+        if (empRes.status === 401) {
+          const refreshed = await refreshAccessToken();
+          if (refreshed) return fetchData();
+          await logout();
+          return;
+        }
+
+        if (empRes.status === 403) {
+          if (logout) await logout();
+          throw new Error('Acceso denegado');
+        }
 
         if (empRes.ok) {
           const empData = await empRes.json();
@@ -608,9 +633,19 @@ export default function StaffEvaluationsScreen() {
         throw new Error('Server URL not configured');
       }
 
-      const token = await AsyncStorage.getItem('access_token');
+      let token = await AsyncStorage.getItem('access_token');
       if (!token) {
-        throw new Error('No authentication token found');
+        const refreshed = await refreshAccessToken();
+        if (!refreshed) {
+          if (logout) await logout();
+          throw new Error('Sesión expirada');
+        }
+        token = await AsyncStorage.getItem('access_token');
+      }
+
+      if (!token) {
+        Alert.alert('Error', 'No se pudo obtener el token de sesión');
+        return;
       }
 
       const decodedToken: any = jwtDecode(token);
@@ -623,14 +658,14 @@ export default function StaffEvaluationsScreen() {
 
       const hash = btoa(
         sessionId +
-          ':' +
-          employee.id +
-          ':' +
-          location.coords.latitude +
-          ':' +
-          location.coords.longitude +
-          ':' +
-          horaAccion
+        ':' +
+        employee.id +
+        ':' +
+        location.coords.latitude +
+        ':' +
+        location.coords.longitude +
+        ':' +
+        horaAccion
       );
 
       const decodedHash = atob(hash);
@@ -648,6 +683,19 @@ export default function StaffEvaluationsScreen() {
             'ngrok-skip-browser-warning': '69420',
           },
         });
+
+        if (response.status === 401) {
+          const refreshed = await refreshAccessToken();
+          if (refreshed) return generateFirmaEvaluador();
+          await logout();
+          return;
+        }
+
+        if (response.status === 403) {
+          if (logout) await logout();
+          throw new Error('Acceso denegado');
+        }
+
         if (response.ok) {
           const empleadoData = await response.json();
           empleadoDetalle = {
@@ -694,7 +742,15 @@ export default function StaffEvaluationsScreen() {
         let empleadoDetalle: FirmaData['empleadoDetalle'] = undefined;
         const isConnected = await checkConnection();
         if (isConnected && apiUrl) {
-          const token = await AsyncStorage.getItem('access_token');
+          let token = await AsyncStorage.getItem('access_token');
+          if (!token) {
+            const refreshed = await refreshAccessToken();
+            if (!refreshed) {
+              if (logout) await logout();
+              throw new Error('Sesión expirada');
+            }
+            token = await AsyncStorage.getItem('access_token');
+          }
           if (token) {
             const response = await fetch(`${apiUrl}/api/empleados/${empleadoId}`, {
               method: 'GET',
@@ -704,6 +760,19 @@ export default function StaffEvaluationsScreen() {
                 'ngrok-skip-browser-warning': '69420',
               },
             });
+
+            if (response.status === 401) {
+              const refreshed = await refreshAccessToken();
+              if (refreshed) return handleScanFirmaEmpleado();
+              await logout();
+              return;
+            }
+
+            if (response.status === 403) {
+              if (logout) await logout();
+              throw new Error('Acceso denegado');
+            }
+
             if (response.ok) {
               const empleadoData = await response.json();
               empleadoDetalle = {
@@ -730,8 +799,7 @@ export default function StaffEvaluationsScreen() {
           if (String(selectedEmpleadoId) !== String(empleadoId)) {
             const empleadoSel = empleados.find((e) => e.id === selectedEmpleadoId);
             setFirmaEmpleadoWarning(
-              `La firma corresponde al empleado ID ${empleadoId}, pero el empleado seleccionado es ${
-                empleadoSel?.nombre || 'otro'
+              `La firma corresponde al empleado ID ${empleadoId}, pero el empleado seleccionado es ${empleadoSel?.nombre || 'otro'
               }.`
             );
           } else {
@@ -1156,7 +1224,7 @@ export default function StaffEvaluationsScreen() {
 
   const parseEvaluacionField = (ev: StaffEvaluation): EvaluationSection[] => {
     let sections: EvaluationSection[] = [];
-    
+
     if (Array.isArray(ev.evaluacion)) {
       sections = ev.evaluacion as EvaluationSection[];
     } else if (typeof ev.evaluacion === 'string' && ev.evaluacion.trim() !== '') {
@@ -1169,7 +1237,7 @@ export default function StaffEvaluationsScreen() {
         console.error('Error parsing evaluacion JSON:', e);
       }
     }
-    
+
     // Establecer editableTitle correctamente: solo "Objetivos generales 50%" tiene preguntas editables
     return sections.map((section) => ({
       ...section,
@@ -1218,8 +1286,8 @@ export default function StaffEvaluationsScreen() {
               style={styles.picker}
               itemStyle={styles.pickerItem}
             >
-              <Picker.Item 
-                label="Seleccionar empleado..." 
+              <Picker.Item
+                label="Seleccionar empleado..."
                 value={undefined}
                 color={selectedEmpleadoId === null ? "#007AFF" : "#000000"}
               />
@@ -1303,8 +1371,8 @@ export default function StaffEvaluationsScreen() {
               style={styles.picker}
               itemStyle={styles.pickerItem}
             >
-              <Picker.Item 
-                label="Seleccionar tipo..." 
+              <Picker.Item
+                label="Seleccionar tipo..."
                 value=""
                 enabled={false}
               />
@@ -1427,30 +1495,30 @@ export default function StaffEvaluationsScreen() {
                     (section.title.startsWith('Retroalimentación') ||
                       section.title === 'Comentarios')
                   ) && (
-                    <>
-                      <TouchableOpacity
-                        style={styles.cameraSmallButton}
-                        onPress={() => openCameraForQuestion(sIndex, qIndex)}
-                      >
-                        {getActionIcon('camera')}
-                        <ThemedText style={styles.cameraSmallButtonText}>
-                          {q.image ? 'Cambiar imagen' : 'Tomar imagen (opcional)'}
-                        </ThemedText>
-                      </TouchableOpacity>
-                      {q.image && (
-                        <Image
-                          source={{ uri: q.image }}
-                          style={[
-                            styles.questionImagePreview,
-                            q.imageOrientation === 'vertical'
-                              ? styles.questionImagePreviewVertical
-                              : styles.questionImagePreviewHorizontal,
-                          ]}
-                          resizeMode="contain"
-                        />
-                      )}
-                    </>
-                  )}
+                      <>
+                        <TouchableOpacity
+                          style={styles.cameraSmallButton}
+                          onPress={() => openCameraForQuestion(sIndex, qIndex)}
+                        >
+                          {getActionIcon('camera')}
+                          <ThemedText style={styles.cameraSmallButtonText}>
+                            {q.image ? 'Cambiar imagen' : 'Tomar imagen (opcional)'}
+                          </ThemedText>
+                        </TouchableOpacity>
+                        {q.image && (
+                          <Image
+                            source={{ uri: q.image }}
+                            style={[
+                              styles.questionImagePreview,
+                              q.imageOrientation === 'vertical'
+                                ? styles.questionImagePreviewVertical
+                                : styles.questionImagePreviewHorizontal,
+                            ]}
+                            resizeMode="contain"
+                          />
+                        )}
+                      </>
+                    )}
                 </ThemedView>
               ))}
             </ThemedView>
@@ -1770,7 +1838,7 @@ export default function StaffEvaluationsScreen() {
             )}
           </ThemedView>
         )}
-        
+
         {employee && ev.evaluador.id === Number(employee.id) && (
           <TouchableOpacity
             style={styles.deleteButton}

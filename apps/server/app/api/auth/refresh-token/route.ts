@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from "uuid";
 import { prisma } from "../../../../utils/prismaClient";
 const jwt = require("jsonwebtoken");
 import crypto from "crypto";
+import { toZonedTime } from "date-fns-tz";
 
 function hashToken(token: string): string {
   return crypto.createHash("sha256").update(token).digest("hex");
@@ -36,13 +37,23 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    if (!payload?.id || !payload?.sessionId) {
+      console.log(2.5);
+      return NextResponse.json(
+        { status: false, message: "Refresh token inválido" },
+        { status: 401 }
+      );
+    }
+
+
     // 2️⃣ Buscar token en BD (no revocado)
-    const storedToken = await prisma.refresh_token.findUnique({
+    const storedToken = await prisma.refresh_token.findFirst({
       where: { token: hashToken(refreshToken) },
     });
 
     if (!storedToken || storedToken.revoked) {
       console.log(3);
+      console.log(storedToken);
       return NextResponse.json(
         { status: false, message: "Refresh token inválido" },
         { status: 401 }
@@ -50,8 +61,10 @@ export async function POST(request: NextRequest) {
     }
 
     // 3️⃣ Validar expiración (UTC)
-    if (storedToken.expiresAt < new Date()) {
+    if (storedToken.expiresAt < toZonedTime(new Date(), "America/Costa_Rica")) {
       console.log(4);
+      console.log(storedToken.expiresAt);
+      console.log(toZonedTime(new Date(), "America/Costa_Rica"));
       return NextResponse.json(
         { status: false, message: "Refresh token expirado" },
         { status: 403 }
@@ -61,6 +74,8 @@ export async function POST(request: NextRequest) {
     // 4️⃣ Validar sessionId
     if (payload.sessionId !== storedToken.sessionId) {
       console.log(5);
+      console.log(payload.sessionId);
+      console.log(storedToken.sessionId);
       return NextResponse.json(
         { status: false, message: "Sesión no válida" },
         { status: 401 }
@@ -110,19 +125,21 @@ export async function POST(request: NextRequest) {
       });
     });
 
+    console.log("Token renovado con éxito");
+
     // 7️⃣ Respuesta
     return NextResponse.json(
       {
         status: true,
         message: "Token renovado con éxito",
-        accessToken: newAccessToken,
-        refreshToken: newRefreshToken,
+        newAccessToken: newAccessToken,
+        newRefreshToken: newRefreshToken,
+        newSessionId: newSessionId,
       },
       { status: 200 }
     );
   } catch (error) {
-    console.log(6);
-    console.error("Error en refresh:", error);
+    console.log("Error en refresh:", error);
     return NextResponse.json(
       { status: false, message: "Error interno del servidor" },
       { status: 500 }

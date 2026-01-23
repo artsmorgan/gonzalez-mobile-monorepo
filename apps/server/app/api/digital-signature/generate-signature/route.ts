@@ -8,14 +8,9 @@ dotenv.config();
 export async function POST(req: NextRequest) {
     try {
         // 🟢 Verificar token de acceso
-        const { valid, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = verifyAccessToken(req);
 
-        if (!valid) {
-            return NextResponse.json(
-                { status: false, message: message },
-                { status: 401 }
-            );
-        }
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         const body = await req.json();
 

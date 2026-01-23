@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { 
-  StyleSheet, 
-  ScrollView, 
-  TouchableOpacity, 
-  TextInput, 
-  Alert, 
-  ActivityIndicator, 
-  Modal, 
+import {
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  TextInput,
+  Alert,
+  ActivityIndicator,
+  Modal,
   View,
   Platform,
   Image
@@ -156,16 +156,16 @@ export default function SatisfactionSurveysScreen() {
   const { employee, refreshAccessToken, logout } = useAuth();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const navigation = useNavigation<SatisfactionSurveysScreenNavigationProp>();
-  
+
   // Data state
   const [surveys, setSurveys] = useState<Survey[]>([]);
   const [puestos, setPuestos] = useState<Puesto[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [hasCurrentMarca, setHasCurrentMarca] = useState<boolean>(false);
-  
+
   // Form states
   const [isCreating, setIsCreating] = useState(false);
-  
+
   // Form refs
   const empresaEvaluadaRef = useRef<string>('');
   const personaNombreRef = useRef<string>('');
@@ -178,17 +178,17 @@ export default function SatisfactionSurveysScreen() {
   const observacionesRef = useRef<string>('');
   const responsableNombreRef = useRef<string>('');
   const responsableCedulaRef = useRef<string>('');
-  
+
   // Controlled states
   const [selectedPuesto, setSelectedPuesto] = useState<number>(0);
   const [fechaEncuesta, setFechaEncuesta] = useState<Date>(new Date());
   const [showFechaEncuestaPicker, setShowFechaEncuestaPicker] = useState(false);
   const [selectedDivision, setSelectedDivision] = useState<string>('Seguridad');
-  
+
   // Answers state and ref
   const [answers, setAnswers] = useState<{ [key: number]: string | number }>({});
   const answersRef = useRef<{ [key: number]: string | number }>({});
-  
+
   // Signature states
   const [personSignature, setPersonSignature] = useState<string | null>(null);
   const personSignatureRef = useRef<string | null>(null);
@@ -198,14 +198,14 @@ export default function SatisfactionSurveysScreen() {
   const [signatureKey, setSignatureKey] = useState(0);
   const [isSignatureModalVisible, setIsSignatureModalVisible] = useState(false);
   const [tempSignature, setTempSignature] = useState<string | null>(null);
-  
+
   // Form key for forcing re-render
   const [formKey, setFormKey] = useState(0);
-  
+
   // Collapsable states
   const [expandedSurveys, setExpandedSurveys] = useState<Set<number>>(new Set());
   const [decodedFirmas, setDecodedFirmas] = useState<Map<number, { responsable: FirmaData | null; persona: string | null }>>(new Map());
-  
+
   // Filters state
   const [filterFecha, setFilterFecha] = useState('');
   const [filterEmpresaEvaluada, setFilterEmpresaEvaluada] = useState('');
@@ -221,7 +221,7 @@ export default function SatisfactionSurveysScreen() {
   const [filterObservations, setFilterObservations] = useState('');
   const [isFiltersExpanded, setIsFiltersExpanded] = useState(false);
   const [showFilterFechaPicker, setShowFilterFechaPicker] = useState(false);
-  
+
   // Input refs
   const empresaEvaluadaInputRef = useRef<TextInput>(null);
   const personaNombreInputRef = useRef<TextInput>(null);
@@ -288,7 +288,8 @@ export default function SatisfactionSurveysScreen() {
         if (!token) {
           const refreshed = await refreshAccessToken();
           if (!refreshed) {
-            throw new Error('No authentication token found');
+            if (logout) await logout();
+            throw new Error('Sesión expirada');
           }
           token = await AsyncStorage.getItem('access_token');
         }
@@ -302,7 +303,7 @@ export default function SatisfactionSurveysScreen() {
           },
         });
 
-        if (surveysResponse.status === 401 || surveysResponse.status === 403) {
+        if (surveysResponse.status === 401) {
           const refreshed = await refreshAccessToken();
           if (refreshed) {
             return fetchSurveys();
@@ -311,6 +312,11 @@ export default function SatisfactionSurveysScreen() {
             await logout();
             return;
           }
+        }
+
+        if (surveysResponse.status === 403) {
+          if (logout) await logout();
+          throw new Error('Acceso denegado');
         }
 
         const surveysData = await surveysResponse.json();
@@ -337,6 +343,18 @@ export default function SatisfactionSurveysScreen() {
               'ngrok-skip-browser-warning': '69420',
             },
           });
+
+          if (puestosResponse.status === 401) {
+            const refreshed = await refreshAccessToken();
+            if (refreshed) return fetchSurveys();
+            await logout();
+            return;
+          }
+
+          if (puestosResponse.status === 403) {
+            if (logout) await logout();
+            throw new Error('Acceso denegado');
+          }
 
           if (puestosResponse.ok) {
             const puestosData = await puestosResponse.json();
@@ -405,7 +423,8 @@ export default function SatisfactionSurveysScreen() {
       if (!token) {
         const refreshed = await refreshAccessToken();
         if (!refreshed) {
-          return null;
+          if (logout) await logout();
+          throw new Error('Sesión expirada');
         }
         token = await AsyncStorage.getItem('access_token');
       }
@@ -418,6 +437,18 @@ export default function SatisfactionSurveysScreen() {
           'ngrok-skip-browser-warning': '69420',
         },
       });
+
+      if (response.status === 401) {
+        const refreshed = await refreshAccessToken();
+        if (refreshed) return fetchEmpleadoDetalle(empleadoId);
+        await logout();
+        return null;
+      }
+
+      if (response.status === 403) {
+        if (logout) await logout();
+        throw new Error('Acceso denegado');
+      }
 
       if (!response.ok) return null;
 
@@ -438,7 +469,7 @@ export default function SatisfactionSurveysScreen() {
     try {
       const decoded = atob(firmaBase64);
       const parts = decoded.split(':');
-      
+
       if (parts.length !== 5) {
         return null;
       }
@@ -560,66 +591,66 @@ export default function SatisfactionSurveysScreen() {
 
   // Filter surveys
   const filteredSurveys = surveys.filter((survey: Survey) => {
-    const matchesFecha = 
-      !filterFecha.trim() || 
+    const matchesFecha =
+      !filterFecha.trim() ||
       survey.fecha?.split('T')[0] === filterFecha;
-    
-    const matchesEmpresaEvaluada = 
-      !filterEmpresaEvaluada.trim() || 
+
+    const matchesEmpresaEvaluada =
+      !filterEmpresaEvaluada.trim() ||
       survey.empresa_evaluada?.toLowerCase().includes(filterEmpresaEvaluada.toLowerCase());
-    
-    const matchesSucursal = 
-      !filterSucursal.trim() || 
+
+    const matchesSucursal =
+      !filterSucursal.trim() ||
       survey.sucursal?.nombre?.toLowerCase().includes(filterSucursal.toLowerCase());
-    
-    const matchesPuesto = 
-      !filterPuesto.trim() || 
+
+    const matchesPuesto =
+      !filterPuesto.trim() ||
       survey.puesto?.nombre?.toLowerCase().includes(filterPuesto.toLowerCase());
-    
-    const matchesDivision = 
-      !filterDivision.trim() || 
+
+    const matchesDivision =
+      !filterDivision.trim() ||
       survey.division?.nombre?.toLowerCase().includes(filterDivision.toLowerCase());
-    
-    const matchesPersonaEvaluada = 
-      !filterPersonaEvaluada.trim() || 
+
+    const matchesPersonaEvaluada =
+      !filterPersonaEvaluada.trim() ||
       survey.persona_evaluada?.toLowerCase().includes(filterPersonaEvaluada.toLowerCase());
-    
-    const matchesCedulaPersonaEvaluada = 
-      !filterCedulaPersonaEvaluada.trim() || 
+
+    const matchesCedulaPersonaEvaluada =
+      !filterCedulaPersonaEvaluada.trim() ||
       survey.cedula_persona_evaluada?.toLowerCase().includes(filterCedulaPersonaEvaluada.toLowerCase());
-    
-    const matchesTelefonoPersonaEvaluada = 
-      !filterTelefonoPersonaEvaluada.trim() || 
+
+    const matchesTelefonoPersonaEvaluada =
+      !filterTelefonoPersonaEvaluada.trim() ||
       survey.telefono_persona_evaluada?.toLowerCase().includes(filterTelefonoPersonaEvaluada.toLowerCase());
-    
-    const matchesEmailPersonaEvaluada = 
-      !filterEmailPersonaEvaluada.trim() || 
+
+    const matchesEmailPersonaEvaluada =
+      !filterEmailPersonaEvaluada.trim() ||
       survey.email_persona_evaluada?.toLowerCase().includes(filterEmailPersonaEvaluada.toLowerCase());
-    
-    const matchesResponsableNombre = 
-      !filterResponsableNombre.trim() || 
+
+    const matchesResponsableNombre =
+      !filterResponsableNombre.trim() ||
       survey.responsable?.nombre?.toLowerCase().includes(filterResponsableNombre.toLowerCase());
-    
-    const matchesResponsableCedula = 
-      !filterResponsableCedula.trim() || 
+
+    const matchesResponsableCedula =
+      !filterResponsableCedula.trim() ||
       survey.responsable?.cedula?.toLowerCase().includes(filterResponsableCedula.toLowerCase());
-    
-    const matchesObservations = 
-      !filterObservations.trim() || 
+
+    const matchesObservations =
+      !filterObservations.trim() ||
       (survey.observations && survey.observations.toLowerCase().includes(filterObservations.toLowerCase()));
-    
-    return matchesFecha && 
-           matchesEmpresaEvaluada && 
-           matchesSucursal && 
-           matchesPuesto && 
-           matchesDivision && 
-           matchesPersonaEvaluada && 
-           matchesCedulaPersonaEvaluada && 
-           matchesTelefonoPersonaEvaluada && 
-           matchesEmailPersonaEvaluada && 
-           matchesResponsableNombre && 
-           matchesResponsableCedula && 
-           matchesObservations;
+
+    return matchesFecha &&
+      matchesEmpresaEvaluada &&
+      matchesSucursal &&
+      matchesPuesto &&
+      matchesDivision &&
+      matchesPersonaEvaluada &&
+      matchesCedulaPersonaEvaluada &&
+      matchesTelefonoPersonaEvaluada &&
+      matchesEmailPersonaEvaluada &&
+      matchesResponsableNombre &&
+      matchesResponsableCedula &&
+      matchesObservations;
   });
 
   const formatDateToISO = (date: Date): string => {
@@ -633,26 +664,26 @@ export default function SatisfactionSurveysScreen() {
     setIsCreating(true);
     setFormKey(prev => prev + 1);
     resetForm();
-    
+
     // Set default values
     if (puestos.length > 0) {
       puestoIdRef.current = puestos[0].id;
       setSelectedPuesto(puestos[0].id);
     }
-    
+
     const today = new Date();
     setFechaEncuesta(today);
     fechaEncuestaRef.current = formatDateToISO(today);
-    
+
     setSelectedDivision('Seguridad');
     divisionRef.current = 'Seguridad';
-    
+
     // Set employee data
     if (employee) {
       responsableNombreRef.current = employee.name || '';
       responsableCedulaRef.current = employee.cedula || '';
     }
-    
+
     // Generate signature
     generateResponsableSignature();
   };
@@ -682,7 +713,7 @@ export default function SatisfactionSurveysScreen() {
     setSignatureKey(prev => prev + 1);
     setIsSignatureModalVisible(false);
     setTempSignature(null);
-    
+
     // Clear input refs
     if (empresaEvaluadaInputRef.current) empresaEvaluadaInputRef.current.clear();
     if (personaNombreInputRef.current) personaNombreInputRef.current.clear();
@@ -852,7 +883,7 @@ export default function SatisfactionSurveysScreen() {
                 // Crear encuesta en cache
                 const cacheStr = await AsyncStorage.getItem('surveys_cache');
                 const cache = cacheStr ? JSON.parse(cacheStr) : [];
-                
+
                 const newSurveyCache: Survey = {
                   id: 0,
                   id_local: localId,
@@ -1118,7 +1149,7 @@ export default function SatisfactionSurveysScreen() {
 
   const toggleSurveyExpansion = async (surveyId: number, survey: Survey) => {
     const isExpanded = expandedSurveys.has(surveyId);
-    
+
     if (isExpanded) {
       // Collapse
       const newExpanded = new Set(expandedSurveys);
@@ -1146,8 +1177,8 @@ export default function SatisfactionSurveysScreen() {
             const firma = survey.firma_persona_evaluada.trim();
             // If it already has data: prefix, use it as is
             // Otherwise, add the prefix
-            personaFirma = firma.startsWith('data:') 
-              ? firma 
+            personaFirma = firma.startsWith('data:')
+              ? firma
               : `data:image/png;base64,${firma}`;
           }
 
@@ -1204,7 +1235,7 @@ export default function SatisfactionSurveysScreen() {
   return (
     <ThemedView style={styles.container}>
       <AppHeader onMenuPress={handleMenuPress} title="Encuestas de Satisfacción" />
-      
+
       <ScrollView style={styles.scrollView}>
         <ThemedView style={styles.scrollContent}>
           <ThemedView style={styles.contentContainer}>
@@ -1218,22 +1249,22 @@ export default function SatisfactionSurveysScreen() {
                 {/* Filters */}
                 <ThemedView style={styles.filtersContainer}>
                   <ThemedView style={styles.filtersHeader}>
-                    <TouchableOpacity 
+                    <TouchableOpacity
                       style={styles.filterToggleButton}
                       onPress={() => setIsFiltersExpanded(!isFiltersExpanded)}
                     >
                       <ThemedText style={styles.filtersTitle}>
                         Filtros
                       </ThemedText>
-                      <Ionicons 
-                        name={isFiltersExpanded ? "chevron-up" : "chevron-down"} 
-                        size={20} 
-                        color="#007AFF" 
+                      <Ionicons
+                        name={isFiltersExpanded ? "chevron-up" : "chevron-down"}
+                        size={20}
+                        color="#007AFF"
                       />
                     </TouchableOpacity>
-                    
+
                     {isFiltersExpanded && (
-                      <TouchableOpacity 
+                      <TouchableOpacity
                         style={styles.resetFiltersButton}
                         onPress={resetAllFilters}
                       >
@@ -1401,7 +1432,7 @@ export default function SatisfactionSurveysScreen() {
                     {filteredSurveys.map((survey) => {
                       const isExpanded = expandedSurveys.has(survey.id);
                       const firmasData = decodedFirmas.get(survey.id);
-                      
+
                       // Parse evaluaciones
                       let evaluacionesArray: Answer[] = [];
                       try {
@@ -1594,7 +1625,7 @@ export default function SatisfactionSurveysScreen() {
                     <ThemedView style={styles.sectionHeader}>
                       <ThemedText style={styles.sectionTitle}>Persona que llena la encuesta</ThemedText>
                     </ThemedView>
-                    
+
                     <ThemedView style={styles.formGroup}>
                       <ThemedText style={styles.label}>Nombre:</ThemedText>
                       <TextInput
@@ -1764,7 +1795,7 @@ export default function SatisfactionSurveysScreen() {
                   {/* Firma persona evaluada */}
                   <ThemedView style={styles.formGroup}>
                     <ThemedText style={styles.label}>Firma de la persona que realiza la encuesta:</ThemedText>
-                    
+
                     {personSignature ? (
                       <ThemedView style={styles.signaturePreviewContainer}>
                         <Image
@@ -1777,7 +1808,7 @@ export default function SatisfactionSurveysScreen() {
                         </TouchableOpacity>
                       </ThemedView>
                     ) : null}
-                    
+
                     <TouchableOpacity style={styles.openSignatureButton} onPress={openSignatureModal}>
                       <Ionicons name="create-outline" size={20} color="#000000" />
                       <ThemedText style={styles.openSignatureButtonText}>
@@ -1800,7 +1831,7 @@ export default function SatisfactionSurveysScreen() {
                           <Ionicons name="close" size={24} color="#333" />
                         </TouchableOpacity>
                       </ThemedView>
-                      
+
                       <View style={styles.modalSignatureContainer}>
                         <SignatureScreen
                           ref={signatureRef}
@@ -1812,13 +1843,13 @@ export default function SatisfactionSurveysScreen() {
                           key={signatureKey}
                         />
                       </View>
-                      
+
                       <ThemedView style={styles.modalActions}>
                         <TouchableOpacity style={styles.modalClearButton} onPress={clearSignatureInModal}>
                           <Ionicons name="trash" size={20} color="#000000" />
                           <ThemedText style={styles.modalClearButtonText}>Limpiar</ThemedText>
                         </TouchableOpacity>
-                        
+
                         <TouchableOpacity style={styles.modalAcceptButton} onPress={acceptSignature}>
                           <Ionicons name="checkmark" size={20} color="#000000" />
                           <ThemedText style={styles.modalAcceptButtonText}>Aceptar</ThemedText>
@@ -1832,7 +1863,7 @@ export default function SatisfactionSurveysScreen() {
                     <ThemedView style={styles.sectionHeader}>
                       <ThemedText style={styles.sectionTitle}>Responsable de la encuesta</ThemedText>
                     </ThemedView>
-                    
+
                     <ThemedView style={styles.formGroup}>
                       <ThemedText style={styles.label}>Nombre:</ThemedText>
                       <TextInput

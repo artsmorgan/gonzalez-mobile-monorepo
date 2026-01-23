@@ -29,12 +29,22 @@ export async function createVoiceNote({
         if (!marcaId) {
             throw new Error('Marca ID not found');
         }
-        
-        const token = await AsyncStorage.getItem('access_token');
+
+        let token = await AsyncStorage.getItem('access_token');
         if (!token) {
-            throw new Error('No authentication token found');
+            if (refreshAccessToken) {
+                const refreshed = await refreshAccessToken();
+                if (!refreshed) {
+                    if (logout) await logout();
+                    throw new Error('Sesión expirada');
+                }
+                token = await AsyncStorage.getItem('access_token');
+            } else {
+                if (logout) await logout();
+                throw new Error('Sesión expirada');
+            }
         }
-        
+
         const response = await fetch(`${apiUrl}/api/voice-notes`, {
             method: 'POST',
             headers: {
@@ -44,8 +54,8 @@ export async function createVoiceNote({
             },
             body: JSON.stringify(requestData),
         });
-    
-        if (response.status === 401 || response.status === 403) {
+
+        if (response.status === 401) {
             if (refreshAccessToken) {
                 const refreshed = await refreshAccessToken();
                 if (refreshed) {
@@ -56,11 +66,16 @@ export async function createVoiceNote({
                 }
             }
         }
-    
+
+        if (response.status === 403) {
+            if (logout) await logout();
+            throw new Error('Acceso denegado');
+        }
+
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
-    
+
         const data = await response.json();
         return data;
     } catch (error) {
@@ -79,12 +94,22 @@ export async function deleteVoiceNote({
         if (!apiUrl) {
             throw new Error('Server URL not configured');
         }
-        
-        const token = await AsyncStorage.getItem('access_token');
+
+        let token = await AsyncStorage.getItem('access_token');
         if (!token) {
-            throw new Error('No authentication token found');
+            if (refreshAccessToken) {
+                const refreshed = await refreshAccessToken();
+                if (!refreshed) {
+                    if (logout) await logout();
+                    throw new Error('Sesión expirada');
+                }
+                token = await AsyncStorage.getItem('access_token');
+            } else {
+                if (logout) await logout();
+                throw new Error('Sesión expirada');
+            }
         }
-        
+
         const response = await fetch(`${apiUrl}/api/voice-notes/${voiceNoteId}`, {
             method: 'DELETE',
             headers: {
@@ -93,8 +118,8 @@ export async function deleteVoiceNote({
                 'ngrok-skip-browser-warning': '69420',
             },
         });
-    
-        if (response.status === 401 || response.status === 403) {
+
+        if (response.status === 401) {
             if (refreshAccessToken) {
                 const refreshed = await refreshAccessToken();
                 if (refreshed) {
@@ -105,11 +130,16 @@ export async function deleteVoiceNote({
                 }
             }
         }
-    
+
+        if (response.status === 403) {
+            if (logout) await logout();
+            throw new Error('Acceso denegado');
+        }
+
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
-    
+
         const data = await response.json();
         return data;
     } catch (error) {

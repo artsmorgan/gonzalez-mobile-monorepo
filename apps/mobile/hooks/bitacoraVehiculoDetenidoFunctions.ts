@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 
-type BasicResponse = { status: boolean; message?: string; [k: string]: any };
+type BasicResponse = { status: boolean; message?: string;[k: string]: any };
 
 export type BitacoraVehiculoDetenidoItem = {
   id: number;
@@ -55,13 +55,17 @@ const getApiUrl = () => {
   return apiUrl;
 };
 
-async function getToken(refreshAccessToken?: () => Promise<boolean>) {
+async function getToken(refreshAccessToken?: () => Promise<boolean>, logout?: () => Promise<any>) {
   let token = await AsyncStorage.getItem('access_token');
   if (!token && refreshAccessToken) {
     const refreshed = await refreshAccessToken();
     if (refreshed) token = await AsyncStorage.getItem('access_token');
+    else if (logout) await logout();
   }
-  if (!token) throw new Error('No authentication token found');
+  if (!token) {
+    if (logout) await logout();
+    throw new Error('Sesión expirada');
+  }
   return token;
 }
 
@@ -75,7 +79,7 @@ export async function listBitacoraVehiculoDetenido({
 }: ListParams): Promise<ListBitacoraResponse> {
   try {
     const apiUrl = getApiUrl();
-    const token = await getToken(refreshAccessToken);
+    const token = await getToken(refreshAccessToken, logout);
     const params = new URLSearchParams();
     if (marcaId) params.set('m', String(marcaId));
     // si vienen ids directos, los mandamos también (el server prioriza estos cuando están completos)
@@ -92,13 +96,18 @@ export async function listBitacoraVehiculoDetenido({
       },
     });
 
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
       if (refreshAccessToken) {
         const refreshed = await refreshAccessToken();
         if (refreshed) return listBitacoraVehiculoDetenido({ marcaId, refreshAccessToken, logout });
         if (logout) await logout();
       }
       return { status: false, message: 'Sesión expirada' };
+    }
+
+    if (response.status === 403) {
+      if (logout) await logout();
+      throw new Error('Acceso denegado');
     }
 
     const data = await response.json();
@@ -112,7 +121,7 @@ export async function listBitacoraVehiculoDetenido({
 export async function createBitacoraVehiculoDetenido({ requestData, refreshAccessToken, logout }: CreateParams): Promise<BasicResponse> {
   try {
     const apiUrl = getApiUrl();
-    const token = await getToken(refreshAccessToken);
+    const token = await getToken(refreshAccessToken, logout);
     const response = await fetch(`${apiUrl}/api/bitacora-vehiculo-detenido`, {
       method: 'POST',
       headers: {
@@ -123,7 +132,7 @@ export async function createBitacoraVehiculoDetenido({ requestData, refreshAcces
       body: JSON.stringify(requestData),
     });
 
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
       if (refreshAccessToken) {
         const refreshed = await refreshAccessToken();
         if (refreshed) return createBitacoraVehiculoDetenido({ requestData, refreshAccessToken, logout });
@@ -144,7 +153,7 @@ export async function createBitacoraVehiculoDetenido({ requestData, refreshAcces
 export async function updateBitacoraVehiculoDetenido({ id, requestData, refreshAccessToken, logout }: UpdateParams): Promise<BasicResponse> {
   try {
     const apiUrl = getApiUrl();
-    const token = await getToken(refreshAccessToken);
+    const token = await getToken(refreshAccessToken, logout);
     const response = await fetch(`${apiUrl}/api/bitacora-vehiculo-detenido/${id}`, {
       method: 'PUT',
       headers: {
@@ -155,13 +164,18 @@ export async function updateBitacoraVehiculoDetenido({ id, requestData, refreshA
       body: JSON.stringify(requestData),
     });
 
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
       if (refreshAccessToken) {
         const refreshed = await refreshAccessToken();
         if (refreshed) return updateBitacoraVehiculoDetenido({ id, requestData, refreshAccessToken, logout });
         if (logout) await logout();
       }
       return { status: false, message: 'Sesión expirada' };
+    }
+
+    if (response.status === 403) {
+      if (logout) await logout();
+      throw new Error('Acceso denegado');
     }
 
     const data: any = await response.json().catch(() => ({}));
@@ -176,7 +190,7 @@ export async function updateBitacoraVehiculoDetenido({ id, requestData, refreshA
 export async function deleteBitacoraVehiculoDetenido({ id, refreshAccessToken, logout }: DeleteParams): Promise<BasicResponse> {
   try {
     const apiUrl = getApiUrl();
-    const token = await getToken(refreshAccessToken);
+    const token = await getToken(refreshAccessToken, logout);
     const response = await fetch(`${apiUrl}/api/bitacora-vehiculo-detenido/${id}`, {
       method: 'DELETE',
       headers: {
@@ -186,13 +200,18 @@ export async function deleteBitacoraVehiculoDetenido({ id, refreshAccessToken, l
       },
     });
 
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
       if (refreshAccessToken) {
         const refreshed = await refreshAccessToken();
         if (refreshed) return deleteBitacoraVehiculoDetenido({ id, refreshAccessToken, logout });
         if (logout) await logout();
       }
       return { status: false, message: 'Sesión expirada' };
+    }
+
+    if (response.status === 403) {
+      if (logout) await logout();
+      throw new Error('Acceso denegado');
     }
 
     const data: any = await response.json().catch(() => ({}));

@@ -93,10 +93,14 @@ export const listIncidentsByMarca = async ({ marcaId, refreshAccessToken, logout
     if (!token) {
       if (refreshAccessToken) {
         const refreshed = await refreshAccessToken();
-        if (!refreshed) throw new Error('No authentication token found');
+        if (!refreshed) {
+          if (logout) await logout();
+          throw new Error('Sesión expirada');
+        }
         token = await AsyncStorage.getItem('access_token');
       } else {
-        throw new Error('No authentication token found');
+        if (logout) await logout();
+        throw new Error('Sesión expirada');
       }
     }
 
@@ -109,13 +113,18 @@ export const listIncidentsByMarca = async ({ marcaId, refreshAccessToken, logout
       },
     });
 
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
       if (refreshAccessToken) {
         const refreshed = await refreshAccessToken();
         if (refreshed) return listIncidentsByMarca({ marcaId, refreshAccessToken, logout });
         if (logout) await logout();
       }
       return { status: false, message: 'Sesión expirada' };
+    }
+
+    if (response.status === 403) {
+      if (logout) await logout();
+      throw new Error('Acceso denegado');
     }
 
     const data = await response.json();
@@ -135,10 +144,14 @@ export const listIncidentClassifications = async ({ refreshAccessToken, logout }
     if (!token) {
       if (refreshAccessToken) {
         const refreshed = await refreshAccessToken();
-        if (!refreshed) throw new Error('No authentication token found');
+        if (!refreshed) {
+          if (logout) await logout();
+          throw new Error('Sesión expirada');
+        }
         token = await AsyncStorage.getItem('access_token');
       } else {
-        throw new Error('No authentication token found');
+        if (logout) await logout();
+        throw new Error('Sesión expirada');
       }
     }
 
@@ -151,13 +164,18 @@ export const listIncidentClassifications = async ({ refreshAccessToken, logout }
       },
     });
 
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
       if (refreshAccessToken) {
         const refreshed = await refreshAccessToken();
         if (refreshed) return listIncidentClassifications({ refreshAccessToken, logout });
         if (logout) await logout();
       }
       return { status: false, message: 'Sesión expirada' };
+    }
+
+    if (response.status === 403) {
+      if (logout) await logout();
+      throw new Error('Acceso denegado');
     }
 
     const data = await response.json();
@@ -177,10 +195,14 @@ export const listExecutives = async ({ refreshAccessToken, logout }: ListExecuti
     if (!token) {
       if (refreshAccessToken) {
         const refreshed = await refreshAccessToken();
-        if (!refreshed) throw new Error('No authentication token found');
+        if (!refreshed) {
+          if (logout) await logout();
+          throw new Error('Sesión expirada');
+        }
         token = await AsyncStorage.getItem('access_token');
       } else {
-        throw new Error('No authentication token found');
+        if (logout) await logout();
+        throw new Error('Sesión expirada');
       }
     }
 
@@ -193,13 +215,18 @@ export const listExecutives = async ({ refreshAccessToken, logout }: ListExecuti
       },
     });
 
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
       if (refreshAccessToken) {
         const refreshed = await refreshAccessToken();
         if (refreshed) return listExecutives({ refreshAccessToken, logout });
         if (logout) await logout();
       }
       return { status: false, message: 'Sesión expirada' };
+    }
+
+    if (response.status === 403) {
+      if (logout) await logout();
+      throw new Error('Acceso denegado');
     }
 
     const data = await response.json();
@@ -222,11 +249,13 @@ export const createIncident = async ({ requestData, refreshAccessToken, logout }
       if (refreshAccessToken) {
         const refreshed = await refreshAccessToken();
         if (!refreshed) {
-          throw new Error('No authentication token found');
+          if (logout) await logout();
+          throw new Error('Sesión expirada');
         }
         token = await AsyncStorage.getItem('access_token');
       } else {
-        throw new Error('No authentication token found');
+        if (logout) await logout();
+        throw new Error('Sesión expirada');
       }
     }
 
@@ -249,7 +278,7 @@ export const createIncident = async ({ requestData, refreshAccessToken, logout }
       body: JSON.stringify(payload),
     });
 
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
       if (refreshAccessToken) {
         const refreshed = await refreshAccessToken();
         if (refreshed) {
@@ -260,6 +289,11 @@ export const createIncident = async ({ requestData, refreshAccessToken, logout }
         }
       }
       return { status: false, message: 'Sesión expirada' };
+    }
+
+    if (response.status === 403) {
+      if (logout) await logout();
+      throw new Error('Acceso denegado');
     }
 
     if (!response.ok) {
@@ -287,11 +321,13 @@ export const updateIncident = async ({ requestData, incidentId, refreshAccessTok
       if (refreshAccessToken) {
         const refreshed = await refreshAccessToken();
         if (!refreshed) {
-          throw new Error('No authentication token found');
+          if (logout) await logout();
+          throw new Error('Sesión expirada');
         }
         token = await AsyncStorage.getItem('access_token');
       } else {
-        throw new Error('No authentication token found');
+        if (logout) await logout();
+        throw new Error('Sesión expirada');
       }
     }
 
@@ -305,7 +341,7 @@ export const updateIncident = async ({ requestData, incidentId, refreshAccessTok
       body: JSON.stringify(requestData),
     });
 
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
       if (refreshAccessToken) {
         const refreshed = await refreshAccessToken();
         if (refreshed) {
@@ -316,6 +352,11 @@ export const updateIncident = async ({ requestData, incidentId, refreshAccessTok
         }
       }
       return { status: false, message: 'Sesión expirada' };
+    }
+
+    if (response.status === 403) {
+      if (logout) await logout();
+      throw new Error('Acceso denegado');
     }
 
     if (!response.ok) {
@@ -346,10 +387,14 @@ export const deleteIncident = async ({ incidentId, refreshAccessToken, logout }:
     if (!token) {
       if (refreshAccessToken) {
         const refreshed = await refreshAccessToken();
-        if (!refreshed) throw new Error('No authentication token found');
+        if (!refreshed) {
+          if (logout) await logout();
+          throw new Error('Sesión expirada');
+        }
         token = await AsyncStorage.getItem('access_token');
       } else {
-        throw new Error('No authentication token found');
+        if (logout) await logout();
+        throw new Error('Sesión expirada');
       }
     }
 
@@ -362,7 +407,7 @@ export const deleteIncident = async ({ incidentId, refreshAccessToken, logout }:
       },
     });
 
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
       if (refreshAccessToken) {
         const refreshed = await refreshAccessToken();
         if (refreshed) return deleteIncident({ incidentId, refreshAccessToken, logout });
@@ -396,10 +441,14 @@ export const deleteIncidentFile = async ({ incidentId, fileId, refreshAccessToke
     if (!token) {
       if (refreshAccessToken) {
         const refreshed = await refreshAccessToken();
-        if (!refreshed) throw new Error('No authentication token found');
+        if (!refreshed) {
+          if (logout) await logout();
+          throw new Error('Sesión expirada');
+        }
         token = await AsyncStorage.getItem('access_token');
       } else {
-        throw new Error('No authentication token found');
+        if (logout) await logout();
+        throw new Error('Sesión expirada');
       }
     }
 
@@ -412,13 +461,18 @@ export const deleteIncidentFile = async ({ incidentId, fileId, refreshAccessToke
       },
     });
 
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
       if (refreshAccessToken) {
         const refreshed = await refreshAccessToken();
         if (refreshed) return deleteIncidentFile({ incidentId, fileId, refreshAccessToken, logout });
         if (logout) await logout();
       }
       return { status: false, message: 'Sesión expirada' };
+    }
+
+    if (response.status === 403) {
+      if (logout) await logout();
+      throw new Error('Acceso denegado');
     }
 
     const data: any = await response.json().catch(() => ({}));
@@ -443,10 +497,14 @@ export const listIncidentContributions = async ({
     if (!token) {
       if (refreshAccessToken) {
         const refreshed = await refreshAccessToken();
-        if (!refreshed) throw new Error('No authentication token found');
+        if (!refreshed) {
+          if (logout) await logout();
+          throw new Error('Sesión expirada');
+        }
         token = await AsyncStorage.getItem('access_token');
       } else {
-        throw new Error('No authentication token found');
+        if (logout) await logout();
+        throw new Error('Sesión expirada');
       }
     }
 
@@ -459,13 +517,18 @@ export const listIncidentContributions = async ({
       },
     });
 
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
       if (refreshAccessToken) {
         const refreshed = await refreshAccessToken();
         if (refreshed) return listIncidentContributions({ incidentId, refreshAccessToken, logout });
         if (logout) await logout();
       }
       return { status: false, message: 'Sesión expirada' };
+    }
+
+    if (response.status === 403) {
+      if (logout) await logout();
+      throw new Error('Acceso denegado');
     }
 
     const data = await response.json();
@@ -490,10 +553,14 @@ export const createIncidentContribution = async ({
     if (!token) {
       if (refreshAccessToken) {
         const refreshed = await refreshAccessToken();
-        if (!refreshed) throw new Error('No authentication token found');
+        if (!refreshed) {
+          if (logout) await logout();
+          throw new Error('Sesión expirada');
+        }
         token = await AsyncStorage.getItem('access_token');
       } else {
-        throw new Error('No authentication token found');
+        if (logout) await logout();
+        throw new Error('Sesión expirada');
       }
     }
 
@@ -515,13 +582,18 @@ export const createIncidentContribution = async ({
       body: JSON.stringify(payload),
     });
 
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
       if (refreshAccessToken) {
         const refreshed = await refreshAccessToken();
         if (refreshed) return createIncidentContribution({ incidentId, requestData, refreshAccessToken, logout });
         if (logout) await logout();
       }
       return { status: false, message: 'Sesión expirada' };
+    }
+
+    if (response.status === 403) {
+      if (logout) await logout();
+      throw new Error('Acceso denegado');
     }
 
     const data: any = await response.json().catch(() => ({}));
@@ -548,10 +620,14 @@ export const updateIncidentContribution = async ({
     if (!token) {
       if (refreshAccessToken) {
         const refreshed = await refreshAccessToken();
-        if (!refreshed) throw new Error('No authentication token found');
+        if (!refreshed) {
+          if (logout) await logout();
+          throw new Error('Sesión expirada');
+        }
         token = await AsyncStorage.getItem('access_token');
       } else {
-        throw new Error('No authentication token found');
+        if (logout) await logout();
+        throw new Error('Sesión expirada');
       }
     }
 
@@ -573,13 +649,18 @@ export const updateIncidentContribution = async ({
       body: JSON.stringify(payload),
     });
 
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
       if (refreshAccessToken) {
         const refreshed = await refreshAccessToken();
         if (refreshed) return updateIncidentContribution({ incidentId, contributionId, requestData, refreshAccessToken, logout });
         if (logout) await logout();
       }
       return { status: false, message: 'Sesión expirada' };
+    }
+
+    if (response.status === 403) {
+      if (logout) await logout();
+      throw new Error('Acceso denegado');
     }
 
     const data: any = await response.json().catch(() => ({}));
@@ -605,10 +686,14 @@ export const deleteIncidentContribution = async ({
     if (!token) {
       if (refreshAccessToken) {
         const refreshed = await refreshAccessToken();
-        if (!refreshed) throw new Error('No authentication token found');
+        if (!refreshed) {
+          if (logout) await logout();
+          throw new Error('Sesión expirada');
+        }
         token = await AsyncStorage.getItem('access_token');
       } else {
-        throw new Error('No authentication token found');
+        if (logout) await logout();
+        throw new Error('Sesión expirada');
       }
     }
 
@@ -621,13 +706,18 @@ export const deleteIncidentContribution = async ({
       },
     });
 
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
       if (refreshAccessToken) {
         const refreshed = await refreshAccessToken();
         if (refreshed) return deleteIncidentContribution({ incidentId, contributionId, refreshAccessToken, logout });
         if (logout) await logout();
       }
       return { status: false, message: 'Sesión expirada' };
+    }
+
+    if (response.status === 403) {
+      if (logout) await logout();
+      throw new Error('Acceso denegado');
     }
 
     const data: any = await response.json().catch(() => ({}));
@@ -654,10 +744,14 @@ export const deleteIncidentContributionFile = async ({
     if (!token) {
       if (refreshAccessToken) {
         const refreshed = await refreshAccessToken();
-        if (!refreshed) throw new Error('No authentication token found');
+        if (!refreshed) {
+          if (logout) await logout();
+          throw new Error('Sesión expirada');
+        }
         token = await AsyncStorage.getItem('access_token');
       } else {
-        throw new Error('No authentication token found');
+        if (logout) await logout();
+        throw new Error('Sesión expirada');
       }
     }
 
@@ -670,13 +764,18 @@ export const deleteIncidentContributionFile = async ({
       },
     });
 
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
       if (refreshAccessToken) {
         const refreshed = await refreshAccessToken();
         if (refreshed) return deleteIncidentContributionFile({ incidentId, contributionId, fileId, refreshAccessToken, logout });
         if (logout) await logout();
       }
       return { status: false, message: 'Sesión expirada' };
+    }
+
+    if (response.status === 403) {
+      if (logout) await logout();
+      throw new Error('Acceso denegado');
     }
 
     const data: any = await response.json().catch(() => ({}));

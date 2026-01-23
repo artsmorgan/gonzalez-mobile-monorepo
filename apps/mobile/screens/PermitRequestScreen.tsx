@@ -198,8 +198,15 @@ export default function PermitRequestScreen() {
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) return undefined;
 
-      const token = await AsyncStorage.getItem('access_token');
-      if (!token) return undefined;
+      let token = await AsyncStorage.getItem('access_token');
+      if (!token) {
+        const refreshed = await refreshAccessToken();
+        if (!refreshed) {
+          if (logout) await logout();
+          throw new Error('Sesión expirada');
+        }
+        token = await AsyncStorage.getItem('access_token');
+      }
 
       const resp = await fetch(`${apiUrl}/api/empleados/${empleadoId}`, {
         method: 'GET',
@@ -209,6 +216,18 @@ export default function PermitRequestScreen() {
           'ngrok-skip-browser-warning': '69420',
         },
       });
+
+      if (resp.status === 401) {
+        const refreshed = await refreshAccessToken();
+        if (refreshed) return fetchEmpleadoDetalleIfPossible(empleadoId);
+        await logout();
+        return undefined;
+      }
+
+      if (resp.status === 403) {
+        if (logout) await logout();
+        throw new Error('Acceso denegado');
+      }
 
       if (!resp.ok) return undefined;
       const data = await resp.json();
@@ -363,7 +382,11 @@ export default function PermitRequestScreen() {
             let token = await AsyncStorage.getItem('access_token');
             if (!token) {
               const refreshed = await refreshAccessToken();
-              if (refreshed) token = await AsyncStorage.getItem('access_token');
+              if (!refreshed) {
+                if (logout) await logout();
+                throw new Error('Sesión expirada');
+              }
+              token = await AsyncStorage.getItem('access_token');
             }
 
             if (token) {
@@ -376,28 +399,19 @@ export default function PermitRequestScreen() {
                 },
               });
 
-              if (resp.status === 401 || resp.status === 403) {
+              if (resp.status === 401) {
                 const refreshed = await refreshAccessToken();
-                if (refreshed) {
-                  const token2 = await AsyncStorage.getItem('access_token');
-                  if (token2) {
-                    const resp2 = await fetch(`${apiUrl}/api/empleados/corpo/${corpoId}`, {
-                      method: 'GET',
-                      headers: {
-                        'Authorization': `Bearer ${token2}`,
-                        'Content-Type': 'application/json',
-                        'ngrok-skip-browser-warning': '69420',
-                      },
-                    });
-                    if (resp2.ok) {
-                      const json2 = await resp2.json();
-                      const empleados: CorpoEmpleado[] = Array.isArray(json2.empleados) ? json2.empleados : [];
-                      setEmpleadosCorpo(empleados);
-                      await AsyncStorage.setItem(cacheKey, JSON.stringify(empleados));
-                    }
-                  }
-                }
-              } else if (resp.ok) {
+                if (refreshed) return fetchPermits();
+                await logout();
+                return;
+              }
+
+              if (resp.status === 403) {
+                if (logout) await logout();
+                throw new Error('Acceso denegado');
+              }
+
+              if (resp.ok) {
                 const json = await resp.json();
                 const empleados: CorpoEmpleado[] = Array.isArray(json.empleados) ? json.empleados : [];
                 setEmpleadosCorpo(empleados);
@@ -470,8 +484,8 @@ export default function PermitRequestScreen() {
   // Actualizar selectedSustitutoId cuando se carguen los empleados y estemos en modo edición
   useEffect(() => {
     if (editingRecord && empleadosCorpo.length > 0 && permisoSustituidoPor) {
-      const sustitutoMatch = empleadosCorpo.find(emp => 
-        emp.nombre === permisoSustituidoPor || 
+      const sustitutoMatch = empleadosCorpo.find(emp =>
+        emp.nombre === permisoSustituidoPor ||
         (emp.codigo && emp.codigo === codigoSustituto)
       );
       if (sustitutoMatch && selectedSustitutoId !== String(sustitutoMatch.id)) {
@@ -544,11 +558,11 @@ export default function PermitRequestScreen() {
     setMotivoPermiso(record.motivo_permiso || '');
     setPermisoSustituidoPor(record.permiso_sustituido_por || '');
     setCodigoSustituto(record.codigo_sustituto || '');
-    
+
     // Intentar encontrar el sustituto en la lista de empleados
     if (record.permiso_sustituido_por && empleadosCorpo.length > 0) {
-      const sustitutoMatch = empleadosCorpo.find(emp => 
-        emp.nombre === record.permiso_sustituido_por || 
+      const sustitutoMatch = empleadosCorpo.find(emp =>
+        emp.nombre === record.permiso_sustituido_por ||
         (emp.codigo && emp.codigo === record.codigo_sustituto)
       );
       if (sustitutoMatch) {
@@ -934,7 +948,7 @@ export default function PermitRequestScreen() {
             <ThemedView style={styles.listItemHeader}>
               <ThemedView style={styles.listItemContent}>
                 <ThemedText style={styles.listItemTitle}>
-                  { record.persona_solicita || 'N/A'}
+                  {record.persona_solicita || 'N/A'}
                 </ThemedText>
                 <ThemedText style={styles.listItemSubtitle}>
                   Divisón: {record.division ? `${record.division}` : ''}

@@ -6,14 +6,9 @@ import { getActivities } from "../../../../utils/createActivities";
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
-        const { valid, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = verifyAccessToken(req);
 
-        if (!valid) {
-            return NextResponse.json(
-                { status: false, message: message },
-                { status: 401 }
-            );
-        }
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         const resolvedParams = await context.params;
         const id = parseInt(resolvedParams.id);
@@ -95,7 +90,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                         }
                         const title = "Ingreso de trabajo confirmado";
                         const description = `El empleado ${empleado.nombre} ${empleado.primer_apellido} ha ingresado a su puesto de ${current_puesto.nombre}${desc_tardia}`;
-                        await sendNotificationByRole(marcaDia.id, title, description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+                        await sendNotificationByRole(marcaDia.corpo_id, [marcaDia.plaza_id], title, description, ["ADMINISTRATIVO", "SUPERVISOR"]);
                     }
                 }
                 break;
@@ -164,7 +159,7 @@ async function marcar_salida(id: number, horaAccion: string, reason: string) {
                 const fecha_salida_string = now.toISOString().split('T')[0];
                 const hora_salida_string = now.toISOString().split('T')[1].split('.')[0];
                 const description = `El empleado ${empleado.nombre} ${empleado.primer_apellido} ha salido anticipadamente el día ${fecha_salida_string} a las ${hora_salida_string}. Motivo: ${reason}`;
-                await sendNotificationByRole(marcaDia.id, title, description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+                await sendNotificationByRole(marcaDia.corpo_id, [marcaDia.plaza_id], title, description, ["ADMINISTRATIVO", "SUPERVISOR"]);
             }
         }
 
@@ -225,7 +220,7 @@ async function check_unmarked_activities(id: number) {
                 unmarked_activities = unmarked_activities.slice(0, -2);
                 const title = "Actividades sin marcar";
                 const description = `El empleado ${empleado.nombre} ${empleado.primer_apellido} marcó salida sin haber marcado las siguientes actividades: ${unmarked_activities}`;
-                await sendNotificationByRole(marcaDia.id, title, description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+                await sendNotificationByRole(marcaDia.corpo_id, [marcaDia.plaza_id], title, description, ["ADMINISTRATIVO", "SUPERVISOR"]);
             }
         }
     }

@@ -8,14 +8,9 @@ export async function PUT(
 ) {
     try {
         /*
-        const { valid, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = verifyAccessToken(req);
 
-        if (!valid) {
-            return NextResponse.json(
-                { status: false, message: message },
-                { status: 401 }
-            );
-        }
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         const resolvedParams = await context.params;
         const { id } = resolvedParams;
@@ -78,14 +73,9 @@ export async function DELETE(
 ) {
     try {
         /*
-        const { valid, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = verifyAccessToken(req);
 
-        if (!valid) {
-            return NextResponse.json(
-                { status: false, message: message },
-                { status: 401 }
-            );
-        }
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         const resolvedParams = await context.params;
         const { id } = resolvedParams;

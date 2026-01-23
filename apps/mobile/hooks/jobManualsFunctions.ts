@@ -54,7 +54,8 @@ export const createJobManual = async ({
   if (!token) {
     const refreshed = await refreshAccessToken();
     if (!refreshed) {
-      throw new Error('No authentication token found');
+      if (logout) await logout();
+      throw new Error('Sesión expirada');
     }
     token = await AsyncStorage.getItem('access_token');
   }
@@ -72,7 +73,7 @@ export const createJobManual = async ({
     }),
   });
 
-  if (response.status === 401 || response.status === 403) {
+  if (response.status === 401) {
     const refreshed = await refreshAccessToken();
     if (refreshed) {
       return createJobManual({ requestData, marcaId, refreshAccessToken, logout });
@@ -80,6 +81,11 @@ export const createJobManual = async ({
       await logout();
       return { status: false, message: 'Sesión expirada' };
     }
+  }
+
+  if (response.status === 403) {
+    if (logout) await logout();
+    throw new Error('Acceso denegado');
   }
 
   const data = await response.json();
@@ -100,7 +106,8 @@ export const listJobManualsByMarca = async ({
   if (!token) {
     const refreshed = await refreshAccessToken();
     if (!refreshed) {
-      throw new Error('No authentication token found');
+      if (logout) await logout();
+      throw new Error('Sesión expirada');
     }
     token = await AsyncStorage.getItem('access_token');
   }
@@ -114,7 +121,7 @@ export const listJobManualsByMarca = async ({
     },
   });
 
-  if (response.status === 401 || response.status === 403) {
+  if (response.status === 401) {
     const refreshed = await refreshAccessToken();
     if (refreshed) {
       return listJobManualsByMarca({ marcaId, refreshAccessToken, logout });
@@ -122,6 +129,11 @@ export const listJobManualsByMarca = async ({
       await logout();
       return { status: false, message: 'Sesión expirada' };
     }
+  }
+
+  if (response.status === 403) {
+    if (logout) await logout();
+    throw new Error('Acceso denegado');
   }
 
   const data = await response.json();
@@ -142,7 +154,8 @@ export const deleteJobManual = async ({
   if (!token) {
     const refreshed = await refreshAccessToken();
     if (!refreshed) {
-      throw new Error('No authentication token found');
+      if (logout) await logout();
+      throw new Error('Sesión expirada');
     }
     token = await AsyncStorage.getItem('access_token');
   }
@@ -156,7 +169,7 @@ export const deleteJobManual = async ({
     },
   });
 
-  if (response.status === 401 || response.status === 403) {
+  if (response.status === 401) {
     const refreshed = await refreshAccessToken();
     if (refreshed) {
       return deleteJobManual({ id, refreshAccessToken, logout });
@@ -164,6 +177,11 @@ export const deleteJobManual = async ({
       await logout();
       return { status: false, message: 'Sesión expirada' };
     }
+  }
+
+  if (response.status === 403) {
+    if (logout) await logout();
+    throw new Error('Acceso denegado');
   }
 
   const data = await response.json();
@@ -188,7 +206,8 @@ export const signJobManual = async ({
   if (!token) {
     const refreshed = await refreshAccessToken();
     if (!refreshed) {
-      throw new Error('No authentication token found');
+      if (logout) await logout();
+      throw new Error('Sesión expirada');
     }
     token = await AsyncStorage.getItem('access_token');
   }
@@ -203,7 +222,7 @@ export const signJobManual = async ({
     body: JSON.stringify({ firma_empleado: firma, marca_id: marcaId, quiz_answear: quizAnswear ?? null, files: files ?? null }),
   });
 
-  if (response.status === 401 || response.status === 403) {
+  if (response.status === 401) {
     const refreshed = await refreshAccessToken();
     if (refreshed) {
       return signJobManual({ id, firma, quizAnswear, files, refreshAccessToken, logout, marcaId });
@@ -211,6 +230,11 @@ export const signJobManual = async ({
       await logout();
       return { status: false, message: 'Sesión expirada' };
     }
+  }
+
+  if (response.status === 403) {
+    if (logout) await logout();
+    throw new Error('Acceso denegado');
   }
 
   const data = await response.json();
@@ -234,7 +258,8 @@ export const putJobManualQuizResult = async ({
   if (!token) {
     const refreshed = await refreshAccessToken();
     if (!refreshed) {
-      throw new Error('No authentication token found');
+      if (logout) await logout();
+      throw new Error('Sesión expirada');
     }
     token = await AsyncStorage.getItem('access_token');
   }
@@ -249,7 +274,7 @@ export const putJobManualQuizResult = async ({
     body: JSON.stringify({ empleado_id: empleadoId, approved, marca_id: marcaId }),
   });
 
-  if (response.status === 401 || response.status === 403) {
+  if (response.status === 401) {
     const refreshed = await refreshAccessToken();
     if (refreshed) {
       return putJobManualQuizResult({ id, marcaId, empleadoId, approved, refreshAccessToken, logout });
@@ -257,6 +282,11 @@ export const putJobManualQuizResult = async ({
       await logout();
       return { status: false, message: 'Sesión expirada' };
     }
+  }
+
+  if (response.status === 403) {
+    if (logout) await logout();
+    throw new Error('Acceso denegado');
   }
 
   const data = await response.json();

@@ -6,10 +6,8 @@ import { prisma } from "../../../../../../utils/prismaClient";
 // GET: devuelve las marcas del usuario para hoy y los próximos 30 días
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
-        const { valid, message } = verifyAccessToken(req);
-        if (!valid) {
-            return NextResponse.json({ status: false, message }, { status: 401 });
-        }
+        const { valid, expired, payload, message } = verifyAccessToken(req);
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         const { id } = await context.params;
         const empleadoId = parseInt(id, 10);

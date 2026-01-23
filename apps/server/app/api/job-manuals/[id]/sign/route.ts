@@ -43,13 +43,8 @@ export async function POST(
     context: { params: Promise<{ id: string }> }
 ) {
     try {
-        const { valid, payload, message } = verifyAccessToken(req);
-        if (!valid) {
-            return NextResponse.json(
-                { status: false, message },
-                { status: 401 }
-            );
-        }
+        const { valid, expired, payload, message } = verifyAccessToken(req);
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         const resolvedParams = await context.params;
         const id = parseInt(resolvedParams.id);
@@ -258,7 +253,7 @@ export async function POST(
         const description = `El empleado ${empleado.nombre} ${empleado.primer_apellido} ${empleado.segundo_apellido} ha firmado el manual ${manual.title} desde el puesto ${puesto.nombre} en la sucursal ${corpo.nombre} el día ${fecha_string} a las ${hora_string}`;
         // Notificaciones NO deben bloquear la firma (si fallan, solo registrar warning)
         try {
-            await sendNotificationByRole(marca.id, "Firma de manual", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+            await sendNotificationByRole(marca.corpo_id, [marca.plaza_id], "Firma de manual", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
         } catch (err) {
             console.warn("Fallo enviando notificación por rol (no bloquea la firma):", err);
         }
@@ -270,7 +265,7 @@ export async function POST(
         if (creator) {
             const description = `El empleado ${creator.nombre} ${creator.primer_apellido} ${creator.segundo_apellido} ha firmado el manual ${manual.title} desde el puesto ${puesto.nombre} en la sucursal ${corpo.nombre} el día ${fecha_string} a las ${hora_string}`;
             try {
-                await sendNotificationByEmployee(marca.id, "Firma de manual", description, [creator.id]);
+                await sendNotificationByEmployee(marca.corpo_id, [creator.id], "Firma de manual", description, [creator.id]);
             } catch (err) {
                 console.warn("Fallo enviando notificación al creador (no bloquea la firma):", err);
             }

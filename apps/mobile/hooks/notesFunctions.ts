@@ -37,12 +37,22 @@ export async function createNote({
         if (!puestoId) {
             throw new Error('Puesto ID not found');
         }
-        
-        const token = await AsyncStorage.getItem('access_token');
+
+        let token = await AsyncStorage.getItem('access_token');
         if (!token) {
-            throw new Error('No authentication token found');
+            if (refreshAccessToken) {
+                const refreshed = await refreshAccessToken();
+                if (!refreshed) {
+                    if (logout) await logout();
+                    throw new Error('Sesión expirada');
+                }
+                token = await AsyncStorage.getItem('access_token');
+            } else {
+                if (logout) await logout();
+                throw new Error('Sesión expirada');
+            }
         }
-        
+
         requestData.marca_id = marcaId;
 
         const response = await fetch(`${apiUrl}/api/puestos/${puestoId}/notas`, {
@@ -54,8 +64,8 @@ export async function createNote({
             },
             body: JSON.stringify(requestData),
         });
-    
-        if (response.status === 401 || response.status === 403) {
+
+        if (response.status === 401) {
             if (refreshAccessToken) {
                 const refreshed = await refreshAccessToken();
                 if (refreshed) {
@@ -66,11 +76,16 @@ export async function createNote({
                 }
             }
         }
-    
+
+        if (response.status === 403) {
+            if (logout) await logout();
+            throw new Error('Acceso denegado');
+        }
+
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
-    
+
         const data = await response.json();
         return data;
     } catch (error) {
@@ -91,7 +106,7 @@ export async function updateNote({
         if (!currentMarcaData) {
             throw new Error('Current marca data not found');
         }
-        
+
         const currentMarcaDataObject = JSON.parse(currentMarcaData);
         const marcaId = currentMarcaDataObject.id;
 
@@ -107,14 +122,24 @@ export async function updateNote({
         if (!puestoId) {
             throw new Error('Puesto ID not found');
         }
-        
-        const token = await AsyncStorage.getItem('access_token');
+
+        let token = await AsyncStorage.getItem('access_token');
         if (!token) {
-            throw new Error('No authentication token found');
+            if (refreshAccessToken) {
+                const refreshed = await refreshAccessToken();
+                if (!refreshed) {
+                    if (logout) await logout();
+                    throw new Error('Sesión expirada');
+                }
+                token = await AsyncStorage.getItem('access_token');
+            } else {
+                if (logout) await logout();
+                throw new Error('Sesión expirada');
+            }
         }
 
         requestData.marca_id = marcaId;
-        
+
         const response = await fetch(`${apiUrl}/api/puestos/${puestoId}/notas/${noteId}`, {
             method: 'PUT',
             headers: {
@@ -124,8 +149,8 @@ export async function updateNote({
             },
             body: JSON.stringify(requestData),
         });
-    
-        if (response.status === 401 || response.status === 403) {
+
+        if (response.status === 401) {
             if (refreshAccessToken) {
                 const refreshed = await refreshAccessToken();
                 if (refreshed) {
@@ -136,11 +161,16 @@ export async function updateNote({
                 }
             }
         }
-    
+
+        if (response.status === 403) {
+            if (logout) await logout();
+            throw new Error('Acceso denegado');
+        }
+
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
-    
+
         const data = await response.json();
         return data;
     } catch (error) {

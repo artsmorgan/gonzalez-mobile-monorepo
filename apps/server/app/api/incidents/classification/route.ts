@@ -4,9 +4,9 @@ import { prisma } from "../../../../utils/prismaClient";
 
 export async function GET(req: NextRequest) {
     try {
-        const { valid, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = verifyAccessToken(req);
         if (!valid) {
-            return NextResponse.json({ status: false, message }, { status: 401 });
+            return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
         }
 
         const classifications = await prisma.n_clasificacion_incidente.findMany({

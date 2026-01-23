@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessToken } from "../../../utils/verifyToken";
 import { toZonedTime } from "date-fns-tz";
 import { prisma } from "../../../utils/prismaClient";
+import { sendNotificationByRole } from "../../../utils/sendNotification";
 
 function parseFechaInput(fecha: any): Date | undefined {
     if (!fecha) return undefined;
@@ -24,17 +25,12 @@ function parseFechaInput(fecha: any): Date | undefined {
 
 export async function POST(req: NextRequest) {
     try {
-        const { valid, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = verifyAccessToken(req);
 
-        if (!valid) {
-            return NextResponse.json(
-                { status: false, message: message },
-                { status: 401 }
-            );
-        }
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
-        const { 
-            marca_id, 
+        const {
+            marca_id,
             fecha,
             division,
             renglon_edificio,
@@ -104,8 +100,43 @@ export async function POST(req: NextRequest) {
             }
         });
 
-        return NextResponse.json({ 
-            status: true, 
+        if (new_record) {
+            let empNombre = "Desconocido";
+            if (new_record.created_by) {
+                const empleado = await prisma.c_empleado.findUnique({ where: { id: Number(new_record.created_by) } });
+                if (empleado) {
+                    empNombre = empleado.nombre + " " + empleado.primer_apellido + " " + empleado.segundo_apellido;
+                }
+            }
+            let sucursalNombre = "Desconocida";
+            if (new_record.corpo_id) {
+                const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: new_record.corpo_id } });
+                if (sucursal) {
+                    sucursalNombre = sucursal.nombre + " (" + sucursal.nro_sucursal + ")";
+                }
+            }
+            let clienteNombre = "Desconocido";
+            if (new_record.cliente_id) {
+                const cliente = await prisma.e_estructura_cliente.findUnique({ where: { id: new_record.cliente_id } });
+                if (cliente) {
+                    clienteNombre = cliente.nombre;
+                }
+            }
+            let plazaNombre = "Desconocida";
+            if (new_record.plaza_id) {
+                const plaza = await prisma.e_estructura_plazas.findUnique({ where: { id: new_record.plaza_id } });
+                if (plaza) {
+                    plazaNombre = plaza.nombre + " (" + plaza.codigo_plaza + ")";
+                }
+            }
+            let fechaRegistro = new_record.created_at.toISOString().split("T")[0];
+            let horaRegistro = new_record.created_at.toISOString().split("T")[1].split(".")[0];
+            const descriptionNotificacion = "El empleado " + empNombre + " ha creado un registro de inducción y recorrido misceláneo en la sucursal " + sucursalNombre + " para el cliente " + clienteNombre + " en la plaza " + plazaNombre + " el día " + fechaRegistro + " a las " + horaRegistro;
+            sendNotificationByRole(new_record.corpo_id, [Number(new_record.created_by)], "Registro de inducción y recorrido misceláneo creado", descriptionNotificacion, ["ADMINISTRATIVO", "SUPERVISOR"]);
+        }
+
+        return NextResponse.json({
+            status: true,
             message: "Registro de inducción y recorrido creado correctamente",
             data: {
                 id: new_record.id,

@@ -4,8 +4,8 @@ import { prisma } from '../../../../../utils/prismaClient';
 
 export async function GET(req: NextRequest, context: { params: Promise<{ corpo_id: string }> }) {
   try {
-    const { valid, message } = verifyAccessToken(req);
-    if (!valid) return NextResponse.json({ status: false, message }, { status: 401 });
+    const { valid, expired, payload, message } = verifyAccessToken(req);
+    if (!valid) return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
 
     const resolvedParams = await context.params;
     const corpoId = parseInt(resolvedParams.corpo_id, 10);

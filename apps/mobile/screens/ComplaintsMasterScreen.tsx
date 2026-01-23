@@ -376,7 +376,15 @@ export default function ComplaintsMasterScreen() {
       }
 
       const location = await Location.getCurrentPositionAsync({});
-      const token = await AsyncStorage.getItem('access_token');
+      let token = await AsyncStorage.getItem('access_token');
+      if (!token) {
+        const refreshed = await refreshAccessToken();
+        if (!refreshed) {
+          if (logout) await logout();
+          throw new Error('Sesión expirada');
+        }
+        token = await AsyncStorage.getItem('access_token');
+      }
       if (!token) {
         Alert.alert('Error', 'No se pudo obtener el token de sesión');
         return;
@@ -407,6 +415,19 @@ export default function ComplaintsMasterScreen() {
               'ngrok-skip-browser-warning': '69420',
             },
           });
+
+          if (empleadoResponse.status === 401) {
+            const refreshed = await refreshAccessToken();
+            if (refreshed) return generateSignature();
+            await logout();
+            return;
+          }
+
+          if (empleadoResponse.status === 403) {
+            if (logout) await logout();
+            throw new Error('Acceso denegado');
+          }
+
           if (empleadoResponse.ok) {
             const empleadoData = await empleadoResponse.json();
             empleadoDetalle = {
@@ -483,6 +504,19 @@ export default function ComplaintsMasterScreen() {
               'ngrok-skip-browser-warning': '69420',
             },
           });
+
+          if (empleadoResponse.status === 401) {
+            const refreshed = await refreshAccessToken();
+            if (refreshed) return handleScanQR();
+            await logout();
+            return;
+          }
+
+          if (empleadoResponse.status === 403) {
+            if (logout) await logout();
+            throw new Error('Acceso denegado');
+          }
+
           if (empleadoResponse.ok) {
             const empleadoData = await empleadoResponse.json();
             empleadoDetalle = {
@@ -1728,7 +1762,7 @@ export default function ComplaintsMasterScreen() {
     <ThemedView style={styles.container}>
       <AppHeader onMenuPress={() => setIsMenuVisible(true)} title="Maestro de Quejas" />
 
-      <ScrollView 
+      <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={true}
@@ -1744,27 +1778,27 @@ export default function ComplaintsMasterScreen() {
             </ThemedText>
           </ThemedView>
 
-        {!hasCurrentMarca && (
-          <ThemedView style={styles.warningContainer}>
-            <ThemedText style={styles.warningText}>
-              No se encontró la marca actual. Por favor, marca tu entrada primero.
-            </ThemedText>
-          </ThemedView>
-        )}
+          {!hasCurrentMarca && (
+            <ThemedView style={styles.warningContainer}>
+              <ThemedText style={styles.warningText}>
+                No se encontró la marca actual. Por favor, marca tu entrada primero.
+              </ThemedText>
+            </ThemedView>
+          )}
 
-        {hasCurrentMarca && (
-          <>
-            {!isCreating && !editingRecord && (
-              <TouchableOpacity style={styles.createButton} onPress={startCreating}>
-                <Ionicons name="add" size={24} color="#FFFFFF" />
-              </TouchableOpacity>
-            )}
+          {hasCurrentMarca && (
+            <>
+              {!isCreating && !editingRecord && (
+                <TouchableOpacity style={styles.createButton} onPress={startCreating}>
+                  <Ionicons name="add" size={24} color="#FFFFFF" />
+                </TouchableOpacity>
+              )}
 
-            {isCreating && renderForm(false)}
-            {editingRecord && renderForm(true)}
-            {!isCreating && !editingRecord && renderList()}
-          </>
-        )}
+              {isCreating && renderForm(false)}
+              {editingRecord && renderForm(true)}
+              {!isCreating && !editingRecord && renderList()}
+            </>
+          )}
         </ThemedView>
       </ScrollView>
 
@@ -2286,8 +2320,8 @@ function ComplaintFilesViewer({
               <ThemedText style={styles.viewerSectionTitle}>Imágenes</ThemedText>
               {imageFiles.map(file => (
                 <ThemedView key={file.id} style={{ backgroundColor: 'transparent' }}>
-                  <ComplaintImageViewer 
-                    imageUrl={buildComplaintFileUrl(complaintId, file)} 
+                  <ComplaintImageViewer
+                    imageUrl={buildComplaintFileUrl(complaintId, file)}
                     onDeleteFile={onDeleteFile ? () => onDeleteFile(file) : undefined}
                   />
                 </ThemedView>
@@ -2315,8 +2349,8 @@ function ComplaintFilesViewer({
               <ThemedText style={styles.viewerSectionTitle}>Videos</ThemedText>
               {videoFiles.map(file => (
                 <ThemedView key={file.id} style={{ backgroundColor: 'transparent' }}>
-                  <ComplaintVideoPlayer 
-                    sourceUrl={buildComplaintFileUrl(complaintId, file)} 
+                  <ComplaintVideoPlayer
+                    sourceUrl={buildComplaintFileUrl(complaintId, file)}
                     onDeleteFile={onDeleteFile ? () => onDeleteFile(file) : undefined}
                   />
                 </ThemedView>
@@ -2357,11 +2391,11 @@ function ComplaintFilesViewer({
   );
 }
 
-function ComplaintImageViewer({ 
-  imageUrl, 
-  onDeleteFile 
-}: { 
-  imageUrl: string; 
+function ComplaintImageViewer({
+  imageUrl,
+  onDeleteFile
+}: {
+  imageUrl: string;
   onDeleteFile?: () => void;
 }) {
   const [containerStyle, setContainerStyle] = useState<any>(styles.viewerImage);
@@ -2430,12 +2464,12 @@ function ComplaintImageViewer({
   );
 }
 
-function ComplaintAudioPlayer({ 
-  sourceUrl, 
+function ComplaintAudioPlayer({
+  sourceUrl,
   label,
-  onDeleteFile 
-}: { 
-  sourceUrl: string; 
+  onDeleteFile
+}: {
+  sourceUrl: string;
   label?: string;
   onDeleteFile?: () => void;
 }) {
@@ -2525,11 +2559,11 @@ function ComplaintAudioPlayer({
   );
 }
 
-function ComplaintVideoPlayer({ 
-  sourceUrl, 
-  onDeleteFile 
-}: { 
-  sourceUrl: string; 
+function ComplaintVideoPlayer({
+  sourceUrl,
+  onDeleteFile
+}: {
+  sourceUrl: string;
   onDeleteFile?: () => void;
 }) {
   const player = useVideoPlayer(sourceUrl);

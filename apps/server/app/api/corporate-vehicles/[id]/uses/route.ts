@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessToken } from "../../../../../utils/verifyToken";
 import { prisma } from "../../../../../utils/prismaClient";
+import { toZonedTime } from "date-fns-tz";
+import { sendNotificationByRole } from "../../../../../utils/sendNotification";
 
 export const runtime = "nodejs";
 
@@ -9,10 +11,8 @@ export async function GET(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { valid, message } = verifyAccessToken(req);
-    if (!valid) {
-      return NextResponse.json({ status: false, message }, { status: 401 });
-    }
+    const { valid, expired, payload, message } = verifyAccessToken(req);
+    if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
     const { id } = await context.params;
     const vehiculoId = parseInt(String(id), 10);
@@ -52,10 +52,8 @@ export async function POST(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { valid, message } = verifyAccessToken(req);
-    if (!valid) {
-      return NextResponse.json({ status: false, message }, { status: 401 });
-    }
+    const { valid, expired, payload, message } = verifyAccessToken(req);
+    if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
     const { id } = await context.params;
     const vehiculoId = parseInt(String(id), 10);
@@ -82,9 +80,9 @@ export async function POST(
       data: {
         vehiculo_id: vehiculoId,
         nombre_conductor: String(nombre_conductor ?? ""),
-        fecha: fecha ? new Date(fecha) : new Date(),
-        hora_inicio: hora_inicio ? new Date(hora_inicio) : new Date(),
-        hora_fin: hora_fin ? new Date(hora_fin) : new Date(),
+        fecha: fecha ? new Date(fecha) : toZonedTime(new Date(), "America/Costa_Rica"),
+        hora_inicio: hora_inicio ? new Date(hora_inicio) : toZonedTime(new Date(), "America/Costa_Rica"),
+        hora_fin: hora_fin ? new Date(hora_fin) : toZonedTime(new Date(), "America/Costa_Rica"),
         combustible_inicio: Number(combustible_inicio ?? 0),
         combustible_fin: Number(combustible_fin ?? 0),
         km_inicio: Number(km_inicio ?? 0),
@@ -93,6 +91,30 @@ export async function POST(
         firma_responsable: String(firma_responsable ?? ""),
       },
     });
+
+    if (created) {
+      const vehiculo = await prisma.c_vehiculos_corporativos.findUnique({ where: { id: created.vehiculo_id } });
+      if (vehiculo) {
+        let vehiculoPlaca = vehiculo.placa;
+        let sucursalNombre = "Desconocida";
+        if (vehiculo.sucursal_id) {
+          const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: vehiculo.sucursal_id } });
+          if (sucursal) {
+            sucursalNombre = sucursal.nombre;
+          }
+        }
+        let empNombre = "Desconocido";
+        if (Number(payload?.id ?? "0")) {
+          const empleado = await prisma.c_empleado.findUnique({ where: { id: Number(payload?.id ?? "0") } });
+          if (empleado) {
+            empNombre = empleado.nombre + " " + empleado.primer_apellido + " " + empleado.segundo_apellido;
+          }
+        }
+        let fechaRegistro = created.fecha.toISOString().split("T")[0];
+        const descriptionNotificacion = "El empleado " + empNombre + " ha registrado el uso del vehículo con la placa " + vehiculoPlaca + " en la sucursal " + sucursalNombre + " el día " + created.fecha.toISOString().split("T")[0];
+        sendNotificationByRole(vehiculo.sucursal_id, [Number(payload?.id ?? "0")], "Uso de vehículo corporativo registrado", descriptionNotificacion, ["ADMINISTRATIVO", "SUPERVISOR"]);
+      }
+    }
 
     return NextResponse.json({ status: true, data: created }, { status: 201 });
   } catch (error: unknown) {

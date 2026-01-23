@@ -267,7 +267,10 @@ export default function PhysicalMinuteAgendaScreen() {
       let token = await AsyncStorage.getItem('access_token');
       if (!token) {
         const refreshed = await refreshAccessToken();
-        if (!refreshed) return;
+        if (!refreshed) {
+          if (logout) await logout();
+          throw new Error('Sesión expirada');
+        }
         token = await AsyncStorage.getItem('access_token');
       }
 
@@ -280,11 +283,16 @@ export default function PhysicalMinuteAgendaScreen() {
         },
       });
 
-      if (response.status === 401 || response.status === 403) {
+      if (response.status === 401) {
         const refreshed = await refreshAccessToken();
         if (refreshed) return fetchMainStructure();
         await logout();
         return;
+      }
+
+      if (response.status === 403) {
+        if (logout) await logout();
+        throw new Error('Acceso denegado');
       }
 
       if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);

@@ -66,10 +66,10 @@ module.exports = {
     extra: {
       // Use environment variable if available (Railway production)
       // Falls back to local development URL if not set
-      API_SERVER: process.env.EXPO_PUBLIC_API_SERVER || 
-                  process.env.API_SERVER || 
-                  process.env.NEXT_PUBLIC_API_SERVER ||
-                  "https://013c74d5d4bb.ngrok-free.app", // Local dev fallback
+      API_SERVER: process.env.EXPO_PUBLIC_API_SERVER ||
+        process.env.API_SERVER ||
+        process.env.NEXT_PUBLIC_API_SERVER ||
+        "https://f88b19a0997d.ngrok-free.app", // Local dev fallback
       APP_MODE: process.env.APP_MODE || process.env.NODE_ENV || "dev",
       router: {},
       eas: {

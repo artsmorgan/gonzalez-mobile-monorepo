@@ -80,7 +80,7 @@ export default function PermissionsScreen() {
     if (!searchText.trim()) {
       return roles;
     }
-    return roles.filter(role => 
+    return roles.filter(role =>
       role.name.toLowerCase().includes(searchText.toLowerCase())
     );
   }, [roles, searchText]);
@@ -97,7 +97,7 @@ export default function PermissionsScreen() {
 
       // Obtener access token de AsyncStorage
       let token = await AsyncStorage.getItem('access_token');
-      
+
       if (!token) {
         const refreshed = await refreshAccessToken();
         if (!refreshed) {
@@ -117,7 +117,7 @@ export default function PermissionsScreen() {
 
       console.log(response);
 
-      if (response.status === 401 || response.status === 403) {
+      if (response.status === 401) {
         const refreshed = await refreshAccessToken();
         if (refreshed) {
           return fetchRoles();
@@ -127,12 +127,17 @@ export default function PermissionsScreen() {
         }
       }
 
+      if (response.status === 403) {
+        if (logout) await logout();
+        throw new Error('Acceso denegado');
+      }
+
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
 
       const data = await response.json();
-      
+
       if (Array.isArray(data)) {
         setRoles(data);
       } else if (data.data && Array.isArray(data.data)) {
@@ -169,69 +174,76 @@ export default function PermissionsScreen() {
   const isActionActive = (roleAction: string): boolean => {
     return ruleActions.some(action => action.toLowerCase() === roleAction.toLowerCase());
   };
-  
-    const updateAction = (action: string, isActive: boolean, roleName: string, moduleName: string) => {
-        // ALERT de confirmacion
-        let action_text = isActive ? 'desactivar' : 'activar';
-        Alert.alert('Confirmacion', `¿Estás seguro de que deseas ${action_text} el permiso "${action}" para el rol "${roleName}" en "${moduleName}"?`, [
-            { text: 'Cancelar', style: 'cancel' },
-            { text: 'Confirmar', style: 'destructive', onPress: async () => {
-                const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-                if (!apiUrl) {
-                    Alert.alert('Error', 'URL del servidor no configurada');
-                    return;
-                }
-                let token = await AsyncStorage.getItem('access_token');
-                
-                // Try to refresh token if we don't have one
-                if (!token) {
-                    const refreshed = await refreshAccessToken();
-                    if (!refreshed) {
-                        Alert.alert('Error', 'No hay token de autenticación válido');
-                        return;
-                    }
-                    token = await AsyncStorage.getItem('access_token');
-                }
 
-                const response = await fetch(`${apiUrl}/api/reglas/roles`, {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${token}`,
-                        'Content-Type': 'application/json',
-                        'ngrok-skip-browser-warning': '69420'
-                    },
-                    body: JSON.stringify({
-                        action: action,
-                        isActive: isActive,
-                        roleName: roleName,
-                        moduleName: moduleName
-                    })
-                });
+  const updateAction = (action: string, isActive: boolean, roleName: string, moduleName: string) => {
+    // ALERT de confirmacion
+    let action_text = isActive ? 'desactivar' : 'activar';
+    Alert.alert('Confirmacion', `¿Estás seguro de que deseas ${action_text} el permiso "${action}" para el rol "${roleName}" en "${moduleName}"?`, [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Confirmar', style: 'destructive', onPress: async () => {
+          const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+          if (!apiUrl) {
+            Alert.alert('Error', 'URL del servidor no configurada');
+            return;
+          }
+          let token = await AsyncStorage.getItem('access_token');
 
-                if (response.status === 401 || response.status === 403) {
-                    // Token might be expired, try to refresh
-                    const refreshed = await refreshAccessToken();
-                    if (refreshed) {
-                        // Retry the request with the new token
-                        return updateAction(action, isActive, roleName, moduleName);
-                    } else {
-                        // If refresh fails, logout the user
-                        await logout();
-                        Alert.alert('11', 'Sesión expirada. Por favor inicie sesión nuevamente.');
-                        return;
-                    }
-                }
+          // Try to refresh token if we don't have one
+          if (!token) {
+            const refreshed = await refreshAccessToken();
+            if (!refreshed) {
+              Alert.alert('Error', 'No hay token de autenticación válido');
+              return;
+            }
+            token = await AsyncStorage.getItem('access_token');
+          }
 
-                if (!response.ok) {
-                    Alert.alert('Error', `Error del servidor: ${response.status}`);
-                } else {
-                    const responseData = await response.json();
-                    Alert.alert('Éxito', responseData.message);
-                    fetchRoles();
-                }
-            }}
-        ]);
-    };
+          const response = await fetch(`${apiUrl}/api/reglas/roles`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+              'ngrok-skip-browser-warning': '69420'
+            },
+            body: JSON.stringify({
+              action: action,
+              isActive: isActive,
+              roleName: roleName,
+              moduleName: moduleName
+            })
+          });
+
+          if (response.status === 401) {
+            // Token might be expired, try to refresh
+            const refreshed = await refreshAccessToken();
+            if (refreshed) {
+              // Retry the request with the new token
+              return updateAction(action, isActive, roleName, moduleName);
+            } else {
+              // If refresh fails, logout the user
+              await logout();
+              Alert.alert('11', 'Sesión expirada. Por favor inicie sesión nuevamente.');
+              return;
+            }
+          }
+
+          if (response.status === 403) {
+            if (logout) await logout();
+            throw new Error('Acceso denegado');
+          }
+
+          if (!response.ok) {
+            Alert.alert('Error', `Error del servidor: ${response.status}`);
+          } else {
+            const responseData = await response.json();
+            Alert.alert('Éxito', responseData.message);
+            fetchRoles();
+          }
+        }
+      }
+    ]);
+  };
 
   const renderRoleItem = ({ item }: { item: Role }) => (
     <ThemedView style={styles.roleCard}>
@@ -262,8 +274,8 @@ export default function PermissionsScreen() {
           <ThemedText style={styles.loadingText}>Cargando permisos...</ThemedText>
         </ThemedView>
         <AppFooter />
-        <SlideMenu 
-          isVisible={isMenuVisible} 
+        <SlideMenu
+          isVisible={isMenuVisible}
           onClose={handleMenuClose}
           onHomePress={handleHomePress}
           currentRoute="permissions"
@@ -283,8 +295,8 @@ export default function PermissionsScreen() {
           </TouchableOpacity>
         </ThemedView>
         <AppFooter />
-        <SlideMenu 
-          isVisible={isMenuVisible} 
+        <SlideMenu
+          isVisible={isMenuVisible}
           onClose={handleMenuClose}
           onHomePress={handleHomePress}
           currentRoute="permissions"
@@ -296,7 +308,7 @@ export default function PermissionsScreen() {
   return (
     <ThemedView style={styles.container}>
       <AppHeader onMenuPress={handleMenuPress} />
-      
+
       <ThemedView style={styles.headerContainer}>
         <TouchableOpacity style={styles.backButtonHeader} onPress={() => router.back()}>
           <ThemedText style={styles.backButtonHeaderText}>← Volver</ThemedText>
@@ -329,8 +341,8 @@ export default function PermissionsScreen() {
         {filteredRoles.length === 0 && !loading && (
           <ThemedView style={styles.emptyContainer}>
             <ThemedText style={styles.emptyText}>
-              {searchText.trim() 
-                ? `No se encontraron roles que coincidan con "${searchText}"` 
+              {searchText.trim()
+                ? `No se encontraron roles que coincidan con "${searchText}"`
                 : 'No se encontraron roles'
               }
             </ThemedText>
@@ -340,8 +352,8 @@ export default function PermissionsScreen() {
 
       <AppFooter />
 
-      <SlideMenu 
-        isVisible={isMenuVisible} 
+      <SlideMenu
+        isVisible={isMenuVisible}
         onClose={handleMenuClose}
         onHomePress={handleHomePress}
         currentRoute="permissions"

@@ -11,8 +11,8 @@ export async function DELETE(
   context: { params: Promise<{ id: string; contributionId: string; fileId: string }> }
 ) {
   try {
-    const { valid, message } = verifyAccessToken(req);
-    if (!valid) return NextResponse.json({ status: false, message }, { status: 401 });
+    const { valid, expired, payload, message } = verifyAccessToken(req);
+    if (!valid) return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
 
     const { id, contributionId, fileId } = await context.params;
     const incidentId = parseInt(id, 10);

@@ -38,10 +38,8 @@ export async function PUT(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { valid, message } = verifyAccessToken(req);
-    if (!valid) {
-      return NextResponse.json({ status: false, message }, { status: 401 });
-    }
+    const { valid, expired, payload, message } = verifyAccessToken(req);
+    if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
     const { id } = await context.params;
     const vehiculoId = parseInt(String(id), 10);
@@ -166,10 +164,8 @@ export async function DELETE(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { valid, message } = verifyAccessToken(req);
-    if (!valid) {
-      return NextResponse.json({ status: false, message }, { status: 401 });
-    }
+    const { valid, expired, payload, message } = verifyAccessToken(req);
+    if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
     const { id } = await context.params;
     const vehiculoId = parseInt(String(id), 10);

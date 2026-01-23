@@ -289,10 +289,12 @@ export default function MutuosAcuerdosScreen() {
       let token = await AsyncStorage.getItem('access_token');
       if (!token) {
         const refreshed = await refreshAccessToken();
-        if (!refreshed) return;
+        if (!refreshed) {
+          if (logout) await logout();
+          throw new Error('Sesión expirada');
+        }
         token = await AsyncStorage.getItem('access_token');
       }
-      if (!token) return;
 
       const response = await fetch(`${apiUrl}/api/main-structure`, {
         method: 'GET',
@@ -303,11 +305,16 @@ export default function MutuosAcuerdosScreen() {
         },
       });
 
-      if (response.status === 401 || response.status === 403) {
+      if (response.status === 401) {
         const refreshed = await refreshAccessToken();
         if (refreshed) return fetchMainStructure();
         await logout();
         return;
+      }
+
+      if (response.status === 403) {
+        if (logout) await logout();
+        throw new Error('Acceso denegado');
       }
 
       if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
@@ -603,7 +610,7 @@ export default function MutuosAcuerdosScreen() {
   const clearSignatureInModal = () => {
     try {
       signatureRef.current?.clearSignature?.();
-    } catch {}
+    } catch { }
     setIsReadingSignature(false);
     setSignatureKey((k) => k + 1);
   };
@@ -671,17 +678,17 @@ export default function MutuosAcuerdosScreen() {
           const local = updatedCache.find((r: any) => r.id_local === targetRecord.id_local);
           const requestData = local
             ? {
-                cliente_id: local.cliente_id,
-                corpo_id: local.corpo_id,
-                ejecutivo_cuenta: local.ejecutivo_cuenta,
-                fecha: local.fecha,
-                turno: local.turno,
-                informacion_oficial_interesado: local.informacion_oficial_interesado,
-                informacion_oficial_colaborador: local.informacion_oficial_colaborador,
-                motivo: local.motivo,
-                firma_responsable: local.firma_responsable,
-                firma_ejecutivo_cuenta: base64Only,
-              }
+              cliente_id: local.cliente_id,
+              corpo_id: local.corpo_id,
+              ejecutivo_cuenta: local.ejecutivo_cuenta,
+              fecha: local.fecha,
+              turno: local.turno,
+              informacion_oficial_interesado: local.informacion_oficial_interesado,
+              informacion_oficial_colaborador: local.informacion_oficial_colaborador,
+              motivo: local.motivo,
+              firma_responsable: local.firma_responsable,
+              firma_ejecutivo_cuenta: base64Only,
+            }
             : null;
           if (requestData) await updateCreateActionForLocalId(targetRecord.id_local, requestData);
         }
@@ -1199,7 +1206,7 @@ export default function MutuosAcuerdosScreen() {
 
               <ThemedText style={styles.label}>División (automática)</ThemedText>
               <ThemedView style={styles.pickerWrapper}>
-                <Picker selectedValue={selectedDivisionId ?? 0} onValueChange={() => {}} enabled={false} style={styles.picker}>
+                <Picker selectedValue={selectedDivisionId ?? 0} onValueChange={() => { }} enabled={false} style={styles.picker}>
                   <Picker.Item
                     label={
                       selectedClienteId

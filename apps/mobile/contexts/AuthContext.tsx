@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import { router } from 'expo-router';
-import React, { createContext, ReactNode, useContext, useEffect, useState } from 'react';
+import React, { createContext, ReactNode, useContext, useEffect, useState, useRef } from 'react';
 
 interface Role {
   id: number;
@@ -70,6 +70,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [refreshToken, setRefreshToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const isRefreshingRef = useRef(false);
+  const refreshPromiseRef = useRef<Promise<boolean> | null>(null);
 
   const isAuthenticated = !!employee && !!accessToken;
 
@@ -129,11 +131,11 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       }
 
       const empleadoData = responseData.empleado;
-      
+
       // Use real tokens from server response
       const accessToken = responseData.accessToken;
       const refreshToken = responseData.refreshToken;
-      
+
       if (!accessToken || !refreshToken) {
         return { success: false, passwordExpired: false, error: 'Tokens no recibidos del servidor' };
       }
@@ -174,7 +176,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     try {
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       let serverResponse = { status: true, message: 'Sesión cerrada correctamente' };
-      
+
       // Call logout API if we have a refresh token
       if (refreshToken && apiUrl) {
         try {
@@ -219,6 +221,24 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   };
 
   const refreshAccessToken = async (): Promise<boolean> => {
+    if (isRefreshingRef.current && refreshPromiseRef.current) {
+      return refreshPromiseRef.current;
+    }
+
+    isRefreshingRef.current = true;
+
+    const promise = (async () => {
+      const ok = await refreshAccessTokenSafe();
+      isRefreshingRef.current = false;
+      refreshPromiseRef.current = null;
+      return ok;
+    })();
+
+    refreshPromiseRef.current = promise;
+    return promise;
+  }
+
+  const refreshAccessTokenSafe = async (): Promise<boolean> => {
     try {
       if (!refreshToken) {
         return false;
@@ -241,26 +261,34 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         }),
       });
 
+      if (!response.ok) {
+        return false;
+      }
+
       const responseData = await response.json();
 
-      if (!responseData.status || !responseData.accessToken) {
+      if (!responseData.status || !responseData.newAccessToken) {
         // logout
         return false;
       }
 
-      const newAccessToken = responseData.accessToken;
-      const newRefreshToken = responseData.refreshToken || refreshToken; // Use new refresh token if provided, otherwise keep current
-      
-      await Promise.all([
-        AsyncStorage.setItem(ACCESS_TOKEN_KEY, newAccessToken),
-        newRefreshToken !== refreshToken && AsyncStorage.setItem(REFRESH_TOKEN_KEY, newRefreshToken),
-      ].filter(Boolean));
+      const newAccessToken = responseData.newAccessToken;
+      const newRefreshToken = responseData.newRefreshToken;
+
+      console.log('newAccessToken', newAccessToken);
+      console.log('newRefreshToken', newRefreshToken);
+
+      const ops = [AsyncStorage.setItem(ACCESS_TOKEN_KEY, newAccessToken)];
+
+      ops.push(AsyncStorage.setItem(REFRESH_TOKEN_KEY, newRefreshToken));
+
+      await Promise.all(ops);
 
       setAccessToken(newAccessToken);
       if (newRefreshToken !== refreshToken) {
         setRefreshToken(newRefreshToken);
       }
-      
+
       return true;
     } catch (error) {
       console.error('Token refresh error:', error);

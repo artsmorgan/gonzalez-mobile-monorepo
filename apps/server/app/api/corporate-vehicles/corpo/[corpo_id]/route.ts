@@ -9,10 +9,8 @@ export async function GET(
   context: { params: Promise<{ corpo_id: string }> }
 ) {
   try {
-    const { valid, message } = verifyAccessToken(req);
-    if (!valid) {
-      return NextResponse.json({ status: false, message }, { status: 401 });
-    }
+    const { valid, expired, payload, message } = verifyAccessToken(req);
+    if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
     const { corpo_id } = await context.params;
     const sucursalId = parseInt(String(corpo_id), 10);

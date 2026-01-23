@@ -5,6 +5,7 @@ import { prisma } from "../../../utils/prismaClient";
 import fs from "fs";
 import path from "path";
 import { v4 as uuidv4 } from "uuid";
+import { sendNotificationByRole } from "../../../utils/sendNotification";
 
 export const runtime = "nodejs";
 
@@ -48,11 +49,9 @@ function parseDateOnly(input: any): Date | null {
 
 export async function POST(req: NextRequest) {
   try {
-    const { valid, payload, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = verifyAccessToken(req);
 
-    if (!valid) {
-      return NextResponse.json({ status: false, message: message }, { status: 401 });
-    }
+    if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
     const {
       cliente_id,
@@ -126,6 +125,27 @@ export async function POST(req: NextRequest) {
     let filesParsed: PncFileInput[] = [];
     if (archivos) {
       filesParsed = safeParseJson<PncFileInput[]>(archivos, []);
+    }
+
+    if (newRecord) {
+      let empNombre = "Desconocido";
+      let sucursalNombre = "Desconocida";
+      let fechaRegistro = createdAt.toISOString().split("T")[0];
+      let horaRegistro = createdAt.toISOString().split("T")[1].split(".")[0];
+      if (newRecord.created_by) {
+        const empleado = await prisma.c_empleado.findUnique({ where: { id: Number(newRecord.created_by) } });
+        if (empleado) {
+          empNombre = empleado.nombre + " " + empleado.primer_apellido + " " + empleado.segundo_apellido;
+        }
+      }
+      if (newRecord.corpo_id) {
+        const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: newRecord.corpo_id } });
+        if (sucursal) {
+          sucursalNombre = sucursal.nombre;
+        }
+      }
+      const descriptionNotificacion = "El empleado " + empNombre + " ha registrado un producto no conforme en la sucursal " + sucursalNombre + " el día " + fechaRegistro + " a las " + horaRegistro;
+      sendNotificationByRole(newRecord.corpo_id, [Number(newRecord.created_by)], "Producto no conforme registrado", descriptionNotificacion, ["ADMINISTRATIVO", "SUPERVISOR"]);
     }
 
     if (filesParsed.length > 0) {

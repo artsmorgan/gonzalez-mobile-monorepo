@@ -7,14 +7,9 @@ dotenv.config();
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
-        const { valid, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = verifyAccessToken(req);
 
-        if (!valid) {
-            return NextResponse.json(
-                { status: false, message: message },
-                { status: 401 }
-            );
-        }
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
 
         const resolvedParams = await context.params;
@@ -41,14 +36,9 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
-        const { valid, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = verifyAccessToken(req);
 
-        if (!valid) {
-            return NextResponse.json(
-                { status: false, message: message },
-                { status: 401 }
-            );
-        }
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         const resolvedParams = await context.params;
         const id = parseInt(resolvedParams.id);

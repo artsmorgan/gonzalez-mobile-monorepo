@@ -31,17 +31,12 @@ const parseDateInputToDate = (input: unknown): Date | null => {
 
 export async function POST(req: NextRequest) {
     try {
-        const { valid, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = verifyAccessToken(req);
 
-        if (!valid) {
-            return NextResponse.json(
-                { status: false, message: message },
-                { status: 401 }
-            );
-        }
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
-        const { 
-            marca_id, 
+        const {
+            marca_id,
             division,
             persona_solicita,
             codigo,
@@ -159,10 +154,10 @@ export async function POST(req: NextRequest) {
         const fecha_string = fechaSolicitudDate.toISOString().split('T')[0];
         const hora_string = fechaSolicitudDate.toISOString().split('T')[1].split('.')[0];
         const description = `Se ha creado una solicitud de permiso para ${personaSolicitaStr} el día ${fecha_string} a las ${hora_string}`;
-        sendNotificationByRole(marcaDia.id, "Solicitud de permiso creada", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+        sendNotificationByRole(marcaDia.corpo_id, [marcaDia.plaza_id], "Solicitud de permiso creada", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
 
-        return NextResponse.json({ 
-            status: true, 
+        return NextResponse.json({
+            status: true,
             message: "Solicitud de permiso creada correctamente",
             data: {
                 id: new_record.id,

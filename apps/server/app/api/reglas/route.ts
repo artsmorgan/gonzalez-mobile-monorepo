@@ -6,14 +6,9 @@ import { prisma } from "../../../utils/prismaClient";
 
 export async function GET(request: NextRequest) {
     try {
-        const { valid, payload, message } = verifyAccessToken(request);
+        const { valid, expired, payload, message } = verifyAccessToken(request);
 
-        if (!valid) {
-            return NextResponse.json(
-                { status: false, message: message },
-                { status: 401 }
-            );
-        }
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         const reglas = actions.map((action) => ({
             nombre: action.nombre,

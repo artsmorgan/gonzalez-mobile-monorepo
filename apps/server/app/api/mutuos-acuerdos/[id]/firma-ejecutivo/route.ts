@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessToken } from "../../../../../utils/verifyToken";
 import { prisma } from "../../../../../utils/prismaClient";
+import { sendNotificationByEmployee } from "../../../../../utils/sendNotification";
+import { toZonedTime } from "date-fns-tz";
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
-    const { valid, payload, message } = verifyAccessToken(req);
-    if (!valid) return NextResponse.json({ status: false, message }, { status: 401 });
+    const { valid, expired, payload, message } = verifyAccessToken(req);
+    if (!valid) return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
 
     const resolvedParams = await context.params;
     const idNum = parseInt(String(resolvedParams.id), 10);
@@ -39,6 +41,20 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       where: { id: idNum },
       data: { firma_ejecutivo_cuenta: firma },
     });
+
+    if (updated) {
+      const cliente = await prisma.e_estructura_cliente.findUnique({ where: { id: updated.cliente_id } });
+      if (cliente) {
+        const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: updated.corpo_id } });
+        if (sucursal) {
+          const now = toZonedTime(new Date(), "America/Costa_Rica");
+          const fecha_string = now.toISOString().split("T")[0];
+          const hora_string = now.toISOString().split("T")[1].split(".")[0];
+          const description = `Se ha firmado el mutuo acuerdo en la sucursal ${sucursal.nombre} de la empresa ${cliente.nombre} el día ${fecha_string} a las ${hora_string}`;
+          sendNotificationByEmployee(updated.corpo_id, [currentEmployeeId], "Mutuo acuerdo firmado", description, [updated.ejecutivo_cuenta]);
+        }
+      }
+    }
 
     return NextResponse.json(
       { status: true, message: "Firma de ejecutivo guardada correctamente", data: { id: updated.id, firma_ejecutivo_cuenta: updated.firma_ejecutivo_cuenta } },

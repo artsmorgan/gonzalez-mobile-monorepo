@@ -1,10 +1,10 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { 
-  StyleSheet, 
-  ScrollView, 
-  TouchableOpacity, 
-  Alert, 
-  ActivityIndicator, 
+import {
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  Alert,
+  ActivityIndicator,
   TextInput,
   Platform,
   Modal
@@ -117,7 +117,7 @@ export default function TrainingsScreen() {
   const { employee, refreshAccessToken, logout } = useAuth();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const navigation = useNavigation<TrainingsScreenNavigationProp>();
-  
+
   // Data states
   const [trainings, setTrainings] = useState<Training[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -128,7 +128,7 @@ export default function TrainingsScreen() {
   // Dropdowns data
   const [puestos, setPuestos] = useState<Puesto[]>([]);
   const [empleados, setEmpleados] = useState<Empleado[]>([]);
-  
+
   // Form states
   const [isCreating, setIsCreating] = useState(false);
   const [formKey, setFormKey] = useState(0); // Key para forzar re-render de inputs
@@ -141,25 +141,25 @@ export default function TrainingsScreen() {
   const [selectedPuestos, setSelectedPuestos] = useState<Puesto[]>([]);
   const [trainingImageBase64, setTrainingImageBase64] = useState<string | null>(null);
   const [decodedFirmas, setDecodedFirmas] = useState<Map<number, FirmaData>>(new Map());
-  
+
   // Form refs
   const tituloRef = useRef('');
   const descripcionRef = useRef('');
   const observacionesRef = useRef('');
   const nombreResponsableRef = useRef('');
   const cedulaResponsableRef = useRef('');
-  
+
   // Form dropdowns
   const [selectedResultado, setSelectedResultado] = useState<string>('');
-  
+
   // Location state
   const [location, setLocation] = useState<Location.LocationObject | null>(null);
-  
+
   // Camera state
   const [isCameraVisible, setIsCameraVisible] = useState(false);
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef<any>(null);
-  
+
   // QR Scanner
   const { scanQR, QRScannerComponent } = useQRScanner();
 
@@ -186,7 +186,7 @@ export default function TrainingsScreen() {
     }, [])
   );
 
-  useEffect(() => { 
+  useEffect(() => {
     const handler = () => {
       fetchData();
     };
@@ -236,7 +236,8 @@ export default function TrainingsScreen() {
         if (!token) {
           const refreshed = await refreshAccessToken();
           if (!refreshed) {
-            throw new Error('No authentication token found');
+            if (logout) await logout();
+            throw new Error('Sesión expirada');
           }
           token = await AsyncStorage.getItem('access_token');
         }
@@ -250,7 +251,7 @@ export default function TrainingsScreen() {
           },
         });
 
-        if (response.status === 401 || response.status === 403) {
+        if (response.status === 401) {
           const refreshed = await refreshAccessToken();
           if (refreshed) {
             return fetchData();
@@ -258,6 +259,11 @@ export default function TrainingsScreen() {
             await logout();
             return;
           }
+        }
+
+        if (response.status === 403) {
+          if (logout) await logout();
+          throw new Error('Acceso denegado');
         }
 
         if (!response.ok) {
@@ -276,7 +282,7 @@ export default function TrainingsScreen() {
                   const parts = decodedString.split(':');
                   if (parts.length === 5) {
                     const [sessionId, empleadoId, latitud, longitud, timestamp] = parts;
-                    
+
                     // Obtener detalles del empleado
                     let empleadoDetalle = undefined;
                     try {
@@ -288,7 +294,7 @@ export default function TrainingsScreen() {
                           'ngrok-skip-browser-warning': '69420',
                         },
                       });
-                      
+
                       if (empleadoResponse.ok) {
                         const empleadoData = await empleadoResponse.json();
                         empleadoDetalle = {
@@ -301,7 +307,7 @@ export default function TrainingsScreen() {
                     } catch (err) {
                       console.error('Error fetching empleado details:', err);
                     }
-                    
+
                     const firmaData: FirmaData = {
                       sessionId,
                       empleadoId,
@@ -310,7 +316,7 @@ export default function TrainingsScreen() {
                       timestamp,
                       empleadoDetalle,
                     };
-                    
+
                     // Guardar en el Map
                     setDecodedFirmas(prev => {
                       const newMap = new Map(prev);
@@ -325,7 +331,7 @@ export default function TrainingsScreen() {
               return training;
             })
           );
-          
+
           setTrainings(trainingsWithDecodedFirmas);
           // Actualizar trainings_cache
           await AsyncStorage.setItem('trainings_cache', JSON.stringify(trainingsWithDecodedFirmas));
@@ -409,7 +415,8 @@ export default function TrainingsScreen() {
       if (!token) {
         const refreshed = await refreshAccessToken();
         if (!refreshed) {
-          throw new Error('No authentication token found');
+          if (logout) await logout();
+          throw new Error('Sesión expirada');
         }
         token = await AsyncStorage.getItem('access_token');
       }
@@ -423,7 +430,7 @@ export default function TrainingsScreen() {
         },
       });
 
-      if (response.status === 401 || response.status === 403) {
+      if (response.status === 401) {
         const refreshed = await refreshAccessToken();
         if (refreshed) {
           return fetchPuestos(corpo_id);
@@ -431,6 +438,11 @@ export default function TrainingsScreen() {
           await logout();
           return;
         }
+      }
+
+      if (response.status === 403) {
+        if (logout) await logout();
+        throw new Error('Acceso denegado');
       }
 
       if (!response.ok) {
@@ -463,7 +475,8 @@ export default function TrainingsScreen() {
       if (!token) {
         const refreshed = await refreshAccessToken();
         if (!refreshed) {
-          throw new Error('No authentication token found');
+          if (logout) await logout();
+          throw new Error('Sesión expirada');
         }
         token = await AsyncStorage.getItem('access_token');
       }
@@ -477,7 +490,7 @@ export default function TrainingsScreen() {
         },
       });
 
-      if (response.status === 401 || response.status === 403) {
+      if (response.status === 401) {
         const refreshed = await refreshAccessToken();
         if (refreshed) {
           return fetchEmpleados(corpo_id);
@@ -485,6 +498,11 @@ export default function TrainingsScreen() {
           await logout();
           return;
         }
+      }
+
+      if (response.status === 403) {
+        if (logout) await logout();
+        throw new Error('Acceso denegado');
       }
 
       if (!response.ok) {
@@ -535,7 +553,7 @@ export default function TrainingsScreen() {
     setFirmaResponsable(null);
     setTrainingImageBase64(null);
     setLocation(null);
-    
+
     // Request location permissions
     (async () => {
       try {
@@ -611,12 +629,12 @@ export default function TrainingsScreen() {
     }
 
     try {
-      const photo = await cameraRef.current.takePictureAsync({ 
+      const photo = await cameraRef.current.takePictureAsync({
         base64: true,
         quality: 0.7,
         skipProcessing: false
       });
-      
+
       if (!photo) {
         Alert.alert('Error', 'No se pudo capturar la foto. Por favor intente nuevamente.');
         setIsCameraVisible(false);
@@ -630,10 +648,10 @@ export default function TrainingsScreen() {
       }
 
       setIsCameraVisible(false);
-      
+
       // Format base64 with data URI prefix
       const formattedBase64 = `data:image/jpeg;base64,${photo.base64!}`;
-      
+
       setTimeout(() => {
         setTrainingImageBase64(formattedBase64);
       }, 100);
@@ -664,11 +682,21 @@ export default function TrainingsScreen() {
         throw new Error('Server URL not configured');
       }
 
-      const token = await AsyncStorage.getItem('access_token');
+      let token = await AsyncStorage.getItem('access_token');
       if (!token) {
-        throw new Error('No authentication token found');
+        const refreshed = await refreshAccessToken();
+        if (!refreshed) {
+          if (logout) await logout();
+          throw new Error('Sesión expirada');
+        }
+        token = await AsyncStorage.getItem('access_token');
       }
-      
+
+      if (!token) {
+        Alert.alert('Error', 'No se pudo obtener el token de sesión');
+        return;
+      }
+
       const decodedToken = jwtDecode(token);
       const sessionId = JSON.parse(JSON.stringify(decodedToken)).sessionId;
 
@@ -676,7 +704,7 @@ export default function TrainingsScreen() {
       if (!horaAccion) {
         throw new Error('Hora de acción not found');
       }
-      
+
       // Encode base64
       const hash = btoa(sessionId + ":" + employee.id + ":" + location.coords.latitude + ":" + location.coords.longitude + ":" + horaAccion);
 
@@ -689,22 +717,22 @@ export default function TrainingsScreen() {
       let empleadoDetalle = undefined;
       if (connectionStatus) {
         const empleadoResponse = await fetch(`${apiUrl}/api/empleados/${decodedEmpleadoId}`, {
-            method: 'GET',
-            headers: {
+          method: 'GET',
+          headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json',
             'ngrok-skip-browser-warning': '69420',
-            },
+          },
         });
 
         if (empleadoResponse.ok) {
-            const empleadoData = await empleadoResponse.json();
-            empleadoDetalle = {
-                nombre: empleadoData.nombre,
-                primer_apellido: empleadoData.primer_apellido,
-                segundo_apellido: empleadoData.segundo_apellido,
-                cedula_empleado: empleadoData.cedula,
-            };
+          const empleadoData = await empleadoResponse.json();
+          empleadoDetalle = {
+            nombre: empleadoData.nombre,
+            primer_apellido: empleadoData.primer_apellido,
+            segundo_apellido: empleadoData.segundo_apellido,
+            cedula_empleado: empleadoData.cedula,
+          };
         }
       }
 
@@ -735,7 +763,7 @@ export default function TrainingsScreen() {
       try {
         const decodedHash = atob(qrData);
         const parts = decodedHash.split(':');
-        
+
         if (parts.length !== 5) {
           Alert.alert('Error', 'El QR no tiene la estructura esperada');
           return;
@@ -747,35 +775,40 @@ export default function TrainingsScreen() {
 
         let empleadoDetalle = undefined;
         if (connectionStatus) {
-            // Fetch empleado details
-            const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-            if (!apiUrl) {
+          // Fetch empleado details
+          const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+          if (!apiUrl) {
             throw new Error('Server URL not configured');
-            }
+          }
 
-            const token = await AsyncStorage.getItem('access_token');
-            if (!token) {
-            throw new Error('No authentication token found');
+          let token = await AsyncStorage.getItem('access_token');
+          if (!token) {
+            const refreshed = await refreshAccessToken();
+            if (!refreshed) {
+              if (logout) await logout();
+              throw new Error('Sesión expirada');
             }
+            token = await AsyncStorage.getItem('access_token');
+          }
 
-            const empleadoResponse = await fetch(`${apiUrl}/api/empleados/${empleadoId}`, {
+          const empleadoResponse = await fetch(`${apiUrl}/api/empleados/${empleadoId}`, {
             method: 'GET',
             headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json',
-                'ngrok-skip-browser-warning': '69420',
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+              'ngrok-skip-browser-warning': '69420',
             },
-            });
+          });
 
-            if (empleadoResponse.ok) {
-                const empleadoData = await empleadoResponse.json();
-                empleadoDetalle = {
-                    nombre: empleadoData.nombre,
-                    primer_apellido: empleadoData.primer_apellido,
-                    segundo_apellido: empleadoData.segundo_apellido,
-                    cedula_empleado: empleadoData.cedula,
-                };
-            }
+          if (empleadoResponse.ok) {
+            const empleadoData = await empleadoResponse.json();
+            empleadoDetalle = {
+              nombre: empleadoData.nombre,
+              primer_apellido: empleadoData.primer_apellido,
+              segundo_apellido: empleadoData.segundo_apellido,
+              cedula_empleado: empleadoData.cedula,
+            };
+          }
         }
 
         setFirmaResponsable({
@@ -843,39 +876,39 @@ export default function TrainingsScreen() {
 
   // Filter trainings
   const filteredTrainings = trainings.filter(training => {
-    const matchesEmpresa = !filterEmpresa || 
+    const matchesEmpresa = !filterEmpresa ||
       training.empresa.nombre.toLowerCase().includes(filterEmpresa.toLowerCase());
-    
-    const matchesCliente = !filterCliente || 
+
+    const matchesCliente = !filterCliente ||
       training.cliente.nombre.toLowerCase().includes(filterCliente.toLowerCase());
-    
-    const matchesSucursal = !filterSucursal || 
+
+    const matchesSucursal = !filterSucursal ||
       training.sucursal.nombre.toLowerCase().includes(filterSucursal.toLowerCase());
-    
-    const matchesPuesto = !filterPuesto || 
+
+    const matchesPuesto = !filterPuesto ||
       training.puestos.some(p => p.nombre.toLowerCase().includes(filterPuesto.toLowerCase()));
-    
-    const matchesEmpleado = !filterEmpleado || 
+
+    const matchesEmpleado = !filterEmpleado ||
       training.empleados.some(e => e.nombre.toLowerCase().includes(filterEmpleado.toLowerCase()) || e.cedula.toLowerCase().includes(filterEmpleado.toLowerCase()));
-    
-    const matchesResponsable = !filterResponsable || 
+
+    const matchesResponsable = !filterResponsable ||
       training.responsable.nombre.toLowerCase().includes(filterResponsable.toLowerCase());
-    
-    const matchesDescripcion = !filterDescripcion || 
+
+    const matchesDescripcion = !filterDescripcion ||
       training.descripcion.toLowerCase().includes(filterDescripcion.toLowerCase());
-    
-    const matchesResultado = !filterResultado || 
+
+    const matchesResultado = !filterResultado ||
       (training.resultado && training.resultado.toLowerCase().includes(filterResultado.toLowerCase()));
-    
-    const matchesObservaciones = !filterObservaciones || 
+
+    const matchesObservaciones = !filterObservaciones ||
       (training.observaciones && training.observaciones.toLowerCase().includes(filterObservaciones.toLowerCase()));
-    
-    const matchesFecha = !filterFecha || 
+
+    const matchesFecha = !filterFecha ||
       (training.fecha && training.fecha.split('T')[0] === filterFecha);
-    
-    return matchesEmpresa && matchesCliente && matchesSucursal && 
-           matchesPuesto && matchesEmpleado && matchesResponsable && 
-           matchesDescripcion && matchesResultado && matchesObservaciones && matchesFecha;
+
+    return matchesEmpresa && matchesCliente && matchesSucursal &&
+      matchesPuesto && matchesEmpleado && matchesResponsable &&
+      matchesDescripcion && matchesResultado && matchesObservaciones && matchesFecha;
   });
 
   const validateForm = (): boolean => {
@@ -1010,9 +1043,9 @@ export default function TrainingsScreen() {
                 // Crear capacitación en cache
                 const cacheStr = await AsyncStorage.getItem('trainings_cache');
                 const cache = cacheStr ? JSON.parse(cacheStr) : [];
-                
+
                 const horaAccion = await getHoraAccion();
-                
+
                 const currentMarca = await AsyncStorage.getItem('current_marca');
                 if (!currentMarca) {
                   Alert.alert('Error', 'No se encontró la marca actual');
@@ -1036,8 +1069,8 @@ export default function TrainingsScreen() {
                   },
                   fecha: fechaCapacitacion,
                   firma_responsable: signatureHash,
-                  nombre_firma: firmaResponsable?.empleadoDetalle ? 
-                    `${firmaResponsable.empleadoDetalle.nombre} ${firmaResponsable.empleadoDetalle.primer_apellido} ${firmaResponsable.empleadoDetalle.segundo_apellido}` : 
+                  nombre_firma: firmaResponsable?.empleadoDetalle ?
+                    `${firmaResponsable.empleadoDetalle.nombre} ${firmaResponsable.empleadoDetalle.primer_apellido} ${firmaResponsable.empleadoDetalle.segundo_apellido}` :
                     '-',
                   base64_file: imageBase64 || '',
                   empleados: selectedEmpleados.map(e => ({ id: e.id, nombre: e.nombre, cedula: e.cedula })),
@@ -1051,7 +1084,7 @@ export default function TrainingsScreen() {
                 Alert.alert('Modo Offline', 'Capacitación registrada localmente. Se sincronizará cuando haya conexión.');
                 setIsCreating(false);
                 resetForm();
-                
+
                 // Actualizar la lista con el cache actualizado
                 setTrainings(cache);
               }
@@ -1144,22 +1177,22 @@ export default function TrainingsScreen() {
         {!isCreating && (
           <ThemedView style={styles.filtersContainer}>
             <ThemedView style={styles.filtersHeader}>
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={styles.filterToggleButton}
                 onPress={() => setIsFiltersExpanded(!isFiltersExpanded)}
               >
                 <ThemedText style={styles.filtersTitle}>
                   Filtros
                 </ThemedText>
-                <Ionicons 
-                  name={isFiltersExpanded ? "chevron-up" : "chevron-down"} 
-                  size={20} 
-                  color="#007AFF" 
+                <Ionicons
+                  name={isFiltersExpanded ? "chevron-up" : "chevron-down"}
+                  size={20}
+                  color="#007AFF"
                 />
               </TouchableOpacity>
-              
+
               {isFiltersExpanded && (
-                <TouchableOpacity 
+                <TouchableOpacity
                   style={styles.resetFiltersButton}
                   onPress={resetAllFilters}
                 >
@@ -1384,10 +1417,10 @@ export default function TrainingsScreen() {
                   {empleados
                     .filter(e => !selectedEmpleados.find(se => se.id === e.id))
                     .map((empleado) => (
-                      <Picker.Item 
-                        key={empleado.id} 
-                        label={`${empleado.nombre} - ${empleado.cedula}`} 
-                        value={empleado.id} 
+                      <Picker.Item
+                        key={empleado.id}
+                        label={`${empleado.nombre} - ${empleado.cedula}`}
+                        value={empleado.id}
                       />
                     ))}
                 </Picker>
@@ -1428,10 +1461,10 @@ export default function TrainingsScreen() {
                   {puestos
                     .filter(p => !selectedPuestos.find(sp => sp.id === p.id))
                     .map((puesto) => (
-                      <Picker.Item 
-                        key={puesto.id} 
-                        label={puesto.nombre} 
-                        value={puesto.id} 
+                      <Picker.Item
+                        key={puesto.id}
+                        label={puesto.nombre}
+                        value={puesto.id}
                       />
                     ))}
                 </Picker>
@@ -1635,8 +1668,8 @@ export default function TrainingsScreen() {
           <ThemedView style={styles.listContainer}>
             {filteredTrainings.length === 0 ? (
               <ThemedText style={styles.emptyText}>
-                {trainings.length === 0 
-                  ? 'No hay capacitaciones registradas' 
+                {trainings.length === 0
+                  ? 'No hay capacitaciones registradas'
                   : 'No hay capacitaciones que coincidan con los filtros'}
               </ThemedText>
             ) : (
@@ -1652,13 +1685,13 @@ export default function TrainingsScreen() {
                   <ThemedView key={training.id !== 0 ? training.id : training.id_local || `training-${index}`} style={styles.trainingCard}>
                     {/* Datos visibles por defecto */}
                     <ThemedText style={styles.trainingDetail}>
-                        <ThemedText style={styles.trainingLabel}>Título: </ThemedText>
-                        <ThemedText style={styles.trainingValue}>{training.titulo}</ThemedText>
+                      <ThemedText style={styles.trainingLabel}>Título: </ThemedText>
+                      <ThemedText style={styles.trainingValue}>{training.titulo}</ThemedText>
                     </ThemedText>
                     <ThemedText style={styles.trainingDetail}>
-                        <ThemedText style={styles.trainingLabel}>Fecha: </ThemedText>
-                        <ThemedText style={styles.trainingValue}>{training.fecha.split('T')[0]}</ThemedText>
-                    </ThemedText> 
+                      <ThemedText style={styles.trainingLabel}>Fecha: </ThemedText>
+                      <ThemedText style={styles.trainingValue}>{training.fecha.split('T')[0]}</ThemedText>
+                    </ThemedText>
 
                     <ThemedText style={styles.trainingDetail}>
                       <ThemedText style={styles.trainingLabel}>Tipo: </ThemedText>
@@ -1689,18 +1722,18 @@ export default function TrainingsScreen() {
                     {/* Collapsable Content */}
                     {isExpanded && (
                       <ThemedView style={styles.collapsableContent}>
-                                            <ThemedText style={styles.trainingDetail}>
-                      <ThemedText style={styles.trainingLabel}>Empresa: </ThemedText>
-                      <ThemedText style={styles.trainingValue}>{training.empresa.nombre}</ThemedText>
-                    </ThemedText>
-                    <ThemedText style={styles.trainingDetail}>
-                      <ThemedText style={styles.trainingLabel}>Cliente: </ThemedText>
-                      <ThemedText style={styles.trainingValue}>{training.cliente.nombre}</ThemedText>
-                    </ThemedText>
-                    <ThemedText style={styles.trainingDetail}>
-                      <ThemedText style={styles.trainingLabel}>Sucursal: </ThemedText>
-                      <ThemedText style={styles.trainingValue}>{training.sucursal.nombre}</ThemedText>
-                    </ThemedText>
+                        <ThemedText style={styles.trainingDetail}>
+                          <ThemedText style={styles.trainingLabel}>Empresa: </ThemedText>
+                          <ThemedText style={styles.trainingValue}>{training.empresa.nombre}</ThemedText>
+                        </ThemedText>
+                        <ThemedText style={styles.trainingDetail}>
+                          <ThemedText style={styles.trainingLabel}>Cliente: </ThemedText>
+                          <ThemedText style={styles.trainingValue}>{training.cliente.nombre}</ThemedText>
+                        </ThemedText>
+                        <ThemedText style={styles.trainingDetail}>
+                          <ThemedText style={styles.trainingLabel}>Sucursal: </ThemedText>
+                          <ThemedText style={styles.trainingValue}>{training.sucursal.nombre}</ThemedText>
+                        </ThemedText>
                         <ThemedText style={styles.trainingDetail}>
                           <ThemedText style={styles.trainingLabel}>Descripción: </ThemedText>
                           <ThemedText style={styles.trainingValue}>{training.descripcion}</ThemedText>
@@ -1825,7 +1858,7 @@ export default function TrainingsScreen() {
         onHomePress={handleHomePress}
       />
       {QRScannerComponent}
-      
+
       {/* Camera Modal */}
       <Modal
         visible={isCameraVisible}
@@ -1844,7 +1877,7 @@ export default function TrainingsScreen() {
             >
               <Ionicons name="close" size={30} color="#000000" />
             </TouchableOpacity>
-            
+
             <TouchableOpacity
               style={styles.cameraCaptureButton}
               onPress={takePicture}
@@ -1873,7 +1906,10 @@ const TrainingImageComponent: React.FC<{ trainingId: number }> = ({ trainingId }
         let token = await AsyncStorage.getItem('access_token');
         if (!token) {
           const refreshed = await refreshAccessToken();
-          if (!refreshed) return;
+          if (!refreshed) {
+            if (logout) await logout();
+            throw new Error('Sesión expirada');
+          }
           token = await AsyncStorage.getItem('access_token');
         }
 
@@ -2156,7 +2192,7 @@ const styles = StyleSheet.create({
     marginLeft: 8,
   },
   listContainer: {
-    
+
   },
   titleContainer: {
     alignItems: 'center',

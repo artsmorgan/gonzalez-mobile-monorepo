@@ -32,11 +32,17 @@ export const createStaffEvaluation = async ({
 
     let token = await AsyncStorage.getItem('access_token');
     if (!token) {
-      const refreshed = await refreshAccessToken();
-      if (!refreshed) {
-        throw new Error('No authentication token found');
+      if (refreshAccessToken) {
+        const refreshed = await refreshAccessToken();
+        if (!refreshed) {
+          if (logout) await logout();
+          throw new Error('Sesión expirada');
+        }
+        token = await AsyncStorage.getItem('access_token');
+      } else {
+        if (logout) await logout();
+        throw new Error('Sesión expirada');
       }
-      token = await AsyncStorage.getItem('access_token');
     }
 
     const response = await fetch(`${apiUrl}/api/evaluation`, {
@@ -49,7 +55,7 @@ export const createStaffEvaluation = async ({
       body: JSON.stringify(requestData),
     });
 
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
       const refreshed = await refreshAccessToken();
       if (refreshed) {
         return createStaffEvaluation({ requestData, refreshAccessToken, logout });
@@ -57,6 +63,11 @@ export const createStaffEvaluation = async ({
         await logout();
         throw new Error('Sesión expirada');
       }
+    }
+
+    if (response.status === 403) {
+      if (logout) await logout();
+      throw new Error('Acceso denegado');
     }
 
     if (!response.ok) {
@@ -87,11 +98,17 @@ export const deleteStaffEvaluation = async ({
 
     let token = await AsyncStorage.getItem('access_token');
     if (!token) {
-      const refreshed = await refreshAccessToken();
-      if (!refreshed) {
-        throw new Error('No authentication token found');
+      if (refreshAccessToken) {
+        const refreshed = await refreshAccessToken();
+        if (!refreshed) {
+          if (logout) await logout();
+          throw new Error('Sesión expirada');
+        }
+        token = await AsyncStorage.getItem('access_token');
+      } else {
+        if (logout) await logout();
+        throw new Error('Sesión expirada');
       }
-      token = await AsyncStorage.getItem('access_token');
     }
 
     const response = await fetch(`${apiUrl}/api/evaluation/${id}`, {
@@ -103,7 +120,7 @@ export const deleteStaffEvaluation = async ({
       },
     });
 
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
       const refreshed = await refreshAccessToken();
       if (refreshed) {
         return deleteStaffEvaluation({ id, refreshAccessToken, logout });
@@ -111,6 +128,11 @@ export const deleteStaffEvaluation = async ({
         await logout();
         throw new Error('Sesión expirada');
       }
+    }
+
+    if (response.status === 403) {
+      if (logout) await logout();
+      throw new Error('Acceso denegado');
     }
 
     const data: ApiResponse = await response.json();

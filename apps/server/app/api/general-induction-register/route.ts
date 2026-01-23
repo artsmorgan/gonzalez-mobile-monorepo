@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessToken } from "../../../utils/verifyToken";
 import { prisma } from "../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
+import { sendNotificationByRole } from "../../../utils/sendNotification";
 
 function parseFechaInput(fecha: any): Date | undefined {
   if (!fecha) return undefined;
@@ -33,10 +34,8 @@ function ensureStringJson(value: any, fallback: string) {
 
 export async function POST(req: NextRequest) {
   try {
-    const { valid, payload, message } = verifyAccessToken(req);
-    if (!valid) {
-      return NextResponse.json({ status: false, message }, { status: 401 });
-    }
+    const { valid, expired, payload, message } = verifyAccessToken(req);
+    if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
     const {
       empresa_id,
@@ -100,6 +99,26 @@ export async function POST(req: NextRequest) {
         e_estructura_sucursal: { select: { nombre: true, nro_sucursal: true } },
       },
     });
+
+    if (record) {
+      let empNombre = "Desconocido";
+      let sucursalNombre = "Desconocida";
+      let fechaRegistro = record.fecha.toISOString().split("T")[0];
+      if (record.created_by) {
+        const empleado = await prisma.c_empleado.findUnique({ where: { id: parseInt(String(record.created_by), 10) } });
+        if (empleado) {
+          empNombre = empleado.nombre + " " + empleado.primer_apellido + " " + empleado.segundo_apellido;
+        }
+      }
+      if (record.corpo_id) {
+        const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: record.corpo_id } });
+        if (sucursal) {
+          sucursalNombre = sucursal.nombre + " (" + sucursal.nro_sucursal + ")";
+        }
+      }
+      const descriptionNotificacion = "El empleado " + empNombre + " ha creado un registro de inducción general en la sucursal " + sucursalNombre + " el día " + fechaRegistro;
+      sendNotificationByRole(record.corpo_id, [parseInt(String(record.created_by), 10)], "Registro de inducción general creado", descriptionNotificacion, ["ADMINISTRATIVO", "SUPERVISOR"]);
+    }
 
     return NextResponse.json(
       {

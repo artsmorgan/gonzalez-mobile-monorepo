@@ -1,5 +1,6 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   Image,
   Modal,
@@ -8,6 +9,7 @@ import {
   StyleSheet,
   TextInput,
   TouchableOpacity,
+  View,
 } from 'react-native';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
@@ -28,6 +30,8 @@ import type { RootStackParamList } from '@/App';
 import { eventBus } from '@/hooks/eventBus';
 import { useQRScanner } from '@/hooks/useQRScanner';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import { CameraView, useCameraPermissions } from 'expo-camera';
+import SignatureScreen from 'react-native-signature-canvas';
 import {
   createCorporateVehicle,
   createCorporateVehicleUse,
@@ -37,6 +41,11 @@ import {
   listCorporateVehiclesByCorpo,
   updateCorporateVehicleUse,
   updateCorporateVehicle,
+  createCorporateVehicleMaintenance,
+  updateCorporateVehicleMaintenance,
+  deleteCorporateVehicleMaintenance,
+  listCorporateVehicleMaintenances,
+  CorporateVehicleMaintenanceRequest,
 } from '@/hooks/evaluationFunctions';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'CorporateVehicles'>;
@@ -86,6 +95,25 @@ type VehicleUse = {
   synced?: boolean;
 };
 
+type VehicleMaintenance = {
+  id: number | string;
+  id_local?: string;
+  vehiculo_id: number | string;
+  fecha: string; // ISO
+  imagen_antes: string; // base64 or file_name
+  tipo: string;
+  mantenimiento: string;
+  diagnostico: string;
+  kilometraje_siguiente_revision: number;
+  imagen_despues: string; // base64 or file_name
+  nombre_mecanico: string;
+  firma_mecanico: string; // base64 signature
+  firma_responsable: string; // base64 hash
+  created_by?: number;
+  created_at?: string;
+  synced?: boolean;
+};
+
 type VehicleRecord = {
   id: number | string;
   id_local?: string;
@@ -114,6 +142,7 @@ type VehicleRecord = {
 
   images?: VehicleImage[];
   usos?: VehicleUse[];
+  mantenimientos?: VehicleMaintenance[];
 };
 
 const getBase64Only = (value: string | null | undefined): string => {
@@ -481,6 +510,13 @@ const buildRevisionConfig = (tipo: TipoBitacora): RevisionEntry[] => {
   return cfg;
 };
 
+const signatureWebStyle = `
+  .m-signature-pad {box-shadow: none; border: none;}
+  .m-signature-pad--body {border: 1px solid #e0e0e0;}
+  .m-signature-pad--footer {display: none; margin: 0px;}
+  body,html {width: 100%; height: 100%; margin: 0; padding: 0;}
+`;
+
 const safeParse = <T,>(value: any, fallback: T): T => {
   try {
     if (typeof value === 'string') {
@@ -548,6 +584,39 @@ export default function CorporateVehiclesScreen() {
   const [showUseTimePicker, setShowUseTimePicker] = useState(false);
   const [useTimePickerValue, setUseTimePickerValue] = useState(new Date());
   const [usePickerKey, setUsePickerKey] = useState<'fecha' | 'hora_inicio' | 'hora_fin' | null>(null);
+
+  // submódulo: mantenimiento (modal)
+  const [maintenanceModalVisible, setMaintenanceModalVisible] = useState(false);
+  const [maintenanceVehicleKey, setMaintenanceVehicleKey] = useState<string | null>(null);
+  const [maintenanceRecords, setMaintenanceRecords] = useState<VehicleMaintenance[]>([]);
+  const [isMaintenanceFormOpen, setIsMaintenanceFormOpen] = useState(false);
+  const [maintenanceEditing, setMaintenanceEditing] = useState<VehicleMaintenance | null>(null);
+
+  const [maintenanceFecha, setMaintenanceFecha] = useState(''); // YYYY-MM-DD
+  const [maintenanceImagenAntes, setMaintenanceImagenAntes] = useState<string>(''); // base64
+  const [maintenanceTipo, setMaintenanceTipo] = useState('');
+  const [maintenanceMantenimiento, setMaintenanceMantenimiento] = useState('');
+  const [maintenanceDiagnostico, setMaintenanceDiagnostico] = useState('');
+  const [maintenanceKmSiguiente, setMaintenanceKmSiguiente] = useState('');
+  const [maintenanceImagenDespues, setMaintenanceImagenDespues] = useState<string>(''); // base64
+  const [maintenanceNombreMecanico, setMaintenanceNombreMecanico] = useState('');
+  const [maintenanceFirmaMecanico, setMaintenanceFirmaMecanico] = useState<string>(''); // base64 signature
+  const [maintenanceFirmaResponsable, setMaintenanceFirmaResponsable] = useState<FirmaData | null>(null);
+
+  // pickers para mantenimiento
+  const [showMaintenanceDatePicker, setShowMaintenanceDatePicker] = useState(false);
+  const [maintenanceDatePickerValue, setMaintenanceDatePickerValue] = useState(new Date());
+
+  // cámara para fotos
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+  const [isCameraVisible, setIsCameraVisible] = useState(false);
+  const [cameraType, setCameraType] = useState<'antes' | 'despues' | null>(null);
+  const cameraRef = useRef<any>(null);
+
+  // signature modal para firma_mecanico
+  const signatureRef = useRef<any>(null);
+  const [signatureModalVisible, setSignatureModalVisible] = useState(false);
+  const [signatureKey, setSignatureKey] = useState(0);
 
   const usesVehicle = useMemo(() => {
     if (!usesVehicleKey) return null;
@@ -794,6 +863,21 @@ export default function CorporateVehiclesScreen() {
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (apiUrl && vehiculoId) {
       return `${apiUrl}/api/corporate-vehicles/${vehiculoId}/get-image/${encodeURIComponent(img.name)}`;
+    }
+    return '';
+  };
+
+  const buildMaintenanceImageUrl = (vehiculoId: number | undefined, imageName: string | null | undefined) => {
+    if (!imageName || imageName.trim().length === 0) return '';
+
+    // Si es una data URI (base64), retornarla directamente
+    if (imageName.startsWith('data:')) {
+      return imageName;
+    }
+
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (apiUrl && vehiculoId) {
+      return `${apiUrl}/api/corporate-vehicles/${vehiculoId}/get-maintenance-image/${encodeURIComponent(imageName)}`;
     }
     return '';
   };
@@ -1049,8 +1133,8 @@ export default function CorporateVehiclesScreen() {
   const buildUseRequestData = () => {
     const firmaHash = useFirmaResponsable
       ? btoa(
-          `${useFirmaResponsable.sessionId}:${useFirmaResponsable.empleadoId}:${useFirmaResponsable.latitud}:${useFirmaResponsable.longitud}:${useFirmaResponsable.timestamp}`
-        )
+        `${useFirmaResponsable.sessionId}:${useFirmaResponsable.empleadoId}:${useFirmaResponsable.latitud}:${useFirmaResponsable.longitud}:${useFirmaResponsable.timestamp}`
+      )
       : '';
 
     return {
@@ -1289,6 +1373,496 @@ export default function CorporateVehiclesScreen() {
     } catch (e: any) {
       console.error('Error navigating to bitacora:', e);
       Alert.alert('Error', e?.message || 'No se pudo abrir la bitácora');
+    }
+  };
+
+  // Funciones para mantenimiento
+  const maintenanceVehicle = useMemo(() => {
+    if (!maintenanceVehicleKey) return null;
+    return records.find((r) => String(r.id || r.id_local) === maintenanceVehicleKey) ?? null;
+  }, [records, maintenanceVehicleKey]);
+
+  const resetMaintenanceForm = useCallback(() => {
+    setMaintenanceFecha('');
+    setMaintenanceImagenAntes('');
+    setMaintenanceTipo('');
+    setMaintenanceMantenimiento('');
+    setMaintenanceDiagnostico('');
+    setMaintenanceKmSiguiente('');
+    setMaintenanceImagenDespues('');
+    setMaintenanceNombreMecanico('');
+    setMaintenanceFirmaMecanico('');
+    setMaintenanceFirmaResponsable(null);
+  }, []);
+
+  const setMaintenancesForVehicleKey = useCallback(async (vehicleKey: string, mantenimientos: VehicleMaintenance[]) => {
+    setRecords((prev) =>
+      prev.map((r) => {
+        const key = String(r.id || r.id_local);
+        if (key !== vehicleKey) return r;
+        return { ...r, mantenimientos };
+      })
+    );
+
+    // Actualizar main_structure_cache
+    const cacheStr = await AsyncStorage.getItem('main_structure_cache');
+    if (cacheStr) {
+      try {
+        const parsed = JSON.parse(cacheStr);
+        if (Array.isArray(parsed)) {
+          const updated = parsed.map((item: any) => {
+            if (item.type !== 'corporate_vehicle') return item;
+            const key = String(item.id || item.id_local);
+            if (key !== vehicleKey) return item;
+            return { ...item, mantenimientos };
+          });
+          await AsyncStorage.setItem('main_structure_cache', JSON.stringify(updated));
+        }
+      } catch (e) {
+        console.error('Error updating main_structure_cache:', e);
+      }
+    }
+
+    const cacheStr2 = await AsyncStorage.getItem('evaluations_cache');
+    const cache = cacheStr2 ? JSON.parse(cacheStr2) : [];
+    const updatedCache = cache.map((item: any) => {
+      if (item.type !== 'corporate_vehicle') return item;
+      const key = String(item.id || item.id_local);
+      if (key !== vehicleKey) return item;
+      return { ...item, mantenimientos };
+    });
+    await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+  }, []);
+
+  const openMaintenanceModal = useCallback(
+    async (vehicle: VehicleRecord) => {
+      const key = String(vehicle.id || vehicle.id_local);
+      setMaintenanceVehicleKey(key);
+      setMaintenanceModalVisible(true);
+      setIsMaintenanceFormOpen(false);
+      setMaintenanceEditing(null);
+      resetMaintenanceForm();
+
+      const initial = (vehicle.mantenimientos || []).map((m) => ({
+        ...m,
+        synced:
+          m.synced !== undefined
+            ? m.synced
+            : typeof m.id === 'number' && !String(m.id).startsWith('local-')
+              ? true
+              : false,
+      }));
+      setMaintenanceRecords(initial);
+
+      const isConnected = await getConnectionStatus();
+      if (!isConnected) return;
+      if (typeof vehicle.id !== 'number') return;
+
+      const res = await listCorporateVehicleMaintenances({
+        vehiculo_id: String(vehicle.id),
+        refreshAccessToken,
+        logout,
+      });
+      if (!res.status) return;
+      const serverMaintenances: VehicleMaintenance[] = Array.isArray(res.data)
+        ? (res.data as any).map((m: any) => ({ ...m, id_local: '', synced: true }))
+        : [];
+      setMaintenanceRecords(serverMaintenances);
+      await setMaintenancesForVehicleKey(key, serverMaintenances);
+    },
+    [getConnectionStatus, listCorporateVehicleMaintenances, refreshAccessToken, logout, resetMaintenanceForm, setMaintenancesForVehicleKey]
+  );
+
+  const closeMaintenanceModal = () => {
+    setMaintenanceModalVisible(false);
+    setMaintenanceVehicleKey(null);
+    setMaintenanceRecords([]);
+    setIsMaintenanceFormOpen(false);
+    setMaintenanceEditing(null);
+    resetMaintenanceForm();
+  };
+
+  const startCreateMaintenance = () => {
+    setIsMaintenanceFormOpen(true);
+    setMaintenanceEditing(null);
+    resetMaintenanceForm();
+  };
+
+  const startEditingMaintenance = (m: VehicleMaintenance) => {
+    setIsMaintenanceFormOpen(true);
+    setMaintenanceEditing(m);
+    setMaintenanceFecha(isoToDate(m.fecha));
+
+    // Construir URL de imagen si es un nombre de archivo
+    const vehiculoId = typeof maintenanceVehicle?.id === 'number' ? maintenanceVehicle.id : undefined;
+    const imagenAntesUri = m.imagen_antes
+      ? (m.imagen_antes.startsWith('data:') ? m.imagen_antes : buildMaintenanceImageUrl(vehiculoId, m.imagen_antes))
+      : '';
+    const imagenDespuesUri = m.imagen_despues
+      ? (m.imagen_despues.startsWith('data:') ? m.imagen_despues : buildMaintenanceImageUrl(vehiculoId, m.imagen_despues))
+      : '';
+
+    setMaintenanceImagenAntes(imagenAntesUri);
+    setMaintenanceTipo(m.tipo || '');
+    setMaintenanceMantenimiento(m.mantenimiento || '');
+    setMaintenanceDiagnostico(m.diagnostico || '');
+    setMaintenanceKmSiguiente(String(m.kilometraje_siguiente_revision ?? ''));
+    setMaintenanceImagenDespues(imagenDespuesUri);
+    setMaintenanceNombreMecanico(m.nombre_mecanico || '');
+    // Cargar firma del mecánico formateada correctamente
+    setMaintenanceFirmaMecanico(formatSignatureForDisplay(m.firma_mecanico));
+    setMaintenanceFirmaResponsable(decodeFirmaHash(m.firma_responsable) as any);
+  };
+
+  const validateMaintenanceForm = () => {
+    if (!maintenanceVehicleKey) return 'No se encontró el vehículo seleccionado';
+    if (!maintenanceFecha.trim()) return 'Fecha es requerida';
+    if (!maintenanceTipo.trim()) return 'Tipo es requerido';
+    if (!maintenanceMantenimiento.trim()) return 'Mantenimiento es requerido';
+    if (!maintenanceNombreMecanico.trim()) return 'Nombre del mecánico es requerido';
+    if (!maintenanceFirmaMecanico) return 'Firma del mecánico es requerida';
+    if (!maintenanceFirmaResponsable) return 'Firma del responsable (QR o Generar) es requerida';
+    return null;
+  };
+
+  const buildMaintenanceRequestData = (): CorporateVehicleMaintenanceRequest => {
+    const firmaHash = maintenanceFirmaResponsable
+      ? btoa(
+        `${maintenanceFirmaResponsable.sessionId}:${maintenanceFirmaResponsable.empleadoId}:${maintenanceFirmaResponsable.latitud}:${maintenanceFirmaResponsable.longitud}:${maintenanceFirmaResponsable.timestamp}`
+      )
+      : '';
+
+    return {
+      fecha: toIsoFromDateAndTime(maintenanceFecha, '00:00'),
+      imagen_antes: getBase64Only(maintenanceImagenAntes),
+      tipo: maintenanceTipo.trim(),
+      mantenimiento: maintenanceMantenimiento.trim(),
+      diagnostico: maintenanceDiagnostico.trim(),
+      kilometraje_siguiente_revision: Number(maintenanceKmSiguiente || 0),
+      imagen_despues: getBase64Only(maintenanceImagenDespues),
+      nombre_mecanico: maintenanceNombreMecanico.trim(),
+      firma_mecanico: getBase64Only(maintenanceFirmaMecanico),
+      firma_responsable: firmaHash,
+    };
+  };
+
+  const saveMaintenanceRecord = async () => {
+    const errMsg = validateMaintenanceForm();
+    if (errMsg) {
+      Alert.alert('Validación', errMsg);
+      return;
+    }
+
+    if (!maintenanceVehicleKey) return;
+    const vehicle = records.find((r) => String(r.id || r.id_local) === maintenanceVehicleKey);
+    if (!vehicle) {
+      Alert.alert('Error', 'No se encontró el vehículo seleccionado');
+      return;
+    }
+
+    const requestData = buildMaintenanceRequestData();
+    const isConnected = await getConnectionStatus();
+    const vehicleIdForAction = String(vehicle.id_local || vehicle.id);
+
+    try {
+      setIsLoading(true);
+
+      if (!isConnected) {
+        const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+        const actions = actionsStr ? JSON.parse(actionsStr) : [];
+
+        if (!maintenanceEditing) {
+          const localMaintenanceId = `local-maintenance-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+          actions.push({
+            id: localMaintenanceId,
+            action: 'create',
+            type: 'corporate_vehicle_maintenance',
+            payload: { vehiculo_id: vehicleIdForAction, ...requestData },
+            synced: false,
+          });
+          await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+
+          const newMaintenance: VehicleMaintenance = {
+            id: localMaintenanceId,
+            id_local: localMaintenanceId,
+            vehiculo_id: vehicleIdForAction,
+            synced: false,
+            ...requestData,
+          } as any;
+          const updated = [...maintenanceRecords, newMaintenance];
+          setMaintenanceRecords(updated);
+          await setMaintenancesForVehicleKey(maintenanceVehicleKey, updated);
+        } else {
+          const maintenanceId = String(maintenanceEditing.id || maintenanceEditing.id_local);
+          actions.push({
+            id: maintenanceId,
+            action: 'update',
+            type: 'corporate_vehicle_maintenance',
+            payload: { vehiculo_id: vehicleIdForAction, ...requestData },
+            synced: false,
+          });
+          await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+
+          const updated = maintenanceRecords.map((m) =>
+            String(m.id) === maintenanceId || String(m.id_local) === maintenanceId
+              ? ({ ...m, ...requestData, synced: false } as any)
+              : m
+          );
+          setMaintenanceRecords(updated);
+          await setMaintenancesForVehicleKey(maintenanceVehicleKey, updated);
+        }
+
+        setIsMaintenanceFormOpen(false);
+        setMaintenanceEditing(null);
+        resetMaintenanceForm();
+        Alert.alert('Guardado offline', 'El mantenimiento se guardó en el dispositivo. Se sincronizará al reconectar.');
+        return;
+      }
+
+      const vehicleIdForResolve = vehicle.id || vehicle.id_local;
+      if (!vehicleIdForResolve) {
+        Alert.alert('Error', 'No se pudo obtener el ID del vehículo');
+        return;
+      }
+      const serverVehicleId = await resolveServerVehicleId(vehicleIdForResolve);
+      if (!serverVehicleId) {
+        Alert.alert('Error', 'No se pudo obtener el ID del vehículo en el servidor');
+        return;
+      }
+
+      if (!maintenanceEditing) {
+        const res = await createCorporateVehicleMaintenance({
+          vehiculo_id: String(serverVehicleId),
+          requestData,
+          refreshAccessToken,
+          logout,
+        });
+        if (!res.status) throw new Error(res.message || 'No se pudo crear');
+      } else {
+        const maintenanceId = String(maintenanceEditing.id);
+        const serverMaintenanceId = maintenanceId.startsWith('local-')
+          ? String(maintenanceEditing.id_local || '')
+          : maintenanceId;
+        if (!serverMaintenanceId || serverMaintenanceId.startsWith('local-')) {
+          Alert.alert('Error', 'Este mantenimiento aún no está sincronizado');
+          return;
+        }
+        const res = await updateCorporateVehicleMaintenance({
+          maintenance_id: serverMaintenanceId,
+          requestData,
+          refreshAccessToken,
+          logout,
+        });
+        if (!res.status) throw new Error(res.message || 'No se pudo actualizar');
+      }
+
+      // Refrescar desde servidor
+      const res = await listCorporateVehicleMaintenances({
+        vehiculo_id: String(serverVehicleId),
+        refreshAccessToken,
+        logout,
+      });
+      if (res.status) {
+        const serverMaintenances: VehicleMaintenance[] = Array.isArray(res.data)
+          ? (res.data as any).map((m: any) => ({ ...m, id_local: '', synced: true }))
+          : [];
+        setMaintenanceRecords(serverMaintenances);
+        await setMaintenancesForVehicleKey(maintenanceVehicleKey, serverMaintenances);
+      }
+
+      setIsMaintenanceFormOpen(false);
+      setMaintenanceEditing(null);
+      resetMaintenanceForm();
+      Alert.alert('Éxito', 'Mantenimiento guardado correctamente');
+    } catch (e: any) {
+      console.error('Error saving maintenance:', e);
+      Alert.alert('Error', e?.message || 'No se pudo guardar el mantenimiento');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const confirmDeleteMaintenance = (m: VehicleMaintenance) => {
+    Alert.alert('Eliminar', '¿Deseas eliminar este mantenimiento?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Eliminar',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            setIsLoading(true);
+            const isConnected = await getConnectionStatus();
+            const maintenanceId = String(m.id || m.id_local);
+
+            if (!isConnected || maintenanceId.startsWith('local-') || !m.synced) {
+              const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+              const actions = actionsStr ? JSON.parse(actionsStr) : [];
+              actions.push({
+                id: maintenanceId,
+                action: 'delete',
+                type: 'corporate_vehicle_maintenance',
+                payload: {},
+                synced: false,
+              });
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+
+              const updated = maintenanceRecords.filter((maintenance) => String(maintenance.id) !== maintenanceId && String(maintenance.id_local) !== maintenanceId);
+              setMaintenanceRecords(updated);
+              await setMaintenancesForVehicleKey(maintenanceVehicleKey!, updated);
+              Alert.alert('Eliminado offline', 'Se eliminará al sincronizar');
+              return;
+            }
+
+            const res = await deleteCorporateVehicleMaintenance({
+              maintenance_id: maintenanceId,
+              refreshAccessToken,
+              logout,
+            });
+            if (!res.status) throw new Error(res.message || 'No se pudo eliminar');
+
+            const updated = maintenanceRecords.filter((maintenance) => String(maintenance.id) !== maintenanceId);
+            setMaintenanceRecords(updated);
+            await setMaintenancesForVehicleKey(maintenanceVehicleKey!, updated);
+            Alert.alert('Éxito', 'Mantenimiento eliminado correctamente');
+          } catch (e: any) {
+            Alert.alert('Error', e?.message || 'No se pudo eliminar el mantenimiento');
+          } finally {
+            setIsLoading(false);
+          }
+        },
+      },
+    ]);
+  };
+
+  // Funciones para cámara
+  const openCamera = async (type: 'antes' | 'despues') => {
+    if (!cameraPermission?.granted) {
+      const result = await requestCameraPermission();
+      if (!result.granted) {
+        Alert.alert('Permisos', 'Se requiere permiso de cámara para tomar fotos');
+        return;
+      }
+    }
+    setCameraType(type);
+    setIsCameraVisible(true);
+  };
+
+  const takePicture = async () => {
+    if (!cameraRef.current) return;
+    try {
+      const photo = await cameraRef.current.takePictureAsync({
+        quality: 0.8,
+        base64: true,
+      });
+      if (photo && photo.base64) {
+        const dataUri = `data:image/jpeg;base64,${photo.base64}`;
+        if (cameraType === 'antes') {
+          setMaintenanceImagenAntes(dataUri);
+        } else {
+          setMaintenanceImagenDespues(dataUri);
+        }
+        setIsCameraVisible(false);
+        setCameraType(null);
+      }
+    } catch (e) {
+      console.error('Error taking picture:', e);
+      Alert.alert('Error', 'No se pudo tomar la foto');
+    }
+  };
+
+  // Funciones para signature
+  const formatSignatureForDisplay = (value?: string | null) => {
+    if (!value) return '';
+    return value.startsWith('data:') ? value : `data:image/png;base64,${value}`;
+  };
+
+  const openSignatureModal = () => {
+    setSignatureModalVisible(true);
+    setSignatureKey((prev) => prev + 1);
+  };
+
+  const closeSignatureModal = () => {
+    setSignatureModalVisible(false);
+  };
+
+  const clearSignatureInModal = () => {
+    setSignatureKey((prev) => prev + 1);
+    if (signatureRef.current) signatureRef.current.clearSignature();
+  };
+
+  const handleSignatureRead = (signature: string) => {
+    if (!signature) {
+      Alert.alert('Error', 'No se pudo obtener la firma');
+      return;
+    }
+    const formatted = signature.startsWith('data:') ? signature : `data:image/png;base64,${signature}`;
+    setMaintenanceFirmaMecanico(formatted);
+    setSignatureModalVisible(false);
+  };
+
+  const acceptSignature = () => {
+    if (signatureRef.current) signatureRef.current.readSignature();
+  };
+
+  // Funciones para firma_responsable
+  const generateMaintenanceFirmaResponsable = async () => {
+    try {
+      setIsGeneratingFirma(true);
+      const employeeId = employee?.id ? String(employee.id) : '';
+      const token = (await AsyncStorage.getItem('access_token')) || '';
+      const sessionId = token ? token.slice(0, 24) : 'local-session';
+      const lat = location ? String(location.latitude) : '0';
+      const lon = location ? String(location.longitude) : '0';
+      const ts = String(Date.now());
+      if (!employeeId) {
+        Alert.alert('Error', 'No se encontró el empleado');
+        return;
+      }
+      const raw = `${sessionId}:${employeeId}:${lat}:${lon}:${ts}`;
+      const hash = btoa(raw);
+      const decoded = decodeFirmaHash(hash);
+      if (!decoded) {
+        Alert.alert('Error', 'No se pudo generar la firma');
+        return;
+      }
+      setMaintenanceFirmaResponsable(decoded);
+    } finally {
+      setIsGeneratingFirma(false);
+    }
+  };
+
+  const handleScanQRMaintenance = async () => {
+    try {
+      const qrData = await scanQR();
+      if (!qrData) return;
+      const decoded = decodeFirmaHash(qrData);
+      if (!decoded) {
+        Alert.alert('Error', 'El QR no tiene la estructura esperada');
+        return;
+      }
+      setMaintenanceFirmaResponsable(decoded);
+    } catch (e) {
+      console.error('Error reading QR (maintenance):', e);
+      Alert.alert('Error', 'No se pudo leer el QR');
+    }
+  };
+
+  // Picker para fecha de mantenimiento
+  const openMaintenanceDatePicker = (currentDate: string) => {
+    if (currentDate) {
+      const d = new Date(currentDate);
+      if (!Number.isNaN(d.getTime())) {
+        setMaintenanceDatePickerValue(d);
+      }
+    }
+    setShowMaintenanceDatePicker(true);
+  };
+
+  const onMaintenanceDatePicked = (event: any, selectedDate?: Date) => {
+    setShowMaintenanceDatePicker(false);
+    if (event.type === 'set' && selectedDate) {
+      setMaintenanceDatePickerValue(selectedDate);
+      setMaintenanceFecha(isoToDate(selectedDate.toISOString()));
     }
   };
 
@@ -1841,21 +2415,54 @@ export default function CorporateVehiclesScreen() {
               ) : (
                 <ThemedText style={styles.emptyText}>No hay firma registrada</ThemedText>
               )}
-              <ThemedView style={styles.signatureButtonsRow}>
+              {!firmaResponsable ? (
                 <TouchableOpacity
-                  style={[styles.signatureBlueButton, isGeneratingFirma && styles.signatureDisabled]}
+                  style={styles.signatureButtonPrimary}
                   onPress={generateFirmaResponsable}
                   disabled={isGeneratingFirma}
                   activeOpacity={0.85}
                 >
-                  <Ionicons name="create-outline" size={18} color="#FFFFFF" />
-                  <ThemedText style={styles.signatureBlueButtonText}>{isGeneratingFirma ? 'Generando...' : 'Generar firma'}</ThemedText>
+                  {isGeneratingFirma ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <>
+                      <Ionicons name="sparkles-outline" size={18} color="#FFFFFF" />
+                      <ThemedText style={styles.signatureButtonText}>Generar firma</ThemedText>
+                    </>
+                  )}
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.signatureBlueButton} onPress={handleScanQR} activeOpacity={0.85}>
+              ) : (
+                <ThemedView style={styles.signatureInfo}>
+                  <ThemedText style={styles.signatureInfoTitle}>
+                    Información de la firma del responsable
+                  </ThemedText>
+                  <ThemedText style={styles.signatureInfoText}>
+                    ID de sesión: {firmaResponsable.sessionId}
+                  </ThemedText>
+                  <ThemedText style={styles.signatureInfoText}>
+                    ID del empleado: {firmaResponsable.empleadoId}
+                  </ThemedText>
+                  <ThemedText style={styles.signatureInfoText}>
+                    Latitud: {firmaResponsable.latitud}
+                  </ThemedText>
+                  <ThemedText style={styles.signatureInfoText}>
+                    Longitud: {firmaResponsable.longitud}
+                  </ThemedText>
+                  <ThemedText style={styles.signatureInfoText}>
+                    Fecha y hora: {new Date(Number(firmaResponsable.timestamp)).toLocaleString()}
+                  </ThemedText>
+                </ThemedView>
+              )}
+              {!firmaResponsable && (
+                <TouchableOpacity
+                  style={[styles.signatureButtonPrimary, { marginTop: 8 }]}
+                  onPress={handleScanQR}
+                  activeOpacity={0.85}
+                >
                   <Ionicons name="qr-code-outline" size={18} color="#FFFFFF" />
-                  <ThemedText style={styles.signatureBlueButtonText}>Escanear QR</ThemedText>
+                  <ThemedText style={styles.signatureButtonText}>Escanear QR</ThemedText>
                 </TouchableOpacity>
-              </ThemedView>
+              )}
 
               <ThemedText style={styles.sectionTitle}>Imágenes</ThemedText>
               <TouchableOpacity style={styles.attachButton} onPress={handleAddImage} activeOpacity={0.85}>
@@ -1921,10 +2528,10 @@ export default function CorporateVehiclesScreen() {
                       <ThemedText style={styles.cardLabel}>Tipo: </ThemedText>
                       <ThemedText style={styles.cardValue}>{r.tipo || '—'}</ThemedText>
                     </ThemedText>
-                  <ThemedText style={styles.cardLine}>
-                    <ThemedText style={styles.cardLabel}>Estado: </ThemedText>
-                    <ThemedText style={styles.cardValue}>{(r as any)?.estado || 'Activo'}</ThemedText>
-                  </ThemedText>
+                    <ThemedText style={styles.cardLine}>
+                      <ThemedText style={styles.cardLabel}>Estado: </ThemedText>
+                      <ThemedText style={styles.cardValue}>{(r as any)?.estado || 'Activo'}</ThemedText>
+                    </ThemedText>
 
                     <TouchableOpacity style={styles.collapseButton} onPress={() => toggleExpanded(recordKey)} activeOpacity={0.85}>
                       <ThemedText style={styles.collapseButtonText}>{isExpanded ? 'Ocultar detalles' : 'Ver detalles'}</ThemedText>
@@ -1959,6 +2566,16 @@ export default function CorporateVehiclesScreen() {
                         <Ionicons name="list-outline" size={18} color="#FFFFFF" />
                         <ThemedText style={styles.actionBtnText}>Usos</ThemedText>
                       </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[styles.actionBtn, styles.usesBtn]}
+                        onPress={() => openMaintenanceModal(r)}
+                        activeOpacity={0.85}
+                      >
+                        <Ionicons name="construct-outline" size={18} color="#FFFFFF" />
+                        <ThemedText style={styles.actionBtnText}>Mantenimiento</ThemedText>
+                      </TouchableOpacity>
+                    </ThemedView>
+                    <ThemedView style={styles.actionsRow}>
                       <TouchableOpacity style={[styles.actionBtn, styles.editBtn]} onPress={() => startEditing(r)} activeOpacity={0.85}>
                         <Ionicons name="create-outline" size={18} color="#FFFFFF" />
                         <ThemedText style={styles.actionBtnText}>Editar</ThemedText>
@@ -2084,21 +2701,54 @@ export default function CorporateVehiclesScreen() {
                       <ThemedText style={styles.signatureLine}>Sin firma</ThemedText>
                     )}
 
-                    <ThemedView style={styles.signatureButtonsRow}>
+                    {!useFirmaResponsable ? (
                       <TouchableOpacity
-                        style={[styles.signatureBlueButton, isGeneratingFirma ? styles.signatureDisabled : null]}
+                        style={styles.signatureButtonPrimary}
                         onPress={generateUseFirmaResponsable}
-                        activeOpacity={0.85}
                         disabled={isGeneratingFirma}
+                        activeOpacity={0.85}
                       >
-                        <Ionicons name="sparkles-outline" size={18} color="#FFFFFF" />
-                        <ThemedText style={styles.signatureBlueButtonText}>{isGeneratingFirma ? 'Generando...' : 'Generar firma'}</ThemedText>
+                        {isGeneratingFirma ? (
+                          <ActivityIndicator size="small" color="#FFFFFF" />
+                        ) : (
+                          <>
+                            <Ionicons name="sparkles-outline" size={18} color="#FFFFFF" />
+                            <ThemedText style={styles.signatureButtonText}>Generar firma</ThemedText>
+                          </>
+                        )}
                       </TouchableOpacity>
-                      <TouchableOpacity style={styles.signatureBlueButton} onPress={handleScanQRUse} activeOpacity={0.85}>
+                    ) : (
+                      <ThemedView style={styles.signatureInfo}>
+                        <ThemedText style={styles.signatureInfoTitle}>
+                          Información de la firma del responsable
+                        </ThemedText>
+                        <ThemedText style={styles.signatureInfoText}>
+                          ID de sesión: {useFirmaResponsable.sessionId}
+                        </ThemedText>
+                        <ThemedText style={styles.signatureInfoText}>
+                          ID del empleado: {useFirmaResponsable.empleadoId}
+                        </ThemedText>
+                        <ThemedText style={styles.signatureInfoText}>
+                          Latitud: {useFirmaResponsable.latitud}
+                        </ThemedText>
+                        <ThemedText style={styles.signatureInfoText}>
+                          Longitud: {useFirmaResponsable.longitud}
+                        </ThemedText>
+                        <ThemedText style={styles.signatureInfoText}>
+                          Fecha y hora: {new Date(Number(useFirmaResponsable.timestamp)).toLocaleString()}
+                        </ThemedText>
+                      </ThemedView>
+                    )}
+                    {!useFirmaResponsable && (
+                      <TouchableOpacity
+                        style={[styles.signatureButtonPrimary, { marginTop: 8 }]}
+                        onPress={handleScanQRUse}
+                        activeOpacity={0.85}
+                      >
                         <Ionicons name="qr-code-outline" size={18} color="#FFFFFF" />
-                        <ThemedText style={styles.signatureBlueButtonText}>Escanear QR</ThemedText>
+                        <ThemedText style={styles.signatureButtonText}>Escanear QR</ThemedText>
                       </TouchableOpacity>
-                    </ThemedView>
+                    )}
                   </ThemedView>
 
                   <ThemedView style={styles.formActions}>
@@ -2156,7 +2806,7 @@ export default function CorporateVehiclesScreen() {
                             <ThemedText style={styles.actionBtnText}>Eliminar</ThemedText>
                           </TouchableOpacity>
                         </ThemedView>
-                        
+
                         <ThemedView style={styles.modalItemActions}>
                           {((u as any)?.bitacora_id == null) && (
                             <TouchableOpacity style={[styles.actionBtn, styles.assignBtn]} onPress={() => handleAssignEstado(u)} activeOpacity={0.85}>
@@ -2170,24 +2820,24 @@ export default function CorporateVehiclesScreen() {
                         {((u as any)?.bitacora_id != null || (u as any)?.bitacora) && (() => {
                           const bitacora = (u as any)?.bitacora;
                           if (!bitacora) return null;
-                          
+
                           const bitacoraKey = `bit_${k}`;
                           const isBitacoraExpanded = expandedBitacoras.has(bitacoraKey);
                           const tipo = String(bitacora.tipo || 'Vehículo') as TipoBitacora;
                           const generalConfig = buildGeneralConfig(tipo);
                           const revisionConfig = buildRevisionConfig(tipo);
-                          
+
                           const infoGeneral = safeParse<any[]>(bitacora.informacion_general, []);
                           const infoRevision = safeParse<any[]>(bitacora.informacion_revision, []);
                           const movimientos = safeParse<any[]>(bitacora.movimientos_vehiculos, []);
                           const observaciones = String(bitacora.observaciones || '');
-                          
+
                           // Mapear información general
                           const generalMap: Record<string, any> = {};
                           for (const f of infoGeneral) {
                             if (f && f.key) generalMap[String(f.key)] = f.value;
                           }
-                          
+
                           // Mapear información de revisión
                           const revisionMap: Record<string, any> = {};
                           const revisionObsMap: Record<string, string> = {};
@@ -2199,7 +2849,7 @@ export default function CorporateVehiclesScreen() {
                               }
                             }
                           }
-                          
+
                           return (
                             <ThemedView style={{ marginTop: 12 }}>
                               <TouchableOpacity
@@ -2220,7 +2870,7 @@ export default function CorporateVehiclesScreen() {
                                 </ThemedText>
                                 <Ionicons name={isBitacoraExpanded ? 'chevron-up' : 'chevron-down'} size={20} color="#007AFF" />
                               </TouchableOpacity>
-                              
+
                               {isBitacoraExpanded && (
                                 <ThemedView style={styles.collapsableContent}>
                                   {/* Información General */}
@@ -2228,7 +2878,7 @@ export default function CorporateVehiclesScreen() {
                                   {generalConfig.map((g) => {
                                     const value = generalMap[g.key];
                                     if (g.kind === 'readonly' || !value) return null;
-                                    
+
                                     if (g.kind === 'signature') {
                                       const sig = String(value || '');
                                       const isBase64 = sig.startsWith('data:') || (!sig.includes(':') && sig.length > 50);
@@ -2243,7 +2893,7 @@ export default function CorporateVehiclesScreen() {
                                         </ThemedView>
                                       );
                                     }
-                                    
+
                                     return (
                                       <ThemedView key={g.key} style={styles.bitacoraField}>
                                         <ThemedText style={styles.bitacoraLabel}>{g.label}:</ThemedText>
@@ -2251,7 +2901,7 @@ export default function CorporateVehiclesScreen() {
                                       </ThemedView>
                                     );
                                   })}
-                                  
+
                                   {/* Información de Revisión */}
                                   <ThemedText style={styles.bitacoraSectionTitle}>Información de Revisión</ThemedText>
                                   {revisionConfig.map((r) => {
@@ -2262,10 +2912,10 @@ export default function CorporateVehiclesScreen() {
                                         </ThemedText>
                                       );
                                     }
-                                    
+
                                     const value = revisionMap[r.key];
                                     const obs = revisionObsMap[`${r.key}__obs`];
-                                    
+
                                     return (
                                       <ThemedView key={r.key} style={styles.bitacoraField}>
                                         <ThemedText style={styles.bitacoraLabel}>{r.label}:</ThemedText>
@@ -2276,7 +2926,7 @@ export default function CorporateVehiclesScreen() {
                                       </ThemedView>
                                     );
                                   })}
-                                  
+
                                   {/* Movimientos */}
                                   {movimientos.length > 0 && (
                                     <>
@@ -2308,7 +2958,7 @@ export default function CorporateVehiclesScreen() {
                                       ))}
                                     </>
                                   )}
-                                  
+
                                   {/* Observaciones */}
                                   {observaciones && (
                                     <>
@@ -2332,6 +2982,358 @@ export default function CorporateVehiclesScreen() {
               <TouchableOpacity style={[styles.formActionBtn, styles.cancelBtn]} onPress={closeUsesModal} activeOpacity={0.85}>
                 <Ionicons name="arrow-back" size={18} color="#000000" />
                 <ThemedText style={styles.cancelBtnText}>Cerrar</ThemedText>
+              </TouchableOpacity>
+            </ThemedView>
+          </ThemedView>
+        </ThemedView>
+      </Modal>
+
+      {/* Modal de Mantenimiento */}
+      <Modal
+        transparent
+        visible={maintenanceModalVisible}
+        animationType="fade"
+        onRequestClose={closeMaintenanceModal}
+      >
+        <ThemedView style={styles.modalBackdrop}>
+          <ThemedView style={styles.modalCard}>
+            <ThemedView style={styles.modalHeader}>
+              <ThemedText style={styles.modalTitle}>
+                Mantenimiento{maintenanceVehicle?.placa ? ` - ${maintenanceVehicle.placa}` : ''}
+              </ThemedText>
+              <TouchableOpacity onPress={closeMaintenanceModal} style={styles.modalCloseBtn} activeOpacity={0.85}>
+                <Ionicons name="close" size={22} color="#000" />
+              </TouchableOpacity>
+            </ThemedView>
+
+            <ScrollView style={styles.modalBody} contentContainerStyle={styles.modalBodyContent} keyboardShouldPersistTaps="handled">
+              <TouchableOpacity style={styles.modalPrimaryBtn} onPress={startCreateMaintenance} activeOpacity={0.85}>
+                <Ionicons name="add-circle-outline" size={18} color="#FFFFFF" />
+                <ThemedText style={styles.modalPrimaryBtnText}>Nuevo mantenimiento</ThemedText>
+              </TouchableOpacity>
+
+              {isMaintenanceFormOpen ? (
+                <ThemedView style={styles.modalFormCard}>
+                  <ThemedText style={styles.modalSectionTitle}>{maintenanceEditing ? 'Editar mantenimiento' : 'Nuevo mantenimiento'}</ThemedText>
+
+                  <ThemedText style={styles.label}>Fecha</ThemedText>
+                  <TouchableOpacity style={styles.dateButton} onPress={() => openMaintenanceDatePicker(maintenanceFecha)} activeOpacity={0.85}>
+                    <ThemedText style={styles.dateButtonText}>{maintenanceFecha || 'Seleccionar fecha'}</ThemedText>
+                    <Ionicons name="calendar-outline" size={18} color="#007AFF" />
+                  </TouchableOpacity>
+
+                  {showMaintenanceDatePicker ? (
+                    <DateTimePicker
+                      value={maintenanceDatePickerValue}
+                      mode="date"
+                      display={Platform.OS === 'ios' ? 'inline' : 'default'}
+                      onChange={onMaintenanceDatePicked}
+                    />
+                  ) : null}
+
+                  <ThemedText style={styles.label}>Tipo</ThemedText>
+                  <ThemedView style={styles.pickerWrapper}>
+                    <Picker selectedValue={maintenanceTipo} onValueChange={(v) => setMaintenanceTipo(String(v || ''))} style={styles.picker}>
+                      <Picker.Item label="Seleccione..." value="" />
+                      <Picker.Item label="Preventivo" value="Preventivo" />
+                      <Picker.Item label="Correctivo" value="Correctivo" />
+                      <Picker.Item label="Emergencia" value="Emergencia" />
+                    </Picker>
+                  </ThemedView>
+
+                  <ThemedText style={styles.label}>Mantenimiento</ThemedText>
+                  <TextInput
+                    style={[styles.input, styles.textArea]}
+                    value={maintenanceMantenimiento}
+                    onChangeText={setMaintenanceMantenimiento}
+                    placeholder="Descripción del mantenimiento"
+                    placeholderTextColor="#999"
+                    multiline
+                  />
+
+                  <ThemedText style={styles.label}>Diagnóstico</ThemedText>
+                  <TextInput
+                    style={[styles.input, styles.textArea]}
+                    value={maintenanceDiagnostico}
+                    onChangeText={setMaintenanceDiagnostico}
+                    placeholder="Diagnóstico"
+                    placeholderTextColor="#999"
+                    multiline
+                  />
+
+                  <ThemedText style={styles.label}>Kilometraje siguiente revisión</ThemedText>
+                  <TextInput
+                    style={styles.input}
+                    value={maintenanceKmSiguiente}
+                    onChangeText={setMaintenanceKmSiguiente}
+                    placeholder="0"
+                    keyboardType="numeric"
+                    placeholderTextColor="#999"
+                  />
+
+                  <ThemedText style={styles.label}>Nombre del mecánico</ThemedText>
+                  <TextInput
+                    style={styles.input}
+                    value={maintenanceNombreMecanico}
+                    onChangeText={setMaintenanceNombreMecanico}
+                    placeholder="Nombre del mecánico"
+                    placeholderTextColor="#999"
+                  />
+
+                  <ThemedText style={styles.sectionTitle}>Imagen antes</ThemedText>
+                  {maintenanceImagenAntes ? (
+                    <ThemedView style={styles.imageWideWrap}>
+                      <Image source={{ uri: maintenanceImagenAntes }} style={styles.imageWide} resizeMode="contain" />
+                      <TouchableOpacity
+                        style={styles.removeImageBtn}
+                        onPress={() => setMaintenanceImagenAntes('')}
+                        activeOpacity={0.85}
+                      >
+                        <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                      </TouchableOpacity>
+                    </ThemedView>
+                  ) : (
+                    <TouchableOpacity style={styles.attachButton} onPress={() => openCamera('antes')} activeOpacity={0.85}>
+                      <Ionicons name="camera-outline" size={20} color="#007AFF" />
+                      <ThemedText style={styles.attachButtonText}>Tomar foto antes</ThemedText>
+                    </TouchableOpacity>
+                  )}
+
+                  <ThemedText style={styles.sectionTitle}>Imagen después</ThemedText>
+                  {maintenanceImagenDespues ? (
+                    <ThemedView style={styles.imageWideWrap}>
+                      <Image source={{ uri: maintenanceImagenDespues }} style={styles.imageWide} resizeMode="contain" />
+                      <TouchableOpacity
+                        style={styles.removeImageBtn}
+                        onPress={() => setMaintenanceImagenDespues('')}
+                        activeOpacity={0.85}
+                      >
+                        <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                      </TouchableOpacity>
+                    </ThemedView>
+                  ) : (
+                    <TouchableOpacity style={styles.attachButton} onPress={() => openCamera('despues')} activeOpacity={0.85}>
+                      <Ionicons name="camera-outline" size={20} color="#007AFF" />
+                      <ThemedText style={styles.attachButtonText}>Tomar foto después</ThemedText>
+                    </TouchableOpacity>
+                  )}
+
+                  <ThemedText style={styles.sectionTitle}>Firma del mecánico</ThemedText>
+                  {!maintenanceFirmaMecanico ? (
+                    <TouchableOpacity
+                      style={styles.signatureButtonPrimary}
+                      onPress={openSignatureModal}
+                      activeOpacity={0.85}
+                    >
+                      <Ionicons name="create-outline" size={18} color="#FFFFFF" />
+                      <ThemedText style={styles.signatureButtonText}>Dibujar firma</ThemedText>
+                    </TouchableOpacity>
+                  ) : (
+                    <ThemedView style={styles.signatureInfo}>
+                      <ThemedText style={styles.signatureInfoTitle}>Firma del mecánico registrada</ThemedText>
+                      <ThemedView style={styles.imageWideWrap}>
+                        <Image source={{ uri: formatSignatureForDisplay(maintenanceFirmaMecanico) }} style={styles.signaturePreview} resizeMode="contain" />
+                        <TouchableOpacity
+                          style={styles.removeImageBtn}
+                          onPress={() => setMaintenanceFirmaMecanico('')}
+                          activeOpacity={0.85}
+                        >
+                          <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                        </TouchableOpacity>
+                      </ThemedView>
+                    </ThemedView>
+                  )}
+
+                  <ThemedText style={styles.sectionTitle}>Firma responsable</ThemedText>
+                  {!maintenanceFirmaResponsable ? (
+                    <TouchableOpacity
+                      style={styles.signatureButtonPrimary}
+                      onPress={generateMaintenanceFirmaResponsable}
+                      disabled={isGeneratingFirma}
+                      activeOpacity={0.85}
+                    >
+                      {isGeneratingFirma ? (
+                        <ActivityIndicator size="small" color="#FFFFFF" />
+                      ) : (
+                        <>
+                          <Ionicons name="sparkles-outline" size={18} color="#FFFFFF" />
+                          <ThemedText style={styles.signatureButtonText}>Generar firma</ThemedText>
+                        </>
+                      )}
+                    </TouchableOpacity>
+                  ) : (
+                    <ThemedView style={styles.signatureInfo}>
+                      <ThemedText style={styles.signatureInfoTitle}>
+                        Información de la firma del responsable
+                      </ThemedText>
+                      <ThemedText style={styles.signatureInfoText}>
+                        ID de sesión: {maintenanceFirmaResponsable.sessionId}
+                      </ThemedText>
+                      <ThemedText style={styles.signatureInfoText}>
+                        ID del empleado: {maintenanceFirmaResponsable.empleadoId}
+                      </ThemedText>
+                      <ThemedText style={styles.signatureInfoText}>
+                        Latitud: {maintenanceFirmaResponsable.latitud}
+                      </ThemedText>
+                      <ThemedText style={styles.signatureInfoText}>
+                        Longitud: {maintenanceFirmaResponsable.longitud}
+                      </ThemedText>
+                      <ThemedText style={styles.signatureInfoText}>
+                        Fecha y hora: {new Date(Number(maintenanceFirmaResponsable.timestamp)).toLocaleString()}
+                      </ThemedText>
+                    </ThemedView>
+                  )}
+                  {!maintenanceFirmaResponsable && (
+                    <TouchableOpacity
+                      style={[styles.signatureButtonPrimary, { marginTop: 8 }]}
+                      onPress={handleScanQRMaintenance}
+                      activeOpacity={0.85}
+                    >
+                      <Ionicons name="qr-code-outline" size={18} color="#FFFFFF" />
+                      <ThemedText style={styles.signatureButtonText}>Escanear QR</ThemedText>
+                    </TouchableOpacity>
+                  )}
+
+                  <ThemedView style={styles.formActions}>
+                    <TouchableOpacity
+                      style={[styles.formActionBtn, styles.cancelBtn]}
+                      onPress={() => {
+                        setIsMaintenanceFormOpen(false);
+                        setMaintenanceEditing(null);
+                        resetMaintenanceForm();
+                      }}
+                      activeOpacity={0.85}
+                    >
+                      <Ionicons name="close" size={18} color="#000000" />
+                      <ThemedText style={styles.cancelBtnText}>Cancelar</ThemedText>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={[styles.formActionBtn, styles.saveBtn]} onPress={saveMaintenanceRecord} activeOpacity={0.85}>
+                      <Ionicons name="save-outline" size={18} color="#FFFFFF" />
+                      <ThemedText style={styles.saveBtnText}>Guardar</ThemedText>
+                    </TouchableOpacity>
+                  </ThemedView>
+                </ThemedView>
+              ) : null}
+
+              {!isMaintenanceFormOpen && maintenanceRecords.length === 0 ? (
+                <ThemedText style={styles.emptyText}>No hay mantenimientos registrados</ThemedText>
+              ) : null}
+              {!isMaintenanceFormOpen && maintenanceRecords.length > 0 ? (
+                <ThemedView style={styles.modalList}>
+                  {maintenanceRecords.map((m) => {
+                    const k = String(m.id || m.id_local);
+                    const offline = !m.synced || k.startsWith('local-');
+                    return (
+                      <ThemedView key={k} style={styles.modalListItem}>
+                        <ThemedText style={styles.modalListTitle}>
+                          {m.tipo || '—'} {offline ? ' (offline)' : ''}
+                        </ThemedText>
+                        <ThemedText style={styles.detailText}>
+                          <ThemedText style={styles.cardLabel}>Fecha: </ThemedText>
+                          <ThemedText style={styles.cardValue}>{isoToDate(m.fecha) || '—'}</ThemedText>
+                        </ThemedText>
+                        <ThemedText style={styles.detailText}>
+                          <ThemedText style={styles.cardLabel}>Mecánico: </ThemedText>
+                          <ThemedText style={styles.cardValue}>{m.nombre_mecanico || '—'}</ThemedText>
+                        </ThemedText>
+
+                        <ThemedView style={styles.modalItemActions}>
+                          <TouchableOpacity style={[styles.actionBtn, styles.editBtn]} onPress={() => startEditingMaintenance(m)} activeOpacity={0.85}>
+                            <Ionicons name="create-outline" size={18} color="#FFFFFF" />
+                            <ThemedText style={styles.actionBtnText}>Editar</ThemedText>
+                          </TouchableOpacity>
+                          <TouchableOpacity style={[styles.actionBtn, styles.deleteBtn]} onPress={() => confirmDeleteMaintenance(m)} activeOpacity={0.85}>
+                            <Ionicons name="trash-outline" size={18} color="#FFFFFF" />
+                            <ThemedText style={styles.actionBtnText}>Eliminar</ThemedText>
+                          </TouchableOpacity>
+                        </ThemedView>
+                      </ThemedView>
+                    );
+                  })}
+                </ThemedView>
+              ) : null}
+            </ScrollView>
+
+            <ThemedView style={styles.modalFooter}>
+              <TouchableOpacity style={[styles.formActionBtn, styles.cancelBtn]} onPress={closeMaintenanceModal} activeOpacity={0.85}>
+                <Ionicons name="arrow-back" size={18} color="#000000" />
+                <ThemedText style={styles.cancelBtnText}>Cerrar</ThemedText>
+              </TouchableOpacity>
+            </ThemedView>
+          </ThemedView>
+        </ThemedView>
+      </Modal>
+
+      {/* Modal de Cámara */}
+      <Modal
+        visible={isCameraVisible}
+        animationType="slide"
+        onRequestClose={() => setIsCameraVisible(false)}
+      >
+        <ThemedView style={{ flex: 1, backgroundColor: '#000' }}>
+          {cameraPermission?.granted ? (
+            <CameraView
+              ref={cameraRef}
+              style={{ flex: 1 }}
+              facing="back"
+            >
+              <TouchableOpacity
+                style={styles.cameraCloseButton}
+                onPress={() => setIsCameraVisible(false)}
+              >
+                <Ionicons name="close" size={30} color="#000000" />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.cameraCaptureButton}
+                onPress={takePicture}
+              >
+                <ThemedView style={styles.cameraCaptureButtonInner} />
+              </TouchableOpacity>
+            </CameraView>
+          ) : (
+            <ThemedView style={styles.cameraPermissionContainer}>
+              <ThemedText style={styles.cameraPermissionText}>Se requiere permiso de cámara</ThemedText>
+              <TouchableOpacity style={styles.cameraPermissionBtn} onPress={requestCameraPermission} activeOpacity={0.85}>
+                <ThemedText style={styles.cameraPermissionBtnText}>Solicitar permiso</ThemedText>
+              </TouchableOpacity>
+            </ThemedView>
+          )}
+        </ThemedView>
+      </Modal>
+
+      {/* Modal de Signature */}
+      <Modal visible={signatureModalVisible} animationType="fade" transparent={true} onRequestClose={closeSignatureModal}>
+        <ThemedView style={styles.modalOverlay}>
+          <ThemedView style={styles.modalContainer}>
+            <ThemedView style={styles.modalHeader}>
+              <ThemedText style={styles.modalTitle}>Firma del mecánico</ThemedText>
+              <TouchableOpacity onPress={closeSignatureModal}>
+                <Ionicons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+            </ThemedView>
+
+            <View style={styles.modalSignatureContainer}>
+              <SignatureScreen
+                ref={signatureRef}
+                onOK={handleSignatureRead}
+                descriptionText="Dibuja la firma en el área blanca"
+                clearText=""
+                confirmText=""
+                webStyle={signatureWebStyle}
+                key={signatureKey}
+              />
+            </View>
+
+            <ThemedView style={styles.modalActions}>
+              <TouchableOpacity style={styles.modalClearButton} onPress={clearSignatureInModal}>
+                <Ionicons name="trash" size={20} color="#000000" />
+                <ThemedText style={styles.modalClearButtonText}>Limpiar</ThemedText>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={styles.modalAcceptButton} onPress={acceptSignature}>
+                <Ionicons name="checkmark" size={20} color="#000000" />
+                <ThemedText style={styles.modalAcceptButtonText}>Aceptar</ThemedText>
               </TouchableOpacity>
             </ThemedView>
           </ThemedView>
@@ -2378,12 +3380,36 @@ const styles = StyleSheet.create({
   switchBtnOn: { backgroundColor: '#F2FFF6', borderColor: '#B7F5CA' },
   switchText: { color: '#000000', fontWeight: '700' },
 
-  signatureInfo: { marginTop: 10, borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 10, padding: 12, backgroundColor: '#FFFFFF' },
   signatureLine: { fontSize: 13, color: '#000000', opacity: 0.8, marginBottom: 4 },
-  signatureButtonsRow: { flexDirection: 'row', gap: 10, marginTop: 10, flexWrap: 'wrap' },
-  signatureBlueButton: { flex: 1, minWidth: '45%', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#007AFF', borderRadius: 10, paddingVertical: 12, paddingHorizontal: 10, gap: 8 },
-  signatureBlueButtonText: { color: '#FFFFFF', fontSize: 14, fontWeight: '800' },
-  signatureDisabled: { opacity: 0.6 },
+  signatureButtonPrimary: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    borderRadius: 8,
+    backgroundColor: '#007AFF',
+    gap: 8,
+  },
+  signatureButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  signatureInfo: {
+    backgroundColor: '#F5F5F5',
+    borderRadius: 8,
+    padding: 10,
+    marginTop: 8,
+  },
+  signatureInfoTitle: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    marginBottom: 4,
+  },
+  signatureInfoText: {
+    fontSize: 12,
+    marginBottom: 2,
+  },
 
   attachButton: { flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 1, borderColor: '#007AFF', borderRadius: 10, paddingVertical: 12, paddingHorizontal: 12, backgroundColor: '#FFFFFF', marginBottom: 10, marginTop: 10 },
   attachButtonText: { color: '#007AFF', fontWeight: '700' },
@@ -2440,7 +3466,7 @@ const styles = StyleSheet.create({
   modalListTitle: { fontSize: 14, fontWeight: '900', color: '#000', marginBottom: 8 },
   modalItemActions: { marginTop: 10, flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
   assignBtn: { backgroundColor: '#FF9500' },
-  
+
   // Bitácora colapsable
   collapsableContent: { marginTop: 10, padding: 12, backgroundColor: '#FAFAFA', borderRadius: 8, borderWidth: 1, borderColor: '#E0E0E0' },
   bitacoraSectionTitle: { fontSize: 15, fontWeight: '800', color: '#007AFF', marginTop: 12, marginBottom: 8 },
@@ -2453,6 +3479,53 @@ const styles = StyleSheet.create({
   signaturePreview: { width: '100%', height: 120, resizeMode: 'contain', marginTop: 4, backgroundColor: '#FFFFFF', borderRadius: 4, borderWidth: 1, borderColor: '#E0E0E0' },
   movimientoCard: { backgroundColor: '#FFFFFF', borderRadius: 8, padding: 10, marginBottom: 10, borderWidth: 1, borderColor: '#E0E0E0' },
   movimientoTitle: { fontSize: 14, fontWeight: '700', color: '#007AFF', marginBottom: 8 },
+
+  // Camera modal
+  cameraCloseButton: {
+    position: 'absolute',
+    top: 40,
+    right: 20,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    borderRadius: 20,
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1,
+  },
+  cameraCaptureButton: {
+    position: 'absolute',
+    bottom: 40,
+    alignSelf: 'center',
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    backgroundColor: 'rgba(255, 255, 255, 0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 4,
+    borderColor: '#fff',
+  },
+  cameraCaptureButtonInner: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: '#fff',
+  },
+  cameraPermissionContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 },
+  cameraPermissionText: { fontSize: 16, color: '#FFFFFF', marginBottom: 20, textAlign: 'center' },
+  cameraPermissionBtn: { backgroundColor: '#007AFF', paddingVertical: 12, paddingHorizontal: 24, borderRadius: 8 },
+  cameraPermissionBtnText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
+
+  // Signature modal
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 16 },
+  modalContainer: { backgroundColor: '#FFF', borderRadius: 12, overflow: 'hidden' },
+  modalSignatureContainer: { height: 280, backgroundColor: '#FFF' },
+  modalActions: { flexDirection: 'row', gap: 10, padding: 14, justifyContent: 'flex-end' },
+  modalClearButton: { backgroundColor: '#F1F5F9', borderRadius: 10, paddingVertical: 10, paddingHorizontal: 12, flexDirection: 'row', gap: 8, alignItems: 'center' },
+  modalClearButtonText: { color: '#111', fontWeight: '800' },
+  modalAcceptButton: { backgroundColor: '#D1FAE5', borderRadius: 10, paddingVertical: 10, paddingHorizontal: 12, flexDirection: 'row', gap: 8, alignItems: 'center' },
+  modalAcceptButtonText: { color: '#111', fontWeight: '800' },
 });
 
 

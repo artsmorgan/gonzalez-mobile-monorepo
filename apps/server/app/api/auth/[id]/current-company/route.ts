@@ -9,10 +9,8 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
         const resolvedParams = await context.params;
         const id = parseInt(resolvedParams.id);
 
-        const { valid, payload, message } = verifyAccessToken(request);
-        if (!valid) {
-            return NextResponse.json({ status: false, message: message }, { status: 401 });
-        }
+        const { valid, expired, payload, message } = verifyAccessToken(request);
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         const empleado = await prisma.c_empleado.findUnique({ where: { id } });
         if (!empleado) {

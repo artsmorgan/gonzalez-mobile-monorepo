@@ -2,6 +2,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessToken } from "../../../utils/verifyToken";
 import { prisma } from "../../../utils/prismaClient";
+import { toZonedTime } from "date-fns-tz";
+import { sendNotificationByRole } from "../../../utils/sendNotification";
 
 function parseDateTime(value: any): Date | null {
   if (!value) return null;
@@ -12,10 +14,8 @@ function parseDateTime(value: any): Date | null {
 
 export async function GET(req: NextRequest) {
   try {
-    const { valid, message } = verifyAccessToken(req);
-    if (!valid) {
-      return NextResponse.json({ status: false, message }, { status: 401 });
-    }
+    const { valid, expired, payload, message } = verifyAccessToken(req);
+    if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
     const rows = await prisma.c_boleta_apreciacion_vulnerabilidad.findMany({
       include: {
@@ -55,9 +55,9 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const { valid, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = verifyAccessToken(req);
     if (!valid) {
-      return NextResponse.json({ status: false, message }, { status: 401 });
+      return NextResponse.json({ status: false, message: message ?? "Token inválido o expirado" }, { status: 401 });
     }
 
     const body = await req.json();
@@ -120,6 +120,35 @@ export async function POST(req: NextRequest) {
         firma_responsable: String(firma_responsable),
       },
     });
+
+    if (created) {
+
+      const now = toZonedTime(new Date(), "America/Costa_Rica");
+
+      let empNombre = "Desconocido";
+      let sucursalNombre = "Desconocida";
+      let puestoNombre = "Desconocido";
+      let fechaRegistro = now.toISOString().split("T")[0];
+      let horaRegistro = now.toISOString().split("T")[1].split(".")[0];
+      const empleado = await prisma.c_empleado.findUnique({ where: { id: parseInt(String(payload?.id ?? "0"), 10) } });
+      if (empleado) {
+        empNombre = empleado.nombre + " " + empleado.primer_apellido + " " + empleado.segundo_apellido;
+      }
+      if (created.corpo_id) {
+        const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: created.corpo_id } });
+        if (sucursal) {
+          sucursalNombre = sucursal.nombre;
+        }
+      }
+      if (created.puesto_id) {
+        const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: created.puesto_id } });
+        if (puesto) {
+          puestoNombre = puesto.nombre + " (" + puesto.codigo + ")";
+        }
+      }
+      const descriptionNotificacion = "El empleado " + empNombre + " ha registrado una apreciación de vulnerabilidad en el puesto " + puestoNombre + " en la sucursal " + sucursalNombre + " el día " + fechaRegistro + " a las " + horaRegistro;
+      sendNotificationByRole(created.corpo_id, [parseInt(String(payload?.id ?? "0"), 10)], "Apreciación de vulnerabilidad registrada", descriptionNotificacion, ["ADMINISTRATIVO", "SUPERVISOR"]);
+    }
 
     return NextResponse.json(
       { status: true, message: "Registro creado correctamente", id: created.id },

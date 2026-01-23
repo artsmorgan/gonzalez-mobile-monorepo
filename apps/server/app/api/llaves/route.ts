@@ -4,12 +4,13 @@ import { verifyAccessToken } from "../../../utils/verifyToken";
 import { prisma } from "../../../utils/prismaClient";
 import { getUserMarca } from "../../../utils/getUserMarca";
 import { toZonedTime } from "date-fns-tz";
+import { sendNotificationByRole } from "../../../utils/sendNotification";
 
 export async function GET(req: NextRequest) {
   try {
-    const { valid, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = verifyAccessToken(req);
     if (!valid) {
-      return NextResponse.json({ status: false, message }, { status: 401 });
+      return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
     }
 
     const marcaIdStr = req.nextUrl.searchParams.get("m");
@@ -86,9 +87,9 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const { valid, payload, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = verifyAccessToken(req);
     if (!valid) {
-      return NextResponse.json({ status: false, message }, { status: 401 });
+      return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
     }
 
     const body = await req.json();
@@ -120,6 +121,34 @@ export async function POST(req: NextRequest) {
         created_at: createdAt,
       },
     });
+
+    if (created) {
+      let empNombre = "Desconocido";
+      let sucursalNombre = "Desconocida";
+      let puestoNombre = "Desconocido";
+      let fechaRegistro = createdAt.toISOString().split("T")[0];
+      let horaRegistro = createdAt.toISOString().split("T")[1].split(".")[0];
+      if (created.created_by) {
+        const empleado = await prisma.c_empleado.findUnique({ where: { id: created.created_by } });
+        if (empleado) {
+          empNombre = empleado.nombre + " " + empleado.primer_apellido + " " + empleado.segundo_apellido;
+        }
+      }
+      if (marcaDia.corpo_id) {
+        const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: marcaDia.corpo_id } });
+        if (sucursal) {
+          sucursalNombre = sucursal.nombre;
+        }
+      }
+      if (marcaDia.puesto_id) {
+        const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: marcaDia.puesto_id } });
+        if (puesto) {
+          puestoNombre = puesto.nombre + " (" + puesto.codigo + ")";
+        }
+      }
+      const description = "El empleado " + empNombre + " ha creado una llave en la sucursal " + sucursalNombre + " el día " + fechaRegistro + " a las " + horaRegistro;
+      sendNotificationByRole(marcaDia.corpo_id, [created.created_by], "Llave registrada", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+    }
 
     return NextResponse.json({ status: true, message: "Llave creada correctamente", id: created.id }, { status: 200 });
   } catch (error: unknown) {

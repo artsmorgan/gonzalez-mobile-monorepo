@@ -39,17 +39,12 @@ function normalizeBase64(b64: string): string {
 
 export async function POST(req: NextRequest) {
     try {
-        const { valid, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = verifyAccessToken(req);
 
-        if (!valid) {
-            return NextResponse.json(
-                { status: false, message: message },
-                { status: 401 }
-            );
-        }
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
-        const { 
-            marca_id, 
+        const {
+            marca_id,
             sociedad,
             nombre_realiza_queja,
             cliente,
@@ -170,16 +165,16 @@ export async function POST(req: NextRequest) {
         });
 
         const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: marcaDia.corpo_id } });
-        
+
         if (sucursal) {
             const fecha_string = created_at.toISOString().split("T")[0];
             const hora_string = created_at.toISOString().split("T")[1].split(".")[0];
             const description = `Se ha registrado una queja de tipo ${tipo_queja} en la sucursal ${sucursal.nombre} de la empresa ${cliente.nombre} el día ${fecha_string} a las ${hora_string}`;
-            sendNotificationByRole(marcaDia.id, "Queja registrada", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+            sendNotificationByRole(marcaDia.corpo_id, [marcaDia.plaza_id], "Queja registrada", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
         }
-        
-        return NextResponse.json({ 
-            status: true, 
+
+        return NextResponse.json({
+            status: true,
             message: "Queja creada correctamente",
             data: {
                 ...(fullRecord ?? new_record),

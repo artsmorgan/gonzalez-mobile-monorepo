@@ -3,13 +3,12 @@ import { verifyAccessToken } from "../../../utils/verifyToken";
 import { toZonedTime, format } from "date-fns-tz";
 import { prisma } from "../../../utils/prismaClient";
 import { getUserMarca } from "../../../utils/getUserMarca";
+import { sendNotificationByRole } from "../../../utils/sendNotification";
 
 export async function GET(req: NextRequest) {
     try {
-        const { valid, payload, message } = verifyAccessToken(req);
-        if (!valid) {
-            return NextResponse.json({ status: false, message }, { status: 401 });
-        }
+        const { valid, expired, payload, message } = verifyAccessToken(req);
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         const params = req.nextUrl.searchParams;
         const marcaId = params.get("m");
@@ -45,10 +44,10 @@ export async function GET(req: NextRequest) {
         // Construir la fecha de la marca actual para comparación
         const marcaFecha = new Date(marca.fecha);
         const marcaFechaStr = marcaFecha.toISOString().split("T")[0];
-        
+
         // Construir la hora_inicio de la marca actual para comparación (formato Time)
         const marcaHoraInicioTime = marca.hora_inicio ? new Date("1970-01-01 " + marca.hora_inicio.toTimeString().slice(0, 8)) : null;
-        
+
         // Construir la hora_fin de la marca actual para comparación (formato Time)
         const marcaHoraFinTime = marca.hora_fin ? new Date("1970-01-01 " + marca.hora_fin.toTimeString().slice(0, 8)) : null;
 
@@ -73,7 +72,7 @@ export async function GET(req: NextRequest) {
                         },
                         hora_inicio: {
                             lt: marca.hora_inicio,
-                        } ,
+                        },
                     },
                 ],
             },
@@ -106,8 +105,8 @@ export async function GET(req: NextRequest) {
 
         const fechaHoraInicio = new Date(`${dateInicioString}T${timeInicioString}`); // En su estado actual, resulta en Invalid Date
         let fechaHoraFin = new Date(`${dateFinString}T${timeFinString}`);
-        
-        if (fechaHoraInicio < fechaHoraFin){ // Si hora_inicio es menor a hora_fin, entonces la fecha de fin es el día siguiente
+
+        if (fechaHoraInicio < fechaHoraFin) { // Si hora_inicio es menor a hora_fin, entonces la fecha de fin es el día siguiente
             const newDateFinString = marcaAnterior.fecha.toISOString().split("T")[0].split("-");
             newDateFinString[2] = (Number(newDateFinString[2]) + 1).toString();
             fechaHoraFin = new Date(`${newDateFinString[0]}-${newDateFinString[1]}-${newDateFinString[2]}T${timeFinString}`);
@@ -118,6 +117,7 @@ export async function GET(req: NextRequest) {
         const all_notas = await prisma.c_puesto_notas.findMany({ where: { puesto_id: marcaAnterior.puesto_id, relevancia: "Alta" } });
 
         const notas_cambios = await prisma.c_puesto_notas_bitacora_cambios.findMany({ where: { nota_id: { in: all_notas.map(nota => nota.id) }, created_at: { lte: fechaHoraFin, gte: fechaHoraInicio } } });
+
         for (const cambio of notas_cambios) {
             const nota = await prisma.c_puesto_notas.findUnique({ where: { id: cambio.nota_id } });
             if (nota) {
@@ -134,7 +134,7 @@ export async function GET(req: NextRequest) {
         }
 
         const incidentes = await prisma.c_incidente.findMany({ where: { corpo_id: marcaAnterior.corpo_id, created_at: { lte: fechaHoraFin, gte: fechaHoraInicio } } });
-        const incidentes_return: { id: number, clasificacion: string, description: string, involucrados: string, estado: boolean, responsable: string}[] = [];
+        const incidentes_return: { id: number, clasificacion: string, description: string, involucrados: string, estado: boolean, responsable: string }[] = [];
         for (const incidente of incidentes) {
             const clasificacion = await prisma.n_clasificacion_incidente.findUnique({ where: { id: incidente.clasificacion } });
             incidentes_return.push({
@@ -173,6 +173,7 @@ export async function GET(req: NextRequest) {
         }
 
         const articulos_puesto_plan = await prisma.e_estructura_articulo_corpo_puesto_plan.findMany({ where: { puesto_id: marcaAnterior.puesto_id, id: { notIn: articulos_return.map(articulo => articulo.id) } } });
+        console.log("articulos_puesto_plan", articulos_puesto_plan);
         for (const articulo of articulos_puesto_plan) {
             let art_bd = null;
             if (articulo.articuloCP_id) {
@@ -193,11 +194,11 @@ export async function GET(req: NextRequest) {
             articulos: articulos_return,
         };
 
-        return NextResponse.json({ 
+        return NextResponse.json({
             status: true,
             info: info_return,
         }, { status: 200 });
-        
+
     }
     catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
@@ -207,10 +208,8 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
     try {
-        const { valid, payload, message } = verifyAccessToken(req);
-        if (!valid) {
-            return NextResponse.json({ status: false, message }, { status: 401 });
-        }
+        const { valid, expired, payload, message } = verifyAccessToken(req);
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         const body = await req.json();
         const {
@@ -249,17 +248,26 @@ export async function POST(req: NextRequest) {
         if (marca_id) {
             const marca = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(marca_id) } });
             if (marca && marca.empleadoFijo_id) {
-                const marcaFechaHoraInicio = new Date(`${marca.fecha}T${marca.hora_entrada_digitada}`);
-                let marcaFechaHoraFin = marca.hora_salida_digitada ? new Date(`${marca.fecha}T${marca.hora_salida_digitada}`) : toZonedTime(new Date(), 'America/Costa_Rica');
-                if (marcaFechaHoraInicio < marcaFechaHoraFin) {
-                    marcaFechaHoraFin = new Date(`${marca.fecha.getDate() + 1}T${marca.hora_fin}`);
+                const dateInicioString = marca.fecha.toISOString().split("T")[0];
+                const timeInicioString = marca.hora_inicio ? marca.hora_inicio.toTimeString().slice(0, 8) : "00:00:00";
+
+                const dateFinString = marca.fecha.toISOString().split("T")[0];
+                const timeFinString = marca.hora_fin ? marca.hora_fin.toTimeString().slice(0, 8) : "23:59:59";
+
+                const marcaFechaHoraInicio = new Date(`${dateInicioString}T${timeInicioString}`); // En su estado actual, resulta en Invalid Date
+                let marcaFechaHoraFin = new Date(`${dateFinString}T${timeFinString}`);
+
+                if (marcaFechaHoraInicio < marcaFechaHoraFin) { // Si hora_inicio es menor a hora_fin, entonces la fecha de fin es el día siguiente
+                    const newDateFinString = marca.fecha.toISOString().split("T")[0].split("-");
+                    newDateFinString[2] = (Number(newDateFinString[2]) + 1).toString();
+                    marcaFechaHoraFin = new Date(`${newDateFinString[0]}-${newDateFinString[1]}-${newDateFinString[2]}T${timeFinString}`);
                 }
 
-                const entregaPuestos = await prisma.e_registro_entrega_puesto.findMany({ 
-                    where: { 
-                        created_at: { lte: marcaFechaHoraFin, gte: marcaFechaHoraInicio }, 
-                        created_by: marca.empleadoFijo_id 
-                    } 
+                const entregaPuestos = await prisma.e_registro_entrega_puesto.findMany({
+                    where: {
+                        created_at: { lte: marcaFechaHoraFin, gte: marcaFechaHoraInicio },
+                        created_by: marca.empleadoFijo_id
+                    }
                 });
                 if (entregaPuestos.length > 0) {
                     return NextResponse.json({ status: false, message: "Ya has registrado la entrega de puesto para este turno" }, { status: 200 });
@@ -278,14 +286,14 @@ export async function POST(req: NextRequest) {
                 oficial_entrega,
                 fecha_entrada_entrega: new Date(fecha_entrada_entrega),
                 fecha_salida_entrega: new Date(fecha_salida_entrega),
-                hora_entrada_entrega: new Date(`1970-01-01T${hora_entrada_entrega}`),
-                hora_salida_entrega: new Date(`1970-01-01T${hora_salida_entrega}`),
+                hora_entrada_entrega: new Date(`${hora_entrada_entrega}`),
+                hora_salida_entrega: new Date(`${hora_salida_entrega}`),
                 turno_entrega,
                 oficial_recibe,
                 fecha_entrada_recibe: new Date(fecha_entrada_recibe),
                 fecha_salida_recibe: new Date(fecha_salida_recibe),
-                hora_entrada_recibe: new Date(`1970-01-01T${hora_entrada_recibe}`),
-                hora_salida_recibe: new Date(`1970-01-01T${hora_salida_recibe}`),
+                hora_entrada_recibe: new Date(`${hora_entrada_recibe}`),
+                hora_salida_recibe: new Date(`${hora_salida_recibe}`),
                 turno_recibe,
                 articulos_puesto: articulos_puesto || '',
                 observaciones: observaciones || '',
@@ -295,8 +303,59 @@ export async function POST(req: NextRequest) {
             },
         });
 
-        return NextResponse.json({ 
-            status: true, 
+        if (nuevoRegistro) {
+            let location = "";
+            if (puesto_id) {
+                const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: puesto_id } });
+                if (puesto) {
+                    location = `para el puesto "${puesto.nombre}"`;
+                    const cliente = await prisma.e_estructura_cliente.findUnique({ where: { id: cliente_id } });
+                    if (cliente) {
+                        location += ` del cliente "${cliente.nombre}"`;
+                    }
+                }
+            }
+
+            let employee = "Desconocido";
+            const empleado = await prisma.c_empleado.findUnique({ where: { id: empleadoId } });
+            if (empleado) {
+                employee = `${empleado.nombre} ${empleado.primer_apellido} ${empleado.segundo_apellido}`;
+            }
+
+            let articulos_desc = ".";
+            let send_notification = false;
+            if (JSON.parse(articulos_puesto).length > 0) {
+                const articulos_puesto_array = JSON.parse(articulos_puesto);
+                let init_desc = false;
+                for (const articulo of articulos_puesto_array) {
+                    let articulo_desc = `- ${articulo.cantidad_real} de ${articulo.cantidad_requerida} unidades de "${articulo.nombre}" (Estado: ${articulo.estado})\n`;
+                    let add_desc = false;
+                    if (articulo.cantidad_requerida > articulo.cantidad_real) {
+                        add_desc = true;
+                    }
+                    if (articulo.estado != "Bueno") {
+                        add_desc = true;
+                    }
+
+                    if (add_desc) {
+                        send_notification = true;
+                        if (!init_desc) {
+                            articulos_desc = ". Sin embargo, los artículos registrados presentan los siguientes detalles:\n";
+                            init_desc = true;
+                        }
+                        articulos_desc += articulo_desc;
+                    }
+                }
+            }
+
+            if (send_notification) {
+                const description = `El usuario ${employee} ha registrado una entrega de puesto${location} (Ocupado anteriormente por ${oficial_entrega}) el día ${fecha_entrada_entrega.split("T")[0]} a las ${hora_entrada_entrega.split("T")[1].split(".")[0]}${articulos_desc}`;
+                sendNotificationByRole(nuevoRegistro.corpo_id, [], "Registro de entrega de puesto creado", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+            }
+        }
+
+        return NextResponse.json({
+            status: true,
             message: "Registro de entrega de puesto creado correctamente",
             data: nuevoRegistro
         }, { status: 200 });

@@ -11,13 +11,8 @@ import { getUserMarca } from "../../../utils/getUserMarca";
 
 export async function GET(req: NextRequest) {
     try {
-        const { valid, payload, message } = verifyAccessToken(req);
-        if (!valid) {
-            return NextResponse.json(
-                { status: false, message: message },
-                { status: 401 }
-            );
-        }
+        const { valid, expired, payload, message } = verifyAccessToken(req);
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         const marcaId = req.nextUrl.searchParams.get("m");
         if (!marcaId) {
@@ -140,13 +135,8 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
     try {
-        const { valid, payload, message } = verifyAccessToken(req);
-        if (!valid) {
-            return NextResponse.json(
-                { status: false, message: message },
-                { status: 401 }
-            );
-        }
+        const { valid, expired, payload, message } = verifyAccessToken(req);
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         const { marca_id, setPuesto, titulo, descripcion, firma_responsable, file_base64, created_at } = await req.json();
 
@@ -225,7 +215,7 @@ export async function POST(req: NextRequest) {
                 const hora = created_at.toISOString().split("T")[1].split(".")[0];
                 const desc = `El usuario ${empleado.nombre} ${empleado.primer_apellido} ha creado una nueva nota de voz llamada ${titulo} el día ${fecha} a las ${hora}`;
                 if (!setPuesto) {
-                    await sendNotificationByRole(marca.id, "Nota de voz creada", desc, ["ADMINISTRATIVO", "SUPERVISOR", "OPERATIVO"]);
+                    await sendNotificationByRole(marca.corpo_id, [marca.plaza_id], "Nota de voz creada", desc, ["ADMINISTRATIVO", "SUPERVISOR", "OPERATIVO"]);
                 } else {
                     const plaza = await prisma.e_estructura_plazas.findMany({ where: { puesto_id: marca.puesto_id } });
                     if (plaza.length > 0) {

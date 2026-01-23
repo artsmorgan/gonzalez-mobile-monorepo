@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessToken } from "../../../utils/verifyToken";
 import { toZonedTime } from "date-fns-tz";
 import { prisma } from "../../../utils/prismaClient";
+import { sendNotificationByRole } from "../../../utils/sendNotification";
 
 function parseDDMMYYYYToDate(value: unknown): Date | null {
     if (!value) return null;
@@ -28,17 +29,12 @@ function toIntOrNull(value: unknown): number | null {
 
 export async function POST(req: NextRequest) {
     try {
-        const { valid, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = verifyAccessToken(req);
 
-        if (!valid) {
-            return NextResponse.json(
-                { status: false, message: message },
-                { status: 401 }
-            );
-        }
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
-        const { 
-            marca_id, 
+        const {
+            marca_id,
             cliente,
             fecha,
             turno,
@@ -113,8 +109,28 @@ export async function POST(req: NextRequest) {
             }
         });
 
-        return NextResponse.json({ 
-            status: true, 
+        if (new_record) {
+            let empNombre = "Desconocido";
+            let sucursalNombre = "Desconocida";
+            let fechaRegistro = new_record.created_at.toISOString().split("T")[0];
+            if (new_record.created_by) {
+                const empleado = await prisma.c_empleado.findUnique({ where: { id: parseInt(String(new_record.created_by), 10) } });
+                if (empleado) {
+                    empNombre = empleado.nombre + " " + empleado.primer_apellido + " " + empleado.segundo_apellido;
+                }
+            }
+            if (new_record.corpo_id) {
+                const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: new_record.corpo_id } });
+                if (sucursal) {
+                    sucursalNombre = sucursal.nombre + " (" + sucursal.nro_sucursal + ")";
+                }
+            }
+            const descriptionNotificacion = "El empleado " + empNombre + " ha creado un registro decontrol de asistencia en la sucursal " + sucursalNombre + " el día " + fechaRegistro;
+            sendNotificationByRole(new_record.corpo_id, [parseInt(String(new_record.created_by), 10)], "Control de asistencia creado", descriptionNotificacion, ["ADMINISTRATIVO", "SUPERVISOR"]);
+        }
+
+        return NextResponse.json({
+            status: true,
             message: "Control de asistencia creado correctamente",
             data: {
                 id: new_record.id,
