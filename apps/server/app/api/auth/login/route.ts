@@ -66,57 +66,42 @@ export async function POST(request: NextRequest) {
             );
         }
 
+        if (!process.env.JWT_SECRET || !process.env.JWT_REFRESH_SECRET) {
+            throw new Error("JWT secrets not configured");
+        }
+
         const sessionId = uuidv4();
 
-        // 👉 Generar Access Token (expira en 15 minutos) para el usuario
         const accessToken = jwt.sign(
-            { id: empleado.id, cedula: empleado.cedula, sessionId: sessionId },
-            process.env.JWT_SECRET,
+            { id: empleado.id, cedula: empleado.cedula, sessionId },
+            process.env.JWT_SECRET!,
             { expiresIn: "15m" }
         );
 
-        // 👉 Generar Refresh Token (expira en 7 días) para el usuario
         const refreshToken = jwt.sign(
-            { id: empleado.id, sessionId: sessionId },
-            process.env.JWT_REFRESH_SECRET,
+            { id: empleado.id, sessionId },
+            process.env.JWT_REFRESH_SECRET!,
             { expiresIn: "7d" }
         );
 
         const now = toZonedTime(new Date(), "America/Costa_Rica");
 
-        // revoked = true a todos los tokens del usuario
-        await prisma.refresh_token.updateMany({
-            where: {
-                empleadoId: empleado.id,
-                revoked: false
-            },
-            data: {
-                revoked: true
-            }
-        });
-
-        // 🔐 Guardar el refresh token en la BD
-        // Si el token ya existe (por condición de carrera), eliminarlo primero
-        try {
-            await prisma.refresh_token.deleteMany({
-                where: { empleadoId: empleado.id, revoked: false },
+        await prisma.$transaction(async (tx) => {
+            await tx.refresh_token.updateMany({
+                where: { empleadoId: empleado.id },
+                data: { revoked: true },
             });
-            await prisma.refresh_token.create({
+
+            await tx.refresh_token.create({
                 data: {
                     token: hashToken(refreshToken),
                     empleadoId: empleado.id,
-                    sessionId: sessionId,
+                    sessionId,
                     createdAt: now,
-                    expiresAt: toZonedTime(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), "America/Costa_Rica") // 7 días
-                }
+                    expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+                },
             });
-        } catch (error: unknown) {
-            const errorMessage = error instanceof Error ? error.message : "Error desconocido";
-            return NextResponse.json(
-                { status: false, message: errorMessage },
-                { status: 500 }
-            );
-        }
+        });
 
         const empleado_plaza = await prisma.c_empleado_plaza.findMany({
             where: {

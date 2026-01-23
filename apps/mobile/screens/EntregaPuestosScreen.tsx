@@ -135,6 +135,19 @@ export default function EntregaPuestosScreen() {
     navigation.navigate('Home');
   };
 
+  const decodeFirmaHash = (hash?: string | null) => {
+    try {
+      if (!hash || String(hash).trim().length === 0) return null;
+      const decoded = atob(String(hash));
+      const parts = decoded.split(':');
+      if (parts.length !== 5) return null;
+      const [sessionId, empleadoId, latitud, longitud, timestamp] = parts;
+      return { sessionId, empleadoId, latitud, longitud, timestamp };
+    } catch {
+      return null;
+    }
+  };
+
   const [isLoading, setIsLoading] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -225,6 +238,8 @@ export default function EntregaPuestosScreen() {
         if (!refreshed) {
           setError('No se pudo autenticar');
           setIsLoading(false);
+          if (logout) await logout();
+          throw new Error('Sesión expirada');
           return;
         }
         token = await AsyncStorage.getItem('access_token');
@@ -239,7 +254,7 @@ export default function EntregaPuestosScreen() {
         },
       });
 
-      if (response.status === 401 || response.status === 403) {
+      if (response.status === 401) {
         const refreshed = await refreshAccessToken();
         if (refreshed) {
           return loadData();
@@ -247,6 +262,11 @@ export default function EntregaPuestosScreen() {
           await logout();
           return;
         }
+      }
+
+      if (response.status === 403) {
+        if (logout) await logout();
+        throw new Error('Acceso denegado');
       }
 
       if (!response.ok) {
@@ -354,10 +374,10 @@ export default function EntregaPuestosScreen() {
     const inicioMin = parseInt(inicioParts[1]) || 0;
     const finHour = parseInt(finParts[0]) || 0;
     const finMin = parseInt(finParts[1]) || 0;
-    
+
     const inicioMinutes = inicioHour * 60 + inicioMin;
     const finMinutes = finHour * 60 + finMin;
-    
+
     if (inicioMinutes >= finMinutes) {
       // Si hora_inicio >= hora_fin, la fecha de fin es el día siguiente
       fechaObj.setDate(fechaObj.getDate() + 1);
@@ -405,7 +425,7 @@ export default function EntregaPuestosScreen() {
               const horaEntradaRecibe = formatTime(currentMarca.hora_inicio);
               const horaSalidaRecibe = formatTime(currentMarca.hora_fin);
 
-              const articulosPuesto = JSON.stringify(articulos);
+              const articulosPuesto = articulos && articulos.length > 0 ? JSON.stringify(articulos) : '[]';
 
               const requestData = {
                 cliente_id: currentMarca.cliente.id,
@@ -440,7 +460,8 @@ export default function EntregaPuestosScreen() {
                 if (!token) {
                   const refreshed = await refreshAccessToken();
                   if (!refreshed) {
-                    throw new Error('No se pudo autenticar');
+                    if (logout) await logout();
+                    throw new Error('Sesión expirada');
                   }
                   token = await AsyncStorage.getItem('access_token');
                 }
@@ -455,7 +476,7 @@ export default function EntregaPuestosScreen() {
                   body: JSON.stringify(requestData),
                 });
 
-                if (response.status === 401 || response.status === 403) {
+                if (response.status === 401) {
                   const refreshed = await refreshAccessToken();
                   if (refreshed) {
                     return handleSave();
@@ -463,6 +484,11 @@ export default function EntregaPuestosScreen() {
                     await logout();
                     return;
                   }
+                }
+
+                if (response.status === 403) {
+                  if (logout) await logout();
+                  throw new Error('Acceso denegado');
                 }
 
                 if (!response.ok) {
@@ -505,6 +531,20 @@ export default function EntregaPuestosScreen() {
     );
   };
 
+  const getInvolucrados = (involucrados: string) => {
+    const involucradosArray = JSON.parse(involucrados);
+    let involucradosText = "";
+    for (let i = 0; i < involucradosArray.length; i++) {
+      const involucrado = involucradosArray[i];
+      let coma = "";
+      if (i > 0) { // Si es el primero, debe incluir una coma
+        coma = ", ";
+      }
+      involucradosText = `${involucrado.nombre} (${involucrado.codigo || ""})${coma}`;
+    }
+    return involucradosText;
+  };
+
   if (isLoading) {
     return (
       <ThemedView style={styles.container}>
@@ -514,8 +554,8 @@ export default function EntregaPuestosScreen() {
           <ThemedText style={styles.loadingText}>Cargando datos...</ThemedText>
         </ThemedView>
         <AppFooter />
-        <SlideMenu 
-          isVisible={isMenuVisible} 
+        <SlideMenu
+          isVisible={isMenuVisible}
           onClose={() => setIsMenuVisible(false)}
           onHomePress={handleHomePress}
           currentRoute="EntregaPuestos"
@@ -535,8 +575,8 @@ export default function EntregaPuestosScreen() {
           </TouchableOpacity>
         </ThemedView>
         <AppFooter />
-        <SlideMenu 
-          isVisible={isMenuVisible} 
+        <SlideMenu
+          isVisible={isMenuVisible}
           onClose={() => setIsMenuVisible(false)}
           onHomePress={handleHomePress}
           currentRoute="EntregaPuestos"
@@ -566,218 +606,275 @@ export default function EntregaPuestosScreen() {
   return (
     <ThemedView style={styles.container}>
       <AppHeader onMenuPress={() => setIsMenuVisible(true)} title="Entrega de Puestos" />
+
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
-        <ThemedText style={styles.title}>Entrega de Puestos</ThemedText>
+        <ThemedView style={styles.content}>
+          {error ? <ThemedText style={styles.errorText}>{error}</ThemedText> : null}
 
-        {/* Sección de datos informativos */}
-        <ThemedView style={styles.section}>
-          <ThemedText style={styles.sectionTitle}>Datos de Entrega</ThemedText>
-          <ThemedView style={styles.infoRow}>
-            <ThemedText style={styles.infoLabel}>Cliente:</ThemedText>
-            <ThemedText style={styles.infoValue}>{currentMarca.cliente.nombre}</ThemedText>
+          <ThemedView style={styles.titleContainer}>
+            <ThemedText type="title" style={styles.title}>
+              <Ionicons name="swap-horizontal" size={22} color="#000000" /> Entrega de Puestos
+            </ThemedText>
+            <ThemedText style={styles.subtitle}>Registro de entrega y recepción de puestos</ThemedText>
           </ThemedView>
-          <ThemedView style={styles.infoRow}>
-            <ThemedText style={styles.infoLabel}>Sucursal:</ThemedText>
-            <ThemedText style={styles.infoValue}>{currentMarca.corpo.nombre}</ThemedText>
-          </ThemedView>
-          <ThemedView style={styles.infoRow}>
-            <ThemedText style={styles.infoLabel}>Puesto:</ThemedText>
-            <ThemedText style={styles.infoValue}>{currentMarca.puesto.nombre}</ThemedText>
-          </ThemedView>
-          <ThemedView style={styles.infoRow}>
-            <ThemedText style={styles.infoLabel}>Oficial Entrega:</ThemedText>
-            <ThemedText style={styles.infoValue}>{info.previous_employee.nombre}</ThemedText>
-          </ThemedView>
-          <ThemedView style={styles.infoRow}>
-            <ThemedText style={styles.infoLabel}>Fecha Entrada Entrega:</ThemedText>
-            <ThemedText style={styles.infoValue}>{fechaEntradaEntrega}</ThemedText>
-          </ThemedView>
-          <ThemedView style={styles.infoRow}>
-            <ThemedText style={styles.infoLabel}>Fecha Salida Entrega:</ThemedText>
-            <ThemedText style={styles.infoValue}>{fechaSalidaEntrega}</ThemedText>
-          </ThemedView>
-          <ThemedView style={styles.infoRow}>
-            <ThemedText style={styles.infoLabel}>Hora Entrada Entrega:</ThemedText>
-            <ThemedText style={styles.infoValue}>{horaEntradaEntrega}</ThemedText>
-          </ThemedView>
-          <ThemedView style={styles.infoRow}>
-            <ThemedText style={styles.infoLabel}>Hora Salida Entrega:</ThemedText>
-            <ThemedText style={styles.infoValue}>{horaSalidaEntrega}</ThemedText>
-          </ThemedView>
-          <ThemedView style={styles.infoRow}>
-            <ThemedText style={styles.infoLabel}>Turno Entrega:</ThemedText>
-            <ThemedText style={styles.infoValue}>{info.previous_marca.tipo_turno}</ThemedText>
-          </ThemedView>
-          <ThemedView style={styles.infoRow}>
-            <ThemedText style={styles.infoLabel}>Oficial Recibe:</ThemedText>
-            <ThemedText style={styles.infoValue}>{employee?.name || 'Desconocido'}</ThemedText>
-          </ThemedView>
-          <ThemedView style={styles.infoRow}>
-            <ThemedText style={styles.infoLabel}>Fecha Entrada Recibe:</ThemedText>
-            <ThemedText style={styles.infoValue}>{fechaEntradaRecibe}</ThemedText>
-          </ThemedView>
-          <ThemedView style={styles.infoRow}>
-            <ThemedText style={styles.infoLabel}>Fecha Salida Recibe:</ThemedText>
-            <ThemedText style={styles.infoValue}>{fechaSalidaRecibe}</ThemedText>
-          </ThemedView>
-          <ThemedView style={styles.infoRow}>
-            <ThemedText style={styles.infoLabel}>Hora Entrada Recibe:</ThemedText>
-            <ThemedText style={styles.infoValue}>{horaEntradaRecibe}</ThemedText>
-          </ThemedView>
-          <ThemedView style={styles.infoRow}>
-            <ThemedText style={styles.infoLabel}>Hora Salida Recibe:</ThemedText>
-            <ThemedText style={styles.infoValue}>{horaSalidaRecibe}</ThemedText>
-          </ThemedView>
-          <ThemedView style={styles.infoRow}>
-            <ThemedText style={styles.infoLabel}>Turno Recibe:</ThemedText>
-            <ThemedText style={styles.infoValue}>{currentMarca.tipo_turno}</ThemedText>
-          </ThemedView>
-        </ThemedView>
 
-        {/* Sección de incidentes */}
-        {info.incidentes.length > 0 && (
-          <ThemedView style={styles.section}>
-            <ThemedText style={styles.sectionTitle}>Incidentes</ThemedText>
-            {info.incidentes.map((incidente) => (
-              <ThemedView key={incidente.id} style={styles.incidenteCard}>
-                <ThemedText style={styles.incidenteTitle}>ID: {incidente.id}</ThemedText>
-                <ThemedText style={styles.incidenteText}>Clasificación: {incidente.clasificacion}</ThemedText>
-                <ThemedText style={styles.incidenteText}>Descripción: {incidente.description}</ThemedText>
-                <ThemedText style={styles.incidenteText}>Involucrados: {incidente.involucrados}</ThemedText>
-                <ThemedText style={styles.incidenteText}>Estado: {incidente.estado ? 'Activo' : 'Resuelto'}</ThemedText>
-                <ThemedText style={styles.incidenteText}>Responsable: {incidente.responsable}</ThemedText>
+          {/* Formulario principal */}
+          <ThemedView style={styles.formCard}>
+            <ThemedText style={styles.formTitle}>Datos de Entrega y Recepción</ThemedText>
+
+            {/* Sección de datos informativos */}
+            <ThemedView style={styles.infoSection}>
+              <ThemedText style={styles.sectionTitle}>Datos de Entrega</ThemedText>
+              <ThemedView style={styles.infoRow}>
+                <ThemedText style={styles.infoLabel}>Cliente:</ThemedText>
+                <ThemedText style={styles.infoValue}>{currentMarca.cliente.nombre}</ThemedText>
               </ThemedView>
-            ))}
-          </ThemedView>
-        )}
+              <ThemedView style={styles.infoRow}>
+                <ThemedText style={styles.infoLabel}>Sucursal:</ThemedText>
+                <ThemedText style={styles.infoValue}>{currentMarca.corpo.nombre}</ThemedText>
+              </ThemedView>
+              <ThemedView style={styles.infoRow}>
+                <ThemedText style={styles.infoLabel}>Puesto:</ThemedText>
+                <ThemedText style={styles.infoValue}>{currentMarca.puesto.nombre}</ThemedText>
+              </ThemedView>
+              <ThemedView style={styles.infoRow}>
+                <ThemedText style={styles.infoLabel}>Oficial Entrega:</ThemedText>
+                <ThemedText style={styles.infoValue}>{info.previous_employee.nombre}</ThemedText>
+              </ThemedView>
+              <ThemedView style={styles.infoRow}>
+                <ThemedText style={styles.infoLabel}>Fecha Entrada Entrega:</ThemedText>
+                <ThemedText style={styles.infoValue}>{fechaEntradaEntrega}</ThemedText>
+              </ThemedView>
+              <ThemedView style={styles.infoRow}>
+                <ThemedText style={styles.infoLabel}>Fecha Salida Entrega:</ThemedText>
+                <ThemedText style={styles.infoValue}>{fechaSalidaEntrega}</ThemedText>
+              </ThemedView>
+              <ThemedView style={styles.infoRow}>
+                <ThemedText style={styles.infoLabel}>Hora Entrada Entrega:</ThemedText>
+                <ThemedText style={styles.infoValue}>{horaEntradaEntrega.split("T")[1].split(".")[0]}</ThemedText>
+              </ThemedView>
+              <ThemedView style={styles.infoRow}>
+                <ThemedText style={styles.infoLabel}>Hora Salida Entrega:</ThemedText>
+                <ThemedText style={styles.infoValue}>{horaSalidaEntrega.split("T")[1].split(".")[0]}</ThemedText>
+              </ThemedView>
+              <ThemedView style={styles.infoRow}>
+                <ThemedText style={styles.infoLabel}>Turno Entrega:</ThemedText>
+                <ThemedText style={styles.infoValue}>{info.previous_marca.tipo_turno}</ThemedText>
+              </ThemedView>
+              <ThemedView style={styles.infoRow}>
+                <ThemedText style={styles.infoLabel}>Oficial Recibe:</ThemedText>
+                <ThemedText style={styles.infoValue}>{employee?.name || 'Desconocido'}</ThemedText>
+              </ThemedView>
+              <ThemedView style={styles.infoRow}>
+                <ThemedText style={styles.infoLabel}>Fecha Entrada Recibe:</ThemedText>
+                <ThemedText style={styles.infoValue}>{fechaEntradaRecibe}</ThemedText>
+              </ThemedView>
+              <ThemedView style={styles.infoRow}>
+                <ThemedText style={styles.infoLabel}>Fecha Salida Recibe:</ThemedText>
+                <ThemedText style={styles.infoValue}>{fechaSalidaRecibe}</ThemedText>
+              </ThemedView>
+              <ThemedView style={styles.infoRow}>
+                <ThemedText style={styles.infoLabel}>Hora Entrada Recibe:</ThemedText>
+                <ThemedText style={styles.infoValue}>{horaEntradaRecibe.split("T")[1].split(".")[0]}</ThemedText>
+              </ThemedView>
+              <ThemedView style={styles.infoRow}>
+                <ThemedText style={styles.infoLabel}>Hora Salida Recibe:</ThemedText>
+                <ThemedText style={styles.infoValue}>{horaSalidaRecibe.split("T")[1].split(".")[0]}</ThemedText>
+              </ThemedView>
+              <ThemedView style={styles.infoRow}>
+                <ThemedText style={styles.infoLabel}>Turno Recibe:</ThemedText>
+                <ThemedText style={styles.infoValue}>{currentMarca.tipo_turno}</ThemedText>
+              </ThemedView>
+            </ThemedView>
 
-        {/* Sección de notas */}
-        {info.notas.length > 0 && (
-          <ThemedView style={styles.section}>
-            <ThemedText style={styles.sectionTitle}>Notas</ThemedText>
-            {info.notas.map((nota) => (
-              <ThemedView key={nota.id} style={styles.notaCard}>
-                <ThemedText style={styles.notaTitle}>{nota.titulo}</ThemedText>
-                <ThemedText style={styles.notaText}>{nota.description}</ThemedText>
-                {nota.categoria && (
-                  <ThemedText style={styles.notaText}>Categoría: {nota.categoria}</ThemedText>
+            {/* Sección de incidentes */}
+            {info.incidentes.length > 0 && (
+              <ThemedView style={styles.infoSection}>
+                <ThemedText style={styles.sectionTitle}>Incidentes</ThemedText>
+                {info.incidentes.map((incidente) => (
+                  <ThemedView key={incidente.id} style={styles.bitacoraCard}>
+                    <ThemedText style={styles.bitTitle}>ID: {incidente.id}</ThemedText>
+                    <ThemedText style={styles.bitLine}>
+                      <ThemedText style={styles.bitLabel}>Clasificación: </ThemedText>
+                      <ThemedText style={styles.bitValue}>{incidente.clasificacion}</ThemedText>
+                    </ThemedText>
+                    <ThemedText style={styles.bitLine}>
+                      <ThemedText style={styles.bitLabel}>Descripción: </ThemedText>
+                      <ThemedText style={styles.bitValue}>{incidente.description}</ThemedText>
+                    </ThemedText>
+                    <ThemedText style={styles.bitLine}>
+                      <ThemedText style={styles.bitLabel}>Involucrados: </ThemedText>
+                      <ThemedText style={styles.bitValue}>{getInvolucrados(incidente.involucrados)}</ThemedText>
+                    </ThemedText>
+                    <ThemedText style={styles.bitLine}>
+                      <ThemedText style={styles.bitLabel}>Estado: </ThemedText>
+                      <ThemedText style={styles.bitValue}>{incidente.estado ? 'Activo' : 'Resuelto'}</ThemedText>
+                    </ThemedText>
+                    <ThemedText style={styles.bitLine}>
+                      <ThemedText style={styles.bitLabel}>Responsable: </ThemedText>
+                      <ThemedText style={styles.bitValue}>{incidente.responsable}</ThemedText>
+                    </ThemedText>
+                  </ThemedView>
+                ))}
+              </ThemedView>
+            )}
+
+            {/* Sección de notas */}
+            {info.notas.length > 0 && (
+              <ThemedView style={styles.infoSection}>
+                <ThemedText style={styles.sectionTitle}>Notas</ThemedText>
+                {info.notas.map((nota) => (
+                  <ThemedView key={nota.id} style={styles.bitacoraCard}>
+                    <ThemedText style={styles.bitTitle}>{nota.titulo}</ThemedText>
+                    <ThemedText style={styles.bitLine}>
+                      <ThemedText style={styles.bitValue}>{nota.description}</ThemedText>
+                    </ThemedText>
+                    {nota.categoria && (
+                      <ThemedText style={styles.bitLine}>
+                        <ThemedText style={styles.bitLabel}>Categoría: </ThemedText>
+                        <ThemedText style={styles.bitValue}>{nota.categoria}</ThemedText>
+                      </ThemedText>
+                    )}
+                    <ThemedText style={styles.bitLine}>
+                      <ThemedText style={styles.bitLabel}>Empleado: </ThemedText>
+                      <ThemedText style={styles.bitValue}>{nota.empleado}</ThemedText>
+                    </ThemedText>
+                    <ThemedText style={styles.bitLine}>
+                      <ThemedText style={styles.bitLabel}>Fecha: </ThemedText>
+                      <ThemedText style={styles.bitValue}>{new Date(nota.updated_at).toLocaleString()}</ThemedText>
+                    </ThemedText>
+                  </ThemedView>
+                ))}
+              </ThemedView>
+            )}
+
+            {/* Sección de artículos */}
+            {articulos.length > 0 && (
+              <ThemedView style={styles.infoSection}>
+                <ThemedText style={styles.sectionTitle}>Artículos</ThemedText>
+                {articulos.map((articulo, index) => (
+                  <ThemedView key={articulo.id} style={styles.bitacoraCard}>
+                    <ThemedText style={styles.bitTitle}>{articulo.nombre}</ThemedText>
+                    <ThemedText style={styles.label}>Estado:</ThemedText>
+                    <View style={styles.pickerContainer}>
+                      <Picker
+                        selectedValue={articulo.estado}
+                        onValueChange={(value) => handleArticuloEstadoChange(index, value)}
+                        style={styles.picker}
+                      >
+                        <Picker.Item label="Bueno" value="Bueno" />
+                        <Picker.Item label="Malo" value="Malo" />
+                        <Picker.Item label="No está" value="No está" />
+                      </Picker>
+                    </View>
+                    <ThemedText style={styles.label}>Cantidad Requerida:</ThemedText>
+                    <TextInput
+                      style={[styles.input, styles.inputReadOnly]}
+                      value={String(articulo.cantidad_requerida)}
+                      editable={false}
+                      placeholderTextColor="#999"
+                    />
+                    <ThemedText style={styles.label}>Cantidad Real:</ThemedText>
+                    <TextInput
+                      style={styles.input}
+                      value={String(articulo.cantidad_real)}
+                      onChangeText={(text) => {
+                        const num = parseInt(text) || 0;
+                        handleArticuloCantidadChange(index, num);
+                      }}
+                      keyboardType="numeric"
+                      placeholderTextColor="#999"
+                    />
+                  </ThemedView>
+                ))}
+              </ThemedView>
+            )}
+
+            {/* Observaciones */}
+            <ThemedText style={styles.label}>Observaciones</ThemedText>
+            <TextInput
+              style={[styles.input, styles.textArea]}
+              value={observaciones}
+              onChangeText={setObservaciones}
+              placeholder="Ingrese observaciones..."
+              placeholderTextColor="#999"
+              multiline
+              numberOfLines={4}
+            />
+
+            {/* Firma Responsable */}
+            <ThemedText style={styles.sectionTitle}>Firma responsable *</ThemedText>
+            <ThemedView style={styles.signatureButtons}>
+              <TouchableOpacity
+                style={[styles.signatureButton, isGeneratingFirma && styles.signatureButtonDisabled]}
+                onPress={handleGenerateFirma}
+                disabled={isGeneratingFirma}
+              >
+                {isGeneratingFirma ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <>
+                    <Ionicons name="finger-print" size={18} color="#FFFFFF" />
+                    <ThemedText style={styles.signatureButtonText}>Generar</ThemedText>
+                  </>
                 )}
-                <ThemedText style={styles.notaText}>Empleado: {nota.empleado}</ThemedText>
-                <ThemedText style={styles.notaText}>Fecha: {new Date(nota.updated_at).toLocaleString()}</ThemedText>
-              </ThemedView>
-            ))}
-          </ThemedView>
-        )}
-
-        {/* Sección de artículos */}
-        <ThemedView style={styles.section}>
-          <ThemedText style={styles.sectionTitle}>Artículos</ThemedText>
-          {articulos.map((articulo, index) => (
-            <ThemedView key={articulo.id} style={styles.articuloCard}>
-              <ThemedText style={styles.articuloTitle}>{articulo.nombre}</ThemedText>
-              <ThemedView style={styles.articuloRow}>
-                <ThemedText style={styles.articuloLabel}>Estado:</ThemedText>
-                <View style={styles.pickerContainer}>
-                  <Picker
-                    selectedValue={articulo.estado}
-                    onValueChange={(value) => handleArticuloEstadoChange(index, value)}
-                    style={styles.picker}
-                  >
-                    <Picker.Item label="Bueno" value="Bueno" />
-                    <Picker.Item label="Malo" value="Malo" />
-                    <Picker.Item label="No está" value="No está" />
-                  </Picker>
-                </View>
-              </ThemedView>
-              <ThemedView style={styles.articuloRow}>
-                <ThemedText style={styles.articuloLabel}>Cantidad Requerida:</ThemedText>
-                <TextInput
-                  style={[styles.input, styles.inputReadOnly]}
-                  value={String(articulo.cantidad_requerida)}
-                  editable={false}
-                />
-              </ThemedView>
-              <ThemedView style={styles.articuloRow}>
-                <ThemedText style={styles.articuloLabel}>Cantidad Real:</ThemedText>
-                <TextInput
-                  style={styles.input}
-                  value={String(articulo.cantidad_real)}
-                  onChangeText={(text) => {
-                    const num = parseInt(text) || 0;
-                    handleArticuloCantidadChange(index, num);
-                  }}
-                  keyboardType="numeric"
-                />
-              </ThemedView>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.signatureButton} onPress={handleScanFirma}>
+                <Ionicons name="qr-code" size={18} color="#FFFFFF" />
+                <ThemedText style={styles.signatureButtonText}>Escanear QR</ThemedText>
+              </TouchableOpacity>
             </ThemedView>
-          ))}
-        </ThemedView>
 
-        {/* Observaciones */}
-        <ThemedView style={styles.section}>
-          <ThemedText style={styles.sectionTitle}>Observaciones</ThemedText>
-          <TextInput
-            style={[styles.input, styles.textArea]}
-            value={observaciones}
-            onChangeText={setObservaciones}
-            placeholder="Ingrese observaciones..."
-            multiline
-            numberOfLines={4}
-          />
-        </ThemedView>
+            {!firmaResponsable ? (
+              <ThemedText style={styles.signatureHintMuted}>Aún no hay firma responsable.</ThemedText>
+            ) : (
+              <ThemedView style={styles.firmaInfoBox}>
+                <ThemedView style={{ flex: 1, paddingRight: 10, backgroundColor: '#F9F9F9' }}>
+                  <ThemedText style={styles.firmaInfoTitle}>Información de la firma:</ThemedText>
+                  {(() => {
+                    const info = decodeFirmaHash(firmaResponsable);
+                    if (!info) {
+                      return <ThemedText style={styles.firmaInfoValue}>Formato no decodificable</ThemedText>;
+                    }
+                    return (
+                      <>
+                        <ThemedText style={styles.firmaInfoValue}>Sesión: {info.sessionId || 'N/A'}</ThemedText>
+                        <ThemedText style={styles.firmaInfoValue}>Empleado: {info.empleadoId || 'N/A'}</ThemedText>
+                        <ThemedText style={styles.firmaInfoValue}>Lat: {info.latitud || 'N/A'} | Long: {info.longitud || 'N/A'}</ThemedText>
+                        <ThemedText style={styles.firmaInfoValue}>Hora: {info.timestamp || 'N/A'}</ThemedText>
+                      </>
+                    );
+                  })()}
+                </ThemedView>
+                <TouchableOpacity style={styles.firmaClearButtonTiny} onPress={() => setFirmaResponsable('')}>
+                  <Ionicons name="trash" size={18} color="#FFFFFF" />
+                </TouchableOpacity>
+              </ThemedView>
+            )}
 
-        {/* Firma Responsable */}
-        <ThemedView style={styles.section}>
-          <ThemedText style={styles.sectionTitle}>Firma Responsable</ThemedText>
-          <ThemedView style={styles.firmaButtons}>
-            <TouchableOpacity style={styles.firmaButton} onPress={() => setIsSignatureModalVisible(true)}>
-              <Ionicons name="create-outline" size={20} color="#007AFF" />
-              <ThemedText style={styles.firmaButtonText}>Firma Manual</ThemedText>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.firmaButton}
-              onPress={handleGenerateFirma}
-              disabled={isGeneratingFirma}
-            >
-              <Ionicons name="key-outline" size={20} color="#007AFF" />
-              <ThemedText style={styles.firmaButtonText}>
-                {isGeneratingFirma ? 'Generando...' : 'Generar Firma'}
-              </ThemedText>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.firmaButton} onPress={handleScanFirma}>
-              <Ionicons name="qr-code-outline" size={20} color="#007AFF" />
-              <ThemedText style={styles.firmaButtonText}>Escanear QR</ThemedText>
-            </TouchableOpacity>
-          </ThemedView>
-          {firmaResponsable && (
-            <ThemedView style={styles.firmaPreview}>
-              <ThemedText style={styles.firmaPreviewText}>
-                {firmaResponsable.length > 50 ? 'Firma generada' : 'Firma capturada'}
-              </ThemedText>
+            <ThemedView style={styles.formActions}>
+              <TouchableOpacity style={[styles.formActionButton, styles.formActionSave]} onPress={handleSave} disabled={isCreating}>
+                {isCreating ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <>
+                    <Ionicons name="save" size={18} color="#fff" />
+                    <ThemedText style={styles.formActionSaveText}>Guardar</ThemedText>
+                  </>
+                )}
+              </TouchableOpacity>
             </ThemedView>
-          )}
+          </ThemedView>
         </ThemedView>
-
-        {/* Botón Guardar */}
-        <TouchableOpacity
-          style={[styles.saveButton, isCreating && styles.saveButtonDisabled]}
-          onPress={handleSave}
-          disabled={isCreating}
-        >
-          {isCreating ? (
-            <ActivityIndicator color="#FFFFFF" />
-          ) : (
-            <ThemedText style={styles.saveButtonText}>Guardar</ThemedText>
-          )}
-        </TouchableOpacity>
-      </ScrollView>
+      </ScrollView >
 
       {/* Modal de Firma */}
-      <Modal
+      < Modal
         visible={isSignatureModalVisible}
         animationType="slide"
         presentationStyle="pageSheet"
-        onRequestClose={() => setIsSignatureModalVisible(false)}
+        onRequestClose={() => setIsSignatureModalVisible(false)
+        }
       >
         <ThemedView style={styles.modalContainer}>
           <ThemedView style={styles.modalHeader}>
@@ -799,200 +896,147 @@ export default function EntregaPuestosScreen() {
             />
           </ThemedView>
         </ThemedView>
-      </Modal>
+      </Modal >
 
       <AppFooter />
-      <SlideMenu 
-        isVisible={isMenuVisible} 
+      <SlideMenu
+        isVisible={isMenuVisible}
         onClose={() => setIsMenuVisible(false)}
         onHomePress={handleHomePress}
         currentRoute="EntregaPuestos"
       />
       {QRScannerComponent}
-    </ThemedView>
+    </ThemedView >
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
+  // Estructura/layout (igual que LlavesScreen)
+  container: { flex: 1 },
+  scrollView: { flex: 1 },
+  scrollContent: { padding: 16 },
+  content: { width: '100%', maxWidth: 800, alignSelf: 'center' },
+
+  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 },
+  loadingText: { marginTop: 16, fontSize: 16, opacity: 0.7 },
+  errorText: { color: '#FF3B30', textAlign: 'center', marginBottom: 12 },
   centerContent: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-  },
-  loadingText: {
-    marginTop: 10,
-    fontSize: 16,
-  },
-  errorText: {
-    fontSize: 16,
-    color: '#FF3B30',
-    textAlign: 'center',
-    marginBottom: 20,
   },
   retryButton: {
     backgroundColor: '#007AFF',
     paddingHorizontal: 20,
     paddingVertical: 10,
     borderRadius: 8,
+    marginTop: 12,
   },
   retryButtonText: {
     color: '#FFFFFF',
     fontSize: 16,
   },
-  scrollView: {
-    flex: 1,
+
+  titleContainer: {
+    alignItems: 'center',
+    marginBottom: 24,
+    paddingBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
   },
-  scrollContent: {
-    padding: 16,
+  title: { fontSize: 22, fontWeight: 'bold', textAlign: 'center', marginBottom: 8 },
+  subtitle: { fontSize: 14, opacity: 0.7, textAlign: 'center' },
+
+  formCard: { marginTop: 12, backgroundColor: '#fff', borderRadius: 10, padding: 14, borderWidth: 1, borderColor: '#E0E0E0' },
+  formTitle: { fontSize: 18, fontWeight: '800', marginBottom: 10, color: '#000' },
+  label: { fontSize: 13, fontWeight: '700', marginTop: 10, color: '#333' },
+  input: { borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 10, backgroundColor: '#fff', color: '#000', marginBottom: 6 },
+  inputReadOnly: { backgroundColor: '#F0F0F0' },
+  textArea: { minHeight: 90, textAlignVertical: 'top' },
+
+  infoSection: {
+    marginTop: 16,
+    marginBottom: 16,
+    paddingBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
   },
-  title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    marginBottom: 20,
-  },
-  section: {
-    marginBottom: 20,
-    padding: 16,
-    backgroundColor: '#F5F5F5',
-    borderRadius: 8,
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    marginBottom: 12,
-  },
+  sectionTitle: { marginTop: 14, fontSize: 15, fontWeight: '800', color: '#007AFF', marginBottom: 10 },
   infoRow: {
     flexDirection: 'row',
     marginBottom: 8,
   },
   infoLabel: {
-    fontWeight: '600',
+    fontWeight: '700',
     width: 150,
+    color: '#333',
   },
   infoValue: {
     flex: 1,
+    color: '#000',
   },
-  incidenteCard: {
+
+  // Cards (igual que LlavesScreen)
+  bitacoraCard: {
     backgroundColor: '#FFFFFF',
-    padding: 12,
     borderRadius: 8,
-    marginBottom: 8,
-  },
-  incidenteTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    marginBottom: 4,
-  },
-  incidenteText: {
-    fontSize: 14,
-    marginBottom: 2,
-  },
-  notaCard: {
-    backgroundColor: '#FFFFFF',
-    padding: 12,
-    borderRadius: 8,
-    marginBottom: 8,
-  },
-  notaTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    marginBottom: 4,
-  },
-  notaText: {
-    fontSize: 14,
-    marginBottom: 2,
-  },
-  articuloCard: {
-    backgroundColor: '#FFFFFF',
-    padding: 12,
-    borderRadius: 8,
+    padding: 16,
     marginBottom: 12,
-  },
-  articuloTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    marginBottom: 8,
-  },
-  articuloRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  articuloLabel: {
-    fontWeight: '600',
-    width: 120,
-  },
-  pickerContainer: {
-    flex: 1,
     borderWidth: 1,
-    borderColor: '#CCCCCC',
-    borderRadius: 4,
+    borderColor: '#E0E0E0',
+  },
+  bitTitle: { fontSize: 16, fontWeight: '800', marginBottom: 10, color: '#000' },
+  bitLine: { marginBottom: 6, color: '#000' },
+  bitLabel: { fontWeight: '700', color: '#333' },
+  bitValue: { color: '#000' },
+
+  pickerContainer: {
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    marginBottom: 6,
+    backgroundColor: '#fff',
   },
   picker: {
     height: 50,
   },
-  input: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: '#CCCCCC',
-    borderRadius: 4,
-    padding: 8,
-    fontSize: 16,
-  },
-  inputReadOnly: {
-    backgroundColor: '#F0F0F0',
-  },
-  textArea: {
-    height: 100,
-    textAlignVertical: 'top',
-  },
-  firmaButtons: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
-    marginBottom: 10,
-  },
-  firmaButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#E3F2FD',
-    padding: 12,
-    borderRadius: 8,
-    gap: 8,
-  },
-  firmaButtonText: {
-    color: '#007AFF',
-    fontSize: 14,
-  },
-  firmaPreview: {
-    backgroundColor: '#FFFFFF',
-    padding: 12,
-    borderRadius: 8,
-    marginTop: 10,
-  },
-  firmaPreviewText: {
-    fontSize: 14,
-    color: '#4CAF50',
-  },
-  saveButton: {
+
+  // Firma responsable (igual que LlavesScreen)
+  signatureButtons: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, backgroundColor: '#fff', marginTop: 8 },
+  signatureButton: {
     backgroundColor: '#007AFF',
-    padding: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
     borderRadius: 8,
+    flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 20,
-    marginBottom: 20,
+    justifyContent: 'center',
+    flex: 1,
+    minWidth: '45%',
   },
-  saveButtonDisabled: {
-    opacity: 0.6,
+  signatureButtonDisabled: { backgroundColor: '#999' },
+  signatureButtonText: { color: '#FFFFFF', fontSize: 14, fontWeight: '600', marginLeft: 8 },
+  signatureHintMuted: { marginTop: 6, color: '#999' },
+
+  firmaInfoBox: {
+    marginTop: 10,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    backgroundColor: '#F9F9F9',
   },
-  saveButtonText: {
-    color: '#FFFFFF',
-    fontSize: 18,
-    fontWeight: 'bold',
-  },
+  firmaInfoTitle: { fontSize: 14, fontWeight: '700', marginBottom: 8, color: '#333' },
+  firmaInfoValue: { fontSize: 13, color: '#333', marginBottom: 4 },
+  firmaClearButtonTiny: { width: 38, height: 38, borderRadius: 8, backgroundColor: '#FF3B30', alignItems: 'center', justifyContent: 'center' },
+
+  formActions: { marginTop: 16, flexDirection: 'row', gap: 10, justifyContent: 'flex-end' },
+  formActionButton: { flexDirection: 'row', gap: 10, alignItems: 'center', justifyContent: 'center', paddingVertical: 14, paddingHorizontal: 20, borderRadius: 12 },
+  formActionSave: { backgroundColor: '#007AFF' },
+  formActionSaveText: { color: '#fff', fontWeight: '800' },
+
   modalContainer: {
     flex: 1,
     backgroundColor: '#FFFFFF',

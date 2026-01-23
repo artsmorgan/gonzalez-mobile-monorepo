@@ -5,6 +5,7 @@ import fs from "fs";
 import path from "path";
 import { v4 as uuidv4 } from "uuid";
 import { findContributionIncidents } from "../../../../../utils/findContributionIncidents";
+import { sendNotificationByRole } from "../../../../../utils/sendNotification";
 
 export const runtime = "nodejs";
 
@@ -38,8 +39,8 @@ function normalizeBase64(b64: string): string {
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
-    const { valid, message } = verifyAccessToken(req);
-    if (!valid) return NextResponse.json({ status: false, message }, { status: 401 });
+    const { valid, expired, payload, message } = verifyAccessToken(req);
+    if (!valid) return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
 
     const { id } = await context.params;
     const incidentId = parseInt(id, 10);
@@ -60,8 +61,8 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
 export async function POST(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
-    const { valid, payload, message } = verifyAccessToken(req);
-    if (!valid) return NextResponse.json({ status: false, message }, { status: 401 });
+    const { valid, expired, payload, message } = verifyAccessToken(req);
+    if (!valid) return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
 
     const { id } = await context.params;
     const incidentId = parseInt(id, 10);
@@ -131,6 +132,33 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
             contribucion_id: created.id,
           },
         });
+      }
+    }
+
+    if (created) {
+      let empleadoNombre = "Desconocido";
+      let sucursalNombre = "Desconocida";
+      let incident = await prisma.c_incidente.findUnique({ where: { id: incidentId } });
+      if (incident) {
+        let clasificacionNombre = "Desconocida";
+        let emp = await prisma.c_empleado.findUnique({ where: { id: empleadoId } });
+        if (emp) {
+          empleadoNombre = emp.nombre + " " + emp.primer_apellido + " " + emp.segundo_apellido;
+        }
+        if (incident.clasificacion) {
+          const clasificacion = await prisma.n_clasificacion_incidente.findUnique({ where: { id: incident.clasificacion } });
+          if (clasificacion) {
+            clasificacionNombre = clasificacion.nombre;
+          }
+        }
+        if (incident.corpo_id) {
+          const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: incident.corpo_id } });
+          if (sucursal) {
+            sucursalNombre = sucursal.nombre;
+          }
+        }
+        let descriptionNotificacion = "El empleado " + empleadoNombre + " ha registrado un aporte al incidente de tipo " + clasificacionNombre + " en la sucursal " + sucursalNombre + " ocurrido el día " + incident.fecha_incidente.toISOString().split("T")[0];
+        sendNotificationByRole(incident.corpo_id, [empleadoId], "Aporte registrado", descriptionNotificacion, ["ADMINISTRATIVO", "SUPERVISOR"]);
       }
     }
 

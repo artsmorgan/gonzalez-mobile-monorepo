@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessToken } from "../../../../../utils/verifyToken";
 import { prisma } from "../../../../../utils/prismaClient";
 import { getUserMarca } from "../../../../../utils/getUserMarca";
+import { sendNotificationByRole } from "../../../../../utils/sendNotification";
 
 function parseDateOnly(value: any): Date | null {
   if (!value) return null;
@@ -46,8 +47,8 @@ async function validateLlaveOwnership(llaveId: number, marcaId: number) {
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
-    const { valid, message } = verifyAccessToken(req);
-    if (!valid) return NextResponse.json({ status: false, message }, { status: 401 });
+    const { valid, expired, payload, message } = verifyAccessToken(req);
+    if (!valid) return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
 
     const resolvedParams = await context.params;
     const llaveId = parseInt(resolvedParams.id);
@@ -75,12 +76,15 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
 export async function POST(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
-    const { valid, message } = verifyAccessToken(req);
-    if (!valid) return NextResponse.json({ status: false, message }, { status: 401 });
+    const { valid, expired, payload, message } = verifyAccessToken(req);
+    if (!valid) return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
 
     const resolvedParams = await context.params;
     const llaveId = parseInt(resolvedParams.id);
     if (!llaveId) return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
+
+    const llave = await prisma.e_llave.findUnique({ where: { id: llaveId } });
+    if (!llave) return NextResponse.json({ status: false, message: "Llave no encontrada" }, { status: 200 });
 
     const body = await req.json();
     const {
@@ -138,6 +142,24 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
         firma_responsable: String(firma_responsable),
       },
     });
+
+    if (created) {
+
+      let sucursalNombre = "Desconocida";
+
+      let fechaRegistro = fechaDate.toISOString().split("T")[0];
+      let horaRegistro = horaDate.toISOString().split("T")[1].split(".")[0];
+
+      if (llave.corpo_id) {
+        const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: llave.corpo_id } });
+        if (sucursal) {
+          sucursalNombre = sucursal.nombre;
+        }
+      }
+
+      const description = "Se ha registrado un movimiento de la llave " + llave.lugar_abre + " (" + llave.cantidad_copias + " copias) de la sucursal " + sucursalNombre + " el día " + fechaRegistro + " a las " + horaRegistro + "(Del empleado " + nombre_persona_entrega + " a " + nombre_persona_recibe + ")";
+      sendNotificationByRole(llave.corpo_id, [], "Movimiento de llave registrado", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+    }
 
     return NextResponse.json(
       { status: true, message: "Movimiento creado correctamente", id: created.id },

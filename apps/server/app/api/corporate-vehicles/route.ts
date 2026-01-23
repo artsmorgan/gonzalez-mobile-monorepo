@@ -5,6 +5,7 @@ import { prisma } from "../../../utils/prismaClient";
 import fs from "fs";
 import path from "path";
 import { v4 as uuidv4 } from "uuid";
+import { sendNotificationByRole } from "../../../utils/sendNotification";
 
 export const runtime = "nodejs";
 
@@ -36,10 +37,8 @@ function normalizeBase64(b64: string): string {
 
 export async function POST(req: NextRequest) {
   try {
-    const { valid, payload, message } = verifyAccessToken(req);
-    if (!valid) {
-      return NextResponse.json({ status: false, message }, { status: 401 });
-    }
+    const { valid, expired, payload, message } = verifyAccessToken(req);
+    if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
     const {
       cliente_id,
@@ -99,6 +98,27 @@ export async function POST(req: NextRequest) {
       },
       include: { c_imagenes_vehiculos_corporativos: true },
     });
+
+    if (newRecord) {
+      let empNombre = "Desconocido";
+      let sucursalNombre = "Desconocida";
+      let fechaRegistro = createdAt.toISOString().split("T")[0];
+      let horaRegistro = createdAt.toISOString().split("T")[1].split(".")[0];
+      if (newRecord.created_by) {
+        const empleado = await prisma.c_empleado.findUnique({ where: { id: newRecord.created_by } });
+        if (empleado) {
+          empNombre = empleado.nombre + " " + empleado.primer_apellido + " " + empleado.segundo_apellido;
+        }
+      }
+      if (newRecord.sucursal_id) {
+        const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: newRecord.sucursal_id } });
+        if (sucursal) {
+          sucursalNombre = sucursal.nombre;
+        }
+      }
+      const descriptionNotificacion = "El empleado " + empNombre + " ha registrado un vehículo corporativo en la sucursal " + sucursalNombre + " el día " + fechaRegistro + " a las " + horaRegistro;
+      sendNotificationByRole(newRecord.sucursal_id, [Number(newRecord.created_by)], "Vehículo corporativo registrado", descriptionNotificacion, ["ADMINISTRATIVO", "SUPERVISOR"]);
+    }
 
     // Imágenes anexas
     let imagesParsed: VehicleImageInput[] = [];

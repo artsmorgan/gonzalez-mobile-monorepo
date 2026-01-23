@@ -1,0 +1,3021 @@
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Alert, ScrollView, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator, Platform, Modal, View, Image } from 'react-native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Network from 'expo-network';
+import * as Location from 'expo-location';
+import DateTimePicker from '@react-native-community/datetimepicker';
+import { Picker } from '@react-native-picker/picker';
+import { CameraView, useCameraPermissions } from 'expo-camera';
+import { jwtDecode } from 'jwt-decode';
+import Ionicons from '@expo/vector-icons/Ionicons';
+import SignatureScreen from 'react-native-signature-canvas';
+
+import AppHeader from '../components/AppHeader';
+import AppFooter from '../components/AppFooter';
+import SlideMenu from '../components/SlideMenu';
+import { ThemedText } from '../components/ThemedText';
+import { ThemedView } from '../components/ThemedView';
+import { useAuth } from '../contexts/AuthContext';
+import { eventBus } from '../hooks/eventBus';
+import getHoraAccion from '../hooks/getHoraAccion';
+import { useQRScanner } from '../hooks/useQRScanner';
+import {
+  createChecklistSupervision,
+  deleteChecklistSupervision,
+  listChecklistSupervision,
+  ChecklistSupervisionItem,
+  updateChecklistSupervision,
+} from '../hooks/checklistSupervisionFunctions';
+import Constants from 'expo-constants';
+
+type ChecklistSupervisionUI = ChecklistSupervisionItem & { id_local?: string };
+
+// Tipos para estructura jerárquica
+type StructureNode = {
+  id: number;
+  nombre: string;
+  clientes?: StructureNode[];
+  division?: StructureNode[];
+  contratos?: StructureNode[];
+  sucursales?: StructureNode[];
+  puestos?: StructureNode[];
+};
+
+// Tipos para evaluación dinámica
+type EvaluationInput = {
+  id: string;
+  type: 'text' | 'textarea' | 'select' | 'date' | 'photo';
+  title?: string;
+  value: string;
+  options?: string[]; // Para select
+  imageOrientation?: 'horizontal' | 'vertical'; // Para fotos (como StaffEvaluationsScreen)
+  file_name?: string; // Solo para registros sincronizados (se establece en backend)
+};
+
+type EvaluationSubsection = {
+  id: string;
+  title: string;
+  inputs: EvaluationInput[];
+};
+
+type EvaluationSection = {
+  id: string;
+  title: string;
+  subsections: EvaluationSubsection[];
+  isPredefined: boolean; // Si es true, no se puede eliminar
+};
+
+// Constantes predefinidas para Aseo y limpieza
+const ASEO_LIMPIEZA_SECTIONS: EvaluationSection[] = [
+  {
+    id: 'limpieza-general',
+    title: 'Limpieza general del área',
+    isPredefined: true,
+    subsections: [
+      'Basureros', 'Mesas y Sillas', 'Escritorios', 'Teléfonos', 'Computadoras',
+      'Archivos y Estantes', 'Vidrios', 'Paredes', 'Pisos', 'Esquinas y Orillas',
+      'Sillones', 'Jefaturas', 'Exteriores', 'Ventiladores', 'Extintores',
+      'Pasa Manos', 'Bibliotecas', 'Credenzas', 'Arturitos', 'Aéreos',
+      'Rotulos', 'Puertas y Llavines', 'Canaletas y Tomas', 'Plantas y Macetas', 'Partes Altas'
+    ].map((item, idx) => ({
+      id: `lg-sub-${idx}`,
+      title: item,
+      inputs: [
+        {
+          id: `lg-${idx}-cal`,
+          type: 'select' as const,
+          title: 'Respuesta',
+          value: '5',
+          options: ['No aplica', '1', '2', '3', '4', '5'],
+        },
+        {
+          id: `lg-${idx}-obs`,
+          type: 'text' as const,
+          title: 'Observaciones',
+          value: '',
+        }
+      ]
+    }))
+  },
+  {
+    id: 'cuarto-aseo',
+    title: 'Cuarto de aseo',
+    isPredefined: true,
+    subsections: [
+      'Documentos ISO Completos', 'Registros del Día Llenos', 'Pilas Limpias',
+      'Utiles de Limpieza Buen Estado', 'Productos Etiquetados y Ordenados', 'Almacenamiento de Comidas'
+    ].map((item, idx) => ({
+      id: `ca-sub-${idx}`,
+      title: item,
+      inputs: [
+        {
+          id: `ca-${idx}-cal`,
+          type: 'select' as const,
+          title: 'Respuesta',
+          value: '5',
+          options: ['No aplica', '1', '2', '3', '4', '5'],
+        },
+        {
+          id: `ca-${idx}-obs`,
+          type: 'text' as const,
+          title: 'Observaciones',
+          value: '',
+        }
+      ]
+    }))
+  },
+  {
+    id: 'servicios-sanitarios',
+    title: 'Cuarto de aseo',
+    isPredefined: true,
+    subsections: [
+      'Orinales', 'Sanitarios y Parte Trasera', 'Lavamanos y Grifería',
+      'Espejos', 'Paredes y Puertas', 'Duchas', 'Partes Altas'
+    ].map((item, idx) => ({
+      id: `ss-sub-${idx}`,
+      title: item,
+      inputs: [
+        {
+          id: `ss-${idx}-cal`,
+          type: 'select' as const,
+          title: 'Respuesta',
+          value: '5',
+          options: ['No aplica', '1', '2', '3', '4', '5'],
+        },
+        {
+          id: `ss-${idx}-obs`,
+          type: 'text' as const,
+          title: 'Observaciones',
+          value: '',
+        }
+      ]
+    }))
+  },
+  {
+    id: 'uniforme-presentacion',
+    title: 'Uniforme y presentación',
+    isPredefined: true,
+    subsections: [
+      {
+        id: 'up-sub-0',
+        title: 'Uniforme y Carnet',
+        inputs: [
+          {
+            id: 'up-0-cal',
+            type: 'select' as const,
+            title: 'Respuesta',
+            value: 'Bueno',
+            options: ['Bueno', 'Malo', 'No aplica'],
+          },
+          {
+            id: 'up-0-estado',
+            type: 'select' as const,
+            title: 'Estado',
+            value: 'Bueno',
+            options: ['Bueno', 'Malo', 'Requiere cambio'],
+          },
+          {
+            id: 'up-0-obs',
+            type: 'text' as const,
+            title: 'Observaciones',
+            value: '',
+          }
+        ]
+      },
+      {
+        id: 'up-sub-1',
+        title: 'Equipo De Proteccion Personal',
+        inputs: [
+          {
+            id: 'up-1-cal',
+            type: 'select' as const,
+            title: 'Respuesta',
+            value: 'Bueno',
+            options: ['Bueno', 'Malo', 'No aplica'],
+          },
+          {
+            id: 'up-1-estado',
+            type: 'select' as const,
+            title: 'Estado',
+            value: 'Bueno',
+            options: ['Bueno', 'Malo', 'Requiere cambio'],
+          }
+        ]
+      }
+    ]
+  },
+  {
+    id: 'estado-equipos',
+    title: 'Estado de los equipos',
+    isPredefined: true,
+    subsections: [
+      'Cepillo', 'Aspiradora', 'Hidrolavadora'
+    ].map((item, idx) => ({
+      id: `ee-sub-${idx}`,
+      title: item,
+      inputs: [
+        {
+          id: `ee-${idx}-cal`,
+          type: 'select' as const,
+          title: 'Respuesta',
+          value: 'Bueno',
+          options: ['Bueno', 'Malo', 'No aplica'],
+        },
+        {
+          id: `ee-${idx}-estado`,
+          type: 'select' as const,
+          title: 'Estado',
+          value: 'Bueno',
+          options: ['Bueno', 'Malo', 'Requiere cambio'],
+        },
+        {
+          id: `ee-${idx}-obs`,
+          type: 'text' as const,
+          title: 'Observaciones',
+          value: '',
+        }
+      ]
+    }))
+  },
+  {
+    id: 'calificacion-general',
+    title: 'Estado de los equipos',
+    isPredefined: true,
+    subsections: [
+      {
+        id: 'calificacion-general-item',
+        title: 'Calificación general',
+        inputs: [
+          {
+            id: 'cg-0-cal',
+            type: 'select' as const,
+            title: 'Respuesta',
+            value: '5',
+            options: ['1', '2', '3', '4', '5'],
+          }
+        ]
+      }
+    ]
+  }
+];
+
+// Constantes predefinidas para Seguridad
+const SEGURIDAD_SECTIONS: EvaluationSection[] = [
+  {
+    id: 'carnes',
+    title: 'Carnés',
+    isPredefined: true,
+    subsections: [
+      {
+        id: 'car-sub-0',
+        title: 'Carne de la empresa',
+        inputs: [
+          {
+            id: 'car-0-cal',
+            type: 'select' as const,
+            title: 'Respuesta',
+            value: 'Bueno',
+            options: ['Bueno', 'Malo', 'No existe'],
+          },
+          {
+            id: 'car-0-photo',
+            type: 'text' as const,
+            title: 'Foto',
+            value: '',
+          }
+        ]
+      },
+      {
+        id: 'car-sub-1',
+        title: 'Carne de Portación de Armas',
+        inputs: [
+          {
+            id: 'car-1-cal',
+            type: 'select' as const,
+            title: 'Respuesta',
+            value: 'Bueno',
+            options: ['Bueno', 'Malo', 'No existe'],
+          },
+          {
+            id: 'car-1-photo',
+            type: 'text' as const,
+            title: 'Foto',
+            value: '',
+          }
+        ]
+      },
+      {
+        id: 'car-sub-2',
+        title: 'Carne de Agente de Seguridad',
+        inputs: [
+          {
+            id: 'car-2-cal',
+            type: 'select' as const,
+            title: 'Respuesta',
+            value: 'Bueno',
+            options: ['Bueno', 'Malo', 'No existe'],
+          },
+          {
+            id: 'car-2-photo',
+            type: 'text' as const,
+            title: 'Foto',
+            value: '',
+          }
+        ]
+      }
+    ]
+  },
+  {
+    id: 'uniforme-seguridad',
+    title: 'Uniforme',
+    isPredefined: true,
+    subsections: [
+      {
+        id: 'us-sub-0',
+        title: 'SEG-PO-001 Código de vestimenta Seguridad',
+        inputs: [
+          {
+            id: 'us-0-cal',
+            type: 'select' as const,
+            title: 'Respuesta',
+            value: 'Bueno',
+            options: ['Bueno', 'Malo', 'No existe'],
+          }
+        ]
+      },
+      {
+        id: 'us-sub-1',
+        title: 'Equipo de invierno: Botas de hule, paraguas y capa impermeable',
+        inputs: [
+          {
+            id: 'us-1-cal',
+            type: 'select' as const,
+            title: 'Respuesta',
+            value: 'Bueno',
+            options: ['Bueno', 'Malo', 'No existe'],
+          }
+        ]
+      }
+    ]
+  },
+  {
+    id: 'equipo-seguridad',
+    title: 'Equipo de seguridad',
+    isPredefined: true,
+    subsections: [
+      'Cinturón de seguridad', 'Esposas y porta esposas', 'Porta tiros/ Porta Cargadores',
+      'Arma de fuego (serie y documento de matricula) / funda/ Munición', 'Bastón telescópico',
+      'Radio de comunicación', 'Porta gas pimienta y Gas pimienta', 'Chaleco antibalas',
+      'Linterna', 'Detector de metales', 'Marcador electrónico', 'Casco dielectrico',
+      'Revisión del estado de los vehículos (bicicleta y motocicletas)', 'Cargado y adaptador de radio'
+    ].map((item, idx) => ({
+      id: `es-sub-${idx}`,
+      title: item,
+      inputs: [
+        {
+          id: `es-${idx}-cal`,
+          type: 'select' as const,
+          title: 'Respuesta',
+          value: 'Bueno',
+          options: ['Bueno', 'Malo', 'No existe'],
+        }
+      ]
+    }))
+  },
+  {
+    id: 'mobiliario-menaje',
+    title: 'Mobiliario y menaje',
+    isPredefined: true,
+    subsections: [
+      'Silla', 'Mesa', 'Microondas', 'Coffee maker',
+      'Articulos de oficina (Grapadora, pilot, lapicero, bitácoras, gabinetes)', 'Gabinetes'
+    ].map((item, idx) => ({
+      id: `mm-sub-${idx}`,
+      title: item,
+      inputs: [
+        {
+          id: `mm-${idx}-cal`,
+          type: 'select' as const,
+          title: 'Respuesta',
+          value: 'Bueno',
+          options: ['Bueno', 'Malo', 'No existe'],
+        }
+      ]
+    }))
+  },
+  {
+    id: 'armas',
+    title: 'Armas',
+    isPredefined: true,
+    subsections: [
+      {
+        id: 'armas-letales',
+        title: 'Letal',
+        inputs: [
+          {
+            id: 'ar-letal-tipo',
+            type: 'select' as const,
+            title: 'Tipo',
+            value: 'Revolver 38',
+            options: ['Revolver 38', 'Pistola 9 MM', 'Escopeta 12', 'No Aplica'],
+          },
+          {
+            id: 'ar-letal-serie',
+            type: 'text' as const,
+            title: 'Serie',
+            value: '',
+          },
+          {
+            id: 'ar-letal-municiones',
+            type: 'select' as const,
+            title: 'Cantidad de municiones',
+            value: '0',
+            options: ['0', '6', '12', '15', '18', '24', '30', '45'],
+          },
+          {
+            id: 'ar-letal-otra-cantidad',
+            type: 'text' as const,
+            title: 'Otra cantidad',
+            value: '',
+          }
+        ]
+      },
+      {
+        id: 'armas-no-letales',
+        title: 'No letal',
+        inputs: [
+          {
+            id: 'ar-noletal-tipo',
+            type: 'select' as const,
+            title: 'Tipo',
+            value: 'Chuzo Eléctrico',
+            options: ['Chuzo Eléctrico', 'Taser Eléctrico', 'No Letal de Gas', 'Balas de Goma (PepperBall)', 'No Aplica'],
+          },
+          {
+            id: 'ar-noletal-serie',
+            type: 'text' as const,
+            title: 'Serie',
+            value: '',
+          },
+          {
+            id: 'ar-noletal-municiones',
+            type: 'text' as const,
+            title: 'Cantidad de municiones',
+            value: '',
+          }
+        ]
+      }
+    ]
+  },
+  {
+    id: 'equipos-cinturon',
+    title: 'Equipos del Cinturón',
+    isPredefined: true,
+    subsections: [
+      {
+        id: 'ec-sub-0',
+        title: 'Arma',
+        inputs: [
+          {
+            id: 'ec-0-cal',
+            type: 'select' as const,
+            title: 'Respuesta',
+            value: 'Bueno',
+            options: ['Bueno', 'Regular', 'Requiere Cambio', 'No Aplica'],
+          }
+        ]
+      },
+      {
+        id: 'ec-sub-1',
+        title: 'Gas pimienta',
+        inputs: [
+          {
+            id: 'ec-1-cal',
+            type: 'select' as const,
+            title: 'Respuesta',
+            value: 'Bueno',
+            options: ['Bueno', 'Regular', 'Requiere Cambio', 'No Aplica'],
+          }
+        ]
+      },
+      {
+        id: 'ec-sub-2',
+        title: 'Black Jack',
+        inputs: [
+          {
+            id: 'ec-2-cal',
+            type: 'select' as const,
+            title: 'Respuesta',
+            value: 'Bueno',
+            options: ['Bueno', 'Regular', 'Requiere Cambio', 'No Aplica'],
+          },
+          {
+            id: 'ec-2-fecha',
+            type: 'date' as const,
+            title: 'Fecha de vencimiento',
+            value: '',
+          }
+        ]
+      },
+      {
+        id: 'ec-sub-3',
+        title: 'Esposas',
+        inputs: [
+          {
+            id: 'ec-3-cal',
+            type: 'select' as const,
+            title: 'Respuesta',
+            value: 'Bueno',
+            options: ['Bueno', 'Regular', 'Requiere Cambio', 'No Aplica'],
+          }
+        ]
+      },
+      {
+        id: 'ec-sub-4',
+        title: 'Cinturón',
+        inputs: [
+          {
+            id: 'ec-4-cal',
+            type: 'select' as const,
+            title: 'Respuesta',
+            value: 'Bueno',
+            options: ['Bueno', 'Regular', 'Requiere Cambio', 'No Aplica'],
+          }
+        ]
+      }
+    ]
+  },
+  {
+    id: 'estado-uniforme',
+    title: 'Estado del Uniforme',
+    isPredefined: true,
+    subsections: [
+      'Camisa', 'Camisa Tipo Polo', 'Pantalon', 'Corbata', 'Zapatos',
+      'Zapatos Dieléctricos', 'Chaleco', 'Saco', 'Jacket', 'Casco Dieléctrico'
+    ].map((item, idx) => ({
+      id: `eu-sub-${idx}`,
+      title: item,
+      inputs: [
+        {
+          id: `eu-${idx}-cal`,
+          type: 'select' as const,
+          title: 'Respuesta',
+          value: 'Bueno',
+          options: ['Bueno', 'Regular', 'Requiere Cambio', 'No Aplica'],
+        }
+      ]
+    }))
+  },
+  {
+    id: 'equipos-puesto',
+    title: 'Equipos del puesto',
+    isPredefined: true,
+    subsections: [
+      'Linterna portátil', 'Silla', 'Mesa', 'Locker', 'Microondas',
+      'Coffe Maker', 'Capa o Poncho', 'Botas de Hule', 'Paraguas',
+      'Trampabalas', 'Botiquín', 'Caja Fuerte'
+    ].map((item, idx) => ({
+      id: `ep-sub-${idx}`,
+      title: item,
+      inputs: [
+        {
+          id: `ep-${idx}-cal`,
+          type: 'select' as const,
+          title: 'Respuesta',
+          value: 'Bueno',
+          options: ['Bueno', 'Regular', 'Requiere Cambio', 'No Aplica'],
+        }
+      ]
+    }))
+  }
+];
+
+const signatureWebStyle = `
+  body, html {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    width: 100%;
+  }
+  .m-signature-pad {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+  }
+`;
+
+function generateRandomId(): string {
+  return `local-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+}
+
+function dateToLocalString(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function decodeFirmaHash(hash: string): { sessionId?: string; empleadoId?: string; latitud?: string; longitud?: string; timestamp?: string } | null {
+  try {
+    const decoded = atob(hash);
+    const parts = decoded.split(':');
+    if (parts.length >= 5) {
+      return {
+        sessionId: parts[0],
+        empleadoId: parts[1],
+        latitud: parts[2],
+        longitud: parts[3],
+        timestamp: parts[4],
+      };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export default function ChecklistSupervisionScreen() {
+  const navigation = useNavigation<any>();
+  const { employee, refreshAccessToken, logout } = useAuth();
+  const { scanQR, QRScannerComponent } = useQRScanner();
+
+  const [isMenuVisible, setIsMenuVisible] = useState(false);
+  const handleMenuPress = () => setIsMenuVisible(true);
+  const handleMenuClose = () => setIsMenuVisible(false);
+  const handleHomePress = () => navigation.navigate('Home');
+
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [checklists, setChecklists] = useState<ChecklistSupervisionUI[]>([]);
+
+  // Estados para estructura jerárquica
+  const [structure, setStructure] = useState<StructureNode[]>([]);
+  const [selectedClienteId, setSelectedClienteId] = useState<number | null>(null);
+  const [selectedDivisionId, setSelectedDivisionId] = useState<number | null>(null);
+  const [selectedCorpoId, setSelectedCorpoId] = useState<number | null>(null);
+  const [selectedPuestoId, setSelectedPuestoId] = useState<number | null>(null);
+
+  // Estados para filtros
+  const [isFiltersExpanded, setIsFiltersExpanded] = useState(false);
+  const [filterSearch, setFilterSearch] = useState('');
+  const [filterClienteId, setFilterClienteId] = useState<number | null>(null);
+  const [filterDivisionId, setFilterDivisionId] = useState<number | null>(null);
+  const [filterCorpoId, setFilterCorpoId] = useState<number | null>(null);
+  const [filterPuestoId, setFilterPuestoId] = useState<number | null>(null);
+
+  // Estados para formulario
+  const [isCreating, setIsCreating] = useState(false);
+  const [editing, setEditing] = useState<ChecklistSupervisionUI | null>(null);
+  const [fecha, setFecha] = useState<Date>(new Date());
+  const [showFechaPicker, setShowFechaPicker] = useState(false);
+  const [ejecutivoCuenta, setEjecutivoCuenta] = useState('');
+  const [evaluation, setEvaluation] = useState<EvaluationSection[]>([]);
+  const [firmaSupervisor, setFirmaSupervisor] = useState('');
+  const [firmaResponsable, setFirmaResponsable] = useState('');
+  const [isGeneratingFirma, setIsGeneratingFirma] = useState(false);
+  const [location, setLocation] = useState<Location.LocationObject | null>(null);
+
+  // Estados para firma dibujada
+  const [isSignatureModalVisible, setIsSignatureModalVisible] = useState(false);
+  const signatureRef = useRef<any>(null);
+  const [signatureKey, setSignatureKey] = useState(0);
+
+  // Estados para cámara (recreado desde cero)
+  const [isCameraVisible, setIsCameraVisible] = useState(false);
+  const [cameraTarget, setCameraTarget] = useState<string | null>(null);
+  const cameraRef = useRef<CameraView | null>(null);
+  const [permission, requestPermission] = useCameraPermissions();
+
+  // Estados para modal de agregar subsección
+  const [isAddSubsectionModalVisible, setIsAddSubsectionModalVisible] = useState(false);
+  const [addSubsectionSectionId, setAddSubsectionSectionId] = useState<string | null>(null);
+  const [newSubsectionTitle, setNewSubsectionTitle] = useState('');
+  const [newSubsectionInputs, setNewSubsectionInputs] = useState<Omit<EvaluationInput, 'id' | 'value'>[]>([]);
+
+  // Estado para items expandidos (como StaffEvaluationsScreen)
+  const [expandedChecklists, setExpandedChecklists] = useState<Set<string>>(new Set());
+
+  // Nodos computados para estructura jerárquica
+  const clientes = useMemo(() => {
+    const empresa = structure.find((e: any) => e.id);
+    return empresa?.clientes || [];
+  }, [structure]);
+
+  const divisiones = useMemo(() => {
+    const cliente = clientes.find((c: any) => c.id === selectedClienteId);
+    return cliente?.division || [];
+  }, [clientes, selectedClienteId]);
+
+  const sucursales = useMemo(() => {
+    const division = divisiones.find((d: any) => d.id === selectedDivisionId);
+    const contratos = division?.contratos || [];
+    return contratos.flatMap((c: any) => c.sucursales || []);
+  }, [divisiones, selectedDivisionId]);
+
+  const puestos = useMemo(() => {
+    const sucursal = sucursales.find((s: any) => s.id === selectedCorpoId);
+    return sucursal?.puestos || [];
+  }, [sucursales, selectedCorpoId]);
+
+  // Mismos nodos para filtros
+  const filterClientes = useMemo(() => {
+    const empresa = structure.find((e: any) => e.id);
+    return empresa?.clientes || [];
+  }, [structure]);
+
+  const filterDivisiones = useMemo(() => {
+    const cliente = filterClientes.find((c: any) => c.id === filterClienteId);
+    return cliente?.division || [];
+  }, [filterClientes, filterClienteId]);
+
+  const filterSucursales = useMemo(() => {
+    const division = filterDivisiones.find((d: any) => d.id === filterDivisionId);
+    const contratos = division?.contratos || [];
+    return contratos.flatMap((c: any) => c.sucursales || []);
+  }, [filterDivisiones, filterDivisionId]);
+
+  const filterPuestos = useMemo(() => {
+    const sucursal = filterSucursales.find((s: any) => s.id === filterCorpoId);
+    return sucursal?.puestos || [];
+  }, [filterSucursales, filterCorpoId]);
+
+  // Cargar estructura principal
+  const fetchMainStructure = useCallback(async () => {
+    try {
+      const cacheStr = await AsyncStorage.getItem('main_structure_cache');
+      if (cacheStr) {
+        const parsed = JSON.parse(cacheStr);
+        if (Array.isArray(parsed)) setStructure(parsed);
+      }
+
+      const isConnected = await getConnectionStatus();
+      if (!isConnected) return;
+
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) return;
+
+      let token = await AsyncStorage.getItem('access_token');
+      if (!token) {
+        const refreshed = await refreshAccessToken();
+        if (!refreshed) {
+          if (logout) await logout();
+          throw new Error('Sesión expirada');
+        }
+        token = await AsyncStorage.getItem('access_token');
+      }
+
+      const response = await fetch(`${apiUrl}/api/main-structure`, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': '69420',
+        },
+      });
+
+      if (response.status === 401) {
+        const refreshed = await refreshAccessToken();
+        if (refreshed) return fetchMainStructure();
+        await logout();
+        return;
+      }
+
+      if (response.status === 403) {
+        if (logout) await logout();
+        throw new Error('Acceso denegado');
+      }
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.status && Array.isArray(data.structure)) {
+          setStructure(data.structure);
+          await AsyncStorage.setItem('main_structure_cache', JSON.stringify(data.structure));
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching main structure:', error);
+    }
+  }, [refreshAccessToken]);
+
+  const getConnectionStatus = async (): Promise<boolean> => {
+    const networkState = await Network.getNetworkStateAsync();
+    return networkState.isConnected && networkState.isInternetReachable ? true : false;
+  };
+
+  const requestLocation = async () => {
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') return null;
+      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      setLocation(loc);
+      return loc;
+    } catch {
+      return null;
+    }
+  };
+
+  // Cargar checklists
+  const fetchChecklists = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const isConnected = await getConnectionStatus();
+
+      // Cargar desde cache primero
+      const cacheStr = await AsyncStorage.getItem('checklist_supervision_cache');
+      if (cacheStr) {
+        const cached = JSON.parse(cacheStr);
+        if (Array.isArray(cached)) setChecklists(cached);
+      }
+
+      if (!isConnected) {
+        setIsLoading(false);
+        return;
+      }
+
+      const result = await listChecklistSupervision({
+        clienteId: filterClienteId || undefined,
+        corpoId: filterCorpoId || undefined,
+        puestoId: filterPuestoId || undefined,
+        refreshAccessToken,
+        logout,
+      });
+
+      if (result.status && result.data) {
+        setChecklists(result.data);
+        await AsyncStorage.setItem('checklist_supervision_cache', JSON.stringify(result.data));
+      } else {
+        setError(result.message || 'Error al cargar checklists');
+      }
+    } catch (err: any) {
+      setError(err.message || 'Error al cargar checklists');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [filterClienteId, filterCorpoId, filterPuestoId, refreshAccessToken, logout]);
+
+  useFocusEffect(
+    useCallback(() => {
+      fetchMainStructure();
+      fetchChecklists();
+    }, [fetchMainStructure, fetchChecklists])
+  );
+
+  useEffect(() => {
+    const handler = () => fetchChecklists();
+    eventBus.on('connectionRestored', handler);
+    return () => {
+      eventBus.off('connectionRestored', handler);
+    };
+  }, [fetchChecklists]);
+
+  // Cuando cambia la división seleccionada, cargar evaluación (solo si no estamos editando)
+  useEffect(() => {
+    // No cargar secciones predefinidas si estamos editando un registro existente
+    if (editing) return;
+
+    if (selectedDivisionId && isCreating) {
+      // Buscar la división seleccionada por nombre
+      const selectedDivision = divisiones.find((d: any) => d.id === selectedDivisionId);
+      if (selectedDivision) {
+        const divisionName = (selectedDivision.nombre || '').toLowerCase();
+        if (divisionName.includes('aseo') || divisionName.includes('limpieza')) {
+          setEvaluation(JSON.parse(JSON.stringify(ASEO_LIMPIEZA_SECTIONS)));
+        } else if (divisionName.includes('seguridad')) {
+          setEvaluation(JSON.parse(JSON.stringify(SEGURIDAD_SECTIONS)));
+        } else {
+          setEvaluation([]);
+        }
+      } else {
+        setEvaluation([]);
+      }
+    } else if (!selectedDivisionId && isCreating) {
+      setEvaluation([]);
+    }
+  }, [selectedDivisionId, isCreating, divisiones, editing]);
+
+  // Funciones para manejar evaluación dinámica
+  const addSection = () => {
+    const newSection: EvaluationSection = {
+      id: `section-${Date.now()}`,
+      title: 'Nueva Sección',
+      isPredefined: false,
+      subsections: [],
+    };
+    setEvaluation([...evaluation, newSection]);
+  };
+
+  const deleteSection = (sectionId: string) => {
+    const section = evaluation.find((s) => s.id === sectionId);
+    if (section?.isPredefined) {
+      Alert.alert('Error', 'No se pueden eliminar secciones predefinidas');
+      return;
+    }
+    setEvaluation(evaluation.filter((s) => s.id !== sectionId));
+  };
+
+  const openAddSubsectionModal = (sectionId: string) => {
+    setAddSubsectionSectionId(sectionId);
+    setNewSubsectionTitle('');
+    setNewSubsectionInputs([]);
+    setIsAddSubsectionModalVisible(true);
+  };
+
+  const closeAddSubsectionModal = () => {
+    setIsAddSubsectionModalVisible(false);
+    setAddSubsectionSectionId(null);
+    setNewSubsectionTitle('');
+    setNewSubsectionInputs([]);
+  };
+
+  const addInputToNewSubsection = (type: 'text' | 'textarea' | 'select' | 'date' | 'photo') => {
+    const newInput: Omit<EvaluationInput, 'id' | 'value'> = {
+      type,
+      title: '',
+      options: type === 'select' ? ['Opción 1', 'Opción 2'] : undefined,
+    };
+    setNewSubsectionInputs([...newSubsectionInputs, newInput]);
+  };
+
+  const updateNewSubsectionInput = (index: number, field: 'title' | 'options', value: string | string[]) => {
+    const updated = [...newSubsectionInputs];
+    updated[index] = { ...updated[index], [field]: value };
+    setNewSubsectionInputs(updated);
+  };
+
+  const removeNewSubsectionInput = (index: number) => {
+    setNewSubsectionInputs(newSubsectionInputs.filter((_, i) => i !== index));
+  };
+
+  const saveNewSubsection = () => {
+    if (!addSubsectionSectionId) return;
+
+    const newSubsection: EvaluationSubsection = {
+      id: `subsection-${Date.now()}`,
+      title: newSubsectionTitle.trim() || 'Nueva Subsección',
+      inputs: newSubsectionInputs.map((input, idx) => ({
+        id: `input-${Date.now()}-${idx}`,
+        ...input,
+        value: '',
+      })),
+    };
+
+    setEvaluation(
+      evaluation.map((s) =>
+        s.id === addSubsectionSectionId ? { ...s, subsections: [...s.subsections, newSubsection] } : s
+      )
+    );
+
+    closeAddSubsectionModal();
+  };
+
+  const addSubsection = (sectionId: string) => {
+    openAddSubsectionModal(sectionId);
+  };
+
+  const deleteSubsection = (sectionId: string, subsectionId: string) => {
+    const section = evaluation.find((s) => s.id === sectionId);
+    if (section?.isPredefined) {
+      Alert.alert('Error', 'No se pueden eliminar subsecciones predefinidas');
+      return;
+    }
+    setEvaluation(
+      evaluation.map((s) =>
+        s.id === sectionId
+          ? { ...s, subsections: s.subsections.filter((sub) => sub.id !== subsectionId) }
+          : s
+      )
+    );
+  };
+
+  const addInput = (sectionId: string, subsectionId: string, type: 'text' | 'textarea' | 'select' | 'date' | 'photo') => {
+    const newInput: EvaluationInput = {
+      id: `input-${Date.now()}`,
+      type,
+      title: '',
+      value: '',
+      options: type === 'select' ? ['Opción 1', 'Opción 2'] : undefined,
+    };
+    setEvaluation(
+      evaluation.map((s) =>
+        s.id === sectionId
+          ? {
+            ...s,
+            subsections: s.subsections.map((sub) =>
+              sub.id === subsectionId ? { ...sub, inputs: [...sub.inputs, newInput] } : sub
+            ),
+          }
+          : s
+      )
+    );
+  };
+
+  const updateInput = (sectionId: string, subsectionId: string, inputId: string, updates: Partial<EvaluationInput>) => {
+    setEvaluation(
+      evaluation.map((s) =>
+        s.id === sectionId
+          ? {
+            ...s,
+            subsections: s.subsections.map((sub) =>
+              sub.id === subsectionId
+                ? {
+                  ...sub,
+                  inputs: sub.inputs.map((inp) => (inp.id === inputId ? { ...inp, ...updates } : inp)),
+                }
+                : sub
+            ),
+          }
+          : s
+      )
+    );
+  };
+
+  const deleteInput = (sectionId: string, subsectionId: string, inputId: string) => {
+    const section = evaluation.find((s) => s.id === sectionId);
+    if (section?.isPredefined) {
+      Alert.alert('Error', 'No se pueden eliminar inputs predefinidos');
+      return;
+    }
+    setEvaluation(
+      evaluation.map((s) =>
+        s.id === sectionId
+          ? {
+            ...s,
+            subsections: s.subsections.map((sub) =>
+              sub.id === subsectionId ? { ...sub, inputs: sub.inputs.filter((inp) => inp.id !== inputId) } : sub
+            ),
+          }
+          : s
+      )
+    );
+  };
+
+  // Función similar a updateQuestionField de StaffEvaluationsScreen
+  const updateInputField = (
+    sectionId: string,
+    subsectionId: string,
+    inputId: string,
+    field: 'value' | 'title' | 'imageOrientation',
+    value: string | null
+  ) => {
+    setEvaluation((prev) => {
+      const copy = prev.map((s) => ({
+        ...s,
+        subsections: s.subsections.map((sub) => ({
+          ...sub,
+          inputs: sub.inputs.map((input) => ({ ...input })),
+        })),
+      }));
+      const section = copy.find((s) => s.id === sectionId);
+      if (!section) return prev;
+      const subsection = section.subsections.find((sub) => sub.id === subsectionId);
+      if (!subsection) return prev;
+      const input = subsection.inputs.find((inp) => inp.id === inputId);
+      if (!input) return prev;
+      (input as any)[field] = value;
+      return copy;
+    });
+  };
+
+  // Funciones para firma supervisor (dibujo)
+  const openSignatureModal = () => {
+    setIsSignatureModalVisible(true);
+    setSignatureKey((prev) => prev + 1);
+  };
+
+  const handleSignatureRead = (signature: string) => {
+    if (signature) {
+      let formattedSignature = signature;
+      if (!signature.startsWith('data:')) {
+        formattedSignature = `data:image/png;base64,${signature}`;
+      }
+      setFirmaSupervisor(formattedSignature);
+      setIsSignatureModalVisible(false);
+    }
+  };
+
+  const clearSignature = () => {
+    setSignatureKey((prev) => prev + 1);
+    if (signatureRef.current) {
+      signatureRef.current.clearSignature();
+    }
+  };
+
+  // Funciones para firma responsable (generar/QR)
+  const handleGenerateFirmaResponsable = async () => {
+    if (isGeneratingFirma) return;
+    setIsGeneratingFirma(true);
+    try {
+      const loc = location ?? (await requestLocation());
+      if (!loc || !employee) {
+        Alert.alert('Error', 'No se pudo obtener ubicación o usuario');
+        return;
+      }
+      const token = await AsyncStorage.getItem('access_token');
+      if (!token) throw new Error('No authentication token found');
+      const decodedToken: any = jwtDecode(token);
+      const sessionId = decodedToken.sessionId;
+      const horaAccion = await getHoraAccion();
+      const hash = btoa(`${sessionId}:${employee.id}:${loc.coords.latitude}:${loc.coords.longitude}:${horaAccion}`);
+      setFirmaResponsable(hash);
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'No se pudo generar la firma');
+    } finally {
+      setIsGeneratingFirma(false);
+    }
+  };
+
+  const handleScanFirmaResponsable = async () => {
+    try {
+      const qrData = await scanQR();
+      if (!qrData) return;
+      setFirmaResponsable(qrData);
+    } catch {
+      Alert.alert('Error', 'No se pudo escanear el QR');
+    }
+  };
+
+  // Funciones para cámara (siguiendo patrón de VehiclesScreen)
+  const openCamera = async (target: string) => {
+    if (!permission) {
+      const permissionResult = await requestPermission();
+      if (!permissionResult.granted) {
+        Alert.alert('Error', 'Se necesita permiso para acceder a la cámara');
+        return;
+      }
+    }
+
+    if (!permission?.granted) {
+      const permissionResult = await requestPermission();
+      if (!permissionResult.granted) {
+        Alert.alert('Error', 'Se necesita permiso para acceder a la cámara');
+        return;
+      }
+    }
+
+    setCameraTarget(target);
+    setIsCameraVisible(true);
+  };
+
+  // Función para obtener la URI de la imagen (como StaffEvaluationsScreen)
+  const getImageUri = (input: EvaluationInput): string => {
+    // Si input.value es un data URI válido, usarlo directamente
+    if (input.value && typeof input.value === 'string' && input.value.startsWith('data:image/')) {
+      return input.value;
+    }
+
+    // Para registros sincronizados, usar la API
+    if (editing?.id && editing.id > 0 && input.file_name) {
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (apiUrl) {
+        return `${apiUrl}/api/checklist-supervision/${editing.id}/get-image/${encodeURIComponent(input.file_name)}`;
+      }
+    }
+
+    // Si tenemos file_name pero no value, construir la URL (para registros cargados desde backend)
+    if (input.file_name && editing?.id && editing.id > 0) {
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (apiUrl) {
+        return `${apiUrl}/api/checklist-supervision/${editing.id}/get-image/${encodeURIComponent(input.file_name)}`;
+      }
+    }
+
+    // Fallback: usar input.value si existe
+    return (input.value && typeof input.value === 'string') ? input.value : '';
+  };
+
+  const handleAddPhoto = async (target: string) => {
+    // Solo permitir tomar fotos con la cámara (como StaffEvaluationsScreen)
+    await openCamera(target);
+  };
+
+  const takePicture = async () => {
+    if (!cameraRef.current || !cameraTarget) {
+      setIsCameraVisible(false);
+      return;
+    }
+    try {
+      const photo: any = await cameraRef.current.takePictureAsync({
+        base64: true,
+        quality: 0.7,
+        skipProcessing: false,
+      });
+      setIsCameraVisible(false);
+      if (!photo || !photo.base64) {
+        Alert.alert('Error', 'No se pudo capturar la imagen');
+        return;
+      }
+      const formattedBase64 = `data:image/jpeg;base64,${photo.base64}`;
+      const parts = cameraTarget.split('-');
+      if (parts.length >= 3) {
+        const sectionId = parts[0];
+        const subsectionId = parts[1];
+        const inputId = parts.slice(2).join('-');
+
+        // Actualizar usando updateInputField (como StaffEvaluationsScreen)
+        updateInputField(sectionId, subsectionId, inputId, 'value', formattedBase64);
+
+        // Calcular orientación a partir de las dimensiones de la foto
+        if (photo.width && photo.height) {
+          const orientation: 'horizontal' | 'vertical' =
+            photo.width >= photo.height ? 'horizontal' : 'vertical';
+          updateInputField(sectionId, subsectionId, inputId, 'imageOrientation', orientation);
+        }
+      } else {
+        console.error('Error: cameraTarget no tiene el formato correcto:', cameraTarget);
+        Alert.alert('Error', 'Error al procesar la imagen capturada');
+      }
+      setCameraTarget(null);
+    } catch (error) {
+      console.error('Error capturing image:', error);
+      setIsCameraVisible(false);
+      Alert.alert('Error', 'No se pudo capturar la imagen');
+    }
+  };
+
+  // Funciones para CRUD
+  const resetForm = () => {
+    setFecha(new Date());
+    setEjecutivoCuenta('');
+    setEvaluation([]);
+    setFirmaSupervisor('');
+    setFirmaResponsable('');
+    setSelectedClienteId(null);
+    setSelectedDivisionId(null);
+    setSelectedCorpoId(null);
+    setSelectedPuestoId(null);
+  };
+
+  const startCreating = () => {
+    resetForm();
+    setEditing(null);
+    setIsCreating(true);
+  };
+
+  const startEditing = (it: ChecklistSupervisionUI) => {
+    // Establecer editing PRIMERO para evitar que useEffect sobrescriba la evaluación
+    setEditing(it);
+    setIsCreating(true);
+    setFecha(it.fecha ? new Date(it.fecha) : new Date());
+    setEjecutivoCuenta(it.ejecutivo_cuenta || '');
+    setFirmaSupervisor(it.firma_supervisor || '');
+    setFirmaResponsable(it.firma_responsable || '');
+
+    // Cargar evaluación INMEDIATAMENTE para preservar los valores
+    try {
+      const evalData = JSON.parse(it.evaluacion || '[]');
+      const parsedEvaluation = Array.isArray(evalData) ? evalData : [];
+      console.log('startEditing: Cargando evaluación:', {
+        sections: parsedEvaluation.length,
+        firstSection: parsedEvaluation[0]?.title,
+        firstInputValue: parsedEvaluation[0]?.subsections?.[0]?.inputs?.[0]?.value,
+        sampleInput: parsedEvaluation[0]?.subsections?.[0]?.inputs?.[0]
+      });
+      // Cargar evaluación inmediatamente
+      setEvaluation(parsedEvaluation);
+    } catch (error) {
+      console.error('startEditing: Error parseando evaluación:', error);
+      setEvaluation([]);
+    }
+
+    // Cargar jerarquía basándose en los IDs del registro (después de cargar evaluación)
+    setSelectedClienteId(it.cliente_id);
+    // Buscar la división basándose en el cliente
+    const empresa = structure.find((e: any) => e.id);
+    const cliente = empresa?.clientes?.find((c: any) => c.id === it.cliente_id);
+    if (cliente && cliente.division && cliente.division.length > 0) {
+      // Buscar la división que contiene el corpo_id
+      for (const div of cliente.division) {
+        const contratos = div.contratos || [];
+        for (const contrato of contratos) {
+          const sucursales = contrato.sucursales || [];
+          if (sucursales.some((s: any) => s.id === it.corpo_id)) {
+            // Usar setTimeout para asegurar que editing esté establecido antes de cambiar selectedDivisionId
+            setTimeout(() => {
+              setSelectedDivisionId(div.id);
+            }, 100);
+            break;
+          }
+        }
+      }
+    }
+    setSelectedCorpoId(it.corpo_id);
+    setSelectedPuestoId(it.puesto_id);
+  };
+
+  const cancelCreating = () => {
+    setIsCreating(false);
+    setEditing(null);
+    resetForm();
+  };
+
+  const validateForm = () => {
+    if (!selectedClienteId || !selectedCorpoId || !selectedPuestoId) {
+      Alert.alert('Error', 'Debes seleccionar Cliente, Sucursal y Puesto');
+      return false;
+    }
+    if (!selectedDivisionId) {
+      Alert.alert('Error', 'Debes seleccionar una División');
+      return false;
+    }
+    if (!ejecutivoCuenta.trim()) {
+      Alert.alert('Error', 'Campo requerido: Ejecutivo de cuenta');
+      return false;
+    }
+    if (!firmaSupervisor) {
+      Alert.alert('Error', 'Debes registrar la firma del supervisor');
+      return false;
+    }
+    if (!firmaResponsable) {
+      Alert.alert('Error', 'Debes registrar la firma responsable');
+      return false;
+    }
+    return true;
+  };
+
+  const handleSave = async () => {
+    if (!validateForm()) return;
+
+    // Verificar que las imágenes estén en la evaluación antes de enviar (como StaffEvaluationsScreen)
+    const evaluationWithImages = JSON.parse(JSON.stringify(evaluation));
+    let hasImages = false;
+    let imageCount = 0;
+    const checkForImages = (obj: any) => {
+      if (Array.isArray(obj)) {
+        obj.forEach(item => checkForImages(item));
+      } else if (obj && typeof obj === 'object') {
+        // Buscar imágenes en value (data URI) como StaffEvaluationsScreen
+        if (obj.type === 'photo' && obj.value && typeof obj.value === 'string' && obj.value.startsWith('data:image/')) {
+          hasImages = true;
+          imageCount++;
+          console.log(`Imagen #${imageCount} encontrada en evaluación:`, {
+            id: obj.id,
+            hasValue: !!obj.value,
+            valueLength: obj.value.length,
+            imageOrientation: obj.imageOrientation
+          });
+        }
+        Object.values(obj).forEach(value => checkForImages(value));
+      }
+    };
+    checkForImages(evaluationWithImages);
+    console.log(`Evaluación a enviar tiene ${imageCount} imagen(es):`, hasImages);
+
+    // Log del tamaño del JSON para verificar que las imágenes estén incluidas
+    const evaluationString = JSON.stringify(evaluationWithImages);
+    console.log('Tamaño del JSON de evaluación:', evaluationString.length, 'caracteres');
+
+    const requestData = {
+      cliente_id: selectedClienteId,
+      division_id: selectedDivisionId,
+      corpo_id: selectedCorpoId,
+      puesto_id: selectedPuestoId,
+      fecha: fecha.toISOString(),
+      ejecutivo_cuenta: ejecutivoCuenta,
+      evaluacion: JSON.stringify(evaluationWithImages),
+      firma_supervisor: firmaSupervisor,
+      firma_responsable: firmaResponsable,
+    };
+
+    const isConnected = await getConnectionStatus();
+
+    try {
+      if (editing && editing.id && editing.id !== 0) {
+        // Actualizar
+        if (isConnected) {
+          const result = await updateChecklistSupervision({
+            id: editing.id,
+            requestData,
+            refreshAccessToken,
+            logout,
+          });
+          if (result.status) {
+            Alert.alert('Éxito', 'Checklist actualizado correctamente');
+            await fetchChecklists();
+            cancelCreating();
+          } else {
+            Alert.alert('Error', result.message || 'No se pudo actualizar');
+          }
+        } else {
+          // Offline: guardar acción
+          const localId = editing.id_local || generateRandomId();
+          const actionsStr = await AsyncStorage.getItem('checklist_supervision_actions');
+          const actions = actionsStr ? JSON.parse(actionsStr) : [];
+          actions.push({
+            type: 'update',
+            id: editing.id,
+            id_local: localId,
+            requestData,
+          });
+          await AsyncStorage.setItem('checklist_supervision_actions', JSON.stringify(actions));
+
+          // Actualizar cache
+          const updated: ChecklistSupervisionUI[] = checklists.map((c) =>
+            c.id === editing.id ? { ...c, ...requestData, id_local: localId } as ChecklistSupervisionUI : c
+          );
+          setChecklists(updated);
+          await AsyncStorage.setItem('checklist_supervision_cache', JSON.stringify(updated));
+
+          Alert.alert('Modo Offline', 'Checklist guardado localmente. Se sincronizará cuando haya conexión.');
+          cancelCreating();
+        }
+      } else {
+        // Crear
+        if (isConnected) {
+          const result = await createChecklistSupervision({
+            requestData,
+            refreshAccessToken,
+            logout,
+          });
+          if (result.status) {
+            Alert.alert('Éxito', 'Checklist creado correctamente');
+            await fetchChecklists();
+            cancelCreating();
+          } else {
+            Alert.alert('Error', result.message || 'No se pudo crear');
+          }
+        } else {
+          // Offline: guardar acción
+          const localId = generateRandomId();
+          const actionsStr = await AsyncStorage.getItem('checklist_supervision_actions');
+          const actions = actionsStr ? JSON.parse(actionsStr) : [];
+          actions.push({
+            type: 'create',
+            id_local: localId,
+            requestData,
+          });
+          await AsyncStorage.setItem('checklist_supervision_actions', JSON.stringify(actions));
+
+          // Agregar a cache
+          if (!selectedClienteId || !selectedDivisionId || !selectedCorpoId || !selectedPuestoId) {
+            Alert.alert('Error', 'Debes completar todos los campos requeridos');
+            return;
+          }
+          const newItem: ChecklistSupervisionUI = {
+            id: 0,
+            id_local: localId,
+            cliente_id: selectedClienteId,
+            division_id: selectedDivisionId,
+            corpo_id: selectedCorpoId,
+            puesto_id: selectedPuestoId,
+            fecha: fecha.toISOString(),
+            ejecutivo_cuenta: ejecutivoCuenta,
+            evaluacion: JSON.stringify(evaluation),
+            firma_supervisor: firmaSupervisor,
+            firma_responsable: firmaResponsable,
+            created_by: typeof employee?.id === 'number' ? employee.id : (employee?.id ? Number(employee.id) : 0),
+            created_at: new Date().toISOString(),
+          };
+          const updated = [...checklists, newItem];
+          setChecklists(updated);
+          await AsyncStorage.setItem('checklist_supervision_cache', JSON.stringify(updated));
+
+          Alert.alert('Modo Offline', 'Checklist guardado localmente. Se sincronizará cuando haya conexión.');
+          cancelCreating();
+        }
+      }
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'No se pudo guardar');
+    }
+  };
+
+  const handleDelete = async (it: ChecklistSupervisionUI) => {
+    Alert.alert('Confirmar', '¿Eliminar este checklist?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Eliminar',
+        style: 'destructive',
+        onPress: async () => {
+          const isConnected = await getConnectionStatus();
+          if (it.id && it.id !== 0 && isConnected) {
+            const result = await deleteChecklistSupervision({
+              id: it.id,
+              refreshAccessToken,
+              logout,
+            });
+            if (result.status) {
+              Alert.alert('Éxito', 'Checklist eliminado correctamente');
+              await fetchChecklists();
+            } else {
+              Alert.alert('Error', result.message || 'No se pudo eliminar');
+            }
+          } else {
+            // Offline: guardar acción
+            const actionsStr = await AsyncStorage.getItem('checklist_supervision_actions');
+            const actions = actionsStr ? JSON.parse(actionsStr) : [];
+            actions.push({
+              type: 'delete',
+              id: it.id || 0,
+              id_local: it.id_local,
+            });
+            await AsyncStorage.setItem('checklist_supervision_actions', JSON.stringify(actions));
+
+            // Eliminar de cache
+            const updated = checklists.filter((c) => {
+              if (it.id && it.id !== 0) return c.id !== it.id;
+              if (it.id_local) return c.id_local !== it.id_local;
+              return false;
+            });
+            setChecklists(updated);
+            await AsyncStorage.setItem('checklist_supervision_cache', JSON.stringify(updated));
+
+            Alert.alert('Modo Offline', 'Checklist eliminado localmente. Se sincronizará cuando haya conexión.');
+          }
+        },
+      },
+    ]);
+  };
+
+  const resetAllFilters = () => {
+    setFilterSearch('');
+    setFilterClienteId(null);
+    setFilterDivisionId(null);
+    setFilterCorpoId(null);
+    setFilterPuestoId(null);
+  };
+
+  // Filtrar checklists
+  const filteredChecklists = useMemo(() => {
+    return checklists.filter((c) => {
+      if (filterSearch) {
+        const searchLower = filterSearch.toLowerCase();
+        const matchesSearch =
+          c.ejecutivo_cuenta?.toLowerCase().includes(searchLower) ||
+          (c.cliente?.nombre || '').toLowerCase().includes(searchLower) ||
+          (c.corpo?.nombre || '').toLowerCase().includes(searchLower) ||
+          (c.puesto?.nombre || '').toLowerCase().includes(searchLower);
+        if (!matchesSearch) return false;
+      }
+      if (filterClienteId && c.cliente_id !== filterClienteId) return false;
+      if (filterCorpoId && c.corpo_id !== filterCorpoId) return false;
+      if (filterPuestoId && c.puesto_id !== filterPuestoId) return false;
+      return true;
+    });
+  }, [checklists, filterSearch, filterClienteId, filterCorpoId, filterPuestoId]);
+
+  // Renderizar evaluación dinámica (como StaffEvaluationsScreen)
+  const renderEvaluationInput = (input: EvaluationInput, sectionId: string, subsectionId: string) => {
+    switch (input.type) {
+      case 'text':
+        return (
+          <TextInput
+            style={styles.formInput}
+            placeholder={input.title || 'Texto'}
+            placeholderTextColor="#999"
+            value={input.value}
+            onChangeText={(text) => updateInput(sectionId, subsectionId, input.id, { value: text })}
+          />
+        );
+      case 'textarea':
+        return (
+          <TextInput
+            style={[styles.formInput, styles.textArea]}
+            multiline
+            placeholder={input.title || 'Texto largo'}
+            placeholderTextColor="#999"
+            value={input.value}
+            onChangeText={(text) => updateInput(sectionId, subsectionId, input.id, { value: text })}
+          />
+        );
+      case 'select':
+        return (
+          <View style={styles.pickerContainer}>
+            <Picker
+              selectedValue={input.value || ''}
+              onValueChange={(value) => updateInput(sectionId, subsectionId, input.id, { value })}
+              style={styles.picker}
+            >
+              <Picker.Item label="Seleccionar opción..." value="" />
+              {(input.options || []).map((opt) => (
+                <Picker.Item key={opt} label={opt} value={opt} />
+              ))}
+            </Picker>
+          </View>
+        );
+      case 'date':
+        return (
+          <TouchableOpacity
+            style={styles.dateButton}
+            onPress={() => {
+              // Implementar date picker
+            }}
+          >
+            <ThemedText style={styles.dateButtonText}>
+              {input.value || 'Seleccionar fecha'}
+            </ThemedText>
+            <Ionicons name="calendar-outline" size={18} color="#007AFF" />
+          </TouchableOpacity>
+        );
+      case 'photo':
+        return null; // Las fotos se manejan fuera de renderEvaluationInput
+      default:
+        return null;
+    }
+  };
+
+  // Función para toggle de expansión (como StaffEvaluationsScreen)
+  const toggleChecklistExpanded = (key: string) => {
+    setExpandedChecklists((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  // Función para parsear evaluación desde JSON
+  const parseEvaluation = (evaluacionStr: string | null): EvaluationSection[] => {
+    if (!evaluacionStr) return [];
+    try {
+      const parsed = JSON.parse(evaluacionStr);
+      const result = Array.isArray(parsed) ? parsed : [];
+      console.log('parseEvaluation: Parsed evaluation:', {
+        sections: result.length,
+        firstSection: result[0]?.title,
+        firstSubsection: result[0]?.subsections?.[0]?.title,
+        firstInput: result[0]?.subsections?.[0]?.inputs?.[0],
+        firstInputValue: result[0]?.subsections?.[0]?.inputs?.[0]?.value
+      });
+      return result;
+    } catch (error) {
+      console.error('parseEvaluation: Error parsing evaluation:', error);
+      return [];
+    }
+  };
+
+  // Función para obtener URI de imagen en lista
+  const getImageUriForList = (input: EvaluationInput, checklistId: number | string): string => {
+    if (input.value && typeof input.value === 'string' && input.value.startsWith('data:image/')) {
+      return input.value;
+    }
+    if (input.file_name && typeof checklistId === 'number' && checklistId > 0) {
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (apiUrl) {
+        return `${apiUrl}/api/checklist-supervision/${checklistId}/get-image/${encodeURIComponent(input.file_name)}`;
+      }
+    }
+    return '';
+  };
+
+  const renderItem = (it: ChecklistSupervisionUI, index: number) => {
+    const key = it.id !== 0 ? `checklist-${it.id}` : it.id_local ? `checklist-${it.id_local}` : `checklist-${index}`;
+    const isExpanded = expandedChecklists.has(key);
+    const fechaStr = it.fecha ? new Date(it.fecha).toLocaleDateString() : '-';
+    const evaluationSections = parseEvaluation(it.evaluacion);
+    console.log('renderItem: Evaluation sections for item:', {
+      itemId: it.id || it.id_local,
+      sectionsCount: evaluationSections.length,
+      firstSection: evaluationSections[0],
+      firstInputValue: evaluationSections[0]?.subsections?.[0]?.inputs?.[0]?.value
+    });
+
+    return (
+      <ThemedView key={key} style={styles.bitacoraCard}>
+        <ThemedText style={styles.bitTitle}>
+          {it.cliente?.nombre || '-'} - {it.corpo?.nombre || '-'} - {it.puesto?.nombre || '-'}
+          {it.id_local ? ' (offline)' : ''}
+        </ThemedText>
+        <ThemedText style={styles.bitLine}>
+          <ThemedText style={styles.bitLabel}>Fecha: </ThemedText>
+          <ThemedText style={styles.bitValue}>{fechaStr}</ThemedText>
+        </ThemedText>
+        <ThemedText style={styles.bitLine}>
+          <ThemedText style={styles.bitLabel}>Ejecutivo: </ThemedText>
+          <ThemedText style={styles.bitValue}>{it.ejecutivo_cuenta || '-'}</ThemedText>
+        </ThemedText>
+
+        {/* Botón para expandir/colapsar evaluación */}
+        <TouchableOpacity
+          style={styles.collapseButton}
+          onPress={() => toggleChecklistExpanded(key)}
+        >
+          <ThemedText style={styles.collapseButtonText}>
+            {isExpanded ? 'Ocultar evaluación detallada' : 'Ver evaluación detallada'}
+          </ThemedText>
+          <Ionicons
+            name={isExpanded ? 'chevron-up' : 'chevron-down'}
+            size={20}
+            color="#007AFF"
+          />
+        </TouchableOpacity>
+
+        {/* Contenido colapsable con evaluación */}
+        {isExpanded && (
+          <ThemedView style={styles.collapsableContent}>
+            {evaluationSections.length === 0 ? (
+              <ThemedText style={styles.emptyText}>No hay detalles de evaluación</ThemedText>
+            ) : (
+              evaluationSections.map((section) => (
+                <ThemedView key={section.id} style={styles.sectionCardList}>
+                  <ThemedText style={styles.sectionTitle}>{section.title}</ThemedText>
+                  {section.subsections.map((subsection) => (
+                    <ThemedView key={subsection.id} style={styles.questionRow}>
+                      {subsection.title && subsection.title.trim() !== '' && (
+                        <ThemedText style={styles.questionTitleList}>{subsection.title}</ThemedText>
+                      )}
+                      {subsection.inputs.map((input) => {
+                        console.log('renderItem: Rendering input:', {
+                          inputId: input.id,
+                          inputType: input.type,
+                          inputTitle: input.title,
+                          subsectionTitle: subsection.title,
+                          inputValue: input.value,
+                          hasValue: !!input.value,
+                          valueType: typeof input.value
+                        });
+                        return (
+                          <ThemedView key={input.id}>
+                            {/* Mostrar título del input si existe y es diferente al título de la subsección */}
+                            {input.title && input.title.trim() !== '' && input.title !== subsection.title && (
+                              <ThemedText style={styles.evalLine}>
+                                <ThemedText style={styles.evalLabel}>{input.title}: </ThemedText>
+                                <ThemedText style={styles.evalValue}>
+                                  {input.type === 'photo'
+                                    ? (input.value || input.file_name ? 'Imagen adjunta' : '-')
+                                    : (input.value || '-')}
+                                </ThemedText>
+                              </ThemedText>
+                            )}
+                            {/* Si el título del input es igual al de la subsección, mostrar solo el valor */}
+                            {input.title && input.title.trim() !== '' && input.title === subsection.title && (
+                              <ThemedText style={styles.evalLine}>
+                                <ThemedText style={styles.evalLabel}>{input.title}: </ThemedText>
+                                <ThemedText style={styles.evalValue}>
+                                  {input.type === 'photo'
+                                    ? (input.value || input.file_name ? 'Imagen adjunta' : '-')
+                                    : (input.value || '-')}
+                                </ThemedText>
+                              </ThemedText>
+                            )}
+                            {/* Si no hay título, mostrar "Valor:" */}
+                            {(!input.title || input.title.trim() === '') && (
+                              <ThemedText style={styles.evalLine}>
+                                <ThemedText style={styles.evalLabel}>Valor: </ThemedText>
+                                <ThemedText style={styles.evalValue}>
+                                  {input.type === 'photo'
+                                    ? (input.value || input.file_name ? 'Imagen adjunta' : '-')
+                                    : (input.value || '-')}
+                                </ThemedText>
+                              </ThemedText>
+                            )}
+                            {/* Mostrar imagen si es tipo photo */}
+                            {input.type === 'photo' && (input.value || input.file_name) && (
+                              <Image
+                                source={{
+                                  uri: getImageUriForList(input, it.id || it.id_local || 0),
+                                }}
+                                style={[
+                                  styles.questionImagePreviewList,
+                                  input.imageOrientation === 'vertical'
+                                    ? styles.questionImagePreviewListVertical
+                                    : styles.questionImagePreviewListHorizontal,
+                                ]}
+                                resizeMode="contain"
+                                onError={(e) => {
+                                  console.error('Error loading image in list:', e.nativeEvent.error);
+                                }}
+                              />
+                            )}
+                          </ThemedView>
+                        );
+                      })}
+                    </ThemedView>
+                  ))}
+                </ThemedView>
+              ))
+            )}
+          </ThemedView>
+        )}
+
+        <ThemedView style={styles.listItemButtons}>
+          <TouchableOpacity style={[styles.listItemButton, styles.editButton]} onPress={() => startEditing(it)}>
+            <Ionicons name="pencil" size={18} color="#FFFFFF" />
+            <ThemedText style={styles.listItemButtonText}>Editar</ThemedText>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.listItemButton, styles.deleteButton]} onPress={() => handleDelete(it)}>
+            <Ionicons name="trash" size={18} color="#FFFFFF" />
+            <ThemedText style={styles.listItemButtonText}>Eliminar</ThemedText>
+          </TouchableOpacity>
+        </ThemedView>
+      </ThemedView>
+    );
+  };
+
+  return (
+    <ThemedView style={styles.container}>
+      <AppHeader onMenuPress={handleMenuPress} title="Checklist de Supervisión" />
+      <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
+        <ThemedView style={styles.content}>
+          {error ? <ThemedText style={styles.errorText}>{error}</ThemedText> : null}
+
+          <ThemedView style={styles.titleContainer}>
+            <ThemedText type="title" style={styles.title}>
+              <Ionicons name="clipboard" size={22} color="#000000" /> Checklist de Supervisión
+            </ThemedText>
+            <ThemedText style={styles.subtitle}>Gestiona los checklists de supervisión</ThemedText>
+          </ThemedView>
+
+          {/* Filtros */}
+          {!isCreating && (
+            <ThemedView style={styles.filtersMain}>
+              <ThemedView style={styles.filterHeader}>
+                <TouchableOpacity
+                  style={styles.filterToggleButton}
+                  onPress={() => setIsFiltersExpanded(!isFiltersExpanded)}
+                >
+                  <ThemedText style={styles.filterToggleText}>Filtros</ThemedText>
+                  <Ionicons
+                    name={isFiltersExpanded ? 'chevron-up' : 'chevron-down'}
+                    size={20}
+                    color="#007AFF"
+                  />
+                </TouchableOpacity>
+                {isFiltersExpanded && (
+                  <TouchableOpacity style={styles.resetFiltersButton} onPress={resetAllFilters}>
+                    <Ionicons name="refresh" size={16} color="#FF3B30" />
+                    <ThemedText style={styles.resetFiltersText}>Reiniciar</ThemedText>
+                  </TouchableOpacity>
+                )}
+              </ThemedView>
+              {isFiltersExpanded && (
+                <ThemedView style={styles.filterContent}>
+                  <ThemedView style={styles.filterGroupSearch}>
+                    <ThemedText style={styles.filterLabel}>Buscar:</ThemedText>
+                    <TextInput
+                      style={styles.searchInput}
+                      value={filterSearch}
+                      onChangeText={setFilterSearch}
+                      placeholder="Ejecutivo, Cliente, Sucursal, Puesto..."
+                      placeholderTextColor="#999"
+                    />
+                  </ThemedView>
+
+                  {/* Árbol jerárquico para filtros */}
+                  <ThemedView style={styles.filterGroup}>
+                    <ThemedText style={styles.filterLabel}>Cliente:</ThemedText>
+                    <View style={styles.pickerContainer}>
+                      <Picker
+                        selectedValue={filterClienteId || ''}
+                        onValueChange={(value) => {
+                          setFilterClienteId(value && value !== '' ? Number(value) : null);
+                          setFilterDivisionId(null);
+                          setFilterCorpoId(null);
+                          setFilterPuestoId(null);
+                        }}
+                        style={styles.picker}
+                      >
+                        <Picker.Item label="Seleccionar..." value="" />
+                        {filterClientes.map((c: any) => (
+                          <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                        ))}
+                      </Picker>
+                    </View>
+                  </ThemedView>
+
+                  {filterClienteId && (
+                    <ThemedView style={styles.filterGroup}>
+                      <ThemedText style={styles.filterLabel}>División:</ThemedText>
+                      <View style={styles.pickerContainer}>
+                        <Picker
+                          selectedValue={filterDivisionId || ''}
+                          onValueChange={(value) => {
+                            setFilterDivisionId(value && value !== '' ? Number(value) : null);
+                            setFilterCorpoId(null);
+                            setFilterPuestoId(null);
+                          }}
+                          style={styles.picker}
+                        >
+                          <Picker.Item label="Seleccionar..." value="" />
+                          {filterDivisiones.map((d: any) => (
+                            <Picker.Item key={d.id} label={d.nombre} value={d.id} />
+                          ))}
+                        </Picker>
+                      </View>
+                    </ThemedView>
+                  )}
+
+                  {filterDivisionId && (
+                    <ThemedView style={styles.filterGroup}>
+                      <ThemedText style={styles.filterLabel}>Sucursal:</ThemedText>
+                      <View style={styles.pickerContainer}>
+                        <Picker
+                          selectedValue={filterCorpoId || ''}
+                          onValueChange={(value) => {
+                            setFilterCorpoId(value && value !== '' ? Number(value) : null);
+                            setFilterPuestoId(null);
+                          }}
+                          style={styles.picker}
+                        >
+                          <Picker.Item label="Seleccionar..." value="" />
+                          {filterSucursales.map((s: any) => (
+                            <Picker.Item key={s.id} label={s.nombre} value={s.id} />
+                          ))}
+                        </Picker>
+                      </View>
+                    </ThemedView>
+                  )}
+
+                  {filterCorpoId && (
+                    <ThemedView style={styles.filterGroup}>
+                      <ThemedText style={styles.filterLabel}>Puesto:</ThemedText>
+                      <View style={styles.pickerContainer}>
+                        <Picker
+                          selectedValue={filterPuestoId || ''}
+                          onValueChange={(value) => setFilterPuestoId(value && value !== '' ? Number(value) : null)}
+                          style={styles.picker}
+                        >
+                          <Picker.Item label="Seleccionar..." value="" />
+                          {filterPuestos.map((p: any) => (
+                            <Picker.Item key={p.id} label={p.nombre} value={p.id} />
+                          ))}
+                        </Picker>
+                      </View>
+                    </ThemedView>
+                  )}
+                </ThemedView>
+              )}
+            </ThemedView>
+          )}
+
+          {!isCreating && (
+            <TouchableOpacity style={styles.createButton} onPress={startCreating}>
+              <ThemedText style={styles.createButtonText}>
+                <Ionicons name="add" size={20} color="#FFFFFF" /> Nuevo registro
+              </ThemedText>
+            </TouchableOpacity>
+          )}
+
+          {isCreating && (
+            <ThemedView style={styles.formCard}>
+              <ThemedText style={styles.formTitle}>{editing ? 'Editar registro' : 'Nuevo registro'}</ThemedText>
+
+              {/* Árbol jerárquico para formulario */}
+              <ThemedView style={styles.filterGroup}>
+                <ThemedText style={styles.label}>Cliente *</ThemedText>
+                <View style={styles.pickerContainer}>
+                  <Picker
+                    selectedValue={selectedClienteId || ''}
+                    onValueChange={(value) => {
+                      setSelectedClienteId(value && value !== '' ? Number(value) : null);
+                      setSelectedDivisionId(null);
+                      setSelectedCorpoId(null);
+                      setSelectedPuestoId(null);
+                    }}
+                    style={styles.picker}
+                  >
+                    <Picker.Item label="Seleccionar..." value="" />
+                    {clientes.map((c: any) => (
+                      <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                    ))}
+                  </Picker>
+                </View>
+              </ThemedView>
+
+              {selectedClienteId && (
+                <ThemedView style={styles.filterGroup}>
+                  <ThemedText style={styles.label}>División *</ThemedText>
+                  <View style={styles.pickerContainer}>
+                    <Picker
+                      selectedValue={selectedDivisionId || ''}
+                      onValueChange={(value) => {
+                        setSelectedDivisionId(value && value !== '' ? Number(value) : null);
+                        setSelectedCorpoId(null);
+                        setSelectedPuestoId(null);
+                      }}
+                      style={styles.picker}
+                    >
+                      <Picker.Item label="Seleccionar..." value="" />
+                      {divisiones.map((d: any) => (
+                        <Picker.Item key={d.id} label={d.nombre} value={d.id} />
+                      ))}
+                    </Picker>
+                  </View>
+                  {selectedDivisionId && divisiones.length === 0 && (
+                    <ThemedText style={styles.errorText}>No hay divisiones disponibles</ThemedText>
+                  )}
+                </ThemedView>
+              )}
+
+              {selectedDivisionId && (
+                <ThemedView style={styles.filterGroup}>
+                  <ThemedText style={styles.label}>Sucursal *</ThemedText>
+                  <View style={styles.pickerContainer}>
+                    <Picker
+                      selectedValue={selectedCorpoId || ''}
+                      onValueChange={(value) => {
+                        setSelectedCorpoId(value && value !== '' ? Number(value) : null);
+                        setSelectedPuestoId(null);
+                      }}
+                      style={styles.picker}
+                    >
+                      <Picker.Item label="Seleccionar..." value="" />
+                      {sucursales.map((s: any) => (
+                        <Picker.Item key={s.id} label={s.nombre} value={s.id} />
+                      ))}
+                    </Picker>
+                  </View>
+                  {selectedCorpoId && sucursales.length === 0 && (
+                    <ThemedText style={styles.errorText}>No hay sucursales disponibles</ThemedText>
+                  )}
+                </ThemedView>
+              )}
+
+              {selectedCorpoId && (
+                <ThemedView style={styles.filterGroup}>
+                  <ThemedText style={styles.label}>Puesto *</ThemedText>
+                  <View style={styles.pickerContainer}>
+                    <Picker
+                      selectedValue={selectedPuestoId || ''}
+                      onValueChange={(value) => setSelectedPuestoId(value && value !== '' ? Number(value) : null)}
+                      style={styles.picker}
+                    >
+                      <Picker.Item label="Seleccionar..." value="" />
+                      {puestos.map((p: any) => (
+                        <Picker.Item key={p.id} label={p.nombre} value={p.id} />
+                      ))}
+                    </Picker>
+                  </View>
+                  {selectedPuestoId && puestos.length === 0 && (
+                    <ThemedText style={styles.errorText}>No hay puestos disponibles</ThemedText>
+                  )}
+                </ThemedView>
+              )}
+
+              <ThemedText style={styles.label}>Fecha *</ThemedText>
+              <TouchableOpacity style={styles.dateButton} onPress={() => setShowFechaPicker(true)}>
+                <ThemedText style={styles.dateButtonText}>
+                  {dateToLocalString(fecha)}
+                </ThemedText>
+                <Ionicons name="calendar-outline" size={18} color="#007AFF" />
+              </TouchableOpacity>
+
+              <ThemedText style={styles.label}>Ejecutivo de cuenta *</ThemedText>
+              <TextInput
+                style={styles.input}
+                placeholder="Nombre del ejecutivo"
+                placeholderTextColor="#999"
+                value={ejecutivoCuenta}
+                onChangeText={setEjecutivoCuenta}
+              />
+
+              {/* Evaluación dinámica */}
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formLabel}>Evaluación</ThemedText>
+                {evaluation.length === 0 && selectedDivisionId && (
+                  <ThemedText style={styles.errorText}>
+                    Selecciona una división válida (Aseo y limpieza o Seguridad) para cargar el formulario
+                  </ThemedText>
+                )}
+
+                {evaluation.map((section) => (
+                  <ThemedView key={section.id} style={styles.sectionCard}>
+                    <ThemedView style={styles.sectionHeader}>
+                      <ThemedText style={styles.sectionTitle}>{section.title}</ThemedText>
+                      {!section.isPredefined && (
+                        <TouchableOpacity onPress={() => deleteSection(section.id)}>
+                          <Ionicons name="trash" size={20} color="#FF3B30" />
+                        </TouchableOpacity>
+                      )}
+                    </ThemedView>
+
+                    {section.subsections.map((subsection) => (
+                      <ThemedView key={subsection.id} style={styles.questionCard}>
+                        {subsection.title && subsection.title.trim() !== '' && (
+                          <ThemedText style={styles.questionTitleList}>
+                            {subsection.title}
+                          </ThemedText>
+                        )}
+                        {subsection.inputs.map((input) => (
+                          <ThemedView key={input.id} style={styles.inputCard}>
+                            {input.title && input.title.trim() !== '' && input.title !== subsection.title && (
+                              <ThemedText style={styles.questionTitleList}>
+                                {input.title}
+                              </ThemedText>
+                            )}
+                            {input.type === 'photo' || (input.type === 'text' && input.title?.toLowerCase().includes('foto')) ? (
+                              <View>
+                                {((input.value && input.value.startsWith('data:image/')) || input.file_name) ? (
+                                  <View>
+                                    <Image
+                                      source={{ uri: getImageUri(input) }}
+                                      style={[
+                                        styles.questionImagePreview,
+                                        input.imageOrientation === 'vertical'
+                                          ? styles.questionImagePreviewVertical
+                                          : styles.questionImagePreviewHorizontal,
+                                      ]}
+                                      resizeMode="contain"
+                                      onError={(e) => {
+                                        console.error('Error loading image:', e.nativeEvent.error);
+                                      }}
+                                    />
+                                    <TouchableOpacity
+                                      style={styles.cameraSmallButton}
+                                      onPress={() => {
+                                        updateInputField(section.id, subsection.id, input.id, 'value', '');
+                                        updateInputField(section.id, subsection.id, input.id, 'imageOrientation', null);
+                                        updateInput(section.id, subsection.id, input.id, { file_name: undefined });
+                                      }}
+                                    >
+                                      <Ionicons name="trash" size={16} color="#FF3B30" />
+                                      <ThemedText style={styles.cameraSmallButtonText}>Eliminar imagen</ThemedText>
+                                    </TouchableOpacity>
+                                  </View>
+                                ) : null}
+                                <TouchableOpacity
+                                  style={styles.cameraSmallButton}
+                                  onPress={() => handleAddPhoto(`${section.id}-${subsection.id}-${input.id}`)}
+                                >
+                                  <Ionicons name="camera" size={16} color="#000000" />
+                                  <ThemedText style={styles.cameraSmallButtonText}>
+                                    {(input.value && input.value.startsWith('data:image/')) || input.file_name ? 'Cambiar imagen' : 'Tomar foto'}
+                                  </ThemedText>
+                                </TouchableOpacity>
+                              </View>
+                            ) : (
+                              <View>
+                                {renderEvaluationInput(input, section.id, subsection.id)}
+                                {!section.isPredefined && (
+                                  <TouchableOpacity
+                                    style={styles.deleteInputButtonSmall}
+                                    onPress={() => deleteInput(section.id, subsection.id, input.id)}
+                                  >
+                                    <Ionicons name="close-circle" size={18} color="#FF3B30" />
+                                  </TouchableOpacity>
+                                )}
+                              </View>
+                            )}
+                          </ThemedView>
+                        ))}
+                        {!section.isPredefined && (
+                          <TouchableOpacity
+                            style={styles.cameraSmallButton}
+                            onPress={() => {
+                              Alert.alert(
+                                'Tipo de input',
+                                'Selecciona el tipo de input',
+                                [
+                                  { text: 'Texto', onPress: () => addInput(section.id, subsection.id, 'text') },
+                                  { text: 'Texto largo', onPress: () => addInput(section.id, subsection.id, 'textarea') },
+                                  { text: 'Select', onPress: () => addInput(section.id, subsection.id, 'select') },
+                                  { text: 'Fecha', onPress: () => addInput(section.id, subsection.id, 'date') },
+                                  { text: 'Foto', onPress: () => addInput(section.id, subsection.id, 'photo') },
+                                  { text: 'Cancelar', style: 'cancel' },
+                                ]
+                              );
+                            }}
+                          >
+                            <Ionicons name="add" size={16} color="#007AFF" />
+                            <ThemedText style={styles.cameraSmallButtonText}>Agregar input</ThemedText>
+                          </TouchableOpacity>
+                        )}
+                        {!section.isPredefined && (
+                          <TouchableOpacity
+                            style={[styles.cameraSmallButton, { backgroundColor: '#FFECEC', borderColor: '#FF3B30' }]}
+                            onPress={() => deleteSubsection(section.id, subsection.id)}
+                          >
+                            <Ionicons name="trash" size={16} color="#FF3B30" />
+                            <ThemedText style={[styles.cameraSmallButtonText, { color: '#FF3B30' }]}>Eliminar subsección</ThemedText>
+                          </TouchableOpacity>
+                        )}
+                      </ThemedView>
+                    ))}
+
+                    {/* Botón para agregar nueva subsección - debe estar fuera del map pero dentro de sectionCard */}
+                    <TouchableOpacity
+                      style={styles.cameraSmallButton}
+                      onPress={() => addSubsection(section.id)}
+                    >
+                      <Ionicons name="add" size={16} color="#007AFF" />
+                      <ThemedText style={styles.cameraSmallButtonText}>Agregar subsección</ThemedText>
+                    </TouchableOpacity>
+                  </ThemedView>
+                ))}
+
+                {!selectedDivisionId && (
+                  <TouchableOpacity style={styles.cameraSmallButton} onPress={addSection}>
+                    <Ionicons name="add" size={16} color="#007AFF" />
+                    <ThemedText style={styles.cameraSmallButtonText}>Agregar sección</ThemedText>
+                  </TouchableOpacity>
+                )}
+              </ThemedView>
+
+              {/* Firma supervisor */}
+              <ThemedText style={styles.sectionTitle}>Firma supervisor *</ThemedText>
+              {firmaSupervisor ? (
+                <ThemedView style={styles.signaturePreviewContainer}>
+                  <Image source={{ uri: firmaSupervisor }} style={styles.signaturePreview} resizeMode="contain" />
+                  <TouchableOpacity style={styles.removeSignatureButton} onPress={() => setFirmaSupervisor('')}>
+                    <Ionicons name="trash" size={18} color="#FFFFFF" />
+                  </TouchableOpacity>
+                </ThemedView>
+              ) : null}
+              <TouchableOpacity style={styles.openSignatureButton} onPress={openSignatureModal}>
+                <Ionicons name="create-outline" size={20} color="#000000" />
+                <ThemedText style={styles.openSignatureButtonText}>
+                  {firmaSupervisor ? 'Modificar firma' : 'Agregar firma'}
+                </ThemedText>
+              </TouchableOpacity>
+
+              {/* Firma responsable */}
+              <ThemedText style={styles.sectionTitle}>Firma responsable *</ThemedText>
+              <ThemedView style={styles.signatureButtons}>
+                <TouchableOpacity
+                  style={[styles.signatureButton, isGeneratingFirma && styles.signatureButtonDisabled]}
+                  onPress={handleGenerateFirmaResponsable}
+                  disabled={isGeneratingFirma}
+                >
+                  {isGeneratingFirma ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <>
+                      <Ionicons name="finger-print" size={18} color="#FFFFFF" />
+                      <ThemedText style={styles.signatureButtonText}>Generar</ThemedText>
+                    </>
+                  )}
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.signatureButton} onPress={handleScanFirmaResponsable}>
+                  <Ionicons name="qr-code" size={18} color="#FFFFFF" />
+                  <ThemedText style={styles.signatureButtonText}>Escanear QR</ThemedText>
+                </TouchableOpacity>
+              </ThemedView>
+
+              {!firmaResponsable ? (
+                <ThemedText style={styles.signatureHintMuted}>Aún no hay firma responsable.</ThemedText>
+              ) : (
+                <ThemedView style={styles.firmaInfoBox}>
+                  <ThemedView style={{ flex: 1, paddingRight: 10 }}>
+                    <ThemedText style={styles.firmaInfoTitle}>Información de la firma:</ThemedText>
+                    {(() => {
+                      const info = decodeFirmaHash(firmaResponsable);
+                      if (!info) {
+                        return <ThemedText style={styles.firmaInfoValue}>Formato no decodificable</ThemedText>;
+                      }
+                      return (
+                        <>
+                          <ThemedText style={styles.firmaInfoValue}>Sesión: {info.sessionId || 'N/A'}</ThemedText>
+                          <ThemedText style={styles.firmaInfoValue}>Empleado: {info.empleadoId || 'N/A'}</ThemedText>
+                          <ThemedText style={styles.firmaInfoValue}>
+                            Lat: {info.latitud || 'N/A'} | Long: {info.longitud || 'N/A'}
+                          </ThemedText>
+                          <ThemedText style={styles.firmaInfoValue}>Hora: {info.timestamp || 'N/A'}</ThemedText>
+                        </>
+                      );
+                    })()}
+                  </ThemedView>
+                  <TouchableOpacity style={styles.firmaClearButtonTiny} onPress={() => setFirmaResponsable('')}>
+                    <Ionicons name="trash" size={18} color="#FFFFFF" />
+                  </TouchableOpacity>
+                </ThemedView>
+              )}
+
+              <ThemedView style={styles.formActions}>
+                <TouchableOpacity style={[styles.formActionButton, styles.formActionCancel]} onPress={cancelCreating}>
+                  <Ionicons name="close" size={18} color="#000" />
+                  <ThemedText style={styles.formActionCancelText}>Cancelar</ThemedText>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.formActionButton, styles.formActionSave]} onPress={handleSave}>
+                  <Ionicons name="save" size={18} color="#fff" />
+                  <ThemedText style={styles.formActionSaveText}>Guardar</ThemedText>
+                </TouchableOpacity>
+              </ThemedView>
+            </ThemedView>
+          )}
+
+          {!isCreating && (
+            <>
+              {isLoading ? (
+                <ThemedView style={styles.loadingContainer}>
+                  <ActivityIndicator size="large" color="#007AFF" />
+                  <ThemedText style={styles.loadingText}>Cargando...</ThemedText>
+                </ThemedView>
+              ) : filteredChecklists.length === 0 ? (
+                <ThemedView style={styles.emptyContainer}>
+                  <ThemedText style={styles.emptyText}>No hay registros</ThemedText>
+                </ThemedView>
+              ) : (
+                <ThemedView style={styles.listContainer}>
+                  {filteredChecklists.map((item, index) => renderItem(item, index))}
+                </ThemedView>
+              )}
+            </>
+          )}
+        </ThemedView>
+      </ScrollView>
+
+      {showFechaPicker && (
+        <DateTimePicker
+          value={fecha}
+          mode="date"
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          onChange={(event, date) => {
+            setShowFechaPicker(false);
+            if (date) setFecha(date);
+          }}
+        />
+      )}
+
+      {/* Modal de firma dibujada */}
+      <Modal
+        visible={isSignatureModalVisible}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setIsSignatureModalVisible(false)}
+      >
+        <ThemedView style={styles.modalContainer}>
+          <ThemedView style={styles.modalHeader}>
+            <ThemedText style={styles.modalTitle}>Dibujar firma</ThemedText>
+            <TouchableOpacity onPress={() => setIsSignatureModalVisible(false)}>
+              <Ionicons name="close" size={24} color="#333" />
+            </TouchableOpacity>
+          </ThemedView>
+          <ThemedText style={styles.signatureModalHint}>Firma dentro del recuadro blanco.</ThemedText>
+          <View style={styles.signaturePadBox}>
+            <SignatureScreen
+              ref={signatureRef}
+              onOK={handleSignatureRead}
+              onEmpty={() => {
+                Alert.alert('Error', 'No se detectó la firma. Intenta de nuevo.');
+              }}
+              descriptionText=""
+              clearText=""
+              confirmText=""
+              webStyle={signatureWebStyle}
+              key={signatureKey}
+            />
+          </View>
+          <ThemedView style={styles.modalActions}>
+            <TouchableOpacity style={styles.modalClearButton} onPress={clearSignature}>
+              <Ionicons name="refresh" size={18} color="#000" />
+              <ThemedText style={styles.modalClearButtonText}>Limpiar</ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.modalAcceptButton}
+              onPress={() => {
+                if (signatureRef.current) {
+                  signatureRef.current.readSignature();
+                } else {
+                  Alert.alert('Error', 'Debe dibujar una firma antes de aceptar');
+                }
+              }}
+            >
+              <Ionicons name="checkmark" size={18} color="#000" />
+              <ThemedText style={styles.modalAcceptButtonText}>Aceptar</ThemedText>
+            </TouchableOpacity>
+          </ThemedView>
+        </ThemedView>
+      </Modal>
+
+      {/* Modal de cámara (siguiendo patrón de VehiclesScreen) */}
+      <Modal
+        visible={isCameraVisible}
+        animationType="slide"
+        onRequestClose={() => setIsCameraVisible(false)}
+      >
+        <ThemedView style={{ flex: 1, backgroundColor: '#000' }}>
+          {permission?.granted && (
+            <CameraView
+              ref={cameraRef}
+              style={{ flex: 1 }}
+              facing="back"
+            >
+              <TouchableOpacity
+                style={styles.cameraCloseButton}
+                onPress={() => setIsCameraVisible(false)}
+              >
+                <Ionicons name="close" size={30} color="#FFFFFF" />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.cameraCaptureButton}
+                onPress={takePicture}
+              >
+                <ThemedView style={styles.cameraCaptureButtonInner} />
+              </TouchableOpacity>
+            </CameraView>
+          )}
+        </ThemedView>
+      </Modal>
+
+      {/* Modal para agregar subsección */}
+      <Modal
+        transparent
+        visible={isAddSubsectionModalVisible}
+        animationType="fade"
+        onRequestClose={closeAddSubsectionModal}
+      >
+        <ThemedView style={styles.modalBackdrop}>
+          <ThemedView style={styles.modalCard}>
+            <ThemedView style={styles.modalHeader}>
+              <ThemedText style={styles.modalTitle}>Agregar Subsección</ThemedText>
+              <TouchableOpacity onPress={closeAddSubsectionModal} style={styles.modalCloseBtn}>
+                <Ionicons name="close" size={22} color="#000" />
+              </TouchableOpacity>
+            </ThemedView>
+
+            <ScrollView style={styles.modalBody} contentContainerStyle={styles.modalBodyContent}>
+              <ThemedView style={styles.filterGroup}>
+                <ThemedText style={styles.label}>Título de la subsección (opcional)</ThemedText>
+                <TextInput
+                  style={styles.input}
+                  placeholder="Título de la subsección"
+                  placeholderTextColor="#999"
+                  value={newSubsectionTitle}
+                  onChangeText={setNewSubsectionTitle}
+                />
+              </ThemedView>
+
+              <ThemedText style={styles.sectionTitle}>Inputs</ThemedText>
+              {newSubsectionInputs.map((input, idx) => (
+                <ThemedView key={idx} style={styles.modalFormCard}>
+                  <ThemedView style={styles.filterGroup}>
+                    <ThemedText style={styles.label}>Tipo</ThemedText>
+                    <View style={styles.pickerContainer}>
+                      <Picker
+                        selectedValue={input.type}
+                        onValueChange={(value) => {
+                          const updated = [...newSubsectionInputs];
+                          updated[idx] = { ...updated[idx], type: value, options: value === 'select' ? ['Opción 1', 'Opción 2'] : undefined };
+                          setNewSubsectionInputs(updated);
+                        }}
+                        style={styles.picker}
+                      >
+                        <Picker.Item label="Texto" value="text" />
+                        <Picker.Item label="Texto largo" value="textarea" />
+                        <Picker.Item label="Select" value="select" />
+                        <Picker.Item label="Fecha" value="date" />
+                        <Picker.Item label="Foto" value="photo" />
+                      </Picker>
+                    </View>
+                  </ThemedView>
+
+                  <ThemedView style={styles.filterGroup}>
+                    <ThemedText style={styles.label}>Título del input (opcional)</ThemedText>
+                    <TextInput
+                      style={styles.input}
+                      placeholder="Título del input"
+                      placeholderTextColor="#999"
+                      value={input.title || ''}
+                      onChangeText={(text) => updateNewSubsectionInput(idx, 'title', text)}
+                    />
+                  </ThemedView>
+
+                  {input.type === 'select' && (
+                    <ThemedView style={styles.filterGroup}>
+                      <ThemedText style={styles.label}>Opciones (separadas por comas)</ThemedText>
+                      <TextInput
+                        style={styles.input}
+                        placeholder="Opción 1, Opción 2, Opción 3"
+                        placeholderTextColor="#999"
+                        value={input.options?.join(', ') || ''}
+                        onChangeText={(text) => {
+                          const options = text.split(',').map(o => o.trim()).filter(o => o.length > 0);
+                          updateNewSubsectionInput(idx, 'options', options);
+                        }}
+                      />
+                    </ThemedView>
+                  )}
+
+                  <TouchableOpacity
+                    style={styles.cameraSmallButton}
+                    onPress={() => removeNewSubsectionInput(idx)}
+                  >
+                    <Ionicons name="trash" size={16} color="#FF3B30" />
+                    <ThemedText style={[styles.cameraSmallButtonText, { color: '#FF3B30' }]}>Eliminar input</ThemedText>
+                  </TouchableOpacity>
+                </ThemedView>
+              ))}
+
+              <TouchableOpacity
+                style={styles.cameraSmallButton}
+                onPress={() => {
+                  Alert.alert(
+                    'Tipo de input',
+                    'Selecciona el tipo de input',
+                    [
+                      { text: 'Texto', onPress: () => addInputToNewSubsection('text') },
+                      { text: 'Texto largo', onPress: () => addInputToNewSubsection('textarea') },
+                      { text: 'Select', onPress: () => addInputToNewSubsection('select') },
+                      { text: 'Fecha', onPress: () => addInputToNewSubsection('date') },
+                      { text: 'Foto', onPress: () => addInputToNewSubsection('photo') },
+                      { text: 'Cancelar', style: 'cancel' },
+                    ]
+                  );
+                }}
+              >
+                <Ionicons name="add" size={16} color="#007AFF" />
+                <ThemedText style={styles.cameraSmallButtonText}>Agregar input</ThemedText>
+              </TouchableOpacity>
+            </ScrollView>
+
+            <ThemedView style={styles.modalFooter}>
+              <TouchableOpacity style={styles.modalPrimaryBtn} onPress={saveNewSubsection}>
+                <ThemedText style={styles.modalPrimaryBtnText}>Guardar subsección</ThemedText>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.modalPrimaryBtn, { backgroundColor: '#6c757d' }]} onPress={closeAddSubsectionModal}>
+                <ThemedText style={styles.modalPrimaryBtnText}>Cancelar</ThemedText>
+              </TouchableOpacity>
+            </ThemedView>
+          </ThemedView>
+        </ThemedView>
+      </Modal>
+
+      <AppFooter />
+      <SlideMenu
+        isVisible={isMenuVisible}
+        onClose={handleMenuClose}
+        onHomePress={handleHomePress}
+        currentRoute="ChecklistSupervision"
+      />
+      {QRScannerComponent}
+    </ThemedView>
+  );
+}
+
+// Estilos (copiados de LlavesScreen.tsx para mantener consistencia)
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#F8F9FA' },
+  scrollView: { flex: 1 },
+  scrollContent: { paddingBottom: 20 },
+  content: { padding: 16 },
+  titleContainer: { marginBottom: 20 },
+  title: { fontSize: 24, fontWeight: '800', color: '#000', marginBottom: 4, },
+  subtitle: { fontSize: 14, color: '#666', },
+  errorText: { color: '#FF3B30', fontSize: 14, marginBottom: 12 },
+  filtersMain: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 10,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+  },
+  filterHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+  },
+  filterToggleButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  filterToggleText: { fontSize: 16, fontWeight: '700', color: '#007AFF' },
+  resetFiltersButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  resetFiltersText: { fontSize: 14, color: '#FF3B30', fontWeight: '600' },
+  filterContent: { padding: 12 },
+  filterGroupSearch: { marginBottom: 12 },
+  filterGroup: { marginBottom: 12 },
+  filterLabel: { fontSize: 14, fontWeight: '600', color: '#333', marginBottom: 6 },
+  searchInput: {
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    padding: 12,
+    backgroundColor: '#FFFFFF',
+    fontSize: 15,
+  },
+  pickerContainer: {
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    backgroundColor: '#FFFFFF',
+    overflow: 'hidden',
+  },
+  picker: { height: 50 },
+  createButton: {
+    backgroundColor: '#007AFF',
+    borderRadius: 10,
+    padding: 14,
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  createButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  formCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 10,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+  },
+  formTitle: { fontSize: 18, fontWeight: '800', color: '#000', marginBottom: 16 },
+  label: { fontSize: 14, fontWeight: '600', color: '#333', marginBottom: 6, marginTop: 12 },
+  input: {
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    padding: 12,
+    backgroundColor: '#FFFFFF',
+    fontSize: 15,
+    marginBottom: 12,
+  },
+  textArea: { minHeight: 100, textAlignVertical: 'top' },
+  dateButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    padding: 12,
+    backgroundColor: '#FFFFFF',
+    marginBottom: 12,
+  },
+  dateButtonText: { fontSize: 15, color: '#000' },
+  sectionTitle: { fontSize: 16, fontWeight: '700', color: '#000', marginTop: 16, marginBottom: 12 },
+  signatureButtons: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 12,
+  },
+  signatureButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#007AFF',
+    borderRadius: 8,
+    padding: 12,
+    gap: 8,
+  },
+  signatureButtonDisabled: { opacity: 0.5 },
+  signatureButtonText: { color: '#FFFFFF', fontSize: 14, fontWeight: '600' },
+  signatureHintMuted: { fontSize: 13, color: '#999', fontStyle: 'italic', marginTop: 8 },
+  firmaInfoBox: {
+    flexDirection: 'row',
+    backgroundColor: '#F9F9F9',
+    borderRadius: 8,
+    padding: 12,
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+  },
+  firmaInfoTitle: { fontSize: 13, fontWeight: '700', color: '#333', marginBottom: 6 },
+  firmaInfoValue: { fontSize: 12, color: '#666', marginBottom: 2 },
+  firmaClearButtonTiny: {
+    backgroundColor: '#FF3B30',
+    borderRadius: 6,
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  formActions: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 20,
+  },
+  formActionButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 12,
+    borderRadius: 8,
+    gap: 8,
+  },
+  formActionCancel: {
+    backgroundColor: '#EDEDED',
+  },
+  formActionSave: {
+    backgroundColor: '#34C759',
+  },
+  formActionCancelText: { color: '#000', fontSize: 14, fontWeight: '700' },
+  formActionSaveText: { color: '#FFFFFF', fontSize: 14, fontWeight: '700' },
+  loadingContainer: {
+    padding: 40,
+    alignItems: 'center',
+  },
+  loadingText: { marginTop: 12, fontSize: 14, color: '#666' },
+  emptyContainer: {
+    padding: 40,
+    alignItems: 'center',
+  },
+  listContainer: { gap: 12 },
+  bitacoraCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 10,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+  },
+  bitTitle: { fontSize: 16, fontWeight: '700', color: '#000', marginBottom: 8 },
+  bitLine: { marginBottom: 4 },
+  bitLabel: { fontSize: 14, fontWeight: '600', color: '#666' },
+  bitValue: { fontSize: 14, color: '#000' },
+  listItemButtons: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 12,
+  },
+  listItemButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 10,
+    borderRadius: 8,
+    gap: 6,
+  },
+  editButton: { backgroundColor: '#007AFF' },
+  deleteButton: { backgroundColor: '#FF3B30' },
+  listItemButtonText: { color: '#FFFFFF', fontSize: 13, fontWeight: '600' },
+  // Estilos para componente collapsable (como StaffEvaluationsScreen)
+  collapseButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    marginTop: 8,
+    backgroundColor: '#FAFAFA',
+  },
+  collapseButtonText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#007AFF',
+  },
+  collapsableContent: {
+    marginTop: 8,
+    padding: 10,
+    borderRadius: 8,
+    backgroundColor: '#F8F9FA',
+  },
+  sectionCardList: {
+    marginBottom: 10,
+    padding: 8,
+    borderRadius: 6,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+  },
+  questionRow: {
+    marginTop: 4,
+    paddingVertical: 4,
+  },
+  questionImagePreviewList: {
+    marginTop: 4,
+    width: '100%',
+    borderRadius: 6,
+  },
+  questionImagePreviewListHorizontal: {
+    height: 160,
+  },
+  questionImagePreviewListVertical: {
+    height: 260,
+  },
+  evalLine: {
+    marginBottom: 4,
+  },
+  evalLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#666',
+  },
+  evalValue: {
+    fontSize: 14,
+    color: '#000',
+  },
+  emptyText: {
+    fontSize: 14,
+    color: '#999',
+    fontStyle: 'italic',
+  },
+  formGroup: {
+    marginBottom: 16,
+  },
+  formLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 6,
+    color: '#333',
+  },
+  sectionCard: {
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 10,
+    backgroundColor: '#FAFAFA',
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  questionCard: {
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 6,
+    padding: 8,
+    marginBottom: 8,
+    backgroundColor: '#FFFFFF',
+  },
+  inputCard: {
+    marginBottom: 8,
+    position: 'relative',
+  },
+  questionTitleList: {
+    fontSize: 13,
+    fontWeight: '600',
+    marginBottom: 6,
+    color: '#000000',
+  },
+  cameraSmallButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    marginTop: 6,
+    backgroundColor: '#F5F5F5',
+  },
+  cameraSmallButtonText: {
+    fontSize: 12,
+    color: '#000000',
+  },
+  deleteInputButtonSmall: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    borderRadius: 12,
+    padding: 4,
+  },
+  questionImagePreview: {
+    marginTop: 8,
+    width: '100%',
+    borderRadius: 6,
+  },
+  questionImagePreviewHorizontal: {
+    height: 160,
+  },
+  questionImagePreviewVertical: {
+    height: 260,
+  },
+  formInput: {
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    padding: 10,
+    fontSize: 14,
+    backgroundColor: '#FFFFFF',
+    color: '#000000',
+  },
+  signaturePreviewContainer: {
+    width: '100%',
+    aspectRatio: 1,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    backgroundColor: '#FFFFFF',
+    overflow: 'hidden',
+    marginTop: 10,
+    marginBottom: 10,
+    position: 'relative',
+  },
+  signaturePreview: { width: '100%', height: '100%' },
+  removeSignatureButton: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    width: 38,
+    height: 38,
+    borderRadius: 10,
+    backgroundColor: '#FF3B30',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  openSignatureButton: {
+    marginTop: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 10,
+    paddingVertical: 12,
+    backgroundColor: '#F8F9FA',
+    gap: 10,
+  },
+  openSignatureButtonText: { fontWeight: '800', color: '#000' },
+  modalContainer: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+    backgroundColor: '#F8F9FA',
+  },
+  modalTitle: { fontSize: 18, fontWeight: '800', color: '#000' },
+  signatureModalHint: { paddingHorizontal: 16, paddingTop: 12, color: '#666', fontSize: 13 },
+  signaturePadBox: {
+    marginTop: 10,
+    marginHorizontal: 16,
+    height: 260,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 2,
+    borderColor: '#E0E0E0',
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  modalActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    padding: 16,
+    gap: 12,
+    backgroundColor: '#FFFFFF',
+  },
+  modalClearButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    borderRadius: 10,
+    backgroundColor: '#EDEDED',
+    gap: 8,
+  },
+  modalClearButtonText: { fontWeight: '800', color: '#000' },
+  modalAcceptButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    borderRadius: 10,
+    backgroundColor: '#D7F5E5',
+    gap: 8,
+  },
+  modalAcceptButtonText: { fontWeight: '800', color: '#000' },
+  // Estilos de cámara (siguiendo patrón de VehiclesScreen)
+  cameraCloseButton: {
+    position: 'absolute',
+    top: 40,
+    right: 20,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    borderRadius: 20,
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1,
+  },
+  cameraCaptureButton: {
+    position: 'absolute',
+    bottom: 40,
+    alignSelf: 'center',
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    backgroundColor: 'rgba(255, 255, 255, 0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 4,
+    borderColor: '#fff',
+  },
+  cameraCaptureButtonInner: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: '#fff',
+  },
+  // Estilos para modal de agregar subsección (bootstrap style)
+  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: 16 },
+  modalCard: { width: '100%', maxWidth: 820, alignSelf: 'center', backgroundColor: '#FFFFFF', borderRadius: 12, overflow: 'hidden' },
+  modalCloseBtn: { padding: 6, borderRadius: 18, backgroundColor: '#F2F2F2' },
+  modalBody: { maxHeight: 520 },
+  modalBodyContent: { padding: 14, paddingBottom: 18 },
+  modalFooter: { padding: 12, borderTopWidth: 1, borderTopColor: '#E0E0E0', backgroundColor: '#FAFAFA', gap: 8 },
+  modalPrimaryBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#007AFF', borderRadius: 10, paddingVertical: 12 },
+  modalPrimaryBtnText: { color: '#FFFFFF', fontSize: 14, fontWeight: '900' },
+  modalFormCard: { backgroundColor: '#fff', borderRadius: 10, padding: 12, borderWidth: 1, borderColor: '#E0E0E0', marginBottom: 14 },
+});
+

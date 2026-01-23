@@ -1,15 +1,10 @@
 import { prisma } from "./prismaClient";
 import { toZonedTime } from "date-fns-tz";
 
-export async function sendNotificationByRole(marcaDiaId: number, title: string, description: string, roles: string[]) {
-    console.log("sendNotificationByRole", marcaDiaId, title, description, roles);
-    const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: marcaDiaId } });
-    if (!marcaDia) {
-        return;
-    }
+export async function sendNotificationByRole(corpoId: number, plazaSenders: number[], title: string, description: string, roles: string[]) {
 
     const receiver: number[] = [];
-    const corpo = await prisma.e_estructura_sucursal.findUnique({ where: { id: marcaDia.corpo_id } });
+    const corpo = await prisma.e_estructura_sucursal.findUnique({ where: { id: corpoId } });
     if (corpo && corpo.id) {
         const puestos_corpo = await prisma.e_estructura_puesto.findMany({ where: { sucursal_id: corpo.id } });
         for (const puesto of puestos_corpo) {
@@ -77,7 +72,7 @@ export async function sendNotificationByRole(marcaDiaId: number, title: string, 
 
         if (notification) {
             for (const plazaId of receiver) {
-                if (plazaId != marcaDia.plaza_id) {
+                if (!plazaSenders.includes(plazaId)) {
                     await prisma.c_plaza_notification.create({
                         data: {
                             plazaId: plazaId,
@@ -122,12 +117,7 @@ export async function sendNotificationByPlaza(marcaDiaId: number, title: string,
     }
 }
 
-export async function sendNotificationByEmployee(marcaDiaId: number, title: string, description: string, employeeIds: number[]) {
-    const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: marcaDiaId } });
-    if (!marcaDia) {
-        return;
-    }
-
+export async function sendNotificationByEmployee(corpoId: number, empleadoSenderIds: number[], title: string, description: string, employeeIds: number[]) {
     if (employeeIds.length > 0) {
         const notification = await prisma.c_notifications.create({
             data: {
@@ -139,7 +129,7 @@ export async function sendNotificationByEmployee(marcaDiaId: number, title: stri
 
         if (notification) {
             for (const employeeId of employeeIds) {
-                if (employeeId != marcaDia.empleadoFijo_id) {
+                if (!empleadoSenderIds.includes(employeeId)) {
                     await prisma.c_empleado_notification.create({
                         data: {
                             empleadoId: employeeId,

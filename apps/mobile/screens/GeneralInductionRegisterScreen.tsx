@@ -447,7 +447,10 @@ export default function GeneralInductionRegisterScreen() {
       let token = await AsyncStorage.getItem('access_token');
       if (!token) {
         const refreshed = await refreshAccessToken();
-        if (!refreshed) return;
+        if (!refreshed) {
+          if (logout) await logout();
+          throw new Error('Sesión expirada');
+        }
         token = await AsyncStorage.getItem('access_token');
       }
 
@@ -467,10 +470,14 @@ export default function GeneralInductionRegisterScreen() {
           await logout();
           return;
         }
-        const token2 = await AsyncStorage.getItem('access_token');
+        let token2 = await AsyncStorage.getItem('access_token');
         if (!token2) {
-          await logout();
-          return;
+          const refreshed = await refreshAccessToken();
+          if (!refreshed) {
+            if (logout) await logout();
+            throw new Error('Sesión expirada');
+          }
+          token2 = await AsyncStorage.getItem('access_token');
         }
         const retry = await fetch(`${apiUrl}/api/main-structure`, {
           method: 'GET',
@@ -1663,7 +1670,7 @@ export default function GeneralInductionRegisterScreen() {
                     <ThemedView style={styles.formGroup}>
                       <ThemedText style={styles.formLabel}>División (automática)</ThemedText>
                       <ThemedView style={styles.pickerWrapper}>
-                        <Picker selectedValue={selectedDivisionId ?? 0} onValueChange={() => {}} enabled={false} style={styles.picker}>
+                        <Picker selectedValue={selectedDivisionId ?? 0} onValueChange={() => { }} enabled={false} style={styles.picker}>
                           <Picker.Item
                             label={
                               selectedClienteId

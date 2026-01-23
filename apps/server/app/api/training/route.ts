@@ -10,13 +10,8 @@ import { getUserMarca } from "../../../utils/getUserMarca";
 
 export async function GET(req: NextRequest) {
     try {
-        const { valid, payload, message } = verifyAccessToken(req);
-        if (!valid) {
-            return NextResponse.json(
-                { status: false, message: message },
-                { status: 401 }
-            );
-        }
+        const { valid, expired, payload, message } = verifyAccessToken(req);
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         const marcaId = req.nextUrl.searchParams.get("m");
         if (!marcaId) {
@@ -159,10 +154,8 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
     try {
-        const { valid, payload, message } = verifyAccessToken(req);
-        if (!valid) {
-            return NextResponse.json({ status: false, message: message }, { status: 401 });
-        }
+        const { valid, expired, payload, message } = verifyAccessToken(req);
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         const {
             marca_id,
@@ -273,7 +266,7 @@ export async function POST(req: NextRequest) {
             });
 
             const desc = `Has recibido la capacitación ${new_capacitacion.titulo} en la sucursal ${corpo.nombre} de ${cliente.nombre} el día ${date} a las ${hour}`;
-            await sendNotificationByEmployee(marca.id, "Capacitación recibida", desc, [parseInt(emp)]);
+            await sendNotificationByEmployee(marca.corpo_id, [marca.empleadoFijo_id], "Capacitación recibida", desc, [parseInt(emp)]);
         }
 
         for (const puesto of puestos) {
@@ -315,7 +308,7 @@ export async function POST(req: NextRequest) {
             const updated_capacitacion = await prisma.e_registro_capacitaciones.update({ where: { id: new_capacitacion.id }, data: { file: file_name } });
         }
 
-        await sendNotificationByRole(marca.id, "Capacitación creada", `Se ha registrado la capacitación ${new_capacitacion.titulo} en la sucursal ${corpo.nombre} de ${cliente.nombre} el día ${date} a las ${hour}`, ["ADMINISTRATIVO", "SUPERVISOR"]);
+        await sendNotificationByRole(marca.corpo_id, [marca.plaza_id], "Capacitación creada", `Se ha registrado la capacitación ${new_capacitacion.titulo} en la sucursal ${corpo.nombre} de ${cliente.nombre} el día ${date} a las ${hour}`, ["ADMINISTRATIVO", "SUPERVISOR"]);
 
         return NextResponse.json({ status: true, message: "Capacitación creada correctamente" }, { status: 200 });
     }

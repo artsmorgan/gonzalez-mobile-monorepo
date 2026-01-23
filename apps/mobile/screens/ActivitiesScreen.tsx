@@ -37,7 +37,7 @@ interface InventoryItemProps {
   getActionIcon: (action: string) => React.ReactElement;
   getConnectionStatus: () => Promise<boolean>;
   onOpenCamera: (inventoryId: number) => void;
-  inventoryImages: {[key: number]: string};
+  inventoryImages: { [key: number]: string };
   onClearInventoryImage: (inventoryId: number) => void;
 }
 
@@ -51,7 +51,7 @@ interface ActivityItemProps {
   getActionIcon: (action: string) => React.ReactElement;
   getConnectionStatus: () => Promise<boolean>;
   openCameraForInventory: (inventoryId: number) => void;
-  inventoryImages: {[key: number]: string};
+  inventoryImages: { [key: number]: string };
   toggleActivity: (activity: Actividad) => void;
   onClearInventoryImage: (inventoryId: number) => void;
 }
@@ -80,8 +80,8 @@ const ActivityItemComponent: React.FC<ActivityItemProps> = ({
       const actionsStr = await AsyncStorage.getItem('activities_actions');
       if (actionsStr) {
         const actions = JSON.parse(actionsStr);
-        const action = actions.find((a: any) => 
-          a.type === 'update' && 
+        const action = actions.find((a: any) =>
+          a.type === 'update' &&
           a.activity_id === activityId
         );
         return action?.requestData?.file || null;
@@ -94,23 +94,23 @@ const ActivityItemComponent: React.FC<ActivityItemProps> = ({
 
   const loadActivityImageFromServer = React.useCallback(async () => {
     if (!apiUrl || !activity.id) return;
-    
+
     try {
       const imageUrl = `${apiUrl}/api/activities/${activity.id}/get-image?t=${Date.now()}`;
       const response = await fetch(imageUrl);
-      
+
       if (response.ok) {
         const blob = await response.blob();
-        
+
         // Convert blob to base64
         const base64Image = await new Promise<string | null>((resolve) => {
           const reader = new FileReader();
-          
+
           reader.onerror = () => {
             console.error('Error al leer la imagen con FileReader');
             resolve(null);
           };
-          
+
           reader.onloadend = () => {
             try {
               const base64data = reader.result as string;
@@ -125,10 +125,10 @@ const ActivityItemComponent: React.FC<ActivityItemProps> = ({
               resolve(null);
             }
           };
-          
+
           reader.readAsDataURL(blob);
         });
-        
+
         if (base64Image) {
           setServerActivityImageBase64(base64Image);
         }
@@ -142,11 +142,11 @@ const ActivityItemComponent: React.FC<ActivityItemProps> = ({
     if (!activity.is_revision_equipo) {
       const loadImages = async () => {
         const connectionStatus = await getConnectionStatus();
-        
+
         // Always load cached image
         const cached = await getCachedActivityImage(activity.id);
         setCachedActivityImage(cached);
-        
+
         // If online, also load from server
         if (connectionStatus) {
           await loadActivityImageFromServer();
@@ -154,7 +154,7 @@ const ActivityItemComponent: React.FC<ActivityItemProps> = ({
           setServerActivityImageBase64(null);
         }
       };
-      
+
       loadImages();
     }
   }, [activity.id, activity.is_revision_equipo, activity.imagen_adjunta, loadActivityImageFromServer, getConnectionStatus]);
@@ -166,7 +166,7 @@ const ActivityItemComponent: React.FC<ActivityItemProps> = ({
           <ThemedText style={styles.activityName}>{activity.nombre_actividad}</ThemedText>
           <ThemedText style={activity.is_pendiente ? styles.activityFrecuenciaPending : styles.activityFrecuencia}>{activity.is_pendiente ? 'Pendiente' : activity.frecuencia}</ThemedText>
         </ThemedView>
-        
+
         {!activity.is_revision_equipo && (
           <ThemedView style={styles.checkboxContainer}>
             <TouchableOpacity
@@ -183,12 +183,12 @@ const ActivityItemComponent: React.FC<ActivityItemProps> = ({
           </ThemedView>
         )}
       </ThemedView>
-      
+
       <ThemedView style={styles.activityBody}>
         <ThemedText style={styles.activityDescription}>
           {activity.descripcion_actividad}
         </ThemedText>
-        
+
         {activity.is_revision_equipo && activity.inventario && (
           <ThemedView style={styles.inventoryContainer}>
             <ThemedText style={styles.inventoryTitle}>Inventario:</ThemedText>
@@ -218,11 +218,11 @@ const ActivityItemComponent: React.FC<ActivityItemProps> = ({
             {(() => {
               const imageToShow = serverActivityImageBase64 || cachedActivityImage;
               if (!imageToShow) return null;
-              
-              const imageUri = imageToShow.startsWith('data:') 
-                ? imageToShow 
+
+              const imageUri = imageToShow.startsWith('data:')
+                ? imageToShow
                 : `data:image/jpeg;base64,${imageToShow}`;
-              
+
               return (
                 <Image
                   source={{ uri: imageUri }}
@@ -266,7 +266,7 @@ const InventoryItemComponent: React.FC<InventoryItemProps> = ({
     setShowMotivoInput(true);
     setShowConfirmButton(true);
     setShowImageCapture(true);
-    
+
     if (value) {
       setMotivo('');
     }
@@ -384,18 +384,18 @@ const InventoryItemComponent: React.FC<InventoryItemProps> = ({
         if (cachedActivities) {
           let activities = JSON.parse(cachedActivities);
           const activityIndex = activities.findIndex((a: Actividad) => a.id === activity.id);
-          
+
           if (activityIndex !== -1) {
             const inventoryIndex = activities[activityIndex].inventario.findIndex(
               (inv: Inventario) => inv.id === inventory.id
             );
-            
+
             if (inventoryIndex !== -1) {
               // Always apply the current change
               activities[activityIndex].inventario[inventoryIndex].revision_equipo.marcada = true;
               activities[activityIndex].inventario[inventoryIndex].revision_equipo.es_correcto = isCorrect;
               activities[activityIndex].inventario[inventoryIndex].revision_equipo.motivo_incorrecto = isCorrect ? '-' : motivo;
-              
+
               await AsyncStorage.setItem('activities_cache', JSON.stringify(activities));
               await fetchActivities();
             }
@@ -414,8 +414,8 @@ const InventoryItemComponent: React.FC<InventoryItemProps> = ({
       const actionsStr = await AsyncStorage.getItem('activities_actions');
       if (actionsStr) {
         const actions = JSON.parse(actionsStr);
-        const action = actions.find((a: any) => 
-          a.type === 'update-equipo' && 
+        const action = actions.find((a: any) =>
+          a.type === 'update-equipo' &&
           a.revisionEquipo_id === inventory.revision_equipo?.id
         );
         return action?.requestData?.file || null;
@@ -434,23 +434,23 @@ const InventoryItemComponent: React.FC<InventoryItemProps> = ({
 
   const loadImageFromServer = React.useCallback(async () => {
     if (!apiUrl || !inventory.revision_equipo?.id) return;
-    
+
     try {
       const imageUrl = `${apiUrl}/api/activities/equipo/${inventory.revision_equipo.id}/get-image?t=${Date.now()}`;
       const response = await fetch(imageUrl);
-      
+
       if (response.ok) {
         const blob = await response.blob();
-        
+
         // Convert blob to base64
         const base64Image = await new Promise<string | null>((resolve) => {
           const reader = new FileReader();
-          
+
           reader.onerror = () => {
             console.error('Error al leer la imagen con FileReader');
             resolve(null);
           };
-          
+
           reader.onloadend = () => {
             try {
               const base64data = reader.result as string;
@@ -465,10 +465,10 @@ const InventoryItemComponent: React.FC<InventoryItemProps> = ({
               resolve(null);
             }
           };
-          
+
           reader.readAsDataURL(blob);
         });
-        
+
         if (base64Image) {
           setServerImageBase64(base64Image);
         }
@@ -482,7 +482,7 @@ const InventoryItemComponent: React.FC<InventoryItemProps> = ({
     const checkConnectionAndLoadImage = async () => {
       const connectionStatus = await getConnectionStatus();
       setIsConnected(connectionStatus);
-      
+
       if (!connectionStatus) {
         // Offline: load from cache
         const cached = await getCachedImage();
@@ -492,18 +492,18 @@ const InventoryItemComponent: React.FC<InventoryItemProps> = ({
         // Online: fetch image from server and convert to base64
         const cached = await getCachedImage();
         setCachedImage(cached);
-        
+
         await loadImageFromServer();
       }
     };
-    
+
     checkConnectionAndLoadImage();
   }, [inventory.revision_equipo?.id, imageRefreshKey, loadImageFromServer]);
 
   return (
     <ThemedView style={styles.inventoryItem}>
       <ThemedText style={styles.inventoryName}>{inventory.nombre}</ThemedText>
-      
+
       {/* Reglas */}
       {inventory.reglas && inventory.reglas.length > 0 && (
         <ThemedView style={styles.reglasContainer}>
@@ -516,7 +516,7 @@ const InventoryItemComponent: React.FC<InventoryItemProps> = ({
           ))}
         </ThemedView>
       )}
-      
+
       <ThemedView style={styles.radioContainer}>
         <TouchableOpacity
           style={styles.radioButton}
@@ -530,7 +530,7 @@ const InventoryItemComponent: React.FC<InventoryItemProps> = ({
           </ThemedView>
           <ThemedText style={styles.radioLabel}>Correcto</ThemedText>
         </TouchableOpacity>
-        
+
         <TouchableOpacity
           style={styles.radioButton}
           onPress={() => handleRadioChange(false)}
@@ -544,7 +544,7 @@ const InventoryItemComponent: React.FC<InventoryItemProps> = ({
           <ThemedText style={styles.radioLabel}>Incorrecto</ThemedText>
         </TouchableOpacity>
       </ThemedView>
-      
+
       {showMotivoInput && (
         <TextInput
           style={styles.motivoInput}
@@ -590,11 +590,11 @@ const InventoryItemComponent: React.FC<InventoryItemProps> = ({
           {(() => {
             const imageToShow = serverImageBase64 || cachedImage;
             if (!imageToShow) return null;
-            
-            const imageUri = imageToShow.startsWith('data:') 
-              ? imageToShow 
+
+            const imageUri = imageToShow.startsWith('data:')
+              ? imageToShow
               : `data:image/jpeg;base64,${imageToShow}`;
-            
+
             return (
               <Image
                 source={{ uri: imageUri }}
@@ -605,7 +605,7 @@ const InventoryItemComponent: React.FC<InventoryItemProps> = ({
           })()}
         </ThemedView>
       )}
-      
+
       {showConfirmButton && (
         <TouchableOpacity
           style={styles.confirmInventoryButton}
@@ -645,11 +645,11 @@ interface Reglas {
 }
 
 interface RevisionEquipo {
-    id: number;
-    marcada: boolean;
-    es_correcto: boolean;
-    motivo_incorrecto: string;
-    imagen_adjunta: string;
+  id: number;
+  marcada: boolean;
+  es_correcto: boolean;
+  motivo_incorrecto: string;
+  imagen_adjunta: string;
 }
 
 interface EmpleadoOption {
@@ -738,26 +738,26 @@ export default function ActivitiesScreen() {
   const { employee, refreshAccessToken, logout } = useAuth();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const navigation = useNavigation<ActivitiesScreenNavigationProp>();
-  
+
   // Activities state
   const [activities, setActivities] = useState<Actividad[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [hasCurrentMarca, setHasCurrentMarca] = useState<boolean>(false);
-  
+
   // Bitacora modal state
   const [isBitacoraModalVisible, setIsBitacoraModalVisible] = useState(false);
   const [bitacoraText, setBitacoraText] = useState('');
   const [selectedActivity, setSelectedActivity] = useState<Actividad | null>(null);
   const [activityImageBase64, setActivityImageBase64] = useState<string | null>(null);
-  
+
   // Camera state
   const [isCameraVisible, setIsCameraVisible] = useState(false);
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef<CameraView | null>(null);
   const [cameraTarget, setCameraTarget] = useState<'activity' | 'inventory'>('activity');
   const [targetInventoryId, setTargetInventoryId] = useState<number | null>(null);
-  const [inventoryImages, setInventoryImages] = useState<{[key: number]: string}>({});
+  const [inventoryImages, setInventoryImages] = useState<{ [key: number]: string }>({});
   // Repetition config modal state
   const [isCreateActivityVisible, setIsCreateActivityVisible] = useState(false);
   const [repetitionType, setRepetitionType] = useState<'daily' | 'weekly' | 'monthly-weekday' | 'monthly-last' | 'yearly' | 'weekdays' | 'custom'>('custom');
@@ -811,19 +811,19 @@ export default function ActivitiesScreen() {
     const weekOrdinals = ['primer', 'segundo', 'tercer', 'cuarto', 'último'];
     const months = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
       'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
-    
+
     const currentWeekday = baseDate.getDay();
     const weekdayName = weekdays[currentWeekday];
     const weekOrdinal = getWeekOrdinal(baseDate);
     const ordinalName = weekOrdinals[weekOrdinal - 1] || 'último';
-    
+
     const currentDay = baseDate.getDate();
     const currentMonth = baseDate.getMonth();
     const monthName = months[currentMonth];
-    
+
     // Calculate last weekday of current month
     const lastWeekdayName = weekdays[currentWeekday];
-    
+
     setWeeklyLabel(`Cada semana el ${weekdayName}`);
     setMonthlyWeekdayLabel(`Cada mes el ${ordinalName} ${weekdayName}`);
     setMonthlyLastLabel(`Cada mes el último ${weekdayName}`);
@@ -886,7 +886,9 @@ export default function ActivitiesScreen() {
         if (!token) {
           const refreshed = await refreshAccessToken();
           if (!refreshed) {
-            throw new Error('No authentication token found');
+            if (logout) await logout();
+            throw new Error('Sesión expirada');
+            return;
           }
           token = await AsyncStorage.getItem('access_token');
         }
@@ -900,7 +902,7 @@ export default function ActivitiesScreen() {
           },
         });
 
-        if (response.status === 401 || response.status === 403) {
+        if (response.status === 401) {
           const refreshed = await refreshAccessToken();
           if (refreshed) {
             return fetchActivities();
@@ -909,6 +911,11 @@ export default function ActivitiesScreen() {
             await logout();
             return;
           }
+        }
+
+        if (response.status === 403) {
+          if (logout) await logout();
+          throw new Error('Acceso denegado');
         }
 
         if (!response.ok) {
@@ -940,7 +947,7 @@ export default function ActivitiesScreen() {
     } catch (err) {
       console.error('Error fetching activities:', err);
       setError('Error al cargar las actividades');
-      
+
       // Try to load from cache if online fetch fails
       const cachedActivities = await AsyncStorage.getItem('activities_cache');
       if (cachedActivities) {
@@ -1037,7 +1044,8 @@ export default function ActivitiesScreen() {
         if (!token) {
           const refreshed = await refreshAccessToken();
           if (!refreshed) {
-            throw new Error('No authentication token found');
+            if (logout) await logout();
+            throw new Error('Sesión expirada');
           }
           token = await AsyncStorage.getItem('access_token');
         }
@@ -1051,7 +1059,7 @@ export default function ActivitiesScreen() {
           },
         });
 
-        if (response.status === 401 || response.status === 403) {
+        if (response.status === 401) {
           const refreshed = await refreshAccessToken();
           if (refreshed) {
             return loadPuestosCatalog(corpoId, isConnected);
@@ -1059,6 +1067,11 @@ export default function ActivitiesScreen() {
             await logout();
             throw new Error('Sesión expirada');
           }
+        }
+
+        if (response.status === 403) {
+          if (logout) await logout();
+          throw new Error('Acceso denegado');
         }
 
         if (!response.ok) {
@@ -1116,7 +1129,8 @@ export default function ActivitiesScreen() {
         if (!token) {
           const refreshed = await refreshAccessToken();
           if (!refreshed) {
-            throw new Error('No authentication token found');
+            if (logout) await logout();
+            throw new Error('Sesión expirada');
           }
           token = await AsyncStorage.getItem('access_token');
         }
@@ -1130,7 +1144,7 @@ export default function ActivitiesScreen() {
           },
         });
 
-        if (response.status === 401 || response.status === 403) {
+        if (response.status === 401) {
           const refreshed = await refreshAccessToken();
           if (refreshed) {
             return loadArticulosCatalog(isConnected);
@@ -1138,6 +1152,11 @@ export default function ActivitiesScreen() {
             await logout();
             throw new Error('Sesión expirada');
           }
+        }
+
+        if (response.status === 403) {
+          if (logout) await logout();
+          throw new Error('Acceso denegado');
         }
 
         if (!response.ok) {
@@ -1475,9 +1494,9 @@ export default function ActivitiesScreen() {
         return prev.map(r =>
           r.puestoId === puestoId
             ? {
-                ...r,
-                plazas: [...r.plazas, ...newPlazaRecords],
-              }
+              ...r,
+              plazas: [...r.plazas, ...newPlazaRecords],
+            }
             : r
         );
       }
@@ -1544,9 +1563,9 @@ export default function ActivitiesScreen() {
         .map(r =>
           r.puestoId === puestoId
             ? {
-                ...r,
-                plazas: r.plazas.filter(p => p.plazaId !== plazaId),
-              }
+              ...r,
+              plazas: r.plazas.filter(p => p.plazaId !== plazaId),
+            }
             : r
         )
         .filter(r => r.assignAll || r.plazas.length > 0)
@@ -1585,9 +1604,9 @@ export default function ActivitiesScreen() {
       prev.map(rule =>
         rule.articuloId === articuloId
           ? {
-              ...rule,
-              reglas: [...rule.reglas, { id: generateRuleId(), nombre: '', valor: '' }],
-            }
+            ...rule,
+            reglas: [...rule.reglas, { id: generateRuleId(), nombre: '', valor: '' }],
+          }
           : rule
       )
     );
@@ -1598,16 +1617,16 @@ export default function ActivitiesScreen() {
       prev.map(rule =>
         rule.articuloId === articuloId
           ? {
-              ...rule,
-              reglas: rule.reglas.map(r =>
-                r.id === ruleId
-                  ? {
-                      ...r,
-                      [field]: value,
-                    }
-                  : r
-              ),
-            }
+            ...rule,
+            reglas: rule.reglas.map(r =>
+              r.id === ruleId
+                ? {
+                  ...r,
+                  [field]: value,
+                }
+                : r
+            ),
+          }
           : rule
       )
     );
@@ -1619,9 +1638,9 @@ export default function ActivitiesScreen() {
         .map(rule =>
           rule.articuloId === articuloId
             ? {
-                ...rule,
-                reglas: rule.reglas.filter(r => r.id !== ruleId),
-              }
+              ...rule,
+              reglas: rule.reglas.filter(r => r.id !== ruleId),
+            }
             : rule
         )
         .filter(rule => rule.reglas.length > 0)
@@ -1649,7 +1668,8 @@ export default function ActivitiesScreen() {
       if (!token) {
         const refreshed = await refreshAccessToken();
         if (!refreshed) {
-          throw new Error('No authentication token found');
+          if (logout) await logout();
+          throw new Error('Sesión expirada');
         }
         token = await AsyncStorage.getItem('access_token');
       }
@@ -1663,7 +1683,7 @@ export default function ActivitiesScreen() {
         },
       });
 
-      if (response.status === 401 || response.status === 403) {
+      if (response.status === 401) {
         const refreshed = await refreshAccessToken();
         if (refreshed) {
           return fetchSignatureEmployee(employeeId);
@@ -1671,6 +1691,11 @@ export default function ActivitiesScreen() {
           await logout();
           throw new Error('Sesión expirada');
         }
+      }
+
+      if (response.status === 403) {
+        if (logout) await logout();
+        throw new Error('Acceso denegado');
       }
 
       if (!response.ok) {
@@ -1846,8 +1871,8 @@ export default function ActivitiesScreen() {
         plazas: responsable.assignAll
           ? []
           : responsable.plazas.map(plaza => ({
-              plaza_id: plaza.plazaId,
-            })),
+            plaza_id: plaza.plazaId,
+          })),
       }));
 
       const requestData = {
@@ -2051,12 +2076,12 @@ export default function ActivitiesScreen() {
     }
 
     try {
-      const photo = await cameraRef.current.takePictureAsync({ 
+      const photo = await cameraRef.current.takePictureAsync({
         base64: true,
         quality: 0.7,
         skipProcessing: false
       });
-      
+
       if (!photo) {
         Alert.alert('Error', 'No se pudo capturar la foto. Por favor intente nuevamente.');
         setIsCameraVisible(false);
@@ -2070,10 +2095,10 @@ export default function ActivitiesScreen() {
       }
 
       setIsCameraVisible(false);
-      
+
       // Format base64 with data URI prefix
       const formattedBase64 = `data:image/jpeg;base64,${photo.base64!}`;
-      
+
       setTimeout(() => {
         if (cameraTarget === 'activity') {
           setActivityImageBase64(formattedBase64);
@@ -2094,7 +2119,7 @@ export default function ActivitiesScreen() {
   const toggleActivity = (activity: Actividad) => {
     const action = activity.is_marcada ? 'desmarcar' : 'marcar';
     const actionText = activity.is_marcada ? 'desmarcar' : 'marcar';
-    
+
     if (action === 'marcar') {
       // Para marcar, mostrar modal de bitácora
       setSelectedActivity(activity);
@@ -2199,11 +2224,11 @@ export default function ActivitiesScreen() {
         if (cachedActivities) {
           let activities = JSON.parse(cachedActivities);
           const activityIndex = activities.findIndex((a: Actividad) => a.id === activity.id);
-          
+
           if (activityIndex !== -1) {
             // Apply the change (marcar or desmarcar)
-              activities[activityIndex].is_marcada = estado === 'marcar';
-            
+            activities[activityIndex].is_marcada = estado === 'marcar';
+
             await AsyncStorage.setItem('activities_cache', JSON.stringify(activities));
           }
         }
@@ -2219,7 +2244,7 @@ export default function ActivitiesScreen() {
 
   const handleBitacoraConfirm = () => {
     if (!selectedActivity) return;
-    
+
     setIsBitacoraModalVisible(false);
     const bitacora = bitacoraText.trim() || "-";
     executeToggleActivity(selectedActivity, 'marcar', bitacora, activityImageBase64);
@@ -2239,18 +2264,18 @@ export default function ActivitiesScreen() {
     return (
       <ActivityItemComponent
         key={activity.id}
-                  activity={activity}
-                  employee={employee}
-                  refreshAccessToken={refreshAccessToken}
-                  logout={logout}
-                  fetchActivities={fetchActivities}
-                  getActionIcon={getActionIcon}
-                  getConnectionStatus={getConnectionStatus}
+        activity={activity}
+        employee={employee}
+        refreshAccessToken={refreshAccessToken}
+        logout={logout}
+        fetchActivities={fetchActivities}
+        getActionIcon={getActionIcon}
+        getConnectionStatus={getConnectionStatus}
         openCameraForInventory={openCameraForInventory}
         inventoryImages={inventoryImages}
         toggleActivity={toggleActivity}
         onClearInventoryImage={(inventoryId) => {
-          setInventoryImages((prev: {[key: number]: string}) => {
+          setInventoryImages((prev: { [key: number]: string }) => {
             const updated = { ...prev };
             delete updated[inventoryId];
             return updated;
@@ -2274,8 +2299,8 @@ export default function ActivitiesScreen() {
           <ThemedText style={styles.loadingText}>Cargando actividades...</ThemedText>
         </ThemedView>
         <AppFooter />
-        <SlideMenu 
-          isVisible={isMenuVisible} 
+        <SlideMenu
+          isVisible={isMenuVisible}
           onClose={handleMenuClose}
           onHomePress={handleHomePress}
           currentRoute="Activities"
@@ -2295,7 +2320,7 @@ export default function ActivitiesScreen() {
           <ThemedText style={styles.noMarcaMessage}>
             Debes registrar una marca de ingreso antes de acceder a las actividades.
           </ThemedText>
-          <TouchableOpacity 
+          <TouchableOpacity
             style={styles.goBackButton}
             onPress={() => navigation.goBack()}
           >
@@ -2304,8 +2329,8 @@ export default function ActivitiesScreen() {
           </TouchableOpacity>
         </ThemedView>
         <AppFooter />
-        <SlideMenu 
-          isVisible={isMenuVisible} 
+        <SlideMenu
+          isVisible={isMenuVisible}
           onClose={handleMenuClose}
           onHomePress={handleHomePress}
           currentRoute="Activities"
@@ -2317,7 +2342,7 @@ export default function ActivitiesScreen() {
   return (
     <ThemedView style={styles.container}>
       <AppHeader onMenuPress={handleMenuPress} title="Actividades" />
-      <ScrollView 
+      <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={true}
@@ -2343,27 +2368,27 @@ export default function ActivitiesScreen() {
 
           {/* Activities List */}
           {!isCreateActivityVisible && (
-          <ThemedView style={styles.activitiesContainer}>
-            {error ? (
-              <ThemedView style={styles.errorContainer}>
-                <ThemedText style={styles.errorText}>{error}</ThemedText>
-                <TouchableOpacity 
-                  style={styles.retryButton}
-                  onPress={fetchActivities}
-                >
-                  <ThemedText style={styles.retryButtonText}>Reintentar</ThemedText>
-                </TouchableOpacity>
-              </ThemedView>
-            ) : activities.length === 0 ? (
-              <ThemedView style={styles.emptyContainer}>
-                <ThemedText style={styles.emptyText}>
-                  No hay actividades asignadas
-                </ThemedText>
-              </ThemedView>
-            ) : (
-              activities.map(activity => renderActivityItem(activity))
-            )}
-          </ThemedView>
+            <ThemedView style={styles.activitiesContainer}>
+              {error ? (
+                <ThemedView style={styles.errorContainer}>
+                  <ThemedText style={styles.errorText}>{error}</ThemedText>
+                  <TouchableOpacity
+                    style={styles.retryButton}
+                    onPress={fetchActivities}
+                  >
+                    <ThemedText style={styles.retryButtonText}>Reintentar</ThemedText>
+                  </TouchableOpacity>
+                </ThemedView>
+              ) : activities.length === 0 ? (
+                <ThemedView style={styles.emptyContainer}>
+                  <ThemedText style={styles.emptyText}>
+                    No hay actividades asignadas
+                  </ThemedText>
+                </ThemedView>
+              ) : (
+                activities.map(activity => renderActivityItem(activity))
+              )}
+            </ThemedView>
           )}
 
           {/* Activity creation form (inline, hides activities list) */}
@@ -2378,41 +2403,41 @@ export default function ActivitiesScreen() {
                   Configuración de la actividad
                 </ThemedText>
 
-                  <ThemedText style={styles.formLabel}>Nombre de la actividad</ThemedText>
-                  <TextInput
-                    style={styles.textInput}
-                    placeholder="Ingresa el nombre de la actividad"
-                    value={activityName}
-                    onChangeText={setActivityName}
+                <ThemedText style={styles.formLabel}>Nombre de la actividad</ThemedText>
+                <TextInput
+                  style={styles.textInput}
+                  placeholder="Ingresa el nombre de la actividad"
+                  value={activityName}
+                  onChangeText={setActivityName}
+                />
+                <ThemedText style={styles.formLabel}>Descripción de la actividad</ThemedText>
+                <TextInput
+                  style={[styles.textInput, styles.textArea]}
+                  placeholder="Describe la actividad"
+                  multiline
+                  value={activityDescription}
+                  onChangeText={setActivityDescription}
+                />
+                <ThemedText style={styles.formLabel}>Fecha de inicio de la actividad</ThemedText>
+                <TouchableOpacity
+                  style={styles.dateButton}
+                  onPress={() => setShowStartDatePicker(true)}
+                >
+                  <ThemedText style={styles.dateButtonText}>
+                    {formatDateForDisplay(activityStartDate)}
+                  </ThemedText>
+                  <Ionicons name="calendar" size={20} color="#007AFF" />
+                </TouchableOpacity>
+                {showStartDatePicker && (
+                  <DateTimePicker
+                    value={activityStartDate}
+                    mode="date"
+                    display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                    onChange={handleStartDateChange}
                   />
-                  <ThemedText style={styles.formLabel}>Descripción de la actividad</ThemedText>
-                  <TextInput
-                    style={[styles.textInput, styles.textArea]}
-                    placeholder="Describe la actividad"
-                    multiline
-                    value={activityDescription}
-                    onChangeText={setActivityDescription}
-                  />
-                  <ThemedText style={styles.formLabel}>Fecha de inicio de la actividad</ThemedText>
-                  <TouchableOpacity
-                    style={styles.dateButton}
-                    onPress={() => setShowStartDatePicker(true)}
-                  >
-                    <ThemedText style={styles.dateButtonText}>
-                      {formatDateForDisplay(activityStartDate)}
-                    </ThemedText>
-                    <Ionicons name="calendar" size={20} color="#007AFF" />
-                  </TouchableOpacity>
-                  {showStartDatePicker && (
-                    <DateTimePicker
-                      value={activityStartDate}
-                      mode="date"
-                      display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                      onChange={handleStartDateChange}
-                    />
-                  )}
+                )}
 
-                  <ThemedView style={styles.sectionCard}>
+                <ThemedView style={styles.sectionCard}>
                   {catalogError ? (
                     <ThemedText style={styles.formErrorText}>{catalogError}</ThemedText>
                   ) : null}
@@ -2523,7 +2548,7 @@ export default function ActivitiesScreen() {
                             <ThemedView key={responsable.puestoId} style={styles.assignedItem}>
                               <View style={styles.assignedHeader}>
                                 <ThemedText style={styles.assignedTitle}>{responsable.puestoNombre}</ThemedText>
-                                <TouchableOpacity 
+                                <TouchableOpacity
                                   style={styles.removeButton}
                                   onPress={() => handleRemovePuesto(responsable.puestoId)}
                                 >
@@ -2538,7 +2563,7 @@ export default function ActivitiesScreen() {
                                 responsable.plazas.map(plaza => (
                                   <View key={plaza.plazaId} style={styles.plazaChip}>
                                     <ThemedText style={styles.plazaChipText}>{plaza.plazaNombre}</ThemedText>
-                                    <TouchableOpacity 
+                                    <TouchableOpacity
                                       style={styles.removeButton}
                                       onPress={() => handleRemovePlaza(responsable.puestoId, plaza.plazaId)}
                                     >
@@ -2553,19 +2578,19 @@ export default function ActivitiesScreen() {
                       </ThemedView>
                     </>
                   )}
-                  </ThemedView>
+                </ThemedView>
 
-                  <ThemedText style={styles.sectionTitle}>Tipo de actividad</ThemedText>
-                  <ThemedView style={styles.pickerContainer}>
-                    <Picker
-                      selectedValue={tipoActividad}
-                      onValueChange={(value) => setTipoActividad(value as 'Normal' | 'Inventario')}
-                      style={styles.picker}
-                    >
-                      <Picker.Item label="Normal" value="Normal" />
-                      <Picker.Item label="Inventario" value="Inventario" />
-                    </Picker>
-                  </ThemedView>
+                <ThemedText style={styles.sectionTitle}>Tipo de actividad</ThemedText>
+                <ThemedView style={styles.pickerContainer}>
+                  <Picker
+                    selectedValue={tipoActividad}
+                    onValueChange={(value) => setTipoActividad(value as 'Normal' | 'Inventario')}
+                    style={styles.picker}
+                  >
+                    <Picker.Item label="Normal" value="Normal" />
+                    <Picker.Item label="Inventario" value="Inventario" />
+                  </Picker>
+                </ThemedView>
 
                 {tipoActividad === 'Inventario' && (
                   <ThemedView style={styles.sectionCard}>
@@ -2593,7 +2618,7 @@ export default function ActivitiesScreen() {
                         <ThemedView key={articulo.articuloId} style={styles.articleCard}>
                           <View style={styles.assignedHeader}>
                             <ThemedText style={styles.assignedTitle}>{articulo.articuloNombre}</ThemedText>
-                            <TouchableOpacity 
+                            <TouchableOpacity
                               style={styles.removeButton}
                               onPress={() => handleRemoveArticulo(articulo.articuloId)}
                             >
@@ -2614,7 +2639,7 @@ export default function ActivitiesScreen() {
                                 value={regla.valor}
                                 onChangeText={text => handleRuleChange(articulo.articuloId, regla.id, 'valor', text)}
                               />
-                              <TouchableOpacity 
+                              <TouchableOpacity
                                 style={styles.removeButton}
                                 onPress={() => handleRemoveRule(articulo.articuloId, regla.id)}
                               >
@@ -2637,47 +2662,47 @@ export default function ActivitiesScreen() {
 
                 <ThemedView style={styles.sectionCard}>
                   <ThemedText style={styles.sectionTitle}>Repetición de la actividad</ThemedText>
-                    <ThemedView style={styles.pickerContainer}>
-                      <Picker
-                        selectedValue={repetitionType}
-                        onValueChange={(value) => setRepetitionType(value as any)}
-                        style={styles.picker}
-                      >
-                        <Picker.Item label="Cada día" value="daily" />
-                        <Picker.Item label={weeklyLabel} value="weekly" />
-                        <Picker.Item label={monthlyWeekdayLabel} value="monthly-weekday" />
-                        <Picker.Item label={monthlyLastLabel} value="monthly-last" />
-                        <Picker.Item label={yearlyLabel} value="yearly" />
-                        <Picker.Item label="Todos los días laborales (lunes a viernes)" value="weekdays" />
-                        <Picker.Item label="Personalizado" value="custom" />
-                      </Picker>
-                    </ThemedView>
+                  <ThemedView style={styles.pickerContainer}>
+                    <Picker
+                      selectedValue={repetitionType}
+                      onValueChange={(value) => setRepetitionType(value as any)}
+                      style={styles.picker}
+                    >
+                      <Picker.Item label="Cada día" value="daily" />
+                      <Picker.Item label={weeklyLabel} value="weekly" />
+                      <Picker.Item label={monthlyWeekdayLabel} value="monthly-weekday" />
+                      <Picker.Item label={monthlyLastLabel} value="monthly-last" />
+                      <Picker.Item label={yearlyLabel} value="yearly" />
+                      <Picker.Item label="Todos los días laborales (lunes a viernes)" value="weekdays" />
+                      <Picker.Item label="Personalizado" value="custom" />
+                    </Picker>
+                  </ThemedView>
 
                   {repetitionType === 'custom' && (
                     <>
-                        <ThemedText style={styles.formLabel}>Repetir cada:</ThemedText>
-                        <View style={styles.intervalRow}>
-                          <TextInput
-                            style={styles.intervalInput}
-                            value={customInterval}
-                            onChangeText={text => setCustomInterval(text.replace(/[^0-9]/g, '') || '1')}
-                            keyboardType="numeric"
-                          />
-                          <ThemedView style={styles.pickerContainerInline}>
-                            <Picker
-                              selectedValue={customUnit}
-                              onValueChange={(value) => setCustomUnit(value as any)}
-                              style={styles.picker}
-                            >
-                              <Picker.Item label="día" value="day" />
-                              <Picker.Item label="semana" value="week" />
-                              <Picker.Item label="mes" value="month" />
-                              <Picker.Item label="año" value="year" />
-                            </Picker>
-                          </ThemedView>
-                        </View>
+                      <ThemedText style={styles.formLabel}>Repetir cada:</ThemedText>
+                      <View style={styles.intervalRow}>
+                        <TextInput
+                          style={styles.intervalInput}
+                          value={customInterval}
+                          onChangeText={text => setCustomInterval(text.replace(/[^0-9]/g, '') || '1')}
+                          keyboardType="numeric"
+                        />
+                        <ThemedView style={styles.pickerContainerInline}>
+                          <Picker
+                            selectedValue={customUnit}
+                            onValueChange={(value) => setCustomUnit(value as any)}
+                            style={styles.picker}
+                          >
+                            <Picker.Item label="día" value="day" />
+                            <Picker.Item label="semana" value="week" />
+                            <Picker.Item label="mes" value="month" />
+                            <Picker.Item label="año" value="year" />
+                          </Picker>
+                        </ThemedView>
+                      </View>
                       {customUnit === 'week' && (
-                        <ThemedView style={{marginTop: 16}}>
+                        <ThemedView style={{ marginTop: 16 }}>
                           <ThemedText style={styles.formLabel}>
                             Se repite el... (puedes seleccionar múltiples días)
                           </ThemedText>
@@ -2714,7 +2739,7 @@ export default function ActivitiesScreen() {
                       )}
 
                       {customUnit === 'month' && (
-                        <ThemedView style={{marginTop: 16}}>
+                        <ThemedView style={{ marginTop: 16 }}>
                           <ThemedText style={styles.formLabel}>Opción de mes:</ThemedText>
                           <ThemedView style={styles.pickerContainer}>
                             <Picker
@@ -2831,56 +2856,56 @@ export default function ActivitiesScreen() {
                   )}
                 </ThemedView>
 
-                  <ThemedText style={styles.sectionTitle}>Firma del responsable</ThemedText>
-                  <ThemedView style={styles.signatureButtons}>
+                <ThemedText style={styles.sectionTitle}>Firma del responsable</ThemedText>
+                <ThemedView style={styles.signatureButtons}>
+                  <TouchableOpacity
+                    style={styles.signatureButton}
+                    onPress={handleGenerateSignature}
+                    disabled={isProcessingSignature}
+                  >
+                    {isProcessingSignature ? (
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                      <>
+                        <Ionicons name="finger-print" size={20} color="#FFFFFF" />
+                        <ThemedText style={styles.signatureButtonText}>Generar</ThemedText>
+                      </>
+                    )}
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.signatureButton}
+                    onPress={handleScanSignature}
+                  >
+                    <Ionicons name="qr-code" size={20} color="#FFFFFF" />
+                    <ThemedText style={styles.signatureButtonText}>Escanear QR</ThemedText>
+                  </TouchableOpacity>
+                </ThemedView>
+                {signatureData && (
+                  <ThemedView style={styles.signatureInfo}>
+                    <ThemedText style={styles.signatureInfoTitle}>Información de la firma:</ThemedText>
+                    <ThemedText style={styles.signatureInfoText}>ID de sesión: {signatureData.sessionId}</ThemedText>
+                    <ThemedText style={styles.signatureInfoText}>ID del empleado: {signatureData.employeeId}</ThemedText>
+                    {signatureEmployeeName && (
+                      <ThemedView style={styles.signatureInfoDetail}>
+                        <ThemedText style={styles.signatureInfoDetailText}>
+                          {signatureEmployeeName}
+                        </ThemedText>
+                      </ThemedView>
+                    )}
+                    <ThemedText style={styles.signatureInfoText}>Latitud: {signatureData.latitude}</ThemedText>
+                    <ThemedText style={styles.signatureInfoText}>Longitud: {signatureData.longitude}</ThemedText>
+                    <ThemedText style={styles.signatureInfoText}>Hora actual: {generateDateTime(signatureData.timestamp)}</ThemedText>
                     <TouchableOpacity
-                      style={styles.signatureButton}
-                      onPress={handleGenerateSignature}
-                      disabled={isProcessingSignature}
+                      style={styles.clearSignatureButton}
+                      onPress={() => {
+                        setSignatureData(null);
+                        setSignatureEmployeeName(null);
+                      }}
                     >
-                      {isProcessingSignature ? (
-                        <ActivityIndicator size="small" color="#FFFFFF" />
-                      ) : (
-                        <>
-                          <Ionicons name="finger-print" size={20} color="#FFFFFF" />
-                          <ThemedText style={styles.signatureButtonText}>Generar</ThemedText>
-                        </>
-                      )}
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={styles.signatureButton}
-                      onPress={handleScanSignature}
-                    >
-                      <Ionicons name="qr-code" size={20} color="#FFFFFF" />
-                      <ThemedText style={styles.signatureButtonText}>Escanear QR</ThemedText>
+                      <ThemedText style={styles.clearSignatureText}>{getActionIcon('clear')}</ThemedText>
                     </TouchableOpacity>
                   </ThemedView>
-                  {signatureData && (
-                    <ThemedView style={styles.signatureInfo}>
-                      <ThemedText style={styles.signatureInfoTitle}>Información de la firma:</ThemedText>
-                      <ThemedText style={styles.signatureInfoText}>ID de sesión: {signatureData.sessionId}</ThemedText>
-                      <ThemedText style={styles.signatureInfoText}>ID del empleado: {signatureData.employeeId}</ThemedText>
-                      {signatureEmployeeName && (
-                        <ThemedView style={styles.signatureInfoDetail}>
-                          <ThemedText style={styles.signatureInfoDetailText}>
-                            {signatureEmployeeName}
-                          </ThemedText>
-                        </ThemedView>
-                      )}
-                      <ThemedText style={styles.signatureInfoText}>Latitud: {signatureData.latitude}</ThemedText>
-                      <ThemedText style={styles.signatureInfoText}>Longitud: {signatureData.longitude}</ThemedText>
-                      <ThemedText style={styles.signatureInfoText}>Hora actual: {generateDateTime(signatureData.timestamp)}</ThemedText>
-                      <TouchableOpacity
-                        style={styles.clearSignatureButton}
-                        onPress={() => {
-                          setSignatureData(null);
-                          setSignatureEmployeeName(null);
-                        }}
-                      >
-                        <ThemedText style={styles.clearSignatureText}>{getActionIcon('clear')}</ThemedText>
-                      </TouchableOpacity>
-                    </ThemedView>
-                  )}
+                )}
 
                 <ThemedView style={styles.repetitionModalButtons}>
                   <TouchableOpacity
@@ -2929,45 +2954,45 @@ export default function ActivitiesScreen() {
                 <Ionicons name="close" size={24} color="#333" />
               </TouchableOpacity>
             </ThemedView>
-            
+
             <ThemedText style={styles.modalSubtitle}>
               {selectedActivity?.nombre_actividad}
             </ThemedText>
-            
+
             <ThemedView style={styles.formGroup}>
               <ThemedText style={styles.formLabel}>Bitácora:</ThemedText>
-            <TextInput
-              style={styles.bitacoraInput}
-              value={bitacoraText}
-              onChangeText={setBitacoraText}
+              <TextInput
+                style={styles.bitacoraInput}
+                value={bitacoraText}
+                onChangeText={setBitacoraText}
                 placeholder="Ingresa la bitácora de la actividad..."
-              placeholderTextColor="#999"
+                placeholderTextColor="#999"
                 multiline
-              numberOfLines={4}
-              textAlignVertical="top"
-            />
+                numberOfLines={4}
+                textAlignVertical="top"
+              />
             </ThemedView>
 
             <ThemedView style={styles.formGroup}>
               <ThemedText style={styles.formLabel}>Adjuntar imagen (opcional):</ThemedText>
-            <TouchableOpacity
-              style={styles.captureImageButton}
-              onPress={openCameraForActivity}
-            >
-              <Ionicons name="camera" size={20} color="#007AFF" />
-              <ThemedText style={styles.captureImageButtonText}>
+              <TouchableOpacity
+                style={styles.captureImageButton}
+                onPress={openCameraForActivity}
+              >
+                <Ionicons name="camera" size={20} color="#007AFF" />
+                <ThemedText style={styles.captureImageButtonText}>
                   {activityImageBase64 ? 'Cambiar imagen' : 'Capturar imagen'}
-              </ThemedText>
-            </TouchableOpacity>
+                </ThemedText>
+              </TouchableOpacity>
 
-            {activityImageBase64 && (
-              <ThemedView style={styles.imagePreviewContainer}>
-                <ThemedText style={styles.imagePreviewTitle}>Imagen capturada:</ThemedText>
-                <Image
+              {activityImageBase64 && (
+                <ThemedView style={styles.imagePreviewContainer}>
+                  <ThemedText style={styles.imagePreviewTitle}>Imagen capturada:</ThemedText>
+                  <Image
                     source={{ uri: activityImageBase64 }}
-                  style={styles.imagePreview}
-                  resizeMode="contain"
-                />
+                    style={styles.imagePreview}
+                    resizeMode="contain"
+                  />
                   <TouchableOpacity
                     style={styles.removeImageButton}
                     onPress={() => setActivityImageBase64(null)}
@@ -2975,10 +3000,10 @@ export default function ActivitiesScreen() {
                     <Ionicons name="trash" size={20} color="#FF3B30" />
                     <ThemedText style={styles.removeImageText}>Eliminar imagen</ThemedText>
                   </TouchableOpacity>
-              </ThemedView>
-            )}
+                </ThemedView>
+              )}
             </ThemedView>
-            
+
             <ThemedView style={styles.modalButtons}>
               <TouchableOpacity
                 style={[styles.modalButton, styles.modalCancelButton]}
@@ -2986,7 +3011,7 @@ export default function ActivitiesScreen() {
               >
                 <ThemedText style={styles.modalCancelButtonText}>Cancelar</ThemedText>
               </TouchableOpacity>
-              
+
               <TouchableOpacity
                 style={[styles.modalButton, styles.modalConfirmButton]}
                 onPress={handleBitacoraConfirm}
@@ -3016,7 +3041,7 @@ export default function ActivitiesScreen() {
             >
               <Ionicons name="close" size={30} color="#fff" />
             </TouchableOpacity>
-            
+
             <TouchableOpacity
               style={styles.cameraCaptureButton}
               onPress={takePicture}
@@ -3028,8 +3053,8 @@ export default function ActivitiesScreen() {
       </Modal>
 
       <AppFooter />
-      <SlideMenu 
-        isVisible={isMenuVisible} 
+      <SlideMenu
+        isVisible={isMenuVisible}
         onClose={handleMenuClose}
         onHomePress={handleHomePress}
         currentRoute="Activities"
@@ -3317,7 +3342,7 @@ const styles = StyleSheet.create({
     borderColor: '#E0E0E0',
     borderRadius: 8,
     padding: 20,
-    marginBottom: 20, 
+    marginBottom: 20,
   },
   sectionCard: {
     marginTop: 12,

@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 
-type BasicResponse = { status: boolean; message?: string; [k: string]: any };
+type BasicResponse = { status: boolean; message?: string;[k: string]: any };
 
 export type MovimientoLlaveItem = {
   id: number;
@@ -56,13 +56,17 @@ const getApiUrl = () => {
   return apiUrl;
 };
 
-async function getToken(refreshAccessToken?: () => Promise<boolean>) {
+async function getToken(refreshAccessToken?: () => Promise<boolean>, logout?: () => Promise<any>) {
   let token = await AsyncStorage.getItem('access_token');
   if (!token && refreshAccessToken) {
     const refreshed = await refreshAccessToken();
     if (refreshed) token = await AsyncStorage.getItem('access_token');
+    else if (logout) await logout();
   }
-  if (!token) throw new Error('No authentication token found');
+  if (!token) {
+    if (logout) await logout();
+    throw new Error('Sesión expirada');
+  }
   return token;
 }
 
@@ -74,7 +78,7 @@ export async function listMovimientosLlave({
 }: ListParams): Promise<{ status: boolean; data?: MovimientoLlaveItem[]; message?: string }> {
   try {
     const apiUrl = getApiUrl();
-    const token = await getToken(refreshAccessToken);
+    const token = await getToken(refreshAccessToken, logout);
     const response = await fetch(`${apiUrl}/api/llaves/${llaveId}/movimientos?m=${marcaId}`, {
       method: 'GET',
       headers: {
@@ -84,13 +88,18 @@ export async function listMovimientosLlave({
       },
     });
 
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
       if (refreshAccessToken) {
         const refreshed = await refreshAccessToken();
         if (refreshed) return listMovimientosLlave({ llaveId, marcaId, refreshAccessToken, logout });
         if (logout) await logout();
       }
       return { status: false, message: 'Sesión expirada' };
+    }
+
+    if (response.status === 403) {
+      if (logout) await logout();
+      throw new Error('Acceso denegado');
     }
 
     const data = await response.json();
@@ -109,7 +118,7 @@ export async function createMovimientoLlave({
 }: CreateParams): Promise<BasicResponse> {
   try {
     const apiUrl = getApiUrl();
-    const token = await getToken(refreshAccessToken);
+    const token = await getToken(refreshAccessToken, logout);
     const response = await fetch(`${apiUrl}/api/llaves/${llaveId}/movimientos`, {
       method: 'POST',
       headers: {
@@ -120,13 +129,18 @@ export async function createMovimientoLlave({
       body: JSON.stringify(requestData),
     });
 
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
       if (refreshAccessToken) {
         const refreshed = await refreshAccessToken();
         if (refreshed) return createMovimientoLlave({ llaveId, requestData, refreshAccessToken, logout });
         if (logout) await logout();
       }
       return { status: false, message: 'Sesión expirada' };
+    }
+
+    if (response.status === 403) {
+      if (logout) await logout();
+      throw new Error('Acceso denegado');
     }
 
     const data: any = await response.json().catch(() => ({}));
@@ -147,7 +161,7 @@ export async function updateMovimientoLlave({
 }: UpdateParams): Promise<BasicResponse> {
   try {
     const apiUrl = getApiUrl();
-    const token = await getToken(refreshAccessToken);
+    const token = await getToken(refreshAccessToken, logout);
     const response = await fetch(`${apiUrl}/api/llaves/${llaveId}/movimientos/${id}`, {
       method: 'PUT',
       headers: {
@@ -158,13 +172,18 @@ export async function updateMovimientoLlave({
       body: JSON.stringify(requestData),
     });
 
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
       if (refreshAccessToken) {
         const refreshed = await refreshAccessToken();
         if (refreshed) return updateMovimientoLlave({ llaveId, id, requestData, refreshAccessToken, logout });
         if (logout) await logout();
       }
       return { status: false, message: 'Sesión expirada' };
+    }
+
+    if (response.status === 403) {
+      if (logout) await logout();
+      throw new Error('Acceso denegado');
     }
 
     const data: any = await response.json().catch(() => ({}));
@@ -185,7 +204,7 @@ export async function deleteMovimientoLlave({
 }: DeleteParams): Promise<BasicResponse> {
   try {
     const apiUrl = getApiUrl();
-    const token = await getToken(refreshAccessToken);
+    const token = await getToken(refreshAccessToken, logout);
     const response = await fetch(`${apiUrl}/api/llaves/${llaveId}/movimientos/${id}?m=${marcaId}`, {
       method: 'DELETE',
       headers: {
@@ -195,13 +214,18 @@ export async function deleteMovimientoLlave({
       },
     });
 
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
       if (refreshAccessToken) {
         const refreshed = await refreshAccessToken();
         if (refreshed) return deleteMovimientoLlave({ llaveId, id, marcaId, refreshAccessToken, logout });
         if (logout) await logout();
       }
       return { status: false, message: 'Sesión expirada' };
+    }
+
+    if (response.status === 403) {
+      if (logout) await logout();
+      throw new Error('Acceso denegado');
     }
 
     const data: any = await response.json().catch(() => ({}));

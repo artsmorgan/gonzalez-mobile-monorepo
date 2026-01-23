@@ -9,13 +9,8 @@ import { getUserMarca } from "../../../utils/getUserMarca";
 
 export async function GET(req: NextRequest) {
     try {
-        const { valid, payload, message } = verifyAccessToken(req);
-        if (!valid) {
-            return NextResponse.json(
-                { status: false, message: message },
-                { status: 401 }
-            );
-        }
+        const { valid, expired, payload, message } = verifyAccessToken(req);
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         const marcaId = req.nextUrl.searchParams.get("m");
         if (!marcaId) {
@@ -149,10 +144,8 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
     try {
-        const { valid, payload, message } = verifyAccessToken(req);
-        if (!valid) {
-            return NextResponse.json({ status: false, message: message }, { status: 401 });
-        }
+        const { valid, expired, payload, message } = verifyAccessToken(req);
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         const {
             marca_id,
@@ -293,7 +286,7 @@ export async function POST(req: NextRequest) {
             const fecha_encuesta_string = fecha.toISOString().split('T')[0];
             const hora_encuesta_string = fecha.toISOString().split('T')[1].split('.')[0];
             const desc_notification = `La encuesta de satisfacción del puesto "${puesto_db.nombre}" realizada el día ${fecha_encuesta_string} a las ${hora_encuesta_string} por parte de "${persona_evaluada}" (${cedula_persona_evaluada}) de la empresa "${empresa_evaluada}" ha sido agregada. Se ha enviado un correo de confirmación a ${email_persona_evaluada}.`;
-            await sendNotificationByRole(marca_id, "Encuesta de satisfacción agregada", desc_notification, ["ADMINISTRATIVO", "SUPERVISOR"]);
+            await sendNotificationByRole(marca.corpo_id, [marca.plaza_id], "Encuesta de satisfacción agregada", desc_notification, ["ADMINISTRATIVO", "SUPERVISOR"]);
         }
 
         return NextResponse.json({ status: true, message: "Encuesta creada correctamente" }, { status: 200 });

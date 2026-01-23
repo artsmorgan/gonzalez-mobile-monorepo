@@ -13,11 +13,16 @@ const normalizeBase64 = (b64: string) => {
   return b64;
 };
 
-async function getTokenOrRefresh(refreshAccessToken?: () => Promise<boolean>) {
+async function getTokenOrRefresh(refreshAccessToken?: () => Promise<boolean>, logout?: () => Promise<any>) {
   let token = await AsyncStorage.getItem('access_token');
   if (!token && refreshAccessToken) {
     const refreshed = await refreshAccessToken();
     if (refreshed) token = await AsyncStorage.getItem('access_token');
+    else if (logout) await logout();
+  }
+  if (!token) {
+    if (logout) await logout();
+    throw new Error('Sesión expirada');
   }
   return token;
 }
@@ -31,8 +36,11 @@ export const listMutuosAcuerdosByCorpo = async ({
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) throw new Error('Server URL not configured');
 
-    const token = await getTokenOrRefresh(refreshAccessToken);
-    if (!token) throw new Error('No authentication token found');
+    const token = await getTokenOrRefresh(refreshAccessToken, logout);
+    if (!token) {
+      if (logout) await logout();
+      throw new Error('Sesión expirada');
+    }
 
     const response = await fetch(`${apiUrl}/api/mutuos-acuerdos/corpo/${corpo_id}`, {
       method: 'GET',
@@ -43,13 +51,18 @@ export const listMutuosAcuerdosByCorpo = async ({
       },
     });
 
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
       if (refreshAccessToken) {
         const refreshed = await refreshAccessToken();
         if (refreshed) return listMutuosAcuerdosByCorpo({ corpo_id, refreshAccessToken, logout });
       }
       if (logout) await logout();
       return { status: false, message: 'Sesión expirada', data: [] };
+    }
+
+    if (response.status === 403) {
+      if (logout) await logout();
+      throw new Error('Acceso denegado');
     }
 
     const data = (await response.json()) as ListMutuosAcuerdosResponse;
@@ -69,8 +82,11 @@ export const createMutuoAcuerdo = async ({
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) throw new Error('Server URL not configured');
 
-    const token = await getTokenOrRefresh(refreshAccessToken);
-    if (!token) throw new Error('No authentication token found');
+    const token = await getTokenOrRefresh(refreshAccessToken, logout);
+    if (!token) {
+      if (logout) await logout();
+      throw new Error('Sesión expirada');
+    }
 
     const payload: any = { ...requestData };
     if (typeof payload.firma_ejecutivo_cuenta === 'string') {
@@ -87,13 +103,18 @@ export const createMutuoAcuerdo = async ({
       body: JSON.stringify(payload),
     });
 
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
       if (refreshAccessToken) {
         const refreshed = await refreshAccessToken();
         if (refreshed) return createMutuoAcuerdo({ requestData, refreshAccessToken, logout });
       }
       if (logout) await logout();
       return { status: false, message: 'Sesión expirada' };
+    }
+
+    if (response.status === 403) {
+      if (logout) await logout();
+      throw new Error('Acceso denegado');
     }
 
     const data = (await response.json()) as MutuoAcuerdoUpsertResponse;
@@ -114,7 +135,7 @@ export const updateMutuoAcuerdo = async ({
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) throw new Error('Server URL not configured');
 
-    const token = await getTokenOrRefresh(refreshAccessToken);
+    const token = await getTokenOrRefresh(refreshAccessToken, logout);
     if (!token) throw new Error('No authentication token found');
 
     const response = await fetch(`${apiUrl}/api/mutuos-acuerdos/${id}`, {
@@ -127,13 +148,18 @@ export const updateMutuoAcuerdo = async ({
       body: JSON.stringify(requestData),
     });
 
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
       if (refreshAccessToken) {
         const refreshed = await refreshAccessToken();
         if (refreshed) return updateMutuoAcuerdo({ id, requestData, refreshAccessToken, logout });
       }
       if (logout) await logout();
       return { status: false, message: 'Sesión expirada' };
+    }
+
+    if (response.status === 403) {
+      if (logout) await logout();
+      throw new Error('Acceso denegado');
     }
 
     const data = (await response.json()) as MutuoAcuerdoUpsertResponse;
@@ -153,8 +179,11 @@ export const deleteMutuoAcuerdo = async ({
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) throw new Error('Server URL not configured');
 
-    const token = await getTokenOrRefresh(refreshAccessToken);
-    if (!token) throw new Error('No authentication token found');
+    const token = await getTokenOrRefresh(refreshAccessToken, logout);
+    if (!token) {
+      if (logout) await logout();
+      throw new Error('Sesión expirada');
+    }
 
     const response = await fetch(`${apiUrl}/api/mutuos-acuerdos/${id}`, {
       method: 'DELETE',
@@ -165,13 +194,18 @@ export const deleteMutuoAcuerdo = async ({
       },
     });
 
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
       if (refreshAccessToken) {
         const refreshed = await refreshAccessToken();
         if (refreshed) return deleteMutuoAcuerdo({ id, refreshAccessToken, logout });
       }
       if (logout) await logout();
       return { status: false, message: 'Sesión expirada' };
+    }
+
+    if (response.status === 403) {
+      if (logout) await logout();
+      throw new Error('Acceso denegado');
     }
 
     const data = (await response.json()) as BasicResponse;
@@ -192,8 +226,11 @@ export const signMutuoAcuerdoEjecutivo = async ({
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) throw new Error('Server URL not configured');
 
-    const token = await getTokenOrRefresh(refreshAccessToken);
-    if (!token) throw new Error('No authentication token found');
+    const token = await getTokenOrRefresh(refreshAccessToken, logout);
+    if (!token) {
+      if (logout) await logout();
+      throw new Error('Sesión expirada');
+    }
 
     const payload = { firma_ejecutivo_cuenta: normalizeBase64(String(firma_ejecutivo_cuenta || '')) };
 
@@ -207,13 +244,18 @@ export const signMutuoAcuerdoEjecutivo = async ({
       body: JSON.stringify(payload),
     });
 
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
       if (refreshAccessToken) {
         const refreshed = await refreshAccessToken();
         if (refreshed) return signMutuoAcuerdoEjecutivo({ id, firma_ejecutivo_cuenta, refreshAccessToken, logout });
       }
       if (logout) await logout();
       return { status: false, message: 'Sesión expirada' };
+    }
+
+    if (response.status === 403) {
+      if (logout) await logout();
+      throw new Error('Acceso denegado');
     }
 
     const data = (await response.json()) as BasicResponse;

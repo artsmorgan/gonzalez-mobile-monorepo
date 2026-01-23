@@ -14,8 +14,8 @@ export async function DELETE(
     // pero las mutaciones sí requieren auth normalmente. Aquí mantenemos auth (por seguridad).
     // Si necesitas sin-auth también para delete, lo ajustamos.
     const { verifyAccessToken } = await import("../../../../../../utils/verifyToken");
-    const { valid, message } = verifyAccessToken(req);
-    if (!valid) return NextResponse.json({ status: false, message }, { status: 401 });
+    const { valid, expired, payload, message } = verifyAccessToken(req);
+    if (!valid) return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
 
     const { id, fileId } = await context.params;
     const complaintId = parseInt(id, 10);

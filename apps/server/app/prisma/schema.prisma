@@ -473,6 +473,25 @@ model c_changelog {
   descripcion      String?   @db.LongText
 }
 
+model c_checklist_supervision {
+  id                    Int                   @id @default(autoincrement())
+  cliente_id            Int
+  division_id           Int
+  corpo_id              Int
+  puesto_id             Int
+  fecha                 DateTime              @db.DateTime
+  ejecutivo_cuenta      String                @db.VarChar(55)
+  evaluacion            String                @db.LongText
+  firma_supervisor      String                @db.LongText
+  firma_responsable     String                @db.LongText
+  created_by            Int
+  created_at            DateTime              @db.DateTime(0)
+
+  e_estructura_cliente  e_estructura_cliente @relation(fields: [cliente_id], references: [id], onDelete: Cascade)
+  e_estructura_sucursal e_estructura_sucursal @relation(fields: [corpo_id], references: [id], onDelete: Cascade)
+  e_estructura_puesto   e_estructura_puesto   @relation(fields: [puesto_id], references: [id], onDelete: Cascade)
+}
+
 model c_combo_uniforme_plaza {
   id                        Int                         @id @default(autoincrement())
   nombre                    String                      @unique(map: "UNIQ_7E3DD1833A909126") @db.VarChar(255)
@@ -2261,6 +2280,8 @@ model c_intercambio_linea {
   plazaInicio_id                                                              Int?
   plazaFin_id                                                                 Int?
   empleadoSustituido_id                                                       Int?
+  archivo_adjunto_id                                                          String?              @db.LongText
+  archivo_adjunto_nombre                                                      String?              @db.LongText
   c_intercambio                                                               c_intercambio?       @relation(fields: [intercambio_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "FK_88E784CE4BC37A6F")
   e_estructura_plazas_c_intercambio_linea_plazaInicio_idToe_estructura_plazas e_estructura_plazas? @relation("c_intercambio_linea_plazaInicio_idToe_estructura_plazas", fields: [plazaInicio_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "FK_88E784CE77BB7125")
   c_empleado_c_intercambio_linea_empleado_idToc_empleado                      c_empleado?          @relation("c_intercambio_linea_empleado_idToc_empleado", fields: [empleado_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "FK_88E784CE952BE730")
@@ -2609,6 +2630,7 @@ model c_vehiculos_corporativos {
   created_at            DateTime  @db.DateTime(0)
   c_imagenes_vehiculos_corporativos c_imagenes_vehiculos_corporativos[]
   c_usos_vehiculos_corporativos c_usos_vehiculos_corporativos[]
+  c_mantenimiento_vehiculos_corporativos c_mantenimiento_vehiculos_corporativos[]
 
   e_estructura_cliente  e_estructura_cliente  @relation(fields: [cliente_id], references: [id], onDelete: Cascade)
   e_estructura_sucursal e_estructura_sucursal @relation(fields: [sucursal_id], references: [id], onDelete: Cascade)
@@ -2635,6 +2657,25 @@ model c_usos_vehiculos_corporativos {
   km_fin             Int
   motivo             String     @db.LongText
   firma_responsable  String     @db.LongText
+  
+  c_vehiculos_corporativos c_vehiculos_corporativos @relation(fields: [vehiculo_id], references: [id], onDelete: Cascade)
+}
+
+model c_mantenimiento_vehiculos_corporativos {
+  id                             Int        @id @default(autoincrement())
+  vehiculo_id                    Int
+  fecha                          DateTime   @db.DateTime
+  imagen_antes                   String     @db.LongText
+  tipo                           String     @db.VarChar(25)
+  mantenimiento                  String     @db.LongText
+  diagnostico                    String     @db.LongText
+  kilometraje_siguiente_revision Int
+  imagen_despues                 String     @db.LongText
+  nombre_mecanico                String     @db.LongText
+  firma_mecanico                 String     @db.LongText
+  firma_responsable              String     @db.LongText
+  created_by                     Int
+  created_at                     DateTime  @db.DateTime(0)
   
   c_vehiculos_corporativos c_vehiculos_corporativos @relation(fields: [vehiculo_id], references: [id], onDelete: Cascade)
 }
@@ -3078,6 +3119,7 @@ model e_estructura_cliente {
   usuario_actualizacion        String?                        @db.VarChar(255)
   fecha_inactivacion           DateTime?                      @db.DateTime(0)
   usuario_inactivacion         String?                        @db.VarChar(255)
+  c_checklist_supervision      c_checklist_supervision[]    
   e_registro_entrega_puesto    e_registro_entrega_puesto[]
   c_vehiculos_corporativos     c_vehiculos_corporativos[]
   c_producto_no_conforme       c_producto_no_conforme[]
@@ -3449,6 +3491,7 @@ model e_estructura_puesto {
   fecha_inactivacion                         DateTime?                                    @db.DateTime(0)
   usuario_inactivacion                       String?                                      @db.VarChar(255)
   es_cubrevacaciones                         Boolean?
+  c_checklist_supervision      c_checklist_supervision[]    
   e_registro_entrega_puesto    e_registro_entrega_puesto[]
   c_agenda_minuta              c_agenda_minuta[]
   c_apertura_cierre_puesto c_apertura_cierre_puesto[]
@@ -3585,6 +3628,7 @@ model e_estructura_sucursal {
   usuario_actualizacion                      String?                                      @db.VarChar(255)
   fecha_inactivacion                         DateTime?                                    @db.DateTime(0)
   usuario_inactivacion                       String?                                      @db.VarChar(255)
+  c_checklist_supervision      c_checklist_supervision[]    
   e_registro_entrega_puesto    e_registro_entrega_puesto[]
   c_vehiculos_corporativos     c_vehiculos_corporativos[]
   c_producto_no_conforme       c_producto_no_conforme[]

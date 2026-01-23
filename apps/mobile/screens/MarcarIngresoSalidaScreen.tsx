@@ -39,7 +39,7 @@ interface AttendanceSuccessResponse {
     tipo_turno: string;
     horas_duracion: number;
     roleDivision: {
-      role:{
+      role: {
         id: number;
         nombre: string;
       };
@@ -177,7 +177,7 @@ export default function MarcarIngresoSalidaScreen() {
 
       // Verificar y obtener ubicación GPS antes de hacer la llamada
       let currentLocation: Location.LocationObject | null = null;
-      
+
       // Verificar permisos de ubicación
       const { status: permissionStatus } = await Location.requestForegroundPermissionsAsync();
       if (permissionStatus !== 'granted') {
@@ -232,33 +232,38 @@ export default function MarcarIngresoSalidaScreen() {
       if (networkState.isConnected && networkState.isInternetReachable) {
 
         const response = await fetch(`${apiUrl}/api/attendance/user/${employee.id}?lat=${lat}&long=${long}`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': '69420',
-        },
-      });
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+            'ngrok-skip-browser-warning': '69420',
+          },
+        });
 
-      if (response.status === 401 || response.status === 403) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) {
-          return fetchAttendanceStatus();
-        } else {
-          // If refresh fails, logout the user
-          await logout();
+        if (response.status === 401) {
+          const refreshed = await refreshAccessToken();
+          if (refreshed) {
+            return fetchAttendanceStatus();
+          } else {
+            // If refresh fails, logout the user
+            await logout();
+          }
         }
-      }
 
-      if (!response.ok) { 
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
+        if (response.status === 403) {
+          if (logout) await logout();
+          throw new Error('Acceso denegado');
+        }
+
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
 
 
         data = await response.json();
 
-        
-      console.log("Response got from the server");
+
+        console.log("Response got from the server");
 
         result = data.status;
 
@@ -273,7 +278,7 @@ export default function MarcarIngresoSalidaScreen() {
           }
 
           marca_send.current_time = parseInt(server_time);
-          
+
           const cache = await AsyncStorage.getItem('current_marca');
           if (cache) {
             const marca_cache = JSON.parse(cache);
@@ -283,7 +288,7 @@ export default function MarcarIngresoSalidaScreen() {
           }
         }
       }
-      else{
+      else {
         console.log('Sin conexión a internet');
         const cache = await AsyncStorage.getItem('current_marca');
         if (!cache) {
@@ -313,15 +318,15 @@ export default function MarcarIngresoSalidaScreen() {
 
       if (result) {
         await setCurrentAttendanceData(marca_send, horaAccionValue);
-        } else {
+      } else {
         if (data && typeof data === 'object' && 'absent' in data && data.absent !== undefined && data.absent === true) {
-            // Show absent reason form
-            setShowAbsentReasonForm(true);
-            setErrorMessage((data as AttendanceErrorResponse).message);
-            return;
-          }
+          // Show absent reason form
+          setShowAbsentReasonForm(true);
           setErrorMessage((data as AttendanceErrorResponse).message);
+          return;
         }
+        setErrorMessage((data as AttendanceErrorResponse).message);
+      }
     } catch (error) {
       console.error('Error fetching attendance status:', error);
       setErrorMessage('Error al cargar los datos. Por favor, intenta nuevamente.');
@@ -337,27 +342,27 @@ export default function MarcarIngresoSalidaScreen() {
     fecha[2] = fecha[2].slice(0, 2);
 
     const estado = marca.hora_entrada_digitada != null ? "Ingresado" : "No ingresado";
-    
+
     let next_time = toZonedTime(new Date(estado == "No ingresado" ? marca.hora_inicio : marca.hora_fin), "America/Costa_Rica");
     next_time.setFullYear(parseInt(fecha[0]), parseInt(fecha[1]) - 1, marca.hora_inicio > marca.hora_fin ? parseInt(fecha[2]) + 1 : parseInt(fecha[2]));
-    
+
     let next_change_time = new Date(next_time.getTime());
     next_change_time.setFullYear(parseInt(fecha[0]), parseInt(fecha[1]) - 1, marca.hora_inicio > marca.hora_fin ? parseInt(fecha[2]) + 1 : parseInt(fecha[2]));
     next_change_time.setMinutes(next_change_time.getMinutes() - 15);
 
     let change_available = true;
     let is_late = false;
-    
+
     const now = horaAccionValue;
 
     if (estado == "No ingresado") {
       if (now < next_change_time.getTime()) { // Si la fecha del parámetro es menor a la fecha de la marca menos 15 menos minutos
-          change_available = false;
+        change_available = false;
       }
     }
 
     if (now > next_time.getTime()) {
-        is_late = true;
+      is_late = true;
     }
 
     const attendance_save = {
@@ -376,7 +381,7 @@ export default function MarcarIngresoSalidaScreen() {
 
     const action = attendanceData.estado === 'No ingresado' ? 'ingresar' : 'salir';
     const actionText = attendanceData.estado === 'No ingresado' ? 'Ingresar' : 'Salir';
-    
+
     Alert.alert(
       'Confirmar acción',
       `¿Estás seguro de que deseas ${action}?`,
@@ -403,15 +408,15 @@ export default function MarcarIngresoSalidaScreen() {
     const dLon = toRad(lon2 - lon1);
 
     const a =
-        Math.sin(dLat / 2) ** 2 +
-        Math.cos(toRad(lat1)) *
-        Math.cos(toRad(lat2)) *
-        Math.sin(dLon / 2) ** 2;
+      Math.sin(dLat / 2) ** 2 +
+      Math.cos(toRad(lat1)) *
+      Math.cos(toRad(lat2)) *
+      Math.sin(dLon / 2) ** 2;
 
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 
     return R * c;
-}
+  }
 
   const executeToggleAttendance = async () => {
     if (!attendanceData) return;
@@ -436,10 +441,10 @@ export default function MarcarIngresoSalidaScreen() {
           throw new Error('Hora de acción not found');
         }
         const now = horaAccion;
-        
+
         const fecha = attendanceData.marca.fecha.split('-');
         fecha[2] = fecha[2].slice(0, 2);
-        
+
         let next_time = toZonedTime(new Date(attendanceData.marca.hora_fin), "America/Costa_Rica");
         next_time.setFullYear(parseInt(fecha[0]), parseInt(fecha[1]) - 1, attendanceData.marca.hora_inicio > attendanceData.marca.hora_fin ? parseInt(fecha[2]) + 1 : parseInt(fecha[2]));
 
@@ -460,11 +465,11 @@ export default function MarcarIngresoSalidaScreen() {
   };
 
   const confirmAction = async (type: string, reason: string = '') => {
-    
+
     if (!attendanceData || !attendanceData.marca || !attendanceData.marca.id) {
       throw new Error('No se encontró la marca');
     }
-    
+
     if (!horaAccion) {
       throw new Error('Hora de acción not found');
     }
@@ -491,6 +496,15 @@ export default function MarcarIngresoSalidaScreen() {
           if (attendanceData) {
             attendanceData.marca.hora_entrada_digitada = new Date(horaAccion).toISOString();
             await AsyncStorage.setItem('current_marca', JSON.stringify(attendanceData.marca));
+            let token = await AsyncStorage.getItem('access_token');
+            if (!token) {
+              const refreshed = await refreshAccessToken();
+              if (!refreshed) {
+                if (logout) await logout();
+                throw new Error('Sesión expirada');
+              }
+              token = await AsyncStorage.getItem('access_token');
+            }
             await Promise.all([
               getLunchTimeConfig(attendanceData.marca.id),
               getActivities(attendanceData.marca.id),
@@ -514,11 +528,8 @@ export default function MarcarIngresoSalidaScreen() {
               getLlaves(attendanceData.marca.id),
               getBitacoraVehiculoDetenido(attendanceData.marca.id),
               getDocumentosEntregados(attendanceData.marca.id),
+              getMainStructure()
             ]);
-
-            //if (attendanceData.marca.roleDivision.division.nombre !== 'OPERATIVO') {
-              await getMainStructure();
-            //}
           }
         }
         else {
@@ -533,8 +544,8 @@ export default function MarcarIngresoSalidaScreen() {
 
       Alert.alert(
         'Éxito',
-        type === 'entrada' 
-          ? 'Ingreso registrado correctamente' 
+        type === 'entrada'
+          ? 'Ingreso registrado correctamente'
           : 'Salida registrada correctamente'
       );
     } else {
@@ -773,8 +784,8 @@ export default function MarcarIngresoSalidaScreen() {
       await AsyncStorage.setItem('categories_cache', JSON.stringify(data.categories));
     }
   }
-  
-  const getTipoActivo = async () => { 
+
+  const getTipoActivo = async () => {
     await AsyncStorage.removeItem('tipo_activos_cache');
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) {
@@ -783,7 +794,7 @@ export default function MarcarIngresoSalidaScreen() {
     const token = await AsyncStorage.getItem('access_token');
     if (!token) {
       throw new Error('No authentication token found');
-  }
+    }
     const response = await fetch(`${apiUrl}/api/visitors/categories`, {
       method: 'GET',
       headers: {
@@ -814,7 +825,7 @@ export default function MarcarIngresoSalidaScreen() {
     if (!token) {
       throw new Error('No authentication token found');
     }
-    
+
     const response = await fetch(`${apiUrl}/api/puestos/${marcaId}/notas`, {
       method: 'GET',
       headers: {
@@ -902,7 +913,7 @@ export default function MarcarIngresoSalidaScreen() {
     const token = await AsyncStorage.getItem('access_token');
     if (!token) {
       throw new Error('No authentication token found');
-  }
+    }
     const response = await fetch(`${apiUrl}/api/incidents?m=${marcaId}`, {
       method: 'GET',
       headers: {
@@ -928,8 +939,8 @@ export default function MarcarIngresoSalidaScreen() {
       throw new Error('Server URL not configured');
     }
     const token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        throw new Error('No authentication token found');
+    if (!token) {
+      throw new Error('No authentication token found');
     }
     const response = await fetch(`${apiUrl}/api/incidents/classification`, {
       method: 'GET',
@@ -947,7 +958,7 @@ export default function MarcarIngresoSalidaScreen() {
       await AsyncStorage.setItem('incidents_classifications_cache', JSON.stringify(data.classifications));
     }
   }
-  
+
   const getDocumentTypes = async () => {
     // Eliminar actions
     await AsyncStorage.removeItem('document_types_cache');
@@ -956,8 +967,8 @@ export default function MarcarIngresoSalidaScreen() {
       throw new Error('Server URL not configured');
     }
     const token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        throw new Error('No authentication token found');
+    if (!token) {
+      throw new Error('No authentication token found');
     }
     const response = await fetch(`${apiUrl}/api/document-types`, {
       method: 'GET',
@@ -1062,7 +1073,7 @@ export default function MarcarIngresoSalidaScreen() {
       await AsyncStorage.setItem('puestos_corpo_cache', JSON.stringify(data.puestos));
     }
   }
-  
+
   const getArticulos = async () => {
     // Eliminar actions
     await AsyncStorage.removeItem('articulos_actions');
@@ -1126,7 +1137,7 @@ export default function MarcarIngresoSalidaScreen() {
       Alert.alert('Error', 'Por favor, ingresa una razón para la salida temprana.');
       return;
     }
-    
+
     setIsModalVisible(false);
     confirmAction('salida', exitReason.trim());
     setExitReason('');
@@ -1142,7 +1153,7 @@ export default function MarcarIngresoSalidaScreen() {
       Alert.alert('Error', 'Por favor, ingresa un motivo válido.');
       return;
     }
-    
+
     setShowAbsentReasonForm(false);
     await submitAbsentReason(absentReason.trim());
     setAbsentReason('');
@@ -1204,7 +1215,7 @@ export default function MarcarIngresoSalidaScreen() {
 
   const getDisability = () => {
     if (!attendanceData) return true;
-    
+
     if (attendanceData.estado === 'Ingresado' && !attendanceData.change_available) return true;
 
     return false;
@@ -1234,7 +1245,7 @@ export default function MarcarIngresoSalidaScreen() {
       throw new Error(`HTTP error! status: ${response.status} getLunchTimeConfig`);
     }
     const data = await response.json();
-    
+
     if (data.status) {
       await AsyncStorage.setItem('lunch_time_config', JSON.stringify(data));
     }
@@ -1262,19 +1273,19 @@ export default function MarcarIngresoSalidaScreen() {
     if (ahoraDate > inicioDate) {
       // Calcular la diferencia en milisegundos
       const diferenciaMs = ahoraDate.getTime() - inicioDate.getTime();
-      
+
       // Convertir a segundos, minutos y horas
       const segundos = Math.floor(diferenciaMs / 1000);
       const minutos = Math.floor(segundos / 60);
       const horas = Math.floor(minutos / 60);
-      
+
       // Obtener los valores restantes
       const segundosRestantes = segundos % 60;
       const minutosRestantes = minutos % 60;
-      
+
       // Construir el texto legible
       const partes: string[] = [];
-      
+
       if (horas > 0) {
         partes.push(`${horas} ${horas === 1 ? 'hora' : 'horas'}`);
       }
@@ -1284,12 +1295,12 @@ export default function MarcarIngresoSalidaScreen() {
       if (segundosRestantes > 0) {
         partes.push(`${segundosRestantes} ${segundosRestantes === 1 ? 'seg' : 'segs'}`);
       }
-      
+
       // Si no hay diferencia significativa, mostrar solo segundos
       if (partes.length === 0) {
         return '0 segundos';
       }
-      
+
       // Unir las partes con comas y "y" antes de la última
       if (partes.length === 1) {
         return partes[0];
@@ -1303,7 +1314,7 @@ export default function MarcarIngresoSalidaScreen() {
     return '--:--';
   };
 
-  const getActivities = async (marcaId: number) => {  
+  const getActivities = async (marcaId: number) => {
     // Eliminar actions
     await AsyncStorage.removeItem('activities_actions');
     await AsyncStorage.removeItem('activities_cache');
@@ -1314,7 +1325,7 @@ export default function MarcarIngresoSalidaScreen() {
     const token = await AsyncStorage.getItem('access_token');
     if (!token) {
       throw new Error('No authentication token found');
-  }
+    }
     const response = await fetch(`${apiUrl}/api/activities/marca/${marcaId}`, {
       method: 'GET',
       headers: {
@@ -1362,7 +1373,7 @@ export default function MarcarIngresoSalidaScreen() {
       await AsyncStorage.setItem('vehicles_cache', JSON.stringify(data));
     }
   }
-  
+
   const getVisitors = async (marcaId: number) => {
     // Eliminar actions
     await AsyncStorage.removeItem('visitors_actions');
@@ -1405,7 +1416,7 @@ export default function MarcarIngresoSalidaScreen() {
 
   const fetchFutureMarks = async () => {
     if (!employee?.id) return;
-    
+
     try {
       setIsLoadingFutureMarks(true);
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
@@ -1431,7 +1442,7 @@ export default function MarcarIngresoSalidaScreen() {
         },
       });
 
-      if (response.status === 401 || response.status === 403) {
+      if (response.status === 401) {
         const refreshed = await refreshAccessToken();
         if (refreshed) {
           return fetchFutureMarks();
@@ -1439,6 +1450,11 @@ export default function MarcarIngresoSalidaScreen() {
           await logout();
           return;
         }
+      }
+
+      if (response.status === 403) {
+        if (logout) await logout();
+        throw new Error('Acceso denegado');
       }
 
       if (!response.ok) {
@@ -1476,12 +1492,12 @@ export default function MarcarIngresoSalidaScreen() {
             console.warn('Fecha inválida:', mark.fecha);
             return;
           }
-          
+
           if (isNaN(fecha.getTime())) {
             console.warn('Fecha inválida (NaN):', mark.fecha);
             return;
           }
-          
+
           const dayKey = fecha.toISOString().split('T')[0];
           if (!groupedByDay[dayKey]) {
             groupedByDay[dayKey] = [];
@@ -1556,7 +1572,7 @@ export default function MarcarIngresoSalidaScreen() {
               {dayMarks.map((mark, index) => {
                 const horaInicioStr = formatHora(mark.hora_inicio);
                 const horaFinStr = formatHora(mark.hora_fin);
-                
+
                 let tipoTurno = 'Desconocido';
                 if (mark.tipo_turno) {
                   switch (mark.tipo_turno) {
@@ -1732,7 +1748,7 @@ export default function MarcarIngresoSalidaScreen() {
         },
       });
 
-      if (response.status === 401 || response.status === 403) {
+      if (response.status === 401) {
         const refreshed = await refreshAccessToken();
         if (refreshed) {
           return executeCreateTestMarca();
@@ -1742,13 +1758,18 @@ export default function MarcarIngresoSalidaScreen() {
         }
       }
 
+      if (response.status === 403) {
+        if (logout) await logout();
+        throw new Error('Acceso denegado');
+      }
+
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
         throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
       }
 
       const data = await response.json();
-      
+
       if (data.status) {
         Alert.alert('Éxito', 'Marca de prueba creada correctamente');
         // Recargar la ventana
@@ -1774,7 +1795,7 @@ export default function MarcarIngresoSalidaScreen() {
   return (
     <ThemedView style={styles.fullContainer}>
       <AppHeader onMenuPress={handleMenuPress} title="Marcar Ingreso/Salida" />
-      
+
       <ScrollView style={styles.scrollView}>
         <ThemedView style={styles.container}>
           {/* Module Title */}
@@ -1823,7 +1844,7 @@ export default function MarcarIngresoSalidaScreen() {
           ) : locationError ? (
             <ThemedView style={styles.errorContainer}>
               <ThemedText style={styles.errorText}>{getActionIcon('warning')} {locationError}</ThemedText>
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={styles.retryButton}
                 onPress={async () => {
                   setLocationError(null);
@@ -1851,7 +1872,7 @@ export default function MarcarIngresoSalidaScreen() {
                     });
                     setLocation(loc);
                     setIsLoadingLocation(false);
-                    
+
                     // Llamar a fetchAttendanceStatus para cargar los datos inmediatamente
                     await fetchAttendanceStatus();
                   } catch (err) {
@@ -1882,7 +1903,7 @@ export default function MarcarIngresoSalidaScreen() {
                   <ThemedText style={styles.absentReasonSubtitle}>
                     Por favor, ingresa el motivo de tu ausencia:
                   </ThemedText>
-                  
+
                   <TextInput
                     style={styles.absentReasonInput}
                     value={absentReason}
@@ -1893,9 +1914,9 @@ export default function MarcarIngresoSalidaScreen() {
                     numberOfLines={3}
                     textAlignVertical="top"
                   />
-                  
+
                   <ThemedView style={styles.absentReasonButtons}>
-                    
+
                     <TouchableOpacity
                       style={[styles.absentReasonButton, styles.absentReasonSubmitButton]}
                       onPress={handleAbsentReasonSubmit}
@@ -1907,9 +1928,9 @@ export default function MarcarIngresoSalidaScreen() {
                   </ThemedView>
                 </ThemedView>
               )}
-              
+
               <ThemedText style={styles.errorText}>{getActionIcon('warning')} {errorMessage}</ThemedText>
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={styles.retryButton}
                 onPress={fetchAttendanceStatus}
               >
@@ -1925,12 +1946,12 @@ export default function MarcarIngresoSalidaScreen() {
               {/* Work Information Card */}
               <ThemedView style={styles.infoCard}>
                 <ThemedText style={styles.infoCardTitle}>Información Laboral</ThemedText>
-                
+
                 <ThemedView style={styles.infoRow}>
                   <ThemedText style={styles.infoLabel}>Fecha de la marca:</ThemedText>
                   <ThemedText style={styles.infoValue}>{attendanceData.marca.fecha.split('T')[0]}</ThemedText>
                 </ThemedView>
-                
+
                 <ThemedView style={styles.infoRow}>
                   <ThemedText style={styles.infoLabel}>Empresa:</ThemedText>
                   <ThemedText style={styles.infoValue}>{attendanceData.marca.empresa.nombre}</ThemedText>
@@ -2036,13 +2057,13 @@ export default function MarcarIngresoSalidaScreen() {
         </ThemedView>
       </ScrollView>
 
-      <SlideMenu 
-        isVisible={isMenuVisible} 
+      <SlideMenu
+        isVisible={isMenuVisible}
         onClose={handleMenuClose}
         onHomePress={handleHomePress}
         currentRoute="marcar-ingreso-salida"
       />
-      
+
       {/* Modal for early exit reason */}
       <Modal
         visible={isModalVisible}
@@ -2058,7 +2079,7 @@ export default function MarcarIngresoSalidaScreen() {
             <ThemedText style={styles.modalSubtitle}>
               Por favor, ingresa la razón por la cual sales antes de tiempo:
             </ThemedText>
-            
+
             <TextInput
               style={styles.modalInput}
               value={exitReason}
@@ -2069,7 +2090,7 @@ export default function MarcarIngresoSalidaScreen() {
               numberOfLines={3}
               textAlignVertical="top"
             />
-            
+
             <ThemedView style={styles.modalButtons}>
               <TouchableOpacity
                 style={[styles.modalButton, styles.modalCancelButton]}
@@ -2079,7 +2100,7 @@ export default function MarcarIngresoSalidaScreen() {
                   {getActionIcon('cancel')}
                 </ThemedText>
               </TouchableOpacity>
-              
+
               <TouchableOpacity
                 style={[styles.modalButton, styles.modalConfirmButton]}
                 onPress={handleModalConfirm}
@@ -2113,7 +2134,7 @@ export default function MarcarIngresoSalidaScreen() {
               </TouchableOpacity>
             </View>
 
-            <ScrollView 
+            <ScrollView
               style={styles.marksModalContent}
               contentContainerStyle={styles.marksModalContentContainer}
               nestedScrollEnabled={true}
@@ -2137,7 +2158,7 @@ export default function MarcarIngresoSalidaScreen() {
           </ThemedView>
         </View>
       </Modal>
-      
+
       <AppFooter />
     </ThemedView>
   );
@@ -2370,7 +2391,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   actionContainer: {
-    
+
   },
   actionButton: {
     paddingVertical: 16,

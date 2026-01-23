@@ -6,12 +6,12 @@ import { getUserMarca } from "../../../../../utils/getUserMarca";
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
-        const { valid, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = verifyAccessToken(req);
 
         if (!valid) {
             return NextResponse.json(
-                { status: false, message: message },
-                { status: 401 }
+                { status: false, expired: expired, message: message },
+                { status: expired ? 401 : 403 }
             );
         }
 

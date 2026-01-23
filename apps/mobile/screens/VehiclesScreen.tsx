@@ -67,16 +67,16 @@ export default function VehiclesScreen() {
   const { employee, refreshAccessToken, logout } = useAuth();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const navigation = useNavigation<VehiclesScreenNavigationProp>();
-  
+
   // Vehicles state
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [hasCurrentMarca, setHasCurrentMarca] = useState<boolean>(false);
-  
+
   // Editing state
   const [editingVehicle, setEditingVehicle] = useState<EditingVehicle | null>(null);
-  
+
   // Creating state
   const [isCreating, setIsCreating] = useState(false);
   const [newVehicle, setNewVehicle] = useState<EditingVehicle>({
@@ -101,7 +101,7 @@ export default function VehiclesScreen() {
   const [vehicleImageBase64, setVehicleImageBase64] = useState<string | null>(null);
   const [isEditingImage, setIsEditingImage] = useState(false);
   const [editingVehicleServerImage, setEditingVehicleServerImage] = useState<string | null>(null);
-  
+
   // Form refs for text inputs
   const tipoRef = useRef<'Particular' | 'Institucional'>('Particular');
   const placaRef = useRef('');
@@ -112,7 +112,7 @@ export default function VehiclesScreen() {
   const horaSalidaHRef = useRef('');
   const horaSalidaMRef = useRef('');
   const razonVisitaRef = useRef('');
-  
+
   const syncTimeFields = (
     entradaH: string,
     entradaM: string,
@@ -178,10 +178,10 @@ export default function VehiclesScreen() {
     setHoraSalidaPickerValue(buildDateFromParts('', ''));
     setShowHoraSalidaPicker(false);
   };
-  
+
   // Minimal state for Picker (needs controlled value)
   const [vehicleTipo, setVehicleTipo] = useState<'Particular' | 'Institucional'>('Particular');
-  
+
   // Time picker state
   const [showHoraEntradaPicker, setShowHoraEntradaPicker] = useState(false);
   const [horaEntradaPickerValue, setHoraEntradaPickerValue] = useState(new Date());
@@ -189,7 +189,7 @@ export default function VehiclesScreen() {
   const [showHoraSalidaPicker, setShowHoraSalidaPicker] = useState(false);
   const [horaSalidaPickerValue, setHoraSalidaPickerValue] = useState(new Date());
   const [horaSalidaDisplay, setHoraSalidaDisplay] = useState('');
-  
+
   // Filters state
   const [searchText, setSearchText] = useState('');
   const [selectedTipo, setSelectedTipo] = useState<string>('all');
@@ -253,7 +253,8 @@ export default function VehiclesScreen() {
         if (!token) {
           const refreshed = await refreshAccessToken();
           if (!refreshed) {
-            throw new Error('No authentication token found');
+            if (logout) await logout();
+            throw new Error('Sesión expirada');
           }
           token = await AsyncStorage.getItem('access_token');
         }
@@ -267,7 +268,7 @@ export default function VehiclesScreen() {
           },
         });
 
-        if (response.status === 401 || response.status === 403) {
+        if (response.status === 401) {
           const refreshed = await refreshAccessToken();
           if (refreshed) {
             return fetchVehicles();
@@ -276,6 +277,11 @@ export default function VehiclesScreen() {
             await logout();
             return;
           }
+        }
+
+        if (response.status === 403) {
+          if (logout) await logout();
+          throw new Error('Acceso denegado');
         }
 
         if (!response.ok) {
@@ -339,7 +345,7 @@ export default function VehiclesScreen() {
 
   const getConnectionStatus = async (): Promise<boolean> => {
     const networkState = await Network.getNetworkStateAsync();
-      return networkState.isConnected && networkState.isInternetReachable ? true : false;
+    return networkState.isConnected && networkState.isInternetReachable ? true : false;
   };
 
   const openCamera = async () => {
@@ -369,12 +375,12 @@ export default function VehiclesScreen() {
     }
 
     try {
-      const photo = await cameraRef.current.takePictureAsync({ 
+      const photo = await cameraRef.current.takePictureAsync({
         base64: true,
         quality: 0.7,
         skipProcessing: false
       });
-      
+
       if (!photo) {
         Alert.alert('Error', 'No se pudo capturar la foto. Por favor intente nuevamente.');
         setIsCameraVisible(false);
@@ -388,10 +394,10 @@ export default function VehiclesScreen() {
       }
 
       setIsCameraVisible(false);
-      
+
       // Format base64 with data URI prefix
       const formattedBase64 = `data:image/jpeg;base64,${photo.base64!}`;
-      
+
       setTimeout(() => {
         setVehicleImageBase64(formattedBase64);
       }, 100);
@@ -431,7 +437,7 @@ export default function VehiclesScreen() {
 
     Alert.alert(
       'Confirmar creación',
-      '¿Estás seguro de que deseas crear este registro de vehículo?',
+      '¿Estás seguro de que deseas crear esta visita de vehículo?',
       [
         { text: 'Cancelar', style: 'cancel' },
         {
@@ -448,7 +454,7 @@ export default function VehiclesScreen() {
 
               // Construir hora_entrada y hora_salida
               const hora_entrada = `${horaEntradaHRef.current.padStart(2, '0')}:${horaEntradaMRef.current.padStart(2, '0')}`;
-              const hora_salida = (horaSalidaHRef.current && horaSalidaMRef.current) 
+              const hora_salida = (horaSalidaHRef.current && horaSalidaMRef.current)
                 ? `${horaSalidaHRef.current.padStart(2, '0')}:${horaSalidaMRef.current.padStart(2, '0')}`
                 : null;
 
@@ -488,7 +494,7 @@ export default function VehiclesScreen() {
                 });
 
                 if (data.status) {
-                  Alert.alert('Éxito', data.message || 'Vehículo registrado correctamente');
+                  Alert.alert('Éxito', data.message || 'Visita de vehículo registrada correctamente');
                   setIsCreating(false);
                   setNewVehicle({
                     id: null,
@@ -512,7 +518,7 @@ export default function VehiclesScreen() {
                   setVehicleImageBase64(null);
                   fetchVehicles();
                 } else {
-                  Alert.alert('Error', data.message || 'Error al registrar el vehículo');
+                  Alert.alert('Error', data.message || 'Error al registrar la visita de vehículo');
                 }
               } else {
                 // Sin internet: modo offline
@@ -533,7 +539,7 @@ export default function VehiclesScreen() {
                 // Crear vehículo en cache
                 const cacheStr = await AsyncStorage.getItem('vehicles_cache');
                 const cache = cacheStr ? JSON.parse(cacheStr) : [];
-                
+
                 const newVehicleCache = {
                   id: 0,
                   tipo: tipoRef.current,
@@ -555,7 +561,7 @@ export default function VehiclesScreen() {
                 cache.push(newVehicleCache);
                 await AsyncStorage.setItem('vehicles_cache', JSON.stringify(cache));
 
-                Alert.alert('Modo Offline', 'Vehículo registrado localmente. Se sincronizará cuando haya conexión.');
+                Alert.alert('Modo Offline', 'Visita de vehículo registrada localmente. Se sincronizará cuando haya conexión.');
                 setIsCreating(false);
                 setNewVehicle({
                   id: null,
@@ -581,7 +587,7 @@ export default function VehiclesScreen() {
               }
             } catch (err) {
               console.error('Error creating vehicle:', err);
-              Alert.alert('Error', 'No se pudo registrar el vehículo');
+              Alert.alert('Error', 'No se pudo registrar la visita de vehículo');
             }
           },
         },
@@ -601,15 +607,15 @@ export default function VehiclesScreen() {
 
     let final_day_initial = day;
     if (horaInicioSplit && parseInt(horaInicioSplit[0]) > parseInt(hora_entrada_raw[0])) {
-        final_day_initial = (parseInt(day) + 1).toString().padStart(2, "0");
+      final_day_initial = (parseInt(day) + 1).toString().padStart(2, "0");
     }
 
     let final_day_final = day;
     if (hora_salida) {
-        const hora_salida_raw = hora_salida.split(":");
-        if (horaInicioSplit && parseInt(horaInicioSplit[0]) > parseInt(hora_salida_raw[0])) {
-            final_day_final = (parseInt(day) + 1).toString().padStart(2, "0");
-        }
+      const hora_salida_raw = hora_salida.split(":");
+      if (horaInicioSplit && parseInt(horaInicioSplit[0]) > parseInt(hora_salida_raw[0])) {
+        final_day_final = (parseInt(day) + 1).toString().padStart(2, "0");
+      }
     }
 
     const hora_entrada_converted = year + "-" + month + "-" + final_day_initial + "T" + hora_entrada_raw[0] + ":" + hora_entrada_raw[1] + ":00.000Z";
@@ -665,7 +671,7 @@ export default function VehiclesScreen() {
 
               // Construir hora_entrada y hora_salida
               const hora_entrada = `${horaEntradaHRef.current.padStart(2, '0')}:${horaEntradaMRef.current.padStart(2, '0')}`;
-              const hora_salida = (horaSalidaHRef.current && horaSalidaMRef.current) 
+              const hora_salida = (horaSalidaHRef.current && horaSalidaMRef.current)
                 ? `${horaSalidaHRef.current.padStart(2, '0')}:${horaSalidaMRef.current.padStart(2, '0')}`
                 : null;
 
@@ -710,7 +716,7 @@ export default function VehiclesScreen() {
                   setEditingVehicleServerImage(null);
                   // Wait a bit for server to process, then fetch vehicles
                   setTimeout(() => {
-                  fetchVehicles();
+                    fetchVehicles();
                   }, 500);
                 } else {
                   Alert.alert('Error', data.message || 'Error al actualizar el vehículo');
@@ -742,8 +748,8 @@ export default function VehiclesScreen() {
                 // Actualizar vehicles_cache
                 const cacheStr = await AsyncStorage.getItem('vehicles_cache');
                 const cache = cacheStr ? JSON.parse(cacheStr) : [];
-                
-                const vehicleIndex = cache.findIndex((v: Vehicle) => 
+
+                const vehicleIndex = cache.findIndex((v: Vehicle) =>
                   editingVehicle.id_local !== '' ? v.id_local === editingVehicle.id_local : v.id === vehicleId
                 );
 
@@ -757,7 +763,7 @@ export default function VehiclesScreen() {
                     // No new image captured, preserve existing base64_image
                     updatedBase64Image = cache[vehicleIndex].base64_image;
                   }
-                  
+
                   cache[vehicleIndex] = {
                     ...cache[vehicleIndex],
                     tipo: tipoRef.current,
@@ -779,7 +785,7 @@ export default function VehiclesScreen() {
                 setEditingVehicleServerImage(null);
                 // Wait a bit to ensure cache is written, then fetch vehicles
                 setTimeout(() => {
-                fetchVehicles();
+                  fetchVehicles();
                 }, 100);
               }
             } catch (err) {
@@ -795,7 +801,7 @@ export default function VehiclesScreen() {
   const deleteVehicle = async (vehicleId: number, id_local: string) => {
     Alert.alert(
       'Confirmar eliminación',
-      '¿Estás seguro de que deseas eliminar este registro de vehículo?',
+      '¿Estás seguro de que deseas eliminar esta visita de vehículo?',
       [
         { text: 'Cancelar', style: 'cancel' },
         {
@@ -815,10 +821,10 @@ export default function VehiclesScreen() {
                 });
 
                 if (data.status) {
-                  Alert.alert('Éxito', data.message || 'Vehículo eliminado correctamente');
+                  Alert.alert('Éxito', data.message || 'Visita de vehículo eliminada correctamente');
                   fetchVehicles();
                 } else {
-                  Alert.alert('Error', data.message || 'Error al eliminar el vehículo');
+                  Alert.alert('Error', data.message || 'Error al eliminar la visita de vehículo');
                 }
               } else {
                 // Sin internet: modo offline
@@ -841,8 +847,8 @@ export default function VehiclesScreen() {
                 // Eliminar de vehicles_cache
                 const cacheStr = await AsyncStorage.getItem('vehicles_cache');
                 const cache = cacheStr ? JSON.parse(cacheStr) : [];
-                
-                const filteredCache = cache.filter((v: Vehicle) => 
+
+                const filteredCache = cache.filter((v: Vehicle) =>
                   id_local !== '' ? v.id_local !== id_local : v.id !== vehicleId
                 );
                 await AsyncStorage.setItem('vehicles_cache', JSON.stringify(filteredCache));
@@ -1034,16 +1040,16 @@ export default function VehiclesScreen() {
             // 1. If online and server image loaded: use server image
             // 2. Otherwise: use base64_image from cache
             // This ensures offline mode always shows base64_image
-            const imageToShow = editingVehicleServerImage 
-              ? editingVehicleServerImage 
+            const imageToShow = editingVehicleServerImage
+              ? editingVehicleServerImage
               : (editingVehicle?.base64_image && editingVehicle.base64_image.trim() !== '')
-                ? (editingVehicle.base64_image.startsWith('data:') 
-                    ? editingVehicle.base64_image 
-                    : `data:image/jpeg;base64,${editingVehicle.base64_image}`)
+                ? (editingVehicle.base64_image.startsWith('data:')
+                  ? editingVehicle.base64_image
+                  : `data:image/jpeg;base64,${editingVehicle.base64_image}`)
                 : null;
-            
+
             if (!imageToShow) return null;
-            
+
             return (
               <ThemedView style={styles.imagePreviewContainer}>
                 <ThemedText style={styles.imagePreviewTitle}>Imagen actual:</ThemedText>
@@ -1059,16 +1065,16 @@ export default function VehiclesScreen() {
 
         {/* Buttons */}
         <ThemedView style={styles.buttonRow}>
-          <TouchableOpacity 
-            style={styles.confirmButton} 
+          <TouchableOpacity
+            style={styles.confirmButton}
             onPress={isCreating ? createVehicle : () => updateVehicle(vehicle.id!)}
           >
             <ThemedText style={styles.confirmButtonText}>
               {getActionIcon('confirm')}
             </ThemedText>
           </TouchableOpacity>
-          <TouchableOpacity 
-            style={styles.cancelButton} 
+          <TouchableOpacity
+            style={styles.cancelButton}
             onPress={isCreating ? cancelCreating : cancelEditing}
           >
             <ThemedText style={styles.cancelButtonText}>
@@ -1107,19 +1113,19 @@ export default function VehiclesScreen() {
 
   const startEditing = async (vehicle: Vehicle) => {
     // Parse time from hora_entrada
-    
+
     const entrada_split = vehicle.hora_entrada.split(':');
     const hours = entrada_split[0].split('T')[1];
     const minutes = entrada_split[1];
 
     let exitHours = '';
     let exitMinutes = '';
-    if(vehicle.hora_salida) {
+    if (vehicle.hora_salida) {
       const salida_split = vehicle.hora_salida.split(':');
       exitHours = salida_split[0].split('T')[1];
       exitMinutes = salida_split[1];
     }
-    
+
     setEditingVehicle({
       id: vehicle.id,
       id_local: vehicle.id_local,
@@ -1139,7 +1145,7 @@ export default function VehiclesScreen() {
     setHoraSalidaPickerValue(buildDateFromParts(exitHours, exitMinutes));
     setShowHoraEntradaPicker(false);
     setShowHoraSalidaPicker(false);
-    
+
     // Initialize refs with vehicle values
     tipoRef.current = vehicle.tipo;
     setVehicleTipo(vehicle.tipo);
@@ -1151,12 +1157,12 @@ export default function VehiclesScreen() {
     horaSalidaHRef.current = exitHours;
     horaSalidaMRef.current = exitMinutes;
     razonVisitaRef.current = vehicle.razon_visita;
-    
+
     // Set image state
     setVehicleImageBase64(null);
     setIsEditingImage(true);
     setEditingVehicleServerImage(null);
-    
+
     // Load image based on network status
     const isConnected = await getConnectionStatus();
     if (isConnected && vehicle.id) {
@@ -1168,8 +1174,8 @@ export default function VehiclesScreen() {
           if (!token) {
             const refreshed = await refreshAccessToken();
             if (!refreshed) {
-              console.error('No authentication token found for vehicle image');
-              return;
+              if (logout) await logout();
+              throw new Error('Sesión expirada');
             }
             token = await AsyncStorage.getItem('access_token');
           }
@@ -1181,19 +1187,19 @@ export default function VehiclesScreen() {
               'ngrok-skip-browser-warning': '69420',
             },
           });
-          
+
           if (response.ok) {
             const blob = await response.blob();
-            
+
             // Convert blob to base64
             const base64Image = await new Promise<string | null>((resolve) => {
               const reader = new FileReader();
-              
+
               reader.onerror = () => {
                 console.error('Error al leer la imagen con FileReader');
                 resolve(null);
               };
-              
+
               reader.onloadend = () => {
                 try {
                   const base64data = reader.result as string;
@@ -1208,10 +1214,10 @@ export default function VehiclesScreen() {
                   resolve(null);
                 }
               };
-              
+
               reader.readAsDataURL(blob);
             });
-            
+
             if (base64Image) {
               setEditingVehicleServerImage(base64Image);
             }
@@ -1307,30 +1313,30 @@ export default function VehiclesScreen() {
   };
 
   const filteredVehicles = vehicles.filter(vehicle => {
-    const matchesSearch = 
+    const matchesSearch =
       vehicle.placa.toLowerCase().includes(searchText.toLowerCase()) ||
       vehicle.nombre_propietario.toLowerCase().includes(searchText.toLowerCase()) ||
       vehicle.cedula_propietario.toLowerCase().includes(searchText.toLowerCase()) ||
       vehicle.razon_visita.toLowerCase().includes(searchText.toLowerCase()) ||
       vehicle.responsable.nombre.toLowerCase().includes(searchText.toLowerCase());
-    
-    const matchesTipo = 
+
+    const matchesTipo =
       selectedTipo === 'all' || vehicle.tipo === selectedTipo;
-    
+
     return matchesSearch && matchesTipo;
   });
 
   if (isLoading) {
     return (
       <ThemedView style={styles.container}>
-        <AppHeader onMenuPress={handleMenuPress} title="Registro de vehículos" />
+        <AppHeader onMenuPress={handleMenuPress} title="Visitas de vehículos" />
         <ThemedView style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#007AFF" />
-          <ThemedText style={styles.loadingText}>Cargando vehículos...</ThemedText>
+          <ThemedText style={styles.loadingText}>Cargando visitas de vehículos...</ThemedText>
         </ThemedView>
         <AppFooter />
-        <SlideMenu 
-          isVisible={isMenuVisible} 
+        <SlideMenu
+          isVisible={isMenuVisible}
           onClose={handleMenuClose}
           onHomePress={handleHomePress}
           currentRoute="Vehicles"
@@ -1343,14 +1349,14 @@ export default function VehiclesScreen() {
   if (!hasCurrentMarca) {
     return (
       <ThemedView style={styles.container}>
-        <AppHeader onMenuPress={handleMenuPress} title="Registro de vehículos" />
+        <AppHeader onMenuPress={handleMenuPress} title="Visitas de vehículos" />
         <ThemedView style={styles.noMarcaContainer}>
           <Ionicons name="alert-circle-outline" size={80} color="#FF9500" />
           <ThemedText style={styles.noMarcaTitle}>No hay marca registrada</ThemedText>
           <ThemedText style={styles.noMarcaMessage}>
-            Debes registrar una marca de ingreso antes de acceder al registro de vehículos.
+            Debes registrar una marca de ingreso antes de acceder a las visitas de vehículos.
           </ThemedText>
-          <TouchableOpacity 
+          <TouchableOpacity
             style={styles.goBackButton}
             onPress={() => navigation.goBack()}
           >
@@ -1359,8 +1365,8 @@ export default function VehiclesScreen() {
           </TouchableOpacity>
         </ThemedView>
         <AppFooter />
-        <SlideMenu 
-          isVisible={isMenuVisible} 
+        <SlideMenu
+          isVisible={isMenuVisible}
           onClose={handleMenuClose}
           onHomePress={handleHomePress}
           currentRoute="Vehicles"
@@ -1371,8 +1377,8 @@ export default function VehiclesScreen() {
 
   return (
     <ThemedView style={styles.container}>
-      <AppHeader onMenuPress={handleMenuPress} title="Registro de vehículos" />
-      <ScrollView 
+      <AppHeader onMenuPress={handleMenuPress} title="Visitas de vehículos" />
+      <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={true}
@@ -1381,32 +1387,32 @@ export default function VehiclesScreen() {
           {/* Module Title */}
           <ThemedView style={styles.titleContainer}>
             <ThemedText type="title" style={styles.title}>
-              {getActionIcon('vehicles')} Registro de vehículos
+              {getActionIcon('vehicles')} Registro de visitas de vehículos
             </ThemedText>
             <ThemedText style={styles.subtitle}>
-              Gestiona el registro de vehículos
+              Gestiona las visitas de vehículos
             </ThemedText>
           </ThemedView>
 
           {/* Filters */}
           <ThemedView style={styles.filtersMain}>
             <ThemedView style={styles.filterHeader}>
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={styles.filterToggleButton}
                 onPress={() => setIsFiltersExpanded(!isFiltersExpanded)}
               >
                 <ThemedText style={styles.filterToggleText}>
                   Filtros
                 </ThemedText>
-                <Ionicons 
-                  name={isFiltersExpanded ? "chevron-up" : "chevron-down"} 
-                  size={20} 
-                  color="#007AFF" 
+                <Ionicons
+                  name={isFiltersExpanded ? "chevron-up" : "chevron-down"}
+                  size={20}
+                  color="#007AFF"
                 />
               </TouchableOpacity>
-              
+
               {isFiltersExpanded && (
-                <TouchableOpacity 
+                <TouchableOpacity
                   style={styles.resetFiltersButton}
                   onPress={resetAllFilters}
                 >
@@ -1463,33 +1469,33 @@ export default function VehiclesScreen() {
 
           {/* Vehicles List */}
           {!isCreating && !editingVehicle && (
-          <ThemedView style={styles.vehiclesContainer}>
-            {filteredVehicles.length === 0 ? (
-              <ThemedView style={styles.emptyContainer}>
-                <ThemedText style={styles.emptyText}>
-                  {vehicles.length === 0 
-                    ? 'No hay vehículos registrados aún' 
-                    : 'No se encontraron vehículos con los filtros aplicados'}
-                </ThemedText>
-              </ThemedView>
-            ) : (
-              filteredVehicles.map(vehicle => (
-                <VehicleItemComponent
-                  key={vehicle.id}
-                  vehicle={vehicle}
-                  onEdit={() => startEditing(vehicle)}
-                  onDelete={() => deleteVehicle(vehicle.id, vehicle.id_local)}
-                  getActionIcon={getActionIcon}
-                  convertDate={convertDate}
-                  getConnectionStatus={getConnectionStatus}
-                />
-              ))
-            )}
-          </ThemedView>
+            <ThemedView style={styles.vehiclesContainer}>
+              {filteredVehicles.length === 0 ? (
+                <ThemedView style={styles.emptyContainer}>
+                  <ThemedText style={styles.emptyText}>
+                    {vehicles.length === 0
+                      ? 'No hay visitas de vehículos registradas aún'
+                      : 'No se encontraron visitas de vehículos con los filtros aplicados'}
+                  </ThemedText>
+                </ThemedView>
+              ) : (
+                filteredVehicles.map(vehicle => (
+                  <VehicleItemComponent
+                    key={vehicle.id}
+                    vehicle={vehicle}
+                    onEdit={() => startEditing(vehicle)}
+                    onDelete={() => deleteVehicle(vehicle.id, vehicle.id_local)}
+                    getActionIcon={getActionIcon}
+                    convertDate={convertDate}
+                    getConnectionStatus={getConnectionStatus}
+                  />
+                ))
+              )}
+            </ThemedView>
           )}
         </ThemedView>
       </ScrollView>
-      
+
       {/* Camera Modal */}
       <Modal
         visible={isCameraVisible}
@@ -1508,7 +1514,7 @@ export default function VehiclesScreen() {
             >
               <Ionicons name="close" size={30} color="#000000" />
             </TouchableOpacity>
-            
+
             <TouchableOpacity
               style={styles.cameraCaptureButton}
               onPress={takePicture}
@@ -1518,10 +1524,10 @@ export default function VehiclesScreen() {
           </CameraView>
         </ThemedView>
       </Modal>
-      
+
       <AppFooter />
-      <SlideMenu 
-        isVisible={isMenuVisible} 
+      <SlideMenu
+        isVisible={isMenuVisible}
         onClose={handleMenuClose}
         onHomePress={handleHomePress}
         currentRoute="Vehicles"
@@ -1548,7 +1554,7 @@ const VehicleItemComponent: React.FC<VehicleItemComponentProps> = ({
   convertDate,
   getConnectionStatus,
 }) => {
-  const { employee, refreshAccessToken } = useAuth();
+  const { employee, refreshAccessToken, logout } = useAuth();
   const [imageBase64, setImageBase64] = React.useState<string | null>(null);
   const [isLoadingImage, setIsLoadingImage] = React.useState<boolean>(false);
   const [isImageExpanded, setIsImageExpanded] = React.useState<boolean>(false);
@@ -1564,37 +1570,37 @@ const VehicleItemComponent: React.FC<VehicleItemComponentProps> = ({
       console.warn('No API URL or vehicle ID available');
       return;
     }
-    
+
     try {
       let token = await AsyncStorage.getItem('access_token');
       if (!token) {
         const refreshed = await refreshAccessToken();
         if (!refreshed) {
-          console.warn('No authentication token found');
-          return;
+          if (logout) await logout();
+          throw new Error('Sesión expirada');
         }
         token = await AsyncStorage.getItem('access_token');
       }
-      
+
       const response = await fetch(`${apiUrl}/api/vehicles/${vehicle.id}/get-image?t=${Date.now()}`, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'ngrok-skip-browser-warning': '69420',
         },
       });
-      
+
       if (response.ok) {
         const blob = await response.blob();
-        
+
         // Convert blob to base64
         const base64Image = await new Promise<string | null>((resolve) => {
           const reader = new FileReader();
-          
+
           reader.onerror = () => {
             console.error('Error al leer la imagen con FileReader');
             resolve(null);
           };
-          
+
           reader.onloadend = () => {
             try {
               const base64data = reader.result as string;
@@ -1609,10 +1615,10 @@ const VehicleItemComponent: React.FC<VehicleItemComponentProps> = ({
               resolve(null);
             }
           };
-          
+
           reader.readAsDataURL(blob);
         });
-        
+
         if (base64Image) {
           setImageBase64(base64Image);
         }
@@ -1635,20 +1641,20 @@ const VehicleItemComponent: React.FC<VehicleItemComponentProps> = ({
 
     const checkConnectionAndLoadImage = async () => {
       setIsLoadingImage(true);
-      
+
       // Check connection status first
       const connectionStatus = await getConnectionStatus();
-      
+
       // Always load cached image first (base64_image from vehicle)
       if (vehicle.base64_image && vehicle.base64_image.trim() !== '') {
-        const formattedImage = vehicle.base64_image.startsWith('data:') 
-          ? vehicle.base64_image 
+        const formattedImage = vehicle.base64_image.startsWith('data:')
+          ? vehicle.base64_image
           : `data:image/jpeg;base64,${vehicle.base64_image}`;
         setImageBase64(formattedImage);
       } else {
         setImageBase64(null);
       }
-      
+
       if (!connectionStatus) {
         // Offline: use cached image only, don't try to load from server
         setIsLoadingImage(false);
@@ -1658,25 +1664,25 @@ const VehicleItemComponent: React.FC<VehicleItemComponentProps> = ({
         setIsLoadingImage(false);
       }
     };
-    
+
     checkConnectionAndLoadImage();
   }, [vehicle.id, vehicle.base64_image, isImageExpanded, getConnectionStatus, loadImageFromServer]);
 
   return (
     <ThemedView style={styles.vehicleCard}>
-                  <ThemedView style={styles.vehicleHeader}>
-                    <ThemedText style={styles.vehiclePlaca}>{vehicle.placa}</ThemedText>
-                    <ThemedText style={styles.vehicleTipo}>{vehicle.tipo}</ThemedText>
-                  </ThemedView>
-                  <ThemedText style={styles.vehicleInfo}>Propietario: {vehicle.nombre_propietario}</ThemedText>
-                  <ThemedText style={styles.vehicleInfo}>Cédula: {vehicle.cedula_propietario}</ThemedText>
-                  <ThemedText style={styles.vehicleInfo}>Entrada: {convertDate(vehicle.hora_entrada)}</ThemedText>
-                  {vehicle.hora_salida && (
-                    <ThemedText style={styles.vehicleInfo}>Salida: {convertDate(vehicle.hora_salida)}</ThemedText>
-                  )}
-                  <ThemedText style={styles.vehicleInfo}>Razón: {vehicle.razon_visita}</ThemedText>
-                  <ThemedText style={styles.vehicleInfo}>Responsable: {vehicle.responsable.nombre}</ThemedText>
-                  
+      <ThemedView style={styles.vehicleHeader}>
+        <ThemedText style={styles.vehiclePlaca}>{vehicle.placa}</ThemedText>
+        <ThemedText style={styles.vehicleTipo}>{vehicle.tipo}</ThemedText>
+      </ThemedView>
+      <ThemedText style={styles.vehicleInfo}>Propietario: {vehicle.nombre_propietario}</ThemedText>
+      <ThemedText style={styles.vehicleInfo}>Cédula: {vehicle.cedula_propietario}</ThemedText>
+      <ThemedText style={styles.vehicleInfo}>Entrada: {convertDate(vehicle.hora_entrada)}</ThemedText>
+      {vehicle.hora_salida && (
+        <ThemedText style={styles.vehicleInfo}>Salida: {convertDate(vehicle.hora_salida)}</ThemedText>
+      )}
+      <ThemedText style={styles.vehicleInfo}>Razón: {vehicle.razon_visita}</ThemedText>
+      <ThemedText style={styles.vehicleInfo}>Responsable: {vehicle.responsable.nombre}</ThemedText>
+
       {/* Collapsable image section */}
       {hasImage && (
         <ThemedView style={styles.collapsableSection}>
@@ -1690,15 +1696,15 @@ const VehicleItemComponent: React.FC<VehicleItemComponentProps> = ({
               size={20}
               color="#007AFF"
             />
-                    </TouchableOpacity>
-          
+          </TouchableOpacity>
+
           {isImageExpanded && (
             <ThemedView style={styles.collapsableContent}>
               {isLoadingImage ? (
                 <ThemedView style={styles.imageLoadingContainer}>
                   <ActivityIndicator size="small" color="#007AFF" />
                   <ThemedText style={styles.imageLoadingText}>Cargando imagen...</ThemedText>
-                  </ThemedView>
+                </ThemedView>
               ) : imageBase64 ? (
                 <ThemedView style={styles.imagePreviewContainer}>
                   <Image
@@ -1711,22 +1717,22 @@ const VehicleItemComponent: React.FC<VehicleItemComponentProps> = ({
                 <ThemedView style={styles.imageLoadingContainer}>
                   <ThemedText style={styles.imageLoadingText}>No hay imagen disponible</ThemedText>
                 </ThemedView>
-            )}
-          </ThemedView>
+              )}
+            </ThemedView>
           )}
         </ThemedView>
       )}
-      
+
       {/* Solo serán visibles si el dato responsable_id es igual al id del empleado actual */}
       {vehicle.responsable.id === parseInt(employee?.id || '0') && (
-      <ThemedView style={styles.buttonRow}>
-        <TouchableOpacity style={styles.editButton} onPress={onEdit}>
-          <ThemedText style={styles.editButtonText}>{getActionIcon('edit')}</ThemedText>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.deleteButton} onPress={onDelete}>
-          <ThemedText style={styles.deleteButtonText}>{getActionIcon('delete')}</ThemedText>
-        </TouchableOpacity>
-      </ThemedView>
+        <ThemedView style={styles.buttonRow}>
+          <TouchableOpacity style={styles.editButton} onPress={onEdit}>
+            <ThemedText style={styles.editButtonText}>{getActionIcon('edit')}</ThemedText>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.deleteButton} onPress={onDelete}>
+            <ThemedText style={styles.deleteButtonText}>{getActionIcon('delete')}</ThemedText>
+          </TouchableOpacity>
+        </ThemedView>
       )}
     </ThemedView>
   );
@@ -2179,7 +2185,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     backgroundColor: '#F9F9F9',
     overflow: 'hidden',
-    
+
   },
   collapsableHeader: {
     flexDirection: 'row',

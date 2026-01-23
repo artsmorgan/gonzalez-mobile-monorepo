@@ -8,9 +8,9 @@ import { sendNotificationByRole } from "../../../../utils/sendNotification";
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
-        const { valid, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = verifyAccessToken(req);
         if (!valid) {
-            return NextResponse.json({ status: false, message }, { status: 401 });
+            return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
         }
 
         const resolvedParams = await context.params;
@@ -33,7 +33,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             consecutivo_informe,
             link_informe,
         } = await req.json();
-        
+
         if (marca_id) {
             return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
         }
@@ -71,7 +71,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                 const fecha_string = incident.fecha_solucion.toISOString().split("T")[0];
                 const hora_string = incident.fecha_solucion.toISOString().split("T")[1].split(".")[0];
                 const description = `Se ha actualizado el incidente de tipo ${clasificacion.nombre} en la sucursal ${sucursal.nombre} de la empresa ${cliente.nombre} el día ${fecha_string} a las ${hora_string}`;
-                sendNotificationByRole(marca.id, "Incidente actualizado", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+                sendNotificationByRole(marca.corpo_id, [marca.plaza_id], "Incidente actualizado", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
             }
         }
 
@@ -85,9 +85,9 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
 export async function DELETE(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
-        const { valid, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = verifyAccessToken(req);
         if (!valid) {
-            return NextResponse.json({ status: false, message }, { status: 401 });
+            return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
         }
 
         const resolvedParams = await context.params;

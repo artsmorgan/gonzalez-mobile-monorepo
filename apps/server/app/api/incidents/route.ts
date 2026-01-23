@@ -41,9 +41,9 @@ function normalizeBase64(b64: string): string {
 
 export async function GET(req: NextRequest) {
     try {
-        const { valid, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = verifyAccessToken(req);
         if (!valid) {
-            return NextResponse.json({ status: false, message }, { status: 401 });
+            return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
         }
 
         const marcaIdStr = req.nextUrl.searchParams.get("m");
@@ -141,9 +141,9 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
     try {
-        const { valid, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = verifyAccessToken(req);
         if (!valid) {
-            return NextResponse.json({ status: false, message }, { status: 401 });
+            return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
         }
 
         const body = await req.json();
@@ -265,13 +265,13 @@ export async function POST(req: NextRequest) {
         const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: marca.corpo_id } });
         const cliente = await prisma.e_estructura_cliente.findUnique({ where: { id: marca.cliente_id } });
         if (clasificacion && sucursal && cliente) {
-            const fecha_string = fecha_incidente.toISOString().split("T")[0];
-            const hora_string = fecha_incidente.toISOString().split("T")[1].split(".")[0];
+            const fecha_string = fecha_incidente.split("T")[0];
+            const hora_string = fecha_incidente.split("T")[1].split(".")[0];
             const description = `Se ha reportado un incidente de tipo ${clasificacion.nombre} en la sucursal ${sucursal.nombre} de la empresa ${cliente.nombre} el día ${fecha_string} a las ${hora_string}`;
             const supervisors = await prisma.c_empleado.findMany({ where: { supervisor_id: empleado_id } });
             const supervisorIds = supervisors.map(s => s.id);
-            sendNotificationByRole(marca.id, "Incidente reportado", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
-            sendNotificationByEmployee(marca.id, "Incidente reportado", description, supervisorIds);
+            sendNotificationByRole(marca.corpo_id, [marca.plaza_id], "Incidente reportado", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+            sendNotificationByEmployee(marca.corpo_id, [empleado_id], "Incidente reportado", description, supervisorIds);
         }
 
         return NextResponse.json(
@@ -280,7 +280,7 @@ export async function POST(req: NextRequest) {
         );
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
-        console.error("Error in POST /api/incidents:", errorMessage);
+        console.log("Error in POST /api/incidents:", errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }

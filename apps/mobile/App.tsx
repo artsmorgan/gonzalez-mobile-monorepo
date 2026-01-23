@@ -76,6 +76,7 @@ import MonthlyWorkRoleScreen from './screens/MonthlyWorkRoleScreen';
 import PermitRequestScreen from './screens/PermitRequestScreen';
 import AttendanceControlScreen from './screens/AttendanceControlScreen';
 import OpeningClosingPositionScreen from './screens/OpeningClosingPositionScreen';
+import TrasladoPlazasScreen from './screens/TrasladoPlazasScreen';
 import ActaEntregaProductosScreen from './screens/ActaEntregaProductosScreen';
 import InductionTourRecordScreen from './screens/InductionTourRecordScreen';
 import GeneralInductionRegisterScreen from './screens/GeneralInductionRegisterScreen';
@@ -107,6 +108,7 @@ import DocumentosEntregadosScreen from './screens/DocumentosEntregadosScreen';
 import ApreciacionVulnerabilidadScreen from './screens/ApreciacionVulnerabilidadScreen';
 import MutuosAcuerdosScreen from './screens/MutuosAcuerdosScreen';
 import EntregaPuestosScreen from './screens/EntregaPuestosScreen';
+import ChecklistSupervisionScreen from './screens/ChecklistSupervisionScreen';
 import { createStaffEvaluation, deleteStaffEvaluation } from './hooks/staffEvaluationsFunctions';
 
 export type RootStackParamList = {
@@ -170,6 +172,7 @@ export type RootStackParamList = {
   PermitRequest: undefined;
   AttendanceControl: undefined;
   OpeningClosingPosition: undefined;
+  TrasladoPlazas: undefined;
   ActaEntregaProductos: undefined;
   InductionTourRecord: undefined;
   GeneralInductionRegister: undefined;
@@ -188,25 +191,26 @@ export type RootStackParamList = {
   JobManuals: undefined;
   StaffEvaluations: undefined;
   BitacoraVehiculosDetenidos:
-    | undefined
-    | {
-        prefill?: {
-          empresa_id?: number;
-          cliente_id: number;
-          division_id?: number;
-          contrato_id?: number;
-          sucursal_id: number;
-          vehiculo_id: number;
-          uso_id: number;
-          vehiculo_tipo?: string;
-          vehiculo_placa?: string;
-        };
-        returnTo?: keyof RootStackParamList;
-      };
+  | undefined
+  | {
+    prefill?: {
+      empresa_id?: number;
+      cliente_id: number;
+      division_id?: number;
+      contrato_id?: number;
+      sucursal_id: number;
+      vehiculo_id: number;
+      uso_id: number;
+      vehiculo_tipo?: string;
+      vehiculo_placa?: string;
+    };
+    returnTo?: keyof RootStackParamList;
+  };
   Llaves: undefined;
   DocumentosEntregados: undefined;
   ApreciacionVulnerabilidad: undefined;
   EntregaPuestos: undefined;
+  ChecklistSupervision: undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -269,6 +273,7 @@ function RootNavigator() {
       <Stack.Screen name="PermitRequest" component={PermitRequestScreen} />
       <Stack.Screen name="AttendanceControl" component={AttendanceControlScreen} />
       <Stack.Screen name="OpeningClosingPosition" component={OpeningClosingPositionScreen} />
+      <Stack.Screen name="TrasladoPlazas" component={TrasladoPlazasScreen} />
       <Stack.Screen name="ActaEntregaProductos" component={ActaEntregaProductosScreen} />
       <Stack.Screen name="InductionTourRecord" component={InductionTourRecordScreen} />
       <Stack.Screen name="GeneralInductionRegister" component={GeneralInductionRegisterScreen} />
@@ -291,6 +296,7 @@ function RootNavigator() {
       <Stack.Screen name="DocumentosEntregados" component={DocumentosEntregadosScreen} />
       <Stack.Screen name="ApreciacionVulnerabilidad" component={ApreciacionVulnerabilidadScreen} />
       <Stack.Screen name="EntregaPuestos" component={EntregaPuestosScreen} />
+      <Stack.Screen name="ChecklistSupervision" component={ChecklistSupervisionScreen} />
     </Stack.Navigator>
   );
 }
@@ -307,7 +313,7 @@ function AppContent() {
   // 🆕 Variable de estado para conexión a internet
   const [isConnected, setIsConnected] = React.useState<boolean | null>(null);
 
-  const FORCE_OFFLINE = false; 
+  const FORCE_OFFLINE = false;
 
   // 🆕 useEffect para escuchar el estado de conexión en tiempo real
   useEffect(() => {
@@ -580,7 +586,7 @@ function AppContent() {
         console.error('Error procesando acción de manual de trabajo:', error);
       }
     }
-  } 
+  }
 
   const checkVisitorsActionsCache = async () => {
     if (!employee) return;
@@ -4361,16 +4367,16 @@ function AppContent() {
                 const cache = JSON.parse(cacheStr);
                 const updatedCache = Array.isArray(cache)
                   ? cache.map((r: any) => {
-                      if (r?.id_local && r.id_local === action.id) {
-                        return {
-                          ...(result as any).data,
-                          id: newId,
-                          id_local: '',
-                          synced: true,
-                        };
-                      }
-                      return r;
-                    })
+                    if (r?.id_local && r.id_local === action.id) {
+                      return {
+                        ...(result as any).data,
+                        id: newId,
+                        id_local: '',
+                        synced: true,
+                      };
+                    }
+                    return r;
+                  })
                   : cache;
                 await AsyncStorage.setItem('mutuos_acuerdos_cache', JSON.stringify(updatedCache));
               }
@@ -4471,16 +4477,16 @@ function AppContent() {
                 const cache = JSON.parse(cacheStr);
                 const updated = Array.isArray(cache)
                   ? cache.map((inc: any) => {
-                      if (inc?.id !== action.incidentId) return inc;
-                      const aportes = Array.isArray(inc?.aportes) ? inc.aportes : [];
-                      const updatedAportes = aportes.map((a: any) => {
-                        if (a?.id_local && a.id_local === action.id) {
-                          return { ...a, id: result.contributionId, id_local: '' };
-                        }
-                        return a;
-                      });
-                      return { ...inc, aportes: updatedAportes };
-                    })
+                    if (inc?.id !== action.incidentId) return inc;
+                    const aportes = Array.isArray(inc?.aportes) ? inc.aportes : [];
+                    const updatedAportes = aportes.map((a: any) => {
+                      if (a?.id_local && a.id_local === action.id) {
+                        return { ...a, id: result.contributionId, id_local: '' };
+                      }
+                      return a;
+                    });
+                    return { ...inc, aportes: updatedAportes };
+                  })
                   : cache;
                 await AsyncStorage.setItem('incidents_cache', JSON.stringify(updated));
               }
@@ -4518,11 +4524,11 @@ function AppContent() {
               const cache = JSON.parse(cacheStr);
               const updated = Array.isArray(cache)
                 ? cache.map((inc: any) => {
-                    if (inc?.id !== action.incidentId) return inc;
-                    const aportes = Array.isArray(inc?.aportes) ? inc.aportes : [];
-                    const updatedAportes = aportes.filter((a: any) => a?.id !== action.contributionId);
-                    return { ...inc, aportes: updatedAportes };
-                  })
+                  if (inc?.id !== action.incidentId) return inc;
+                  const aportes = Array.isArray(inc?.aportes) ? inc.aportes : [];
+                  const updatedAportes = aportes.filter((a: any) => a?.id !== action.contributionId);
+                  return { ...inc, aportes: updatedAportes };
+                })
                 : cache;
               await AsyncStorage.setItem('incidents_cache', JSON.stringify(updated));
             }
@@ -4546,15 +4552,15 @@ function AppContent() {
               const cache = JSON.parse(cacheStr);
               const updated = Array.isArray(cache)
                 ? cache.map((inc: any) => {
-                    if (inc?.id !== action.incidentId) return inc;
-                    const aportes = Array.isArray(inc?.aportes) ? inc.aportes : [];
-                    const updatedAportes = aportes.map((ap: any) => {
-                      if (ap?.id !== action.contributionId) return ap;
-                      const files = Array.isArray(ap?.files) ? ap.files : [];
-                      return { ...ap, files: files.filter((f: any) => f?.id !== action.fileId) };
-                    });
-                    return { ...inc, aportes: updatedAportes };
-                  })
+                  if (inc?.id !== action.incidentId) return inc;
+                  const aportes = Array.isArray(inc?.aportes) ? inc.aportes : [];
+                  const updatedAportes = aportes.map((ap: any) => {
+                    if (ap?.id !== action.contributionId) return ap;
+                    const files = Array.isArray(ap?.files) ? ap.files : [];
+                    return { ...ap, files: files.filter((f: any) => f?.id !== action.fileId) };
+                  });
+                  return { ...inc, aportes: updatedAportes };
+                })
                 : cache;
               await AsyncStorage.setItem('incidents_cache', JSON.stringify(updated));
             }
@@ -4702,7 +4708,7 @@ function AppContent() {
         return;
       }
       console.log(5);
-      const horaAccion = await getUpdatedHoraAccion();  
+      const horaAccion = await getUpdatedHoraAccion();
       if (new Date(temp_state.currentTimestamp + temp_state.remainingSeconds).getTime() > horaAccion) {
         return;
       }
@@ -4735,8 +4741,8 @@ function AppContent() {
   }
 
   const get_notifications = async () => {
-    const token = await AsyncStorage.getItem('access_token');
-    if (!token) {
+    const refreshToken = await AsyncStorage.getItem('refresh_token');
+    if (!refreshToken) {
       return;
     }
     const current_marca = await AsyncStorage.getItem('current_marca');
@@ -4760,6 +4766,17 @@ function AppContent() {
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        if (logout) await logout();
+        throw new Error('Sesión expirada');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
     const response = await fetch(`${apiUrl}/api/notification?m=${current_marca_obj.id}`, {
       method: 'GET',
       headers: {
@@ -4768,9 +4785,8 @@ function AppContent() {
         'ngrok-skip-browser-warning': '69420',
       },
     });
-    const data = await response.json();
-    
-    if (response.status === 401 || response.status === 403) {
+
+    if (response.status === 401) {
       const refreshed = await refreshAccessToken();
       if (refreshed) {
         return get_notifications();
@@ -4780,6 +4796,17 @@ function AppContent() {
         return;
       }
     }
+
+    if (response.status === 403) {
+      if (logout) await logout();
+      throw new Error('Acceso denegado');
+    }
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const data = await response.json();
 
     if (data.status) {
 
@@ -4802,17 +4829,21 @@ function AppContent() {
     }
   }
 
-
-  // ✅ Aquí agregas la función que se ejecutará cada 30 segundos
   useEffect(() => {
-    // Ejecuta una vez al inicio
-    check_conection_time();
+    let timeoutId: NodeJS.Timeout;
 
-    // Ejecuta cada 60 segundos (60,000 ms)
-    const interval = setInterval(check_conection_time, 30000);
+    const poll = async () => {
+      await check_conection_time();
+      timeoutId = setTimeout(poll, 30000) as unknown as NodeJS.Timeout;
+    };
 
-    // Limpieza al desmontar el componente
-    return () => clearInterval(interval);
+    if (isConnected) {
+      poll(); // ejecuta inmediato
+    }
+
+    return () => {
+      clearTimeout(timeoutId);
+    };
   }, [isConnected]);
 
   if (!loaded) {

@@ -305,10 +305,12 @@ export default function AttendanceControlScreen() {
       let token = await AsyncStorage.getItem('access_token');
       if (!token) {
         const refreshed = await refreshAccessToken();
-        if (!refreshed) return;
+        if (!refreshed) {
+          if (logout) await logout();
+          throw new Error('Sesión expirada');
+        }
         token = await AsyncStorage.getItem('access_token');
       }
-      if (!token) return;
 
       const resp = await fetch(`${apiUrl}/api/empleados/corpo/${corpoId}`, {
         method: 'GET',
@@ -318,6 +320,13 @@ export default function AttendanceControlScreen() {
           'ngrok-skip-browser-warning': '69420',
         },
       });
+
+      if (resp.status === 401 || resp.status === 403) {
+        const refreshed = await refreshAccessToken();
+        if (refreshed) return fetchEmpleadosByCorpo(corpoId);
+        await logout();
+        return;
+      }
 
       const data = await resp.json().catch(() => null);
       if (resp.ok && data?.status && Array.isArray(data.empleados)) {
@@ -396,7 +405,7 @@ export default function AttendanceControlScreen() {
       try {
         colaboradoresArray = JSON.parse(record.colaboradores);
         if (!Array.isArray(colaboradoresArray)) colaboradoresArray = [];
-        
+
         // Decodificar los QR guardados para mostrar la información
         colaboradoresArray = await Promise.all(colaboradoresArray.map(async (colab: any) => {
           const decoded: Colaborador = {
@@ -423,8 +432,16 @@ export default function AttendanceControlScreen() {
                 const [sessionId, empleadoId, latitud, longitud, timestamp] = parts;
                 let empleadoDetalle = undefined;
                 const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-                const token = await AsyncStorage.getItem('access_token');
-                
+                let token = await AsyncStorage.getItem('access_token');
+                if (!token) {
+                  const refreshed = await refreshAccessToken();
+                  if (!refreshed) {
+                    if (logout) await logout();
+                    throw new Error('Sesión expirada');
+                  }
+                  token = await AsyncStorage.getItem('access_token');
+                }
+
                 if (apiUrl && token) {
                   try {
                     const empleadoResponse = await fetch(`${apiUrl}/api/empleados/${empleadoId}`, {
@@ -435,6 +452,16 @@ export default function AttendanceControlScreen() {
                         'ngrok-skip-browser-warning': '69420',
                       },
                     });
+
+                    if (empleadoResponse.status === 401) {
+                      const refreshed = await refreshAccessToken();
+                      if (!refreshed) await logout();
+                    }
+
+                    if (empleadoResponse.status === 403) {
+                      if (logout) await logout();
+                      throw new Error('Acceso denegado');
+                    }
 
                     if (empleadoResponse.ok) {
                       const empleadoData = await empleadoResponse.json();
@@ -472,8 +499,16 @@ export default function AttendanceControlScreen() {
                 const [sessionId, empleadoId, latitud, longitud, timestamp] = parts;
                 let empleadoDetalle = undefined;
                 const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-                const token = await AsyncStorage.getItem('access_token');
-                
+                let token = await AsyncStorage.getItem('access_token');
+                if (!token) {
+                  const refreshed = await refreshAccessToken();
+                  if (!refreshed) {
+                    if (logout) await logout();
+                    throw new Error('Sesión expirada');
+                  }
+                  token = await AsyncStorage.getItem('access_token');
+                }
+
                 if (apiUrl && token) {
                   try {
                     const empleadoResponse = await fetch(`${apiUrl}/api/empleados/${empleadoId}`, {
@@ -484,6 +519,16 @@ export default function AttendanceControlScreen() {
                         'ngrok-skip-browser-warning': '69420',
                       },
                     });
+
+                    if (empleadoResponse.status === 401) {
+                      const refreshed = await refreshAccessToken();
+                      if (!refreshed) await logout();
+                    }
+
+                    if (empleadoResponse.status === 403) {
+                      if (logout) await logout();
+                      throw new Error('Acceso denegado');
+                    }
 
                     if (empleadoResponse.ok) {
                       const empleadoData = await empleadoResponse.json();
@@ -669,7 +714,7 @@ export default function AttendanceControlScreen() {
     try {
       setCurrentQRType({ index, type });
       const qrData = await scanQR();
-      
+
       if (!qrData) {
         setCurrentQRType(null);
         return;
@@ -680,15 +725,24 @@ export default function AttendanceControlScreen() {
       try {
         const decodedData = atob(qrData);
         const parts = decodedData.split(':');
-        
+
         if (parts.length === 5) {
           const [sessionId, empleadoId, latitud, longitud, timestamp] = parts;
 
           // Intentar obtener detalles del empleado
           let empleadoDetalle = undefined;
           const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-          const token = await AsyncStorage.getItem('access_token');
-          
+          let token = await AsyncStorage.getItem('access_token');
+          if (!token) {
+            const refreshed = await refreshAccessToken();
+            if (!refreshed) {
+              if (logout) await logout();
+              throw new Error('Sesión expirada');
+              return;
+            }
+            token = await AsyncStorage.getItem('access_token');
+          }
+
           if (apiUrl && token) {
             try {
               const empleadoResponse = await fetch(`${apiUrl}/api/empleados/${empleadoId}`, {
@@ -699,6 +753,18 @@ export default function AttendanceControlScreen() {
                   'ngrok-skip-browser-warning': '69420',
                 },
               });
+
+              if (empleadoResponse.status === 401) {
+                const refreshed = await refreshAccessToken();
+                if (refreshed) return handleScanQR(index, type);
+                await logout();
+                return;
+              }
+
+              if (empleadoResponse.status === 403) {
+                if (logout) await logout();
+                throw new Error('Acceso denegado');
+              }
 
               if (empleadoResponse.ok) {
                 const empleadoData = await empleadoResponse.json();
@@ -763,9 +829,17 @@ export default function AttendanceControlScreen() {
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) throw new Error('Server URL not configured');
 
-      const token = await AsyncStorage.getItem('access_token');
-      if (!token) throw new Error('No authentication token found');
+      let token = await AsyncStorage.getItem('access_token');
+      if (!token) {
+        const refreshed = await refreshAccessToken();
+        if (!refreshed) {
+          if (logout) await logout();
+          throw new Error('Sesión expirada');
+        }
+        token = await AsyncStorage.getItem('access_token');
+      }
 
+      if (!token) throw new Error('No authentication token found');
       const decodedToken = jwtDecode(token);
       const sessionId = JSON.parse(JSON.stringify(decodedToken)).sessionId;
 
@@ -791,6 +865,18 @@ export default function AttendanceControlScreen() {
               'ngrok-skip-browser-warning': '69420',
             },
           });
+
+          if (empleadoResponse.status === 401) {
+            const refreshed = await refreshAccessToken();
+            if (refreshed) return generateSignatureResponsable();
+            await logout();
+            return;
+          }
+
+          if (empleadoResponse.status === 403) {
+            if (logout) await logout();
+            throw new Error('Acceso denegado');
+          }
 
           if (empleadoResponse.ok) {
             const empleadoData = await empleadoResponse.json();
@@ -843,8 +929,16 @@ export default function AttendanceControlScreen() {
         const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
         if (!apiUrl) throw new Error('Server URL not configured');
 
-        const token = await AsyncStorage.getItem('access_token');
-        if (!token) throw new Error('No authentication token found');
+        let token = await AsyncStorage.getItem('access_token');
+        if (!token) {
+          const refreshed = await refreshAccessToken();
+          if (!refreshed) {
+            if (logout) await logout();
+            throw new Error('Sesión expirada');
+            return;
+          }
+          token = await AsyncStorage.getItem('access_token');
+        }
 
         const empleadoResponse = await fetch(`${apiUrl}/api/empleados/${empleadoId}`, {
           method: 'GET',
@@ -854,6 +948,18 @@ export default function AttendanceControlScreen() {
             'ngrok-skip-browser-warning': '69420',
           },
         });
+
+        if (empleadoResponse.status === 401) {
+          const refreshed = await refreshAccessToken();
+          if (refreshed) return handleScanQRResponsable();
+          await logout();
+          return;
+        }
+
+        if (empleadoResponse.status === 403) {
+          if (logout) await logout();
+          throw new Error('Acceso denegado');
+        }
 
         if (empleadoResponse.ok) {
           const empleadoData = await empleadoResponse.json();
@@ -1570,20 +1676,20 @@ export default function AttendanceControlScreen() {
 
               {false && (
                 <>
-              <ThemedView style={styles.formGroup}>
-                <ThemedText style={styles.formLabel}>Cliente</ThemedText>
-                <ThemedView style={styles.readonlyBox}>
-                  <ThemedText style={styles.readonlyText}>{marcaClienteName || 'N/A'}</ThemedText>
-                </ThemedView>
-              </ThemedView>
+                  <ThemedView style={styles.formGroup}>
+                    <ThemedText style={styles.formLabel}>Cliente</ThemedText>
+                    <ThemedView style={styles.readonlyBox}>
+                      <ThemedText style={styles.readonlyText}>{marcaClienteName || 'N/A'}</ThemedText>
+                    </ThemedView>
+                  </ThemedView>
 
-              <ThemedView style={styles.formGroup}>
-                <ThemedText style={styles.formLabel}>Sucursal</ThemedText>
-                <ThemedView style={styles.readonlyBox}>
-                  <ThemedText style={styles.readonlyText}>{marcaCorpoName || 'N/A'}</ThemedText>
-                </ThemedView>
-              </ThemedView>
-              </>
+                  <ThemedView style={styles.formGroup}>
+                    <ThemedText style={styles.formLabel}>Sucursal</ThemedText>
+                    <ThemedView style={styles.readonlyBox}>
+                      <ThemedText style={styles.readonlyText}>{marcaCorpoName || 'N/A'}</ThemedText>
+                    </ThemedView>
+                  </ThemedView>
+                </>
               )}
 
               {/* Fecha */}
@@ -1761,18 +1867,18 @@ export default function AttendanceControlScreen() {
             </ThemedView>
           ) : (
             <ThemedView style={styles.listSection}>
-                <ThemedView style={styles.readonlyBox}>
-                  <ThemedView style={styles.compactInfoRow}>
-                    <ThemedView style={styles.compactInfoItem}>
-                      <ThemedText style={styles.compactInfoLabel}>Cliente</ThemedText>
-                      <ThemedText style={styles.readonlyText}>{marcaClienteName || 'N/A'}</ThemedText>
-                    </ThemedView>
-                    <ThemedView style={styles.compactInfoItem}>
-                      <ThemedText style={styles.compactInfoLabel}>Sucursal</ThemedText>
-                      <ThemedText style={styles.readonlyText}>{marcaCorpoName || 'N/A'}</ThemedText>
-                    </ThemedView>
+              <ThemedView style={styles.readonlyBox}>
+                <ThemedView style={styles.compactInfoRow}>
+                  <ThemedView style={styles.compactInfoItem}>
+                    <ThemedText style={styles.compactInfoLabel}>Cliente</ThemedText>
+                    <ThemedText style={styles.readonlyText}>{marcaClienteName || 'N/A'}</ThemedText>
+                  </ThemedView>
+                  <ThemedView style={styles.compactInfoItem}>
+                    <ThemedText style={styles.compactInfoLabel}>Sucursal</ThemedText>
+                    <ThemedText style={styles.readonlyText}>{marcaCorpoName || 'N/A'}</ThemedText>
                   </ThemedView>
                 </ThemedView>
+              </ThemedView>
               <TouchableOpacity style={styles.createButton} onPress={startCreating}>
                 <Ionicons name="add" size={24} color="#FFFFFF" />
               </TouchableOpacity>

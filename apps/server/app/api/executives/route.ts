@@ -5,11 +5,9 @@ import { prisma } from "../../../utils/prismaClient";
 
 export async function GET(req: NextRequest) {
     try {
-        const { valid, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = verifyAccessToken(req);
 
-        if (!valid) {
-            return NextResponse.json({ status: false, message: message }, { status: 401 });
-        }
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         const executives = await prisma.n_ejecutivo_cuenta.findMany();
         return NextResponse.json({ status: true, executives: executives }, { status: 200 });

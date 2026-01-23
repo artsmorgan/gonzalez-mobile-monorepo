@@ -67,7 +67,7 @@ export default function LunchTimeScreen() {
   // Time picker state for pauses (one at a time)
   const [activeInactivityPicker, setActiveInactivityPicker] = useState<null | { index: number; type: 'start' | 'end' }>(null);
   const [inactivityPickerValue, setInactivityPickerValue] = useState(new Date());
-  
+
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const navigation = useNavigation<LunchTimeScreenNavigationProp>();
 
@@ -104,7 +104,7 @@ export default function LunchTimeScreen() {
   useEffect(() => {
     endTimeRef.current = endTime;
   }, [endTime]);
-  
+
   useEffect(() => {
     endTimeModeRef.current = endTimeMode;
   }, [endTimeMode]);
@@ -215,7 +215,7 @@ export default function LunchTimeScreen() {
     if (temp_state) {
       try {
         const temp_state_obj = JSON.parse(temp_state);
-        
+
         // Restore inactivities
         if (temp_state_obj.inactivities) {
           setInactivities(temp_state_obj.inactivities.map((inactivity: any) => ({
@@ -226,7 +226,7 @@ export default function LunchTimeScreen() {
         }
 
         console.log('temp_state_obj', temp_state_obj);
-        
+
         if (temp_state_obj.running) {
           setIsTimerActive(true);
           const horaAccion = await getUpdatedHoraAccion();
@@ -244,7 +244,7 @@ export default function LunchTimeScreen() {
             setTimeRemaining(parseInt(remaining_time.toFixed(0)));
           }
         }
-        else{
+        else {
           setIsTimerActive(false);
           setTimeRemaining(parseInt((temp_state_obj.remainingSeconds / 1000).toFixed(0)));
           setStartTime(temp_state_obj.startTime ? new Date(temp_state_obj.startTime) : null);
@@ -268,7 +268,7 @@ export default function LunchTimeScreen() {
       const horaAccion = await getUpdatedHoraAccion();
       endTimeUse = horaAccion;
     }
-    else{ 
+    else {
       endTimeUse = endTimeRef.current;
     }
 
@@ -311,14 +311,14 @@ export default function LunchTimeScreen() {
         refreshAccessToken,
         logout
       });
-      
+
       if (!responseData.status) {
         Alert.alert('Error', responseData.message);
         return;
       }
 
       const msg = requestData.es_manual ? 'Registro de tiempo de almuerzo guardado correctamente' : 'Tu descanso ha terminado. ¡Es hora de volver al trabajo!';
-      
+
       Alert.alert(
         '🎉 ¡Tiempo de Almuerzo Completado!',
         msg,
@@ -337,7 +337,7 @@ export default function LunchTimeScreen() {
     } else {
       // Sin internet: modo offline
       const localId = generateRandomId();
-      
+
       // Crear entrada en lunchtime_actions
       const actionsStr = await AsyncStorage.getItem('lunchtime_actions');
       const actions = actionsStr ? JSON.parse(actionsStr) : [];
@@ -349,7 +349,7 @@ export default function LunchTimeScreen() {
       await AsyncStorage.setItem('lunchtime_actions', JSON.stringify(actions));
 
       const msg = requestData.es_manual ? 'Registro de tiempo de almuerzo guardado localmente. Se sincronizará cuando haya conexión.' : 'Tu descanso ha terminado. El registro se sincronizará cuando haya conexión.';
-      
+
       Alert.alert(
         'Modo Offline',
         msg,
@@ -393,9 +393,14 @@ export default function LunchTimeScreen() {
         if (!apiUrl) {
           throw new Error('Server URL not configured');
         }
-        const token = await AsyncStorage.getItem('access_token');
+        let token = await AsyncStorage.getItem('access_token');
         if (!token) {
-          throw new Error('No authentication token found');
+          const refreshed = await refreshAccessToken();
+          if (!refreshed) {
+            if (logout) await logout();
+            throw new Error('Sesión expirada');
+          }
+          token = await AsyncStorage.getItem('access_token');
         }
         const response = await fetch(`${apiUrl}/api/lunch-time/${current_marca_obj.id}`, {
           method: 'GET',
@@ -415,7 +420,7 @@ export default function LunchTimeScreen() {
         }
         lunch_time_config_obj = data;
       }
-      else { 
+      else {
         const lunch_time_config = await AsyncStorage.getItem('lunch_time_config');
         if (!lunch_time_config) {
           throw new Error('No lunch time config found');
@@ -453,7 +458,7 @@ export default function LunchTimeScreen() {
       setIsTimerActive(true);
       setEndTimeMode('current');
       setEndTime(null);
-      
+
       // Si había una inactividad en curso, guardarla
       if (currentInactivityStart) {
         const newInactivity: InactivityData = {
@@ -495,7 +500,7 @@ export default function LunchTimeScreen() {
     const hours = Math.floor(seconds / 3600);
     const minutes = Math.floor((seconds % 3600) / 60);
     const remainingSeconds = seconds % 60;
-    
+
     if (hours > 0) {
       return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${remainingSeconds.toString().padStart(2, '0')}`;
     }
@@ -518,354 +523,354 @@ export default function LunchTimeScreen() {
   const handleBack = () => {
     navigation.goBack();
   };
-  
 
-const getActionIcon = (action: string) => {
-  switch (action.toLowerCase()) {
-    case 'confirm': return <Ionicons name="checkmark" size={35} color='#FFFFFF' />;
-    case 'lunch-time': return <Ionicons name="hourglass" size={25} color='#000000' />;
-    case 'start': return <Ionicons name="caret-forward" size={35} color='#FFFFFF' />;
-    case 'start-internal': return <Ionicons name="caret-forward" size={25} color='#000000' />;
-    case 'stop': return <Ionicons name="pause" size={35} color='#FFFFFF' />;
-    case 'stop-internal': return <Ionicons name="pause" size={25} color='#000000' />;
-    case 'reset': return <Ionicons name="refresh" size={35} color='#FFFFFF' />;
-    case 'manual': return <Ionicons name="create-outline" size={20} color='#000000' />;
-    case 'add': return <Ionicons name="add" size={20} color='#000000' />;
-    case 'remove': return <Ionicons name="trash" size={20} color='#FF3B30' />;
-    default: return <Ionicons name="close" size={35} color='#FFFFFF' />;
-  }
-};
 
-const renderInactivityTime = (inactivity: InactivityData) => {
-  const initial_time = inactivity.startTime.toISOString().split('T')[1].split('.')[0];
-  const final_time = inactivity.endTime.toISOString().split('T')[1].split('.')[0];
-  return `${initial_time} - ${final_time}`;
-};
-
-const validateTimeConflicts = (startTime: Date, inactivities: InactivityData[], availableMinutes: number): string[] => {
-  const errors: string[] = [];
-  
-  // Validar que las inactividades no empiecen antes del tiempo de inicio
-  inactivities.forEach((inactivity, index) => {
-    if (inactivity.startTime < startTime) {
-      errors.push(`La pausa #${index + 1} no puede empezar antes del tiempo de inicio del almuerzo`);
+  const getActionIcon = (action: string) => {
+    switch (action.toLowerCase()) {
+      case 'confirm': return <Ionicons name="checkmark" size={35} color='#FFFFFF' />;
+      case 'lunch-time': return <Ionicons name="hourglass" size={25} color='#000000' />;
+      case 'start': return <Ionicons name="caret-forward" size={35} color='#FFFFFF' />;
+      case 'start-internal': return <Ionicons name="caret-forward" size={25} color='#000000' />;
+      case 'stop': return <Ionicons name="pause" size={35} color='#FFFFFF' />;
+      case 'stop-internal': return <Ionicons name="pause" size={25} color='#000000' />;
+      case 'reset': return <Ionicons name="refresh" size={35} color='#FFFFFF' />;
+      case 'manual': return <Ionicons name="create-outline" size={20} color='#000000' />;
+      case 'add': return <Ionicons name="add" size={20} color='#000000' />;
+      case 'remove': return <Ionicons name="trash" size={20} color='#FF3B30' />;
+      default: return <Ionicons name="close" size={35} color='#FFFFFF' />;
     }
-    
-    // Validar que la hora de inicio no sea mayor a la hora de fin
-    if (inactivity.startTime >= inactivity.endTime) {
-      errors.push(`La pausa #${index + 1} no puede tener una hora de inicio mayor o igual a la hora de fin`);
-    }
-  });
-  
-  // Validar conflictos entre inactividades
-  for (let i = 0; i < inactivities.length; i++) {
-    for (let j = i + 1; j < inactivities.length; j++) {
-      const inactivity1 = inactivities[i];
-      const inactivity2 = inactivities[j];
-      
-      // Verificar si hay solapamiento
-      if ((inactivity1.startTime < inactivity2.endTime && inactivity1.endTime > inactivity2.startTime)) {
-        errors.push(`Las pausas #${i + 1} y #${j + 1} tienen horarios que se solapan`);
-      }
-    }
-  }
-  
-  // Validar que el tiempo efectivo de almuerzo no exceda los minutos disponibles
-  if (inactivities.length > 0) {
-    // Ordenar las pausas por hora de inicio
-    const sortedInactivities = [...inactivities].sort((a, b) => a.startTime.getTime() - b.startTime.getTime());
-    
-    // Calcular el tiempo entre el inicio del almuerzo y la primera pausa
-    const timeToFirstPause = (sortedInactivities[0].startTime.getTime() - startTime.getTime()) / (1000 * 60);
-    
-    // Calcular el tiempo entre pausas consecutivas (de fin de una pausa al inicio de la siguiente)
-    let timeBetweenPauses = 0;
-    for (let i = 0; i < sortedInactivities.length - 1; i++) {
-      const timeBetween = (sortedInactivities[i + 1].startTime.getTime() - sortedInactivities[i].endTime.getTime()) / (1000 * 60);
-      timeBetweenPauses += timeBetween;
-    }
-    
-    // Calcular el tiempo total efectivo de almuerzo (sin contar las pausas)
-    const totalEffectiveLunchTime = timeToFirstPause + timeBetweenPauses;
-    
-    // Verificar que el tiempo efectivo no exceda los minutos disponibles
-    if (totalEffectiveLunchTime > availableMinutes) {
-      errors.push(`El tiempo efectivo de almuerzo (${totalEffectiveLunchTime.toFixed(1)} minutos) excede los ${availableMinutes} minutos disponibles`);
-    }
-    
-    // Verificar que el tiempo entre el inicio y la primera pausa no sea negativo
-    if (timeToFirstPause < 0) {
-      errors.push(`La primera pausa no puede empezar antes del tiempo de inicio del almuerzo`);
-    }
-  }
-  
-  return errors;
-};
-
-const calculateEndTime = (startTime: Date, inactivities: InactivityData[]): Date => {
-  const totalInactivityMinutes = inactivities.reduce((total, inactivity) => {
-    const diffMs = inactivity.endTime.getTime() - inactivity.startTime.getTime();
-    return total + (diffMs / (1000 * 60)); // Convertir a minutos
-  }, 0);
-  
-  // Agregar 30 minutos de almuerzo + tiempo de inactividades
-  const lunchMinutes = timerConfig?.minutos || 30;
-  const totalMinutes = lunchMinutes + totalInactivityMinutes;
-  
-  return new Date(startTime.getTime() + (totalMinutes * 60 * 1000));
-};
-
-const handleManualLunchTime = () => {
-  setIsManualModalVisible(true);
-  setManualStartHour('');
-  setManualStartMinute('');
-  setManualInactivities([]);
-  setShowStartTimePicker(false);
-  setActiveInactivityPicker(null);
-};
-
-const handleStartTimePickerChange = (event: any, selectedTime?: Date) => {
-  if (Platform.OS === 'android') {
-    setShowStartTimePicker(false);
-  }
-  if (selectedTime) {
-    setStartTimePickerValue(selectedTime);
-    const hours = selectedTime.getHours().toString().padStart(2, '0');
-    const minutes = selectedTime.getMinutes().toString().padStart(2, '0');
-    setManualStartHour(hours);
-    setManualStartMinute(minutes);
-  }
-};
-
-const openStartTimePicker = () => {
-  const baseDate = new Date();
-  if (manualStartHour && manualStartMinute) {
-    baseDate.setHours(parseInt(manualStartHour, 10), parseInt(manualStartMinute, 10), 0, 0);
-  }
-  setStartTimePickerValue(baseDate);
-  setShowStartTimePicker(true);
-};
-
-const openInactivityPicker = (index: number, type: 'start' | 'end') => {
-  const baseDate = new Date();
-  const inactivity = manualInactivities[index];
-
-  if (type === 'start') {
-    if (inactivity.startHour && inactivity.startMinute) {
-      baseDate.setHours(parseInt(inactivity.startHour, 10), parseInt(inactivity.startMinute, 10), 0, 0);
-    }
-  } else {
-    if (inactivity.endHour && inactivity.endMinute) {
-      baseDate.setHours(parseInt(inactivity.endHour, 10), parseInt(inactivity.endMinute, 10), 0, 0);
-    }
-  }
-
-  setInactivityPickerValue(baseDate);
-  setActiveInactivityPicker({ index, type });
-};
-
-const handleInactivityTimePickerChange = (event: any, selectedTime?: Date) => {
-  if (Platform.OS === 'android') {
-    setActiveInactivityPicker(null);
-  }
-  if (!selectedTime || !activeInactivityPicker) {
-    return;
-  }
-
-  setInactivityPickerValue(selectedTime);
-  const hours = selectedTime.getHours().toString().padStart(2, '0');
-  const minutes = selectedTime.getMinutes().toString().padStart(2, '0');
-
-  if (activeInactivityPicker.type === 'start') {
-    handleManualInactivityChange(activeInactivityPicker.index, 'startHour', hours);
-    handleManualInactivityChange(activeInactivityPicker.index, 'startMinute', minutes);
-  } else {
-    handleManualInactivityChange(activeInactivityPicker.index, 'endHour', hours);
-    handleManualInactivityChange(activeInactivityPicker.index, 'endMinute', minutes);
-  }
-};
-
-const handleAddManualInactivity = () => {
-  const newInactivity: ManualInactivityData = {
-    startHour: '',
-    startMinute: '',
-    endHour: '',
-    endMinute: '',
-    reason: ''
   };
-  setManualInactivities(prev => [...prev, newInactivity]);
-};
 
-const handleRemoveManualInactivity = (index: number) => {
-  setManualInactivities(prev => prev.filter((_, i) => i !== index));
-};
+  const renderInactivityTime = (inactivity: InactivityData) => {
+    const initial_time = inactivity.startTime.toISOString().split('T')[1].split('.')[0];
+    const final_time = inactivity.endTime.toISOString().split('T')[1].split('.')[0];
+    return `${initial_time} - ${final_time}`;
+  };
 
-const validateNumberInput = (value: string, max: number): string => {
-  // Solo permitir números
-  const numericValue = value.replace(/[^0-9]/g, '');
-  
-  // Limitar a 2 dígitos
-  const limitedValue = numericValue.slice(0, 2);
-  
-  // Verificar que no exceda el máximo
-  const numValue = parseInt(limitedValue, 10);
-  if (!isNaN(numValue) && numValue > max) {
-    return max.toString();
-  }
-  
-  return limitedValue;
-};
+  const validateTimeConflicts = (startTime: Date, inactivities: InactivityData[], availableMinutes: number): string[] => {
+    const errors: string[] = [];
 
-const handleManualInactivityChange = (index: number, field: keyof ManualInactivityData, value: string) => {
-  setManualInactivities(prev => prev.map((inactivity, i) => {
-    if (i === index) {
-      if (field === 'startHour' || field === 'endHour') {
-        return { ...inactivity, [field]: validateNumberInput(value, 23) };
-      } else if (field === 'startMinute' || field === 'endMinute') {
-        return { ...inactivity, [field]: validateNumberInput(value, 59) };
+    // Validar que las inactividades no empiecen antes del tiempo de inicio
+    inactivities.forEach((inactivity, index) => {
+      if (inactivity.startTime < startTime) {
+        errors.push(`La pausa #${index + 1} no puede empezar antes del tiempo de inicio del almuerzo`);
       }
-      return { ...inactivity, [field]: value };
-    }
-    return inactivity;
-  }));
-};
 
-const handleManualSubmit = async () => {
-  // Validar hora de inicio
-  if (!manualStartHour || !manualStartMinute) {
-    Alert.alert('Error', 'Por favor ingresa la hora de inicio del almuerzo');
-    return;
-  }
-  
-  if (!timerConfig) {
-    Alert.alert('Error', 'No se pudo obtener la configuración del temporizador');
-    return;
-  }
-  
-  const errors: string[] = [];
-
-  const current_marca = await AsyncStorage.getItem('current_marca');
-  if (!current_marca) {
-    Alert.alert('Error', 'No se pudo obtener la marca actual');
-    return;
-  }
-  const current_marca_parsed = JSON.parse(current_marca);
-  if (!current_marca_parsed) {
-    Alert.alert('Error', 'No se pudo obtener la marca actual');
-    return;
-  }
-
-  // Validar que las pausas tengan todos los campos llenos
-  manualInactivities.forEach((inactivity, index) => {
-    if (!inactivity.startHour || !inactivity.startMinute || !inactivity.endHour || !inactivity.endMinute) {
-      errors.push(`La pausa #${index + 1} tiene campos vacíos`);
-    }
-  });
-  
-  if (errors.length > 0) {
-    Alert.alert('Error de validación', errors.join('\n'));
-    return;
-  }
-
-  const dateArray = current_marca_parsed.fecha.split('T')[0].split('-');
-  const year = dateArray[0];
-  const month = dateArray[1];
-  const day = dateArray[2];
-
-  const init_time_array = current_marca_parsed.hora_inicio.split('T')[1].split(':');
-  const marca_init_hours = init_time_array[0];
-  const marca_init_minutes = init_time_array[1];
-
-  const end_time_array = current_marca_parsed.hora_fin.split('T')[1].split(':');
-  const marca_end_hours = end_time_array[0];
-  const marca_end_minutes = end_time_array[1];
-
-  let end_day = day;
-  if (parseInt(marca_end_hours, 10) > parseInt(marca_init_hours, 10)) {
-    end_day = (parseInt(day, 10) + 1).toString().padStart(2, '0');
-  }
-
-  const marca_end_time = new Date(`${year}-${month}-${end_day}T${marca_end_hours}:${marca_end_minutes}:00.000Z`);
-  
-  // Crear fecha de hoy con la hora especificada
-  const startHours = manualStartHour;
-  const startMinutes = manualStartMinute;
-
-  let final_day = day;
-  if (parseInt(marca_init_hours, 10) > parseInt(startHours, 10)) {
-    final_day = (parseInt(day, 10) + 1).toString().padStart(2, '0');
-  }
-
-  const startTime = new Date(`${year}-${month}-${final_day}T${startHours}:${startMinutes}:00.000Z`);
-
-  const initial_string = `${year}-${month}-${final_day} ${startHours}:${startMinutes}:00`;
-  
-  console.log('manualInactivities', manualInactivities);
-
-  const inactivitiesWithToday: InactivityData[] = [];
-  for (const inactivity of manualInactivities) {
-    
-    let startDay = final_day;
-    if (parseInt(startHours, 10) > parseInt(inactivity.startHour, 10)) {
-      startDay = (parseInt(final_day, 10) + 1).toString().padStart(2, '0');
-    }
-
-    let endDay = final_day;
-    if (parseInt(startHours, 10) > parseInt(inactivity.endHour, 10)) {
-      endDay = (parseInt(final_day, 10) + 1).toString().padStart(2, '0');
-    }
-
-    const activityStartTime = new Date(`${year}-${month}-${startDay}T${inactivity.startHour}:${inactivity.startMinute}:00.000Z`);
-    const activityEndTime = new Date(`${year}-${month}-${endDay}T${inactivity.endHour}:${inactivity.endMinute}:00.000Z`);
-    inactivitiesWithToday.push({
-      startTime: activityStartTime,
-      endTime: activityEndTime,
-      reason: inactivity.reason || 'Sin razón determinada'
+      // Validar que la hora de inicio no sea mayor a la hora de fin
+      if (inactivity.startTime >= inactivity.endTime) {
+        errors.push(`La pausa #${index + 1} no puede tener una hora de inicio mayor o igual a la hora de fin`);
+      }
     });
-  }
-  
-  const validationErrors = validateTimeConflicts(startTime, inactivitiesWithToday, timerConfig.minutos);
-  
-  const endTime = calculateEndTime(startTime, inactivitiesWithToday);
-  const endTime_split = endTime.toISOString().split('T');
-  const endTime_string = `${endTime_split[0]} ${endTime_split[1].split('.')[0]}`;
-  
-  if (endTime > marca_end_time) {
-    validationErrors.push('El tiempo de fin del almuerzo no puede ser mayor a la hora de fin de la marca actual');
-  }
 
-  if (validationErrors.length > 0) {
-    Alert.alert('Error de validación', validationErrors.join('\n'));
-    return;
-  }
-  
-  Alert.alert(
-    'Confirmar Registro Manual',
-    `¿Estás seguro de que deseas registrar este tiempo de almuerzo?\n\nInicio: ${initial_string}\nFin: ${endTime_string}\nPausas: ${inactivitiesWithToday.length}`,
-    [
-      { text: 'Cancelar', style: 'cancel' },
-      {
-        text: 'Confirmar',
-        onPress: async () => {
-          const requestData = {
-            empleadoId: employee?.id,
-            inicio: startTime,
-            fin: endTime,
-            pausas: JSON.stringify(inactivitiesWithToday),
-            es_manual: true
-          };
-          
-          try {
-            await sendLunchTimeRecord(requestData);
-            setIsManualModalVisible(false);
-          } catch (error) {
-            Alert.alert('Error', 'No se pudo registrar el tiempo de almuerzo');
-          }
+    // Validar conflictos entre inactividades
+    for (let i = 0; i < inactivities.length; i++) {
+      for (let j = i + 1; j < inactivities.length; j++) {
+        const inactivity1 = inactivities[i];
+        const inactivity2 = inactivities[j];
+
+        // Verificar si hay solapamiento
+        if ((inactivity1.startTime < inactivity2.endTime && inactivity1.endTime > inactivity2.startTime)) {
+          errors.push(`Las pausas #${i + 1} y #${j + 1} tienen horarios que se solapan`);
         }
       }
-    ]
-  );
-};
+    }
+
+    // Validar que el tiempo efectivo de almuerzo no exceda los minutos disponibles
+    if (inactivities.length > 0) {
+      // Ordenar las pausas por hora de inicio
+      const sortedInactivities = [...inactivities].sort((a, b) => a.startTime.getTime() - b.startTime.getTime());
+
+      // Calcular el tiempo entre el inicio del almuerzo y la primera pausa
+      const timeToFirstPause = (sortedInactivities[0].startTime.getTime() - startTime.getTime()) / (1000 * 60);
+
+      // Calcular el tiempo entre pausas consecutivas (de fin de una pausa al inicio de la siguiente)
+      let timeBetweenPauses = 0;
+      for (let i = 0; i < sortedInactivities.length - 1; i++) {
+        const timeBetween = (sortedInactivities[i + 1].startTime.getTime() - sortedInactivities[i].endTime.getTime()) / (1000 * 60);
+        timeBetweenPauses += timeBetween;
+      }
+
+      // Calcular el tiempo total efectivo de almuerzo (sin contar las pausas)
+      const totalEffectiveLunchTime = timeToFirstPause + timeBetweenPauses;
+
+      // Verificar que el tiempo efectivo no exceda los minutos disponibles
+      if (totalEffectiveLunchTime > availableMinutes) {
+        errors.push(`El tiempo efectivo de almuerzo (${totalEffectiveLunchTime.toFixed(1)} minutos) excede los ${availableMinutes} minutos disponibles`);
+      }
+
+      // Verificar que el tiempo entre el inicio y la primera pausa no sea negativo
+      if (timeToFirstPause < 0) {
+        errors.push(`La primera pausa no puede empezar antes del tiempo de inicio del almuerzo`);
+      }
+    }
+
+    return errors;
+  };
+
+  const calculateEndTime = (startTime: Date, inactivities: InactivityData[]): Date => {
+    const totalInactivityMinutes = inactivities.reduce((total, inactivity) => {
+      const diffMs = inactivity.endTime.getTime() - inactivity.startTime.getTime();
+      return total + (diffMs / (1000 * 60)); // Convertir a minutos
+    }, 0);
+
+    // Agregar 30 minutos de almuerzo + tiempo de inactividades
+    const lunchMinutes = timerConfig?.minutos || 30;
+    const totalMinutes = lunchMinutes + totalInactivityMinutes;
+
+    return new Date(startTime.getTime() + (totalMinutes * 60 * 1000));
+  };
+
+  const handleManualLunchTime = () => {
+    setIsManualModalVisible(true);
+    setManualStartHour('');
+    setManualStartMinute('');
+    setManualInactivities([]);
+    setShowStartTimePicker(false);
+    setActiveInactivityPicker(null);
+  };
+
+  const handleStartTimePickerChange = (event: any, selectedTime?: Date) => {
+    if (Platform.OS === 'android') {
+      setShowStartTimePicker(false);
+    }
+    if (selectedTime) {
+      setStartTimePickerValue(selectedTime);
+      const hours = selectedTime.getHours().toString().padStart(2, '0');
+      const minutes = selectedTime.getMinutes().toString().padStart(2, '0');
+      setManualStartHour(hours);
+      setManualStartMinute(minutes);
+    }
+  };
+
+  const openStartTimePicker = () => {
+    const baseDate = new Date();
+    if (manualStartHour && manualStartMinute) {
+      baseDate.setHours(parseInt(manualStartHour, 10), parseInt(manualStartMinute, 10), 0, 0);
+    }
+    setStartTimePickerValue(baseDate);
+    setShowStartTimePicker(true);
+  };
+
+  const openInactivityPicker = (index: number, type: 'start' | 'end') => {
+    const baseDate = new Date();
+    const inactivity = manualInactivities[index];
+
+    if (type === 'start') {
+      if (inactivity.startHour && inactivity.startMinute) {
+        baseDate.setHours(parseInt(inactivity.startHour, 10), parseInt(inactivity.startMinute, 10), 0, 0);
+      }
+    } else {
+      if (inactivity.endHour && inactivity.endMinute) {
+        baseDate.setHours(parseInt(inactivity.endHour, 10), parseInt(inactivity.endMinute, 10), 0, 0);
+      }
+    }
+
+    setInactivityPickerValue(baseDate);
+    setActiveInactivityPicker({ index, type });
+  };
+
+  const handleInactivityTimePickerChange = (event: any, selectedTime?: Date) => {
+    if (Platform.OS === 'android') {
+      setActiveInactivityPicker(null);
+    }
+    if (!selectedTime || !activeInactivityPicker) {
+      return;
+    }
+
+    setInactivityPickerValue(selectedTime);
+    const hours = selectedTime.getHours().toString().padStart(2, '0');
+    const minutes = selectedTime.getMinutes().toString().padStart(2, '0');
+
+    if (activeInactivityPicker.type === 'start') {
+      handleManualInactivityChange(activeInactivityPicker.index, 'startHour', hours);
+      handleManualInactivityChange(activeInactivityPicker.index, 'startMinute', minutes);
+    } else {
+      handleManualInactivityChange(activeInactivityPicker.index, 'endHour', hours);
+      handleManualInactivityChange(activeInactivityPicker.index, 'endMinute', minutes);
+    }
+  };
+
+  const handleAddManualInactivity = () => {
+    const newInactivity: ManualInactivityData = {
+      startHour: '',
+      startMinute: '',
+      endHour: '',
+      endMinute: '',
+      reason: ''
+    };
+    setManualInactivities(prev => [...prev, newInactivity]);
+  };
+
+  const handleRemoveManualInactivity = (index: number) => {
+    setManualInactivities(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const validateNumberInput = (value: string, max: number): string => {
+    // Solo permitir números
+    const numericValue = value.replace(/[^0-9]/g, '');
+
+    // Limitar a 2 dígitos
+    const limitedValue = numericValue.slice(0, 2);
+
+    // Verificar que no exceda el máximo
+    const numValue = parseInt(limitedValue, 10);
+    if (!isNaN(numValue) && numValue > max) {
+      return max.toString();
+    }
+
+    return limitedValue;
+  };
+
+  const handleManualInactivityChange = (index: number, field: keyof ManualInactivityData, value: string) => {
+    setManualInactivities(prev => prev.map((inactivity, i) => {
+      if (i === index) {
+        if (field === 'startHour' || field === 'endHour') {
+          return { ...inactivity, [field]: validateNumberInput(value, 23) };
+        } else if (field === 'startMinute' || field === 'endMinute') {
+          return { ...inactivity, [field]: validateNumberInput(value, 59) };
+        }
+        return { ...inactivity, [field]: value };
+      }
+      return inactivity;
+    }));
+  };
+
+  const handleManualSubmit = async () => {
+    // Validar hora de inicio
+    if (!manualStartHour || !manualStartMinute) {
+      Alert.alert('Error', 'Por favor ingresa la hora de inicio del almuerzo');
+      return;
+    }
+
+    if (!timerConfig) {
+      Alert.alert('Error', 'No se pudo obtener la configuración del temporizador');
+      return;
+    }
+
+    const errors: string[] = [];
+
+    const current_marca = await AsyncStorage.getItem('current_marca');
+    if (!current_marca) {
+      Alert.alert('Error', 'No se pudo obtener la marca actual');
+      return;
+    }
+    const current_marca_parsed = JSON.parse(current_marca);
+    if (!current_marca_parsed) {
+      Alert.alert('Error', 'No se pudo obtener la marca actual');
+      return;
+    }
+
+    // Validar que las pausas tengan todos los campos llenos
+    manualInactivities.forEach((inactivity, index) => {
+      if (!inactivity.startHour || !inactivity.startMinute || !inactivity.endHour || !inactivity.endMinute) {
+        errors.push(`La pausa #${index + 1} tiene campos vacíos`);
+      }
+    });
+
+    if (errors.length > 0) {
+      Alert.alert('Error de validación', errors.join('\n'));
+      return;
+    }
+
+    const dateArray = current_marca_parsed.fecha.split('T')[0].split('-');
+    const year = dateArray[0];
+    const month = dateArray[1];
+    const day = dateArray[2];
+
+    const init_time_array = current_marca_parsed.hora_inicio.split('T')[1].split(':');
+    const marca_init_hours = init_time_array[0];
+    const marca_init_minutes = init_time_array[1];
+
+    const end_time_array = current_marca_parsed.hora_fin.split('T')[1].split(':');
+    const marca_end_hours = end_time_array[0];
+    const marca_end_minutes = end_time_array[1];
+
+    let end_day = day;
+    if (parseInt(marca_end_hours, 10) > parseInt(marca_init_hours, 10)) {
+      end_day = (parseInt(day, 10) + 1).toString().padStart(2, '0');
+    }
+
+    const marca_end_time = new Date(`${year}-${month}-${end_day}T${marca_end_hours}:${marca_end_minutes}:00.000Z`);
+
+    // Crear fecha de hoy con la hora especificada
+    const startHours = manualStartHour;
+    const startMinutes = manualStartMinute;
+
+    let final_day = day;
+    if (parseInt(marca_init_hours, 10) > parseInt(startHours, 10)) {
+      final_day = (parseInt(day, 10) + 1).toString().padStart(2, '0');
+    }
+
+    const startTime = new Date(`${year}-${month}-${final_day}T${startHours}:${startMinutes}:00.000Z`);
+
+    const initial_string = `${year}-${month}-${final_day} ${startHours}:${startMinutes}:00`;
+
+    console.log('manualInactivities', manualInactivities);
+
+    const inactivitiesWithToday: InactivityData[] = [];
+    for (const inactivity of manualInactivities) {
+
+      let startDay = final_day;
+      if (parseInt(startHours, 10) > parseInt(inactivity.startHour, 10)) {
+        startDay = (parseInt(final_day, 10) + 1).toString().padStart(2, '0');
+      }
+
+      let endDay = final_day;
+      if (parseInt(startHours, 10) > parseInt(inactivity.endHour, 10)) {
+        endDay = (parseInt(final_day, 10) + 1).toString().padStart(2, '0');
+      }
+
+      const activityStartTime = new Date(`${year}-${month}-${startDay}T${inactivity.startHour}:${inactivity.startMinute}:00.000Z`);
+      const activityEndTime = new Date(`${year}-${month}-${endDay}T${inactivity.endHour}:${inactivity.endMinute}:00.000Z`);
+      inactivitiesWithToday.push({
+        startTime: activityStartTime,
+        endTime: activityEndTime,
+        reason: inactivity.reason || 'Sin razón determinada'
+      });
+    }
+
+    const validationErrors = validateTimeConflicts(startTime, inactivitiesWithToday, timerConfig.minutos);
+
+    const endTime = calculateEndTime(startTime, inactivitiesWithToday);
+    const endTime_split = endTime.toISOString().split('T');
+    const endTime_string = `${endTime_split[0]} ${endTime_split[1].split('.')[0]}`;
+
+    if (endTime > marca_end_time) {
+      validationErrors.push('El tiempo de fin del almuerzo no puede ser mayor a la hora de fin de la marca actual');
+    }
+
+    if (validationErrors.length > 0) {
+      Alert.alert('Error de validación', validationErrors.join('\n'));
+      return;
+    }
+
+    Alert.alert(
+      'Confirmar Registro Manual',
+      `¿Estás seguro de que deseas registrar este tiempo de almuerzo?\n\nInicio: ${initial_string}\nFin: ${endTime_string}\nPausas: ${inactivitiesWithToday.length}`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Confirmar',
+          onPress: async () => {
+            const requestData = {
+              empleadoId: employee?.id,
+              inicio: startTime,
+              fin: endTime,
+              pausas: JSON.stringify(inactivitiesWithToday),
+              es_manual: true
+            };
+
+            try {
+              await sendLunchTimeRecord(requestData);
+              setIsManualModalVisible(false);
+            } catch (error) {
+              Alert.alert('Error', 'No se pudo registrar el tiempo de almuerzo');
+            }
+          }
+        }
+      ]
+    );
+  };
 
   if (isLoading) {
     return (
@@ -879,7 +884,7 @@ const handleManualSubmit = async () => {
   return (
     <ThemedView style={styles.fullContainer}>
       <AppHeader onMenuPress={handleMenuPress} title="Tiempo de Almuerzo" />
-      
+
       <ScrollView style={styles.scrollView}>
         <ThemedView style={styles.container}>
 
@@ -904,7 +909,7 @@ const handleManualSubmit = async () => {
           ) : error ? (
             <ThemedView style={styles.errorContainer}>
               <ThemedText style={styles.errorText}>⚠️ {error}</ThemedText>
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={styles.retryButton}
                 onPress={fetchTimerConfig}
               >
@@ -917,7 +922,7 @@ const handleManualSubmit = async () => {
               <ThemedText style={styles.containerTitle}>
                 Inicia tu tiempo de almuerzo y añade pausas
               </ThemedText>
-              
+
               {/* Timer Display */}
               <ThemedView style={styles.timerDisplay}>
                 <ThemedView style={styles.timerDisplayContent}>
@@ -972,23 +977,23 @@ const handleManualSubmit = async () => {
               <ThemedView style={styles.controlsContainer}>
                 <View style={styles.buttonRow}>
                   {!isTimerActive ? (
-                    <TouchableOpacity 
+                    <TouchableOpacity
                       style={styles.startButton}
                       onPress={handleStart}
                       disabled={timeRemaining === 0}
                     >
-                        {getActionIcon('start')}
+                      {getActionIcon('start')}
                     </TouchableOpacity>
                   ) : (
-                    <TouchableOpacity 
+                    <TouchableOpacity
                       style={styles.stopButton}
                       onPress={handleStop}
                     >
                       {getActionIcon('stop')}
                     </TouchableOpacity>
                   )}
-                  
-                  <TouchableOpacity 
+
+                  <TouchableOpacity
                     style={styles.resetButton}
                     onPress={handleReset}
                   >
@@ -998,7 +1003,7 @@ const handleManualSubmit = async () => {
 
                 {/* Manual Registration Button - Only visible when timer is stopped */}
                 {!isTimerActive && (
-                  <TouchableOpacity 
+                  <TouchableOpacity
                     style={styles.manualButton}
                     onPress={handleManualLunchTime}
                   >
@@ -1016,8 +1021,8 @@ const handleManualSubmit = async () => {
 
       <AppFooter />
 
-      <SlideMenu 
-        isVisible={isMenuVisible} 
+      <SlideMenu
+        isVisible={isMenuVisible}
         onClose={handleMenuClose}
         onHomePress={handleHomePress}
         currentRoute="lunch-time"
@@ -1031,144 +1036,144 @@ const handleManualSubmit = async () => {
         onRequestClose={() => setIsManualModalVisible(false)}
       >
         <View style={styles.modalOverlay}>
-          <TouchableOpacity 
+          <TouchableOpacity
             style={StyleSheet.absoluteFill}
             activeOpacity={1}
             onPress={() => setIsManualModalVisible(false)}
           />
           <View style={styles.modalContainerWrapper}>
             <ThemedView style={styles.modalContainer}>
-            {/* Modal Header */}
-            <View style={styles.modalHeader}>
-              <ThemedText style={styles.modalTitle}>Registro Manual de Almuerzo</ThemedText>
-              <TouchableOpacity onPress={() => setIsManualModalVisible(false)}>
-                <ThemedText style={styles.closeButton}>✕</ThemedText>
-              </TouchableOpacity>
-            </View>
-
-            {/* Modal Content */}
-            <ScrollView style={styles.modalContent}>
-              {/* Start Time Input */}
-              <ThemedView style={styles.inputGroup}>
-                <ThemedText style={[styles.inputLabel, { color: '#000000' }]}>Hora de Inicio del Almuerzo:</ThemedText>
-                <TouchableOpacity style={styles.timePickerButton} onPress={openStartTimePicker}>
-                  <ThemedText style={styles.timePickerButtonText}>
-                    {manualStartHour && manualStartMinute ? `${manualStartHour}:${manualStartMinute}` : 'Seleccionar hora'}
-                  </ThemedText>
-                  <Ionicons name="time-outline" size={20} color="#007AFF" />
+              {/* Modal Header */}
+              <View style={styles.modalHeader}>
+                <ThemedText style={styles.modalTitle}>Registro Manual de Almuerzo</ThemedText>
+                <TouchableOpacity onPress={() => setIsManualModalVisible(false)}>
+                  <ThemedText style={styles.closeButton}>✕</ThemedText>
                 </TouchableOpacity>
-                {showStartTimePicker && (
-                  <View style={styles.inlinePickerContainer}>
-                    <DateTimePicker
-                      value={startTimePickerValue}
-                      mode="time"
-                      display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                      onChange={handleStartTimePickerChange}
-                    />
-                  </View>
-                )}
-              </ThemedView>
+              </View>
 
-              {/* Inactivities Section */}
-              <ThemedView style={styles.inactivitiesSection}>
-                <View style={styles.sectionHeader}>
-                  <ThemedText style={[styles.sectionTitle, { color: '#000000' }]}>Agrega las pausas:</ThemedText>
-                  <TouchableOpacity 
-                    style={styles.addButton}
-                    onPress={handleAddManualInactivity}
-                  >
-                    <ThemedText style={styles.addButtonText}>
-                      {getActionIcon('add')}
+              {/* Modal Content */}
+              <ScrollView style={styles.modalContent}>
+                {/* Start Time Input */}
+                <ThemedView style={styles.inputGroup}>
+                  <ThemedText style={[styles.inputLabel, { color: '#000000' }]}>Hora de Inicio del Almuerzo:</ThemedText>
+                  <TouchableOpacity style={styles.timePickerButton} onPress={openStartTimePicker}>
+                    <ThemedText style={styles.timePickerButtonText}>
+                      {manualStartHour && manualStartMinute ? `${manualStartHour}:${manualStartMinute}` : 'Seleccionar hora'}
                     </ThemedText>
+                    <Ionicons name="time-outline" size={20} color="#007AFF" />
                   </TouchableOpacity>
-                </View>
-
-                {manualInactivities.map((inactivity, index) => (
-                  <ThemedView key={index} style={styles.inactivityFormItem}>
-                    <View style={styles.inactivityHeader}>
-                      <ThemedText style={styles.inactivityNumber}>Pausa #{index + 1}</ThemedText>
-                      <TouchableOpacity 
-                        onPress={() => handleRemoveManualInactivity(index)}
-                        style={styles.removeButton}
-                      >
-                        {getActionIcon('remove')}
-                      </TouchableOpacity>
-                    </View>
-
-                    {/* Horas en una sola fila */}
-                    <View style={styles.pauseTimesRow}>
-                      {/* Hora de Inicio */}
-                      <ThemedView style={styles.pauseTimeSection}>
-                        <ThemedView style={styles.pauseTimeHoursSection}>
-                          <ThemedText style={styles.pauseTimeLabel}>Inicio:</ThemedText>
-                          <TouchableOpacity
-                            style={styles.timePickerButtonSmall}
-                            onPress={() => openInactivityPicker(index, 'start')}
-                          >
-                            <ThemedText style={styles.timePickerButtonTextSmall}>
-                              {inactivity.startHour && inactivity.startMinute
-                                ? `${inactivity.startHour}:${inactivity.startMinute}`
-                                : 'Seleccione'}
-                            </ThemedText>
-                            <Ionicons name="time-outline" size={16} color="#007AFF" />
-                          </TouchableOpacity>
-                        </ThemedView>
-
-                        {/* Hora de Fin */}
-                        <ThemedView style={styles.pauseTimeHoursSection}>
-                          <ThemedText style={styles.pauseTimeLabel}>Fin:</ThemedText>
-                          <TouchableOpacity
-                            style={styles.timePickerButtonSmall}
-                            onPress={() => openInactivityPicker(index, 'end')}
-                          >
-                            <ThemedText style={styles.timePickerButtonTextSmall}>
-                              {inactivity.endHour && inactivity.endMinute
-                                ? `${inactivity.endHour}:${inactivity.endMinute}`
-                                : 'Seleccione'}
-                            </ThemedText>
-                            <Ionicons name="time-outline" size={16} color="#007AFF" />
-                          </TouchableOpacity>
-                        </ThemedView>
-                      </ThemedView>
-                    </View>
-                    {activeInactivityPicker && activeInactivityPicker.index === index && (
-                      <View style={styles.inlinePickerContainer}>
-                        <DateTimePicker
-                          value={inactivityPickerValue}
-                          mode="time"
-                          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                          onChange={handleInactivityTimePickerChange}
-                        />
-                      </View>
-                    )}
-
-                    <ThemedView style={styles.reasonInputGroup}>
-                      <ThemedText style={styles.reasonLabel}>Razón:</ThemedText>
-                      <TextInput
-                        style={styles.reasonInputSmall}
-                        value={inactivity.reason}
-                        onChangeText={(value) => handleManualInactivityChange(index, 'reason', value)}
-                        placeholder="Describe la razón de la pausa..."
-                        placeholderTextColor="#999"
-                        multiline
-                        numberOfLines={2}
+                  {showStartTimePicker && (
+                    <View style={styles.inlinePickerContainer}>
+                      <DateTimePicker
+                        value={startTimePickerValue}
+                        mode="time"
+                        display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                        onChange={handleStartTimePickerChange}
                       />
-                    </ThemedView>
-                  </ThemedView>
-                ))}
-              </ThemedView>
+                    </View>
+                  )}
+                </ThemedView>
 
-              {/* Submit Button */}
-              <TouchableOpacity 
-                style={styles.submitButton}
-                onPress={handleManualSubmit}
-              >
-                <ThemedText style={styles.submitButtonText}>
-                  {getActionIcon('confirm')}
-                </ThemedText>
-              </TouchableOpacity>
-            </ScrollView>
-          </ThemedView>
+                {/* Inactivities Section */}
+                <ThemedView style={styles.inactivitiesSection}>
+                  <View style={styles.sectionHeader}>
+                    <ThemedText style={[styles.sectionTitle, { color: '#000000' }]}>Agrega las pausas:</ThemedText>
+                    <TouchableOpacity
+                      style={styles.addButton}
+                      onPress={handleAddManualInactivity}
+                    >
+                      <ThemedText style={styles.addButtonText}>
+                        {getActionIcon('add')}
+                      </ThemedText>
+                    </TouchableOpacity>
+                  </View>
+
+                  {manualInactivities.map((inactivity, index) => (
+                    <ThemedView key={index} style={styles.inactivityFormItem}>
+                      <View style={styles.inactivityHeader}>
+                        <ThemedText style={styles.inactivityNumber}>Pausa #{index + 1}</ThemedText>
+                        <TouchableOpacity
+                          onPress={() => handleRemoveManualInactivity(index)}
+                          style={styles.removeButton}
+                        >
+                          {getActionIcon('remove')}
+                        </TouchableOpacity>
+                      </View>
+
+                      {/* Horas en una sola fila */}
+                      <View style={styles.pauseTimesRow}>
+                        {/* Hora de Inicio */}
+                        <ThemedView style={styles.pauseTimeSection}>
+                          <ThemedView style={styles.pauseTimeHoursSection}>
+                            <ThemedText style={styles.pauseTimeLabel}>Inicio:</ThemedText>
+                            <TouchableOpacity
+                              style={styles.timePickerButtonSmall}
+                              onPress={() => openInactivityPicker(index, 'start')}
+                            >
+                              <ThemedText style={styles.timePickerButtonTextSmall}>
+                                {inactivity.startHour && inactivity.startMinute
+                                  ? `${inactivity.startHour}:${inactivity.startMinute}`
+                                  : 'Seleccione'}
+                              </ThemedText>
+                              <Ionicons name="time-outline" size={16} color="#007AFF" />
+                            </TouchableOpacity>
+                          </ThemedView>
+
+                          {/* Hora de Fin */}
+                          <ThemedView style={styles.pauseTimeHoursSection}>
+                            <ThemedText style={styles.pauseTimeLabel}>Fin:</ThemedText>
+                            <TouchableOpacity
+                              style={styles.timePickerButtonSmall}
+                              onPress={() => openInactivityPicker(index, 'end')}
+                            >
+                              <ThemedText style={styles.timePickerButtonTextSmall}>
+                                {inactivity.endHour && inactivity.endMinute
+                                  ? `${inactivity.endHour}:${inactivity.endMinute}`
+                                  : 'Seleccione'}
+                              </ThemedText>
+                              <Ionicons name="time-outline" size={16} color="#007AFF" />
+                            </TouchableOpacity>
+                          </ThemedView>
+                        </ThemedView>
+                      </View>
+                      {activeInactivityPicker && activeInactivityPicker.index === index && (
+                        <View style={styles.inlinePickerContainer}>
+                          <DateTimePicker
+                            value={inactivityPickerValue}
+                            mode="time"
+                            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                            onChange={handleInactivityTimePickerChange}
+                          />
+                        </View>
+                      )}
+
+                      <ThemedView style={styles.reasonInputGroup}>
+                        <ThemedText style={styles.reasonLabel}>Razón:</ThemedText>
+                        <TextInput
+                          style={styles.reasonInputSmall}
+                          value={inactivity.reason}
+                          onChangeText={(value) => handleManualInactivityChange(index, 'reason', value)}
+                          placeholder="Describe la razón de la pausa..."
+                          placeholderTextColor="#999"
+                          multiline
+                          numberOfLines={2}
+                        />
+                      </ThemedView>
+                    </ThemedView>
+                  ))}
+                </ThemedView>
+
+                {/* Submit Button */}
+                <TouchableOpacity
+                  style={styles.submitButton}
+                  onPress={handleManualSubmit}
+                >
+                  <ThemedText style={styles.submitButtonText}>
+                    {getActionIcon('confirm')}
+                  </ThemedText>
+                </TouchableOpacity>
+              </ScrollView>
+            </ThemedView>
           </View>
         </View>
       </Modal>
@@ -1525,7 +1530,7 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
   },
   inactivitiesSection: {
-    
+
   },
   sectionHeader: {
     flexDirection: 'row',

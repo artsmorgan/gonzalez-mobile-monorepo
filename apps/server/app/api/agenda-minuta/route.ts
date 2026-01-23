@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessToken } from "../../../utils/verifyToken";
 import { prisma } from "../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
+import { sendNotificationByRole } from "../../../utils/sendNotification";
 
 function parseFechaInput(fecha: any): Date | undefined {
   if (!fecha) return undefined;
@@ -48,8 +49,8 @@ function ensureStringJson(value: any, fallback: string) {
 
 export async function POST(req: NextRequest) {
   try {
-    const { valid, payload, message } = verifyAccessToken(req);
-    if (!valid) return NextResponse.json({ status: false, message }, { status: 401 });
+    const { valid, expired, payload, message } = verifyAccessToken(req);
+    if (!valid) return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
 
     const {
       cliente_id,
@@ -128,6 +129,34 @@ export async function POST(req: NextRequest) {
         e_estructura_puesto: { select: { nombre: true, codigo: true } },
       },
     });
+
+    if (record) {
+      let empNombre = "Desconocido";
+      let sucursalNombre = "Desconocida";
+      let puestoNombre = "Desconocido";
+      let fechaRegistro = createdAt.toISOString().split("T")[0];
+      let horaRegistro = createdAt.toISOString().split("T")[1].split(".")[0];
+      if (record.created_by) {
+        const empleado = await prisma.c_empleado.findUnique({ where: { id: parseInt(String(record.created_by), 10) } });
+        if (empleado) {
+          empNombre = empleado.nombre + " " + empleado.primer_apellido + " " + empleado.segundo_apellido;
+        }
+      }
+      if (record.corpo_id) {
+        const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: record.corpo_id } });
+        if (sucursal) {
+          sucursalNombre = sucursal.nombre;
+        }
+      }
+      if (record.puesto_id) {
+        const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: record.puesto_id } });
+        if (puesto) {
+          puestoNombre = puesto.nombre + " (" + puesto.codigo + ")";
+        }
+      }
+      const description = "El empleado " + empNombre + " ha registrado una agenda minuta titulada " + record.titulo + " en el puesto " + puestoNombre + " de la sucursal " + sucursalNombre + " el día " + fechaRegistro + " a las " + horaRegistro;
+      sendNotificationByRole(record.corpo_id, [parseInt(String(record.created_by), 10)], "Agenda minuta registrada", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+    }
 
     return NextResponse.json(
       {

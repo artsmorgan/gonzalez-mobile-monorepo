@@ -290,10 +290,12 @@ export default function NonConformingProductScreen() {
       let token = await AsyncStorage.getItem('access_token');
       if (!token) {
         const refreshed = await refreshAccessToken();
-        if (!refreshed) return;
+        if (!refreshed) {
+          if (logout) await logout();
+          throw new Error('Sesión expirada');
+        }
         token = await AsyncStorage.getItem('access_token');
       }
-      if (!token) return;
 
       const response = await fetch(`${apiUrl}/api/main-structure`, {
         method: 'GET',
@@ -304,11 +306,16 @@ export default function NonConformingProductScreen() {
         },
       });
 
-      if (response.status === 401 || response.status === 403) {
+      if (response.status === 401) {
         const refreshed = await refreshAccessToken();
         if (refreshed) return fetchMainStructure();
         await logout();
         return;
+      }
+
+      if (response.status === 403) {
+        if (logout) await logout();
+        throw new Error('Acceso denegado');
       }
 
       if (!response.ok) return;
@@ -462,9 +469,9 @@ export default function NonConformingProductScreen() {
 
       const res = await listNonConformingProductByCorpo({
         corpo_id: String(corpoId),
-          refreshAccessToken,
-          logout,
-        });
+        refreshAccessToken,
+        logout,
+      });
 
       if (!res.status) {
         setRecords(localCache);
@@ -623,8 +630,8 @@ export default function NonConformingProductScreen() {
       const decoded = decodeFirmaHash(qrData);
       if (!decoded) {
         Alert.alert('Error', 'El QR no tiene la estructura esperada');
-      return;
-    }
+        return;
+      }
       setFirmaResponsable(decoded);
     } catch (e) {
       console.error('Error reading QR:', e);
@@ -794,17 +801,17 @@ export default function NonConformingProductScreen() {
     }
 
     const requestData: any = buildRequestData();
-              const isConnected = await getConnectionStatus();
+    const isConnected = await getConnectionStatus();
 
     // CREATE
     if (!editing) {
-              if (isConnected) {
+      if (isConnected) {
         const res = await createNonConformingProduct({ requestData, refreshAccessToken, logout });
         if (res.status) {
           Alert.alert('Éxito', 'Registro creado correctamente');
           cancelCreateOrEdit();
           await fetchRecords();
-                } else {
+        } else {
           Alert.alert('Error', res.message || 'No se pudo crear el registro');
         }
         return;
@@ -824,8 +831,8 @@ export default function NonConformingProductScreen() {
       }));
 
       const localItem: PncRecord = {
-                  id: '',
-                  id_local: localId,
+        id: '',
+        id_local: localId,
         cliente_id: requestData.cliente_id,
         corpo_id: requestData.corpo_id,
         fecha_identificacion: requestData.fecha_identificacion,
@@ -842,8 +849,8 @@ export default function NonConformingProductScreen() {
         firma_responsable: requestData.firma_responsable,
         created_at: nowIso,
         files: localFiles,
-                  synced: false,
-                };
+        synced: false,
+      };
 
       const actionsStr = await AsyncStorage.getItem('evaluations_actions');
       const actions = actionsStr ? JSON.parse(actionsStr) : [];
@@ -853,7 +860,7 @@ export default function NonConformingProductScreen() {
       const cacheStr = await AsyncStorage.getItem('evaluations_cache');
       const cache = cacheStr ? JSON.parse(cacheStr) : [];
       cache.push({ ...localItem, type: 'non_conforming_product' });
-                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(cache));
+      await AsyncStorage.setItem('evaluations_cache', JSON.stringify(cache));
 
       Alert.alert('Guardado (offline)', 'El registro se sincronizará cuando vuelva la conexión.');
       cancelCreateOrEdit();
@@ -880,7 +887,7 @@ export default function NonConformingProductScreen() {
         Alert.alert('Éxito', 'Registro actualizado correctamente');
         cancelCreateOrEdit();
         await fetchRecords();
-                } else {
+      } else {
         Alert.alert('Error', res.message || 'No se pudo actualizar el registro');
       }
       return;
@@ -888,19 +895,19 @@ export default function NonConformingProductScreen() {
 
     // offline update (incluye local)
     {
-                const actionsStr = await AsyncStorage.getItem('evaluations_actions');
-                const actions = actionsStr ? JSON.parse(actionsStr) : [];
+      const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+      const actions = actionsStr ? JSON.parse(actionsStr) : [];
       actions.push({ id: recordId, action: 'update', type: 'non_conforming_product', payload: requestDataUpdate, synced: false });
-                await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
 
-                const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
       const cache = cacheStr ? JSON.parse(cacheStr) : [];
-                  const updatedCache = cache.map((item: any) => {
+      const updatedCache = cache.map((item: any) => {
         if (item.type !== 'non_conforming_product') return item;
         if (!(item.id === recordId || item.id_local === recordId)) return item;
         return { ...item, ...requestDataUpdate, synced: false };
-                  });
-                  await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+      });
+      await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
 
       Alert.alert('Guardado (offline)', 'Los cambios se sincronizarán cuando vuelva la conexión.');
       cancelCreateOrEdit();
@@ -910,13 +917,13 @@ export default function NonConformingProductScreen() {
 
   const handleDelete = async (r: PncRecord) => {
     Alert.alert('Confirmar', '¿Deseas eliminar este registro?', [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Eliminar',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              const isConnected = await getConnectionStatus();
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Eliminar',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            const isConnected = await getConnectionStatus();
             const recordId = r.id || r.id_local;
             const isLocal = String(r.id_local || '').startsWith('local-') || String(r.id || '').startsWith('local-') || !r.synced;
 
@@ -925,27 +932,27 @@ export default function NonConformingProductScreen() {
               if (!res.status) {
                 Alert.alert('Error', res.message || 'No se pudo eliminar');
                 return;
-                }
-              } else {
-                const actionsStr = await AsyncStorage.getItem('evaluations_actions');
-                const actions = actionsStr ? JSON.parse(actionsStr) : [];
+              }
+            } else {
+              const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+              const actions = actionsStr ? JSON.parse(actionsStr) : [];
               actions.push({ id: recordId, action: 'delete', type: 'non_conforming_product', payload: {}, synced: false });
-                await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
             }
 
-                const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+            const cacheStr = await AsyncStorage.getItem('evaluations_cache');
             const cache = cacheStr ? JSON.parse(cacheStr) : [];
             const updatedCache = cache.filter((item: any) => !(item.type === 'non_conforming_product' && (item.id === recordId || item.id_local === recordId)));
-                  await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+            await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
 
             Alert.alert('Éxito', 'Registro eliminado');
             await fetchRecords();
           } catch (e) {
             console.error('Error deleting PNC:', e);
             Alert.alert('Error', 'No se pudo eliminar');
-            }
-          },
+          }
         },
+      },
     ]);
   };
 
@@ -967,7 +974,7 @@ export default function NonConformingProductScreen() {
             <TouchableOpacity onPress={() => removeLocalFile('image', file.id)}>
               <Ionicons name="trash" size={16} color="#FF3B30" />
             </TouchableOpacity>
-        </ThemedView>
+          </ThemedView>
         ))}
 
         {audioFiles.map((file) => (
@@ -980,7 +987,7 @@ export default function NonConformingProductScreen() {
               <Ionicons name="trash" size={16} color="#FF3B30" />
               <ThemedText style={styles.removeMediaText}>Quitar</ThemedText>
             </TouchableOpacity>
-        </ThemedView>
+          </ThemedView>
         ))}
 
         {videoFiles.map((file) => (
@@ -993,7 +1000,7 @@ export default function NonConformingProductScreen() {
               <Ionicons name="trash" size={16} color="#FF3B30" />
               <ThemedText style={styles.removeMediaText}>Quitar</ThemedText>
             </TouchableOpacity>
-        </ThemedView>
+          </ThemedView>
         ))}
 
         {documentFiles.map((file) => (
@@ -1003,7 +1010,7 @@ export default function NonConformingProductScreen() {
             <TouchableOpacity onPress={() => removeLocalFile('document', file.id)}>
               <Ionicons name="trash" size={16} color="#FF3B30" />
             </TouchableOpacity>
-        </ThemedView>
+          </ThemedView>
         ))}
       </ThemedView>
     );
@@ -1013,10 +1020,10 @@ export default function NonConformingProductScreen() {
     const decodedFirma = firmaResponsable
       ? firmaResponsable
       : decodeFirmaHash(
-          editing
-            ? (records.find((r) => String(r.id) === String(editing.id) || String(r.id_local) === String(editing.id_local))?.firma_responsable || '')
-            : ''
-        );
+        editing
+          ? (records.find((r) => String(r.id) === String(editing.id) || String(r.id_local) === String(editing.id_local))?.firma_responsable || '')
+          : ''
+      );
 
     const divisionName =
       selectedClienteId && selectedDivisionId
@@ -1031,7 +1038,7 @@ export default function NonConformingProductScreen() {
           <ThemedView style={styles.inlineLoading}>
             <ActivityIndicator size="small" color="#007AFF" />
             <ThemedText style={styles.inlineLoadingText}>Cargando estructura...</ThemedText>
-        </ThemedView>
+          </ThemedView>
         ) : null}
 
         <ThemedText style={styles.sectionTitle}>Jerarquía (hasta sucursal)</ThemedText>
@@ -1063,7 +1070,7 @@ export default function NonConformingProductScreen() {
 
         <ThemedText style={styles.label}>División (automática)</ThemedText>
         <ThemedView style={styles.pickerWrapper}>
-          <Picker selectedValue={selectedDivisionId ?? 0} onValueChange={() => {}} enabled={false} style={styles.picker}>
+          <Picker selectedValue={selectedDivisionId ?? 0} onValueChange={() => { }} enabled={false} style={styles.picker}>
             <Picker.Item label={divisionName} value={0} />
           </Picker>
         </ThemedView>
@@ -1270,12 +1277,12 @@ export default function NonConformingProductScreen() {
             <ThemedView key={recordKey} style={styles.card}>
               <ThemedText style={styles.cardTitle}>
                 {r.tipo_servicio_no_conforme || '—'}
-                  </ThemedText>
+              </ThemedText>
 
               <ThemedText style={styles.cardLine}>
                 <ThemedText style={styles.cardLabel}>Fecha identificación: </ThemedText>
                 <ThemedText style={styles.cardValue}>{r.fecha_identificacion.split('T')[0] || '—'}</ThemedText>
-                  </ThemedText>
+              </ThemedText>
               <ThemedText style={styles.cardLine}>
                 <ThemedText style={styles.cardLabel}>Responsable: </ThemedText>
                 <ThemedText style={styles.cardValue}>{r.responsable_cuenta || '—'}</ThemedText>
@@ -1308,10 +1315,10 @@ export default function NonConformingProductScreen() {
                           return (
                             <ThemedView key={`${recordKey}_img_${idx}`} style={styles.imageWideWrap}>
                               <Image source={{ uri }} style={styles.imageWide} resizeMode="contain" />
-                </ThemedView>
+                            </ThemedView>
                           );
                         })}
-                    </ThemedView>
+                      </ThemedView>
                     </>
                   ) : null}
 
@@ -1325,7 +1332,7 @@ export default function NonConformingProductScreen() {
                           <ThemedView key={`${recordKey}_aud_${idx}`} style={styles.mediaBlock}>
                             <ThemedText style={styles.mediaLabel} numberOfLines={1}>{label}</ThemedText>
                             <PncAudioPlayer sourceUrl={uri} />
-                </ThemedView>
+                          </ThemedView>
                         );
                       })}
                     </>
@@ -1354,7 +1361,7 @@ export default function NonConformingProductScreen() {
                         const uri = buildFileUrl(pncId, f);
                         const label = (f.original_name || f.name || `archivo_${idx}`).trim();
                         return (
-                    <TouchableOpacity
+                          <TouchableOpacity
                             key={`${recordKey}_doc_${idx}`}
                             style={styles.fileRow}
                             onPress={async () => {
@@ -1368,7 +1375,7 @@ export default function NonConformingProductScreen() {
                           >
                             <ThemedText numberOfLines={1} style={styles.fileName}>{label}</ThemedText>
                             <Ionicons name="open-outline" size={18} color="#007AFF" />
-                    </TouchableOpacity>
+                          </TouchableOpacity>
                         );
                       })}
                     </>
@@ -1419,7 +1426,7 @@ export default function NonConformingProductScreen() {
               <ThemedText style={styles.createButtonText}>
                 <Ionicons name="add" size={20} color="#FFFFFF" /> Nuevo registro
               </ThemedText>
-              </TouchableOpacity>
+            </TouchableOpacity>
           ) : null}
 
           {isCreating ? renderForm() : renderList()}

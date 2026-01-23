@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessToken } from "../../../utils/verifyToken";
 import { prisma } from "../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
+import { sendNotificationByEmployee, sendNotificationByRole } from "../../../utils/sendNotification";
 
 function ensureStringJson(value: any, fallback: string) {
   if (value === null || value === undefined) return fallback;
@@ -33,8 +34,8 @@ function parseFechaInput(fecha: any): Date | undefined {
 
 export async function POST(req: NextRequest) {
   try {
-    const { valid, payload, message } = verifyAccessToken(req);
-    if (!valid) return NextResponse.json({ status: false, message }, { status: 401 });
+    const { valid, expired, payload, message } = verifyAccessToken(req);
+    if (!valid) return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
 
     const body = await req.json();
     const {
@@ -81,6 +82,9 @@ export async function POST(req: NextRequest) {
     const createdAt = toZonedTime(new Date(), "America/Costa_Rica");
     const createdBy = parseInt(String((payload as any)?.id ?? 0), 10) || 0;
 
+    const oficialInteresado = ensureStringJson(informacion_oficial_interesado, "[]");
+    const oficialColaborador = ensureStringJson(informacion_oficial_colaborador, "[]");
+
     const record = await prisma.e_mutuos_acuerdos.create({
       data: {
         cliente_id: clienteIdNum,
@@ -88,8 +92,8 @@ export async function POST(req: NextRequest) {
         ejecutivo_cuenta: ejecutivoCuentaNum,
         fecha: fechaParsed,
         turno: String(turno).trim(),
-        informacion_oficial_interesado: ensureStringJson(informacion_oficial_interesado, "[]"),
-        informacion_oficial_colaborador: ensureStringJson(informacion_oficial_colaborador, "[]"),
+        informacion_oficial_interesado: oficialInteresado,
+        informacion_oficial_colaborador: oficialColaborador,
         motivo: String(motivo),
         // En creación se permite vacío: se llenará luego con firma dibujada si owned=true
         firma_ejecutivo_cuenta: typeof firma_ejecutivo_cuenta === "string" ? firma_ejecutivo_cuenta : "",
@@ -107,6 +111,34 @@ export async function POST(req: NextRequest) {
     // owned: misma lógica que incidencias (supervisor_id === ejecutivo_cuenta)
     const empleado = createdBy ? await prisma.c_empleado.findUnique({ where: { id: createdBy } }) : null;
     const myEjecutivoCuentaId = empleado?.supervisor_id ?? null;
+
+    if (myEjecutivoCuentaId !== null && myEjecutivoCuentaId === (record as any).ejecutivo_cuenta) {
+      const cliente = await prisma.e_estructura_cliente.findUnique({ where: { id: clienteIdNum } });
+      if (cliente) {
+        const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: corpoIdNum } });
+        if (sucursal) {
+          const fecha_string = createdAt.toISOString().split("T")[0];
+          const hora_string = createdAt.toISOString().split("T")[1].split(".")[0];
+
+          let interesadoName = "-Interesado desconocido-";
+          let colaboradorName = "-Colaborador desconocido-";
+          if (oficialInteresado.length) {
+            interesadoName = oficialInteresado[0];
+          }
+          if (oficialColaborador.length > 0) {
+            colaboradorName = oficialColaborador[0];
+          }
+
+          const description = `Se ha registrado un mutuo acuerdo en la sucursal ${sucursal.nombre} de la empresa ${cliente.nombre} el día ${fecha_string} a las ${hora_string} con los involucrados ${interesadoName} y ${colaboradorName}`;
+          sendNotificationByRole(corpoIdNum, [], "Mutuo acuerdo registrado", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+
+          const supervisors = await prisma.c_empleado.findMany({ where: { supervisor_id: ejecutivoCuentaNum } });
+          const supervisorIds = supervisors.map(s => s.id);
+
+          sendNotificationByEmployee(corpoIdNum, [createdBy], "Mutuo acuerdo registrado", description, supervisorIds);
+        }
+      }
+    }
 
     return NextResponse.json(
       {

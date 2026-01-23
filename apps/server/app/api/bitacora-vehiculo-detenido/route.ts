@@ -4,6 +4,7 @@ import { verifyAccessToken } from "../../../utils/verifyToken";
 import { prisma } from "../../../utils/prismaClient";
 import { getUserMarca } from "../../../utils/getUserMarca";
 import { toZonedTime } from "date-fns-tz";
+import { sendNotificationByRole } from "../../../utils/sendNotification";
 
 function safeParseJson<T>(value: any, fallback: T): T {
   try {
@@ -26,9 +27,9 @@ function normalizeToStringifiedJson(value: any): string {
 
 export async function GET(req: NextRequest) {
   try {
-    const { valid, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = verifyAccessToken(req);
     if (!valid) {
-      return NextResponse.json({ status: false, message }, { status: 401 });
+      return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
     }
     // Soporte para filtros directos por estructura (sin depender de marca)
     const empresaIdStr = req.nextUrl.searchParams.get("empresa_id");
@@ -106,9 +107,9 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const { valid, payload, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = verifyAccessToken(req);
     if (!valid) {
-      return NextResponse.json({ status: false, message }, { status: 401 });
+      return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
     }
 
     const body = await req.json();
@@ -170,15 +171,43 @@ export async function POST(req: NextRequest) {
     });
 
     // Vinculación: si viene `uso_id`, marcamos el uso con `bitacora_id = created.id`
-    if (uso_id) {
-      try {
-        await prisma.c_usos_vehiculos_corporativos.update({
-          where: { id: Number(uso_id) },
-          data: { bitacora_id: created.id },
-        });
-      } catch {
-        // si falla, no rompemos el create de bitácora
+    let description = "";
+    let empNombre = "Desconocido";
+    let sucursalNombre = "Desconocida";
+    const fechaEntrada = createdAt.toISOString().split("T")[0];
+    const horaEntrada = createdAt.toISOString().split("T")[1].split(".")[0];
+    if (created.created_by) {
+      const empleado = await prisma.c_empleado.findUnique({ where: { id: created.created_by } });
+      if (empleado) {
+        empNombre = empleado.nombre + " " + empleado.primer_apellido + " " + empleado.segundo_apellido;
       }
+    }
+    if (sucursalId) {
+      const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: sucursalId } });
+      if (sucursal) {
+        sucursalNombre = sucursal.nombre;
+      }
+    }
+    if (created) {
+      description = "El empleado " + empNombre + " ha creado una bitácora de vehículo detenido de tipo " + tipo;
+      if (uso_id) {
+        try {
+          const uso = await prisma.c_usos_vehiculos_corporativos.update({
+            where: { id: Number(uso_id) },
+            data: { bitacora_id: created.id },
+          });
+          if (uso) {
+            const vehiculo = await prisma.c_vehiculos_corporativos.findUnique({ where: { id: uso.vehiculo_id } });
+            if (vehiculo) {
+              description += " para el vehículo con la placa " + vehiculo.placa;
+            }
+          }
+        } catch {
+          // si falla, no rompemos el create de bitácora
+        }
+      }
+      description += " en la sucursal " + sucursalNombre + " el día " + fechaEntrada + " a las " + horaEntrada;
+      sendNotificationByRole(sucursalId, [], "Bitácora de vehículo detenido creada", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
     }
 
     return NextResponse.json({ status: true, message: "Bitácora creada correctamente", id: created.id }, { status: 200 });

@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 
-type BasicResponse = { status: boolean; message?: string; [k: string]: any };
+type BasicResponse = { status: boolean; message?: string;[k: string]: any };
 
 export type DocumentoEntregadoItem = {
   id: number;
@@ -60,11 +60,12 @@ const getApiUrl = () => {
   return apiUrl;
 };
 
-async function getToken(refreshAccessToken?: () => Promise<boolean>) {
+async function getToken(refreshAccessToken?: () => Promise<boolean>, logout?: () => Promise<any>) {
   let token = await AsyncStorage.getItem('access_token');
   if (!token && refreshAccessToken) {
     const refreshed = await refreshAccessToken();
     if (refreshed) token = await AsyncStorage.getItem('access_token');
+    else if (logout) await logout();
   }
   if (!token) throw new Error('No authentication token found');
   return token;
@@ -77,7 +78,7 @@ export async function listDocumentosEntregados({
 }: ListParams): Promise<ListDocumentosEntregadosResponse> {
   try {
     const apiUrl = getApiUrl();
-    const token = await getToken(refreshAccessToken);
+    const token = await getToken(refreshAccessToken, logout);
     const response = await fetch(`${apiUrl}/api/documentos-entregados?m=${marcaId}`, {
       method: 'GET',
       headers: {
@@ -87,13 +88,18 @@ export async function listDocumentosEntregados({
       },
     });
 
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
       if (refreshAccessToken) {
         const refreshed = await refreshAccessToken();
         if (refreshed) return listDocumentosEntregados({ marcaId, refreshAccessToken, logout });
         if (logout) await logout();
       }
       return { status: false, message: 'Sesión expirada' };
+    }
+
+    if (response.status === 403) {
+      if (logout) await logout();
+      throw new Error('Acceso denegado');
     }
 
     const data = await response.json();
@@ -111,7 +117,7 @@ export async function createDocumentoEntregado({
 }: CreateParams): Promise<BasicResponse> {
   try {
     const apiUrl = getApiUrl();
-    const token = await getToken(refreshAccessToken);
+    const token = await getToken(refreshAccessToken, logout);
     const response = await fetch(`${apiUrl}/api/documentos-entregados`, {
       method: 'POST',
       headers: {
@@ -122,13 +128,18 @@ export async function createDocumentoEntregado({
       body: JSON.stringify(requestData),
     });
 
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
       if (refreshAccessToken) {
         const refreshed = await refreshAccessToken();
         if (refreshed) return createDocumentoEntregado({ requestData, refreshAccessToken, logout });
         if (logout) await logout();
       }
       return { status: false, message: 'Sesión expirada' };
+    }
+
+    if (response.status === 403) {
+      if (logout) await logout();
+      throw new Error('Acceso denegado');
     }
 
     const data: any = await response.json().catch(() => ({}));
@@ -148,7 +159,7 @@ export async function updateDocumentoEntregado({
 }: UpdateParams): Promise<BasicResponse> {
   try {
     const apiUrl = getApiUrl();
-    const token = await getToken(refreshAccessToken);
+    const token = await getToken(refreshAccessToken, logout);
     const response = await fetch(`${apiUrl}/api/documentos-entregados/${id}`, {
       method: 'PUT',
       headers: {
@@ -159,13 +170,18 @@ export async function updateDocumentoEntregado({
       body: JSON.stringify(requestData),
     });
 
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
       if (refreshAccessToken) {
         const refreshed = await refreshAccessToken();
         if (refreshed) return updateDocumentoEntregado({ id, requestData, refreshAccessToken, logout });
         if (logout) await logout();
       }
       return { status: false, message: 'Sesión expirada' };
+    }
+
+    if (response.status === 403) {
+      if (logout) await logout();
+      throw new Error('Acceso denegado');
     }
 
     const data: any = await response.json().catch(() => ({}));
@@ -185,7 +201,7 @@ export async function deleteDocumentoEntregado({
 }: DeleteParams): Promise<BasicResponse> {
   try {
     const apiUrl = getApiUrl();
-    const token = await getToken(refreshAccessToken);
+    const token = await getToken(refreshAccessToken, logout);
     const response = await fetch(`${apiUrl}/api/documentos-entregados/${id}?m=${marcaId}`, {
       method: 'DELETE',
       headers: {
@@ -195,13 +211,18 @@ export async function deleteDocumentoEntregado({
       },
     });
 
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
       if (refreshAccessToken) {
         const refreshed = await refreshAccessToken();
         if (refreshed) return deleteDocumentoEntregado({ id, marcaId, refreshAccessToken, logout });
         if (logout) await logout();
       }
       return { status: false, message: 'Sesión expirada' };
+    }
+
+    if (response.status === 403) {
+      if (logout) await logout();
+      throw new Error('Acceso denegado');
     }
 
     const data: any = await response.json().catch(() => ({}));
@@ -222,7 +243,7 @@ export async function getDocumentTypes({
 }): Promise<{ status: boolean; documentTypes?: DocumentTypeItem[]; message?: string }> {
   try {
     const apiUrl = getApiUrl();
-    const token = await getToken(refreshAccessToken);
+    const token = await getToken(refreshAccessToken, logout);
     const response = await fetch(`${apiUrl}/api/document-types`, {
       method: 'GET',
       headers: {
@@ -232,13 +253,18 @@ export async function getDocumentTypes({
       },
     });
 
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
       if (refreshAccessToken) {
         const refreshed = await refreshAccessToken();
         if (refreshed) return getDocumentTypes({ refreshAccessToken, logout });
         if (logout) await logout();
       }
       throw new Error('Sesión expirada');
+    }
+
+    if (response.status === 403) {
+      if (logout) await logout();
+      throw new Error('Acceso denegado');
     }
 
     const data: any = await response.json().catch(() => ({}));
@@ -256,7 +282,7 @@ export async function getDocumentTypes({
         if (Array.isArray(cached)) {
           return { status: true, documentTypes: cached };
         }
-      } catch {}
+      } catch { }
     }
     return { status: false, message: error.message || 'Error al cargar tipos de documento' };
   }

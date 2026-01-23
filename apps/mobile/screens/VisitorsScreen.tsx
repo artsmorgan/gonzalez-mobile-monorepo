@@ -96,16 +96,16 @@ export default function VisitorsScreen() {
   const { employee, refreshAccessToken, logout } = useAuth();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const navigation = useNavigation<VisitorsScreenNavigationProp>();
-  
+
   // Visitors state
   const [visitors, setVisitors] = useState<Visitor[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [hasCurrentMarca, setHasCurrentMarca] = useState<boolean>(false);
-  
+
   // Editing state
   const [editingVisitor, setEditingVisitor] = useState<EditingVisitor | null>(null);
-  
+
   // Creating state
   const [isCreating, setIsCreating] = useState(false);
   const [newVisitor, setNewVisitor] = useState<EditingVisitor>({
@@ -126,7 +126,7 @@ export default function VisitorsScreen() {
     foto_cedula_nueva: null,
     activos: [],
   });
-  
+
   // Form refs for text inputs (main fields only, activos/detalles remain in state due to dynamic arrays)
   const nombreRef = useRef('');
   const cedulaRef = useRef('');
@@ -137,21 +137,21 @@ export default function VisitorsScreen() {
   const razonVisitaRef = useRef('');
   const observacionesRef = useRef('');
   const persAutorizaSalidaRef = useRef('');
-  
+
   // Filters state
   const [searchText, setSearchText] = useState('');
   const [selectedTipoVisitante, setSelectedTipoVisitante] = useState<string>('all');
   const [isFiltersExpanded, setIsFiltersExpanded] = useState(false);
-  
+
   // Expanded details state
   const [expandedVisitorIds, setExpandedVisitorIds] = useState<number[]>([]);
-  
+
   // Camera state
   const [isCameraVisible, setIsCameraVisible] = useState(false);
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef<CameraView | null>(null);
   const [isEditingCamera, setIsEditingCamera] = useState(false);
-  
+
   // Asset types cache
   const [tipoActivos, setTipoActivos] = useState<TipoActivo[]>([]);
 
@@ -171,7 +171,7 @@ export default function VisitorsScreen() {
       eventBus.off('connectionRestored', handler);
     };
   }, []);
-  
+
   const loadData = async () => {
     try {
       // Ejecutar fetch de tipos de activos primero
@@ -204,7 +204,8 @@ export default function VisitorsScreen() {
         if (!token) {
           const refreshed = await refreshAccessToken();
           if (!refreshed) {
-            throw new Error('No authentication token found');
+            if (logout) await logout();
+            throw new Error('Sesión expirada');
           }
           token = await AsyncStorage.getItem('access_token');
         }
@@ -218,7 +219,7 @@ export default function VisitorsScreen() {
           },
         });
 
-        if (response.status === 401 || response.status === 403) {
+        if (response.status === 401) {
           const refreshed = await refreshAccessToken();
           if (refreshed) {
             return fetchTipoActivos();
@@ -226,6 +227,11 @@ export default function VisitorsScreen() {
             await logout();
             return;
           }
+        }
+
+        if (response.status === 403) {
+          if (logout) await logout();
+          throw new Error('Acceso denegado');
         }
 
         if (!response.ok) {
@@ -295,7 +301,8 @@ export default function VisitorsScreen() {
         if (!token) {
           const refreshed = await refreshAccessToken();
           if (!refreshed) {
-            throw new Error('No authentication token found');
+            if (logout) await logout();
+            throw new Error('Sesión expirada');
           }
           token = await AsyncStorage.getItem('access_token');
         }
@@ -309,7 +316,7 @@ export default function VisitorsScreen() {
           },
         });
 
-        if (response.status === 401 || response.status === 403) {
+        if (response.status === 401) {
           const refreshed = await refreshAccessToken();
           if (refreshed) {
             return fetchVisitors();
@@ -318,6 +325,11 @@ export default function VisitorsScreen() {
             await logout();
             return;
           }
+        }
+
+        if (response.status === 403) {
+          if (logout) await logout();
+          throw new Error('Acceso denegado');
         }
 
         if (!response.ok) {
@@ -381,15 +393,15 @@ export default function VisitorsScreen() {
 
     let final_day_initial = day;
     if (horaInicioSplit && parseInt(horaInicioSplit[0]) > parseInt(hora_entrada_raw[0])) {
-        final_day_initial = (parseInt(day) + 1).toString().padStart(2, "0");
+      final_day_initial = (parseInt(day) + 1).toString().padStart(2, "0");
     }
 
     let final_day_final = day;
     if (hora_salida) {
-        const hora_salida_raw = hora_salida.split(":");
-        if (horaInicioSplit && parseInt(horaInicioSplit[0]) > parseInt(hora_salida_raw[0])) {
-            final_day_final = (parseInt(day) + 1).toString().padStart(2, "0");
-        }
+      const hora_salida_raw = hora_salida.split(":");
+      if (horaInicioSplit && parseInt(horaInicioSplit[0]) > parseInt(hora_salida_raw[0])) {
+        final_day_final = (parseInt(day) + 1).toString().padStart(2, "0");
+      }
     }
 
     const hora_entrada_converted = year + "-" + month + "-" + final_day_initial + "T" + hora_entrada_raw[0] + ":" + hora_entrada_raw[1] + ":00.000Z";
@@ -479,9 +491,9 @@ export default function VisitorsScreen() {
       // Helper para mapear activos - evitar duplicación de código
       const mapActivos = (detalles: any) => {
         const detallesArray = Array.isArray(detalles) ? detalles : [];
-        return detallesArray.map((det: any) => ({ 
-          detalle: det.detalle || '', 
-          descripcion: det.descripcion || '' 
+        return detallesArray.map((det: any) => ({
+          detalle: det.detalle || '',
+          descripcion: det.descripcion || ''
         }));
       };
 
@@ -513,7 +525,7 @@ export default function VisitorsScreen() {
       // Procesar foto_cedula
       let fotoCedula = visitor.foto_cedula;
       let shouldFetchImage = fotoCedula && !fotoCedula.startsWith('data:image');
-      
+
       if (shouldFetchImage) {
         // Fetch from server
         try {
@@ -521,22 +533,22 @@ export default function VisitorsScreen() {
           if (apiUrl) {
             const imageUrl = `${apiUrl}/api/uploads/visitors/${visitor.id}/cedula?name=${fotoCedula}`;
             const response = await fetch(imageUrl);
-            
+
             if (!response.ok) {
               console.warn('No se pudo cargar la imagen desde el servidor');
               fotoCedula = null;
             } else {
               const blob = await response.blob();
-              
+
               // Convertir blob a base64 usando Promise para evitar race conditions
               fotoCedula = await new Promise<string | null>((resolve) => {
                 const reader = new FileReader();
-                
+
                 reader.onerror = () => {
                   console.error('Error al leer la imagen con FileReader');
                   resolve(null);
                 };
-                
+
                 reader.onloadend = () => {
                   try {
                     const base64data = reader.result as string;
@@ -551,7 +563,7 @@ export default function VisitorsScreen() {
                     resolve(null);
                   }
                 };
-                
+
                 reader.readAsDataURL(blob);
               });
             }
@@ -564,7 +576,7 @@ export default function VisitorsScreen() {
 
       // Solo UN setEditingVisitor al final, después de procesar todo
       setEditingVisitor(createEditingVisitorObject(fotoCedula));
-      
+
       // Initialize refs with visitor values
       nombreRef.current = visitor.nombre;
       cedulaRef.current = visitor.cedula;
@@ -657,8 +669,8 @@ export default function VisitorsScreen() {
 
               const currentMarcaData = JSON.parse(currentMarca);
               const horaEntrada = `${horaEntradaHRef.current.padStart(2, '0')}:${horaEntradaMRef.current.padStart(2, '0')}`;
-              const horaSalida = horaSalidaHRef.current && horaSalidaMRef.current 
-                ? `${horaSalidaHRef.current.padStart(2, '0')}:${horaSalidaMRef.current.padStart(2, '0')}` 
+              const horaSalida = horaSalidaHRef.current && horaSalidaMRef.current
+                ? `${horaSalidaHRef.current.padStart(2, '0')}:${horaSalidaMRef.current.padStart(2, '0')}`
                 : null;
 
               const { converted_hora_entrada, converted_hora_salida } = convert_date(currentMarcaData, horaEntrada, horaSalida);
@@ -710,7 +722,7 @@ export default function VisitorsScreen() {
                 // Guardar en visitors_actions
                 const actionsStr = await AsyncStorage.getItem('visitors_actions');
                 const actions = actionsStr ? JSON.parse(actionsStr) : [];
-                
+
                 actions.push({
                   requestData: requestBody,
                   marcaId: currentMarcaData.id,
@@ -725,7 +737,7 @@ export default function VisitorsScreen() {
                 // Guardar en visitors_cache
                 const cacheStr = await AsyncStorage.getItem('visitors_cache');
                 const cache = cacheStr ? JSON.parse(cacheStr) : [];
-                
+
                 const newVisitorCache: Visitor = {
                   id: 0,
                   nombre: nombreRef.current,
@@ -843,8 +855,8 @@ export default function VisitorsScreen() {
 
               const currentMarcaData = JSON.parse(currentMarca);
               const horaEntrada = `${horaEntradaHRef.current.padStart(2, '0')}:${horaEntradaMRef.current.padStart(2, '0')}`;
-              const horaSalida = horaSalidaHRef.current && horaSalidaMRef.current 
-                ? `${horaSalidaHRef.current.padStart(2, '0')}:${horaSalidaMRef.current.padStart(2, '0')}` 
+              const horaSalida = horaSalidaHRef.current && horaSalidaMRef.current
+                ? `${horaSalidaHRef.current.padStart(2, '0')}:${horaSalidaMRef.current.padStart(2, '0')}`
                 : null;
 
               const { converted_hora_entrada, converted_hora_salida } = convert_date(currentMarcaData, horaEntrada, horaSalida);
@@ -895,7 +907,7 @@ export default function VisitorsScreen() {
                 // Si id_local !== '', buscar acción "create" y modificar su requestData
                 if (editingVisitor.id_local !== '') {
                   const createActionIndex = actions.findIndex((a: any) => a.id === editingVisitor.id_local && a.type === 'create');
-                  
+
                   if (createActionIndex !== -1) {
                     // Modificar requestData de la acción create, ignorando foto_cedula si no hay nueva imagen
                     const updatedRequestData = {
@@ -928,7 +940,7 @@ export default function VisitorsScreen() {
                 } else {
                   // Si id_local === '', buscar acción "update" existente o crear nueva
                   const updateActionIndex = actions.findIndex((a: any) => a.id === editingVisitor.id && a.type === 'update');
-                  
+
                   if (updateActionIndex !== -1) {
                     // Modificar requestData de la acción update existente
                     const updatedRequestData = {
@@ -969,8 +981,8 @@ export default function VisitorsScreen() {
                 // Actualizar visitors_cache
                 const cacheStr = await AsyncStorage.getItem('visitors_cache');
                 const cache = cacheStr ? JSON.parse(cacheStr) : [];
-                
-                const visitorIndex = cache.findIndex((v: Visitor) => 
+
+                const visitorIndex = cache.findIndex((v: Visitor) =>
                   editingVisitor.id_local !== '' ? v.id_local === editingVisitor.id_local : v.id === editingVisitor.id
                 );
 
@@ -1065,8 +1077,8 @@ export default function VisitorsScreen() {
                 // Eliminar de visitors_cache
                 const cacheStr = await AsyncStorage.getItem('visitors_cache');
                 const cache = cacheStr ? JSON.parse(cacheStr) : [];
-                
-                const filteredCache = cache.filter((v: Visitor) => 
+
+                const filteredCache = cache.filter((v: Visitor) =>
                   visitor.id_local !== '' ? v.id_local !== visitor.id_local : v.id !== visitor.id
                 );
                 await AsyncStorage.setItem('visitors_cache', JSON.stringify(filteredCache));
@@ -1125,12 +1137,12 @@ export default function VisitorsScreen() {
 
     try {
       // Capturar foto con opciones de calidad reducida para evitar problemas de memoria
-      const photo = await cameraRef.current.takePictureAsync({ 
+      const photo = await cameraRef.current.takePictureAsync({
         base64: true,
         quality: 0.7, // Reducir calidad para disminuir tamaño
         skipProcessing: false
       });
-      
+
       if (!photo) {
         Alert.alert('Error', 'No se pudo capturar la foto. Por favor intente nuevamente.');
         setIsCameraVisible(false);
@@ -1152,19 +1164,19 @@ export default function VisitorsScreen() {
         // Verificar que el tamaño no sea excesivo (por ejemplo, más de 10MB en base64)
         const sizeInMB = (photo.base64.length * 3) / 4 / (1024 * 1024);
         console.log(`Tamaño de imagen: ${sizeInMB.toFixed(2)} MB`);
-        
+
         if (sizeInMB > 10) {
           Alert.alert('Advertencia', 'La imagen es muy grande. Esto puede causar problemas de rendimiento.');
         }
 
         const base64Image = `data:image/jpeg;base64,${photo.base64}`;
-        
+
         // Usar setTimeout para asegurar que el estado se actualice después de cerrar el modal
         setIsCameraVisible(false);
-        
+
         setTimeout(() => {
           try {
-            
+
             if (isEditingCamera && editingVisitor) {
               setEditingVisitor((prev) => {
                 const updated = {
@@ -1347,18 +1359,18 @@ export default function VisitorsScreen() {
 
   // Filtrado de visitantes
   const filteredVisitors = visitors.filter(visitor => {
-    const matchesSearch = 
+    const matchesSearch =
       visitor.nombre.toLowerCase().includes(searchText.toLowerCase()) ||
       visitor.cedula.toLowerCase().includes(searchText.toLowerCase()) ||
       visitor.razon_visita.toLowerCase().includes(searchText.toLowerCase()) ||
       (visitor.pers_autoriza_salida && visitor.pers_autoriza_salida.toLowerCase().includes(searchText.toLowerCase())) ||
       (visitor.observaciones && visitor.observaciones.toLowerCase().includes(searchText.toLowerCase()));
-    
-    const matchesTipoVisitante = 
-      selectedTipoVisitante === 'all' || 
+
+    const matchesTipoVisitante =
+      selectedTipoVisitante === 'all' ||
       (selectedTipoVisitante === 'visitante' && !visitor.es_funcionario) ||
       (selectedTipoVisitante === 'funcionario' && visitor.es_funcionario);
-    
+
     return matchesSearch && matchesTipoVisitante;
   });
 
@@ -1640,7 +1652,7 @@ export default function VisitorsScreen() {
                     </ThemedView>
 
                     <TextInput
-                      style={[{marginBottom: 10}, styles.input]}
+                      style={[{ marginBottom: 10 }, styles.input]}
                       value={detalle.detalle}
                       onChangeText={(text) => updateDetalle(activoIndex, detalleIndex, 'detalle', text, isEditing)}
                       placeholder="Título del detalle"
@@ -1666,8 +1678,8 @@ export default function VisitorsScreen() {
           <ThemedText style={styles.label}>Foto de Cédula (Opcional)</ThemedText>
           {visitor.foto_cedula ? (
             <ThemedView style={styles.photoPreviewContainer}>
-              <Image 
-                source={{ uri: visitor.foto_cedula }} 
+              <Image
+                source={{ uri: visitor.foto_cedula }}
                 style={styles.photoPreview}
                 resizeMode="contain"
               />
@@ -1755,17 +1767,17 @@ export default function VisitorsScreen() {
         </ThemedView>
 
         {/* Botón para expandir/colapsar detalles */}
-        <TouchableOpacity 
+        <TouchableOpacity
           style={styles.toggleDetailsButton}
           onPress={() => toggleVisitorDetails(visitor.id)}
         >
           <ThemedText style={styles.toggleDetailsText}>
             {isExpanded ? 'Ocultar detalles' : 'Ver más detalles'}
           </ThemedText>
-          <Ionicons 
-            name={isExpanded ? "chevron-up" : "chevron-down"} 
-            size={20} 
-            color="#007AFF" 
+          <Ionicons
+            name={isExpanded ? "chevron-up" : "chevron-down"}
+            size={20}
+            color="#007AFF"
           />
         </TouchableOpacity>
 
@@ -1798,10 +1810,10 @@ export default function VisitorsScreen() {
               <ThemedView style={styles.activosSection}>
                 <ThemedText style={styles.sectionTitle}>Activos ({visitor.activos.length})</ThemedText>
                 {visitor.activos.map((activo, index) => {
-                  const detallesArray = Array.isArray(activo.detalles) 
-                    ? activo.detalles 
+                  const detallesArray = Array.isArray(activo.detalles)
+                    ? activo.detalles
                     : (typeof activo.detalles === 'string' ? JSON.parse(activo.detalles) : []);
-                  
+
                   return (
                     <ThemedView key={index} style={styles.activoCard}>
                       <ThemedView style={styles.visitorDetailMain}>
@@ -1844,15 +1856,15 @@ export default function VisitorsScreen() {
               <ThemedView style={styles.fotoCedulaSection}>
                 <ThemedText style={styles.sectionTitle}>Foto de Cédula</ThemedText>
                 {visitor.foto_cedula.startsWith('data:image') ? (
-                  <Image 
-                    source={{ uri: visitor.foto_cedula }} 
+                  <Image
+                    source={{ uri: visitor.foto_cedula }}
                     style={styles.fotoCedulaImage}
                     resizeMode="contain"
                   />
                 ) : (
                   apiUrl && (
-                    <Image 
-                      source={{ uri: `${apiUrl}/api/uploads/visitors/${visitor.id}/cedula?name=${visitor.foto_cedula}` }} 
+                    <Image
+                      source={{ uri: `${apiUrl}/api/uploads/visitors/${visitor.id}/cedula?name=${visitor.foto_cedula}` }}
                       style={styles.fotoCedulaImage}
                       resizeMode="contain"
                     />
@@ -1885,7 +1897,7 @@ export default function VisitorsScreen() {
   return (
     <ThemedView style={styles.container}>
       <AppHeader onMenuPress={() => setIsMenuVisible(true)} title="Registro de Visitantes" />
-      
+
       {isLoading ? (
         <ThemedView style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#007AFF" />
@@ -1898,7 +1910,7 @@ export default function VisitorsScreen() {
           <ThemedText style={styles.noMarcaMessage}>
             Debes registrar una marca de ingreso antes de acceder al registro de visitantes.
           </ThemedText>
-          <TouchableOpacity 
+          <TouchableOpacity
             style={styles.goBackButton}
             onPress={() => navigation.goBack()}
           >
@@ -1907,7 +1919,7 @@ export default function VisitorsScreen() {
           </TouchableOpacity>
         </ThemedView>
       ) : (
-        <ScrollView 
+        <ScrollView
           style={styles.scrollView}
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={true}
@@ -1926,22 +1938,22 @@ export default function VisitorsScreen() {
             {/* Filtros */}
             <ThemedView style={styles.filtersContainer}>
               <ThemedView style={styles.filtersHeader}>
-                <TouchableOpacity 
+                <TouchableOpacity
                   style={styles.filterToggleButton}
                   onPress={() => setIsFiltersExpanded(!isFiltersExpanded)}
                 >
                   <ThemedText style={styles.filtersTitle}>
                     Filtros
                   </ThemedText>
-                  <Ionicons 
-                    name={isFiltersExpanded ? "chevron-up" : "chevron-down"} 
-                    size={20} 
-                    color="#007AFF" 
+                  <Ionicons
+                    name={isFiltersExpanded ? "chevron-up" : "chevron-down"}
+                    size={20}
+                    color="#007AFF"
                   />
                 </TouchableOpacity>
-                
+
                 {isFiltersExpanded && (
-                  <TouchableOpacity 
+                  <TouchableOpacity
                     style={styles.resetFiltersButton}
                     onPress={resetAllFilters}
                   >
@@ -2046,8 +2058,8 @@ export default function VisitorsScreen() {
       </Modal>
 
       <AppFooter />
-      <SlideMenu 
-        isVisible={isMenuVisible} 
+      <SlideMenu
+        isVisible={isMenuVisible}
         onClose={() => setIsMenuVisible(false)}
         onHomePress={() => navigation.navigate('Home')}
         currentRoute="Visitors"

@@ -4,10 +4,8 @@ import { prisma } from "../../../utils/prismaClient";
 
 export async function GET(req: NextRequest) {
     try {
-        const { valid, payload, message } = verifyAccessToken(req);
-        if (!valid) {
-            return NextResponse.json({ status: false, message: message }, { status: 401 });
-        }
+        const { valid, expired, payload, message } = verifyAccessToken(req);
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
         const articulos = await prisma.n_articulo_corpo_puesto.findMany();
         const articulos_return: { id: number, nombre: string }[] = [];
         for (const articulo of articulos) {

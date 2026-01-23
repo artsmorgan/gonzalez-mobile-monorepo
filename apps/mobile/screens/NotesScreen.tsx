@@ -52,7 +52,7 @@ interface CurrentMarca {
     id: number;
     nombre: string;
   };
-  corpo: {  
+  corpo: {
     id: number;
     nombre: string;
     ubicacion: {
@@ -128,23 +128,23 @@ export default function NotesScreen() {
   const { employee, refreshAccessToken, logout } = useAuth();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const navigation = useNavigation<NotesScreenNavigationProp>();
-  
+
   // Notes state
   const [notes, setNotes] = useState<Note[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [puesto, setPuesto] = useState<Puesto | null>(null);
   const [hasCurrentMarca, setHasCurrentMarca] = useState<boolean>(false);
-  
+
   // Expanded notes state
   const [expandedNotes, setExpandedNotes] = useState<Set<number>>(new Set());
 
   // Current marca state
   const [currentMarca, setCurrentMarca] = useState<CurrentMarca | null>(null);
-  
+
   // Editing state
   const [editingNote, setEditingNote] = useState<EditingNote | null>(null);
-  
+
   // Creating state
   const [isCreating, setIsCreating] = useState(false);
   const [newNote, setNewNote] = useState<EditingNote>({
@@ -156,11 +156,11 @@ export default function NotesScreen() {
     categoria_id: null,
     relevancia: 'Baja',
   });
-  
+
   // Form refs for text inputs
   const tituloRef = useRef('');
   const descriptionRef = useRef('');
-  
+
   // Filters state
   const [searchText, setSearchText] = useState('');
   const [selectedDivision, setSelectedDivision] = useState<string>('all');
@@ -170,16 +170,16 @@ export default function NotesScreen() {
   const [selectedRelevancia, setSelectedRelevancia] = useState<string>('all');
   const [empleadoFilter, setEmpleadoFilter] = useState('');
   const [isFiltersExpanded, setIsFiltersExpanded] = useState(false);
-  
+
   // Changes modal state
   const [isChangesModalVisible, setIsChangesModalVisible] = useState(false);
   const [changes, setChanges] = useState<Change[]>([]);
   const [isLoadingChanges, setIsLoadingChanges] = useState(false);
   const [selectedNoteId, setSelectedNoteId] = useState<number | null>(null);
-  
+
   // Divisions from employee roles
   const [divisions, setDivisions] = useState<string[]>([]);
-  
+
   // Categories state
   const [categories, setCategories] = useState<Category[]>([]);
   const [isLoadingCategories, setIsLoadingCategories] = useState(false);
@@ -206,7 +206,7 @@ export default function NotesScreen() {
       fetchPuestosCorpo();
     }, [])
   );
-  
+
   useEffect(() => {
     const handler = () => {
       Promise.all([
@@ -256,7 +256,8 @@ export default function NotesScreen() {
         if (!token) {
           const refreshed = await refreshAccessToken();
           if (!refreshed) {
-            throw new Error('No authentication token found');
+            if (logout) await logout();
+            throw new Error('Sesión expirada');
           }
           token = await AsyncStorage.getItem('access_token');
         }
@@ -270,7 +271,7 @@ export default function NotesScreen() {
           },
         });
 
-        if (response.status === 401 || response.status === 403) {
+        if (response.status === 401) {
           const refreshed = await refreshAccessToken();
           if (refreshed) {
             return fetchCategories();
@@ -279,6 +280,11 @@ export default function NotesScreen() {
             await logout();
             return;
           }
+        }
+
+        if (response.status === 403) {
+          if (logout) await logout();
+          throw new Error('Acceso denegado');
         }
 
         if (!response.ok) {
@@ -356,7 +362,8 @@ export default function NotesScreen() {
         if (!token) {
           const refreshed = await refreshAccessToken();
           if (!refreshed) {
-            throw new Error('No authentication token found');
+            if (logout) await logout();
+            throw new Error('Sesión expirada');
           }
           token = await AsyncStorage.getItem('access_token');
         }
@@ -370,7 +377,7 @@ export default function NotesScreen() {
           },
         });
 
-        if (response.status === 401 || response.status === 403) {
+        if (response.status === 401) {
           const refreshed = await refreshAccessToken();
           if (refreshed) {
             return fetchPuestosCorpo();
@@ -379,6 +386,11 @@ export default function NotesScreen() {
             await logout();
             return;
           }
+        }
+
+        if (response.status === 403) {
+          if (logout) await logout();
+          throw new Error('Acceso denegado');
         }
 
         if (!response.ok) {
@@ -459,7 +471,8 @@ export default function NotesScreen() {
         if (!token) {
           const refreshed = await refreshAccessToken();
           if (!refreshed) {
-            throw new Error('No authentication token found');
+            if (logout) await logout();
+            throw new Error('Sesión expirada');
           }
           token = await AsyncStorage.getItem('access_token');
         }
@@ -473,7 +486,7 @@ export default function NotesScreen() {
           },
         });
 
-        if (response.status === 401 || response.status === 403) {
+        if (response.status === 401) {
           const refreshed = await refreshAccessToken();
           if (refreshed) {
             return fetchNotes();
@@ -482,6 +495,11 @@ export default function NotesScreen() {
             await logout();
             return;
           }
+        }
+
+        if (response.status === 403) {
+          if (logout) await logout();
+          throw new Error('Acceso denegado');
         }
 
         if (!response.ok) {
@@ -547,7 +565,7 @@ export default function NotesScreen() {
       return;
     }
     const currentMarcaData = JSON.parse(currentMarca);
-    if (!currentMarcaData){
+    if (!currentMarcaData) {
       Alert.alert('Error', 'No se pudo cargar la marca');
       return;
     }
@@ -566,7 +584,7 @@ export default function NotesScreen() {
       Alert.alert('Error', 'Debe seleccionar una categoría');
       return;
     }
-    
+
     Alert.alert(
       'Confirmar creación',
       '¿Estás seguro de que deseas crear esta nota?',
@@ -579,7 +597,7 @@ export default function NotesScreen() {
               // Determine puestos array based on role
               const isSupervisor = currentMarcaData?.roleDivision?.role?.nombre === 'SUPERVISOR';
               let puestosArray: number[] = [];
-              
+
               if (isSupervisor) {
                 // For supervisor: use selected puestos (convert to string)
                 puestosArray = selectedPuestos.map(id => id);
@@ -645,7 +663,7 @@ export default function NotesScreen() {
                 // Crear nota en cache
                 const cacheStr = await AsyncStorage.getItem('notes_cache');
                 const cache = cacheStr ? JSON.parse(cacheStr) : { notas: [], puesto: null };
-                
+
                 const newNoteCache = {
                   id: 0,
                   titulo: tituloRef.current,
@@ -756,8 +774,8 @@ export default function NotesScreen() {
                 // Actualizar notes_cache
                 const cacheStr = await AsyncStorage.getItem('notes_cache');
                 const cache = cacheStr ? JSON.parse(cacheStr) : { notas: [], puesto: null };
-                
-                const noteIndex = cache.notas.findIndex((n: Note) => 
+
+                const noteIndex = cache.notas.findIndex((n: Note) =>
                   editingNote.id_local !== '' ? n.id_local === editingNote.id_local : n.id === noteId
                 );
 
@@ -807,7 +825,8 @@ export default function NotesScreen() {
               if (!token) {
                 const refreshed = await refreshAccessToken();
                 if (!refreshed) {
-                  throw new Error('No authentication token found');
+                  if (logout) await logout();
+                  throw new Error('Sesión expirada');
                 }
                 token = await AsyncStorage.getItem('access_token');
               }
@@ -821,7 +840,7 @@ export default function NotesScreen() {
                 },
               });
 
-              if (response.status === 401 || response.status === 403) {
+              if (response.status === 401) {
                 const refreshed = await refreshAccessToken();
                 if (refreshed) {
                   return deleteNote(noteId);
@@ -830,6 +849,11 @@ export default function NotesScreen() {
                   await logout();
                   return;
                 }
+              }
+
+              if (response.status === 403) {
+                if (logout) await logout();
+                throw new Error('Acceso denegado');
               }
 
               const data = await response.json();
@@ -849,19 +873,19 @@ export default function NotesScreen() {
       ]
     );
   };
-  
-const getActionIcon = (action: string) => {
-  switch (action.toLowerCase()) {
-    case 'add': return <Ionicons name="add-sharp" size={20} color='#000000' />;
-    case 'confirm': return <Ionicons name="checkmark-sharp" size={20} color='#FFFFFF' />;
-    case 'cancel': return <Ionicons name="close-sharp" size={20} color='#FFFFFF' />;
-    case 'edit': return <Ionicons name="pencil" size={20} color='#FFFFFF' />;
-    case 'delete': return <Ionicons name="trash" size={20} color='#FFFFFF' />;
-    case 'notes': return <Ionicons name="document" size={25} color='#000000' />;
-    case 'changes': return <Ionicons name="document" size={25} color='#000000' />;
-    default: return <Ionicons name="close-sharp" size={20} color='#FFFFFF' />;
-  }
-};
+
+  const getActionIcon = (action: string) => {
+    switch (action.toLowerCase()) {
+      case 'add': return <Ionicons name="add-sharp" size={20} color='#000000' />;
+      case 'confirm': return <Ionicons name="checkmark-sharp" size={20} color='#FFFFFF' />;
+      case 'cancel': return <Ionicons name="close-sharp" size={20} color='#FFFFFF' />;
+      case 'edit': return <Ionicons name="pencil" size={20} color='#FFFFFF' />;
+      case 'delete': return <Ionicons name="trash" size={20} color='#FFFFFF' />;
+      case 'notes': return <Ionicons name="document" size={25} color='#000000' />;
+      case 'changes': return <Ionicons name="document" size={25} color='#000000' />;
+      default: return <Ionicons name="close-sharp" size={20} color='#FFFFFF' />;
+    }
+  };
 
   const toggleExpanded = (noteId: number) => {
     const newExpanded = new Set(expandedNotes);
@@ -908,7 +932,7 @@ const getActionIcon = (action: string) => {
     if (currentMarca) {
       const currentMarcaData = JSON.parse(currentMarca);
       const isSupervisor = currentMarcaData?.roleDivision?.role?.nombre === 'SUPERVISOR';
-      
+
       if (isSupervisor) {
         // For supervisor: start with current puesto selected
         const currentPuestoId = currentMarcaData?.puesto?.id;
@@ -940,13 +964,13 @@ const getActionIcon = (action: string) => {
   const formatDate = (dateString: string) => {
     try {
       const date = new Date(dateString);
-  
+
       let hours = date.getUTCHours(); // <-- usa getUTCHours() para evitar ajustes de zona
       const minutes = date.getUTCMinutes();
-  
+
       const ampm = hours >= 12 ? "pm" : "am";
       hours = hours % 12 || 12; // convierte 0 → 12 y 13–23 → 1–11
-  
+
       const formatted = `${hours}:${minutes.toString().padStart(2, "0")} ${ampm}`;
 
       return `${date.getDate()} de ${monthNames[date.getMonth()]} de ${date.getFullYear()}, ${formatted}`;
@@ -963,40 +987,40 @@ const getActionIcon = (action: string) => {
 
 
   const filteredNotes = notes.filter(note => {
-    const matchesSearch = 
+    const matchesSearch =
       note.titulo.toLowerCase().includes(searchText.toLowerCase()) ||
       note.description.toLowerCase().includes(searchText.toLowerCase());
-    
-    const matchesDivision = 
-      selectedDivision === 'all' || 
+
+    const matchesDivision =
+      selectedDivision === 'all' ||
       selectedDivision === 'none' && !note.division ||
       note.division === selectedDivision;
-    
+
     const matchesDate = !selectedDate || (() => {
       const noteDate = new Date(note.updated_at);
       const filterDate = selectedDate;
-      
+
       // Compare only date part (ignore time)
       const noteDateOnly = new Date(noteDate.getFullYear(), noteDate.getMonth(), noteDate.getDate());
       const filterDateOnly = new Date(filterDate.getFullYear(), filterDate.getMonth(), filterDate.getDate());
-      
+
       return noteDateOnly.getTime() === filterDateOnly.getTime();
     })();
-    
-    const matchesCategory = 
-      selectedCategory === 'all' || 
+
+    const matchesCategory =
+      selectedCategory === 'all' ||
       (selectedCategory === 'none' && !note.categoria_id) ||
       note.categoria_id === selectedCategory;
-    
-    const matchesRelevancia = 
-      selectedRelevancia === 'all' || 
+
+    const matchesRelevancia =
+      selectedRelevancia === 'all' ||
       (selectedRelevancia === 'none' && !note.relevancia) ||
       note.relevancia === selectedRelevancia;
-    
-    const matchesEmpleado = 
-      !empleadoFilter || 
+
+    const matchesEmpleado =
+      !empleadoFilter ||
       note.empleado.toLowerCase().includes(empleadoFilter.toLowerCase());
-    
+
     return matchesSearch && matchesDivision && matchesDate && matchesCategory && matchesRelevancia && matchesEmpleado;
   });
 
@@ -1074,7 +1098,8 @@ const getActionIcon = (action: string) => {
       if (!token) {
         const refreshed = await refreshAccessToken();
         if (!refreshed) {
-          throw new Error('No authentication token found');
+          if (logout) await logout();
+          throw new Error('Sesión expirada');
         }
         token = await AsyncStorage.getItem('access_token');
       }
@@ -1088,7 +1113,7 @@ const getActionIcon = (action: string) => {
         },
       });
 
-      if (response.status === 401 || response.status === 403) {
+      if (response.status === 401) {
         const refreshed = await refreshAccessToken();
         if (refreshed) {
           return fetchChanges(noteId);
@@ -1097,6 +1122,11 @@ const getActionIcon = (action: string) => {
           await logout();
           return;
         }
+      }
+
+      if (response.status === 403) {
+        if (logout) await logout();
+        throw new Error('Acceso denegado');
       }
 
       if (!response.ok) {
@@ -1241,7 +1271,7 @@ const getActionIcon = (action: string) => {
             {isExpanded && (
               <ThemedView style={styles.noteBody}>
                 <ThemedText style={styles.noteDescription}>{note.description}</ThemedText>
-                
+
                 {/* Último cambio info */}
                 <ThemedView style={styles.lastChangeContainer}>
                   <ThemedText style={styles.lastChangeLabel}>Último cambio:</ThemedText>
@@ -1283,7 +1313,7 @@ const getActionIcon = (action: string) => {
       <ThemedView style={[styles.noteCard, styles.newNoteCard]}>
         <ThemedView style={styles.editContainer}>
           <ThemedText style={styles.newNoteTitle}>Nueva Nota</ThemedText>
-          
+
           <ThemedView style={styles.inputGroup}>
             <ThemedText style={styles.inputLabel}>Título:</ThemedText>
             <TextInput
@@ -1404,8 +1434,8 @@ const getActionIcon = (action: string) => {
           <ThemedText style={styles.loadingText}>Cargando novedades...</ThemedText>
         </ThemedView>
         <AppFooter />
-        <SlideMenu 
-          isVisible={isMenuVisible} 
+        <SlideMenu
+          isVisible={isMenuVisible}
           onClose={handleMenuClose}
           onHomePress={handleHomePress}
           currentRoute="Notes"
@@ -1425,7 +1455,7 @@ const getActionIcon = (action: string) => {
           <ThemedText style={styles.noMarcaMessage}>
             Debes registrar una marca de ingreso antes de acceder a la bitácora de novedades.
           </ThemedText>
-          <TouchableOpacity 
+          <TouchableOpacity
             style={styles.goBackButton}
             onPress={() => navigation.goBack()}
           >
@@ -1434,8 +1464,8 @@ const getActionIcon = (action: string) => {
           </TouchableOpacity>
         </ThemedView>
         <AppFooter />
-        <SlideMenu 
-          isVisible={isMenuVisible} 
+        <SlideMenu
+          isVisible={isMenuVisible}
           onClose={handleMenuClose}
           onHomePress={handleHomePress}
           currentRoute="Notes"
@@ -1447,7 +1477,7 @@ const getActionIcon = (action: string) => {
   return (
     <ThemedView style={styles.container}>
       <AppHeader onMenuPress={handleMenuPress} title="Bitácora de novedades" />
-      <ScrollView 
+      <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={true}
@@ -1476,22 +1506,22 @@ const getActionIcon = (action: string) => {
           <ThemedView style={styles.filtersMain}>
             {/* Filter Header */}
             <ThemedView style={styles.filterHeader}>
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={styles.filterToggleButton}
                 onPress={() => setIsFiltersExpanded(!isFiltersExpanded)}
               >
                 <ThemedText style={styles.filterToggleText}>
                   Filtros
                 </ThemedText>
-                <Ionicons 
-                  name={isFiltersExpanded ? "chevron-up" : "chevron-down"} 
-                  size={20} 
-                  color="#007AFF" 
+                <Ionicons
+                  name={isFiltersExpanded ? "chevron-up" : "chevron-down"}
+                  size={20}
+                  color="#007AFF"
                 />
               </TouchableOpacity>
-              
+
               {isFiltersExpanded && (
-                <TouchableOpacity 
+                <TouchableOpacity
                   style={styles.resetFiltersButton}
                   onPress={resetAllFilters}
                 >
@@ -1514,7 +1544,7 @@ const getActionIcon = (action: string) => {
                     placeholderTextColor="#999"
                   />
                 </ThemedView>
-                
+
                 {/* Date Filter */}
                 <ThemedView style={styles.filterGroupSearch}>
                   <ThemedText style={styles.filterLabel}>Fecha:</ThemedText>
@@ -1528,7 +1558,7 @@ const getActionIcon = (action: string) => {
                       </ThemedText>
                       <Ionicons name="calendar-outline" size={20} color="#007AFF" />
                     </TouchableOpacity>
-                    
+
                     {selectedDate && (
                       <TouchableOpacity
                         style={styles.clearDateButton}
@@ -1616,8 +1646,8 @@ const getActionIcon = (action: string) => {
             {filteredNotes.length === 0 ? (
               <ThemedView style={styles.emptyContainer}>
                 <ThemedText style={styles.emptyText}>
-                  {notes.length === 0 
-                    ? 'No hay notas creadas aún' 
+                  {notes.length === 0
+                    ? 'No hay notas creadas aún'
                     : 'No se encontraron notas con los filtros aplicados'}
                 </ThemedText>
               </ThemedView>
@@ -1628,8 +1658,8 @@ const getActionIcon = (action: string) => {
         </ThemedView>
       </ScrollView>
       <AppFooter />
-      <SlideMenu 
-        isVisible={isMenuVisible} 
+      <SlideMenu
+        isVisible={isMenuVisible}
         onClose={handleMenuClose}
         onHomePress={handleHomePress}
         currentRoute="Notes"
@@ -1668,7 +1698,7 @@ const getActionIcon = (action: string) => {
                     <ThemedView style={styles.changeHeader}>
                       <ThemedText style={styles.changeTitle}>{change.titulo}</ThemedText>
                     </ThemedView>
-                    
+
                     {/* Categoría */}
                     {change.categoria && (
                       <ThemedView style={styles.changeCategoryContainer}>
@@ -1677,7 +1707,7 @@ const getActionIcon = (action: string) => {
                         </ThemedView>
                       </ThemedView>
                     )}
-                    
+
                     {/* Relevancia */}
                     {change.relevancia && (
                       <ThemedView style={styles.changeCategoryContainer}>
@@ -1686,10 +1716,10 @@ const getActionIcon = (action: string) => {
                         </ThemedView>
                       </ThemedView>
                     )}
-                    
+
                     {/* Descripción */}
                     <ThemedText style={styles.changeDescription}>{change.description}</ThemedText>
-                    
+
                     {/* Información del empleado y fecha con fondo celeste */}
                     <ThemedView style={styles.changeInfoContainer}>
                       <ThemedText style={styles.changeEmployee}>Realizado por: {change.empleado}</ThemedText>
@@ -1816,7 +1846,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   filtersContainer: {
-    
+
   },
   filtersMain: {
     width: '100%',

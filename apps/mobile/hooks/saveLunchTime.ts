@@ -20,9 +20,19 @@ export default async function saveLunchTime({
             throw new Error('Server URL not configured');
         }
 
-        const token = await AsyncStorage.getItem('access_token');
+        let token = await AsyncStorage.getItem('access_token');
         if (!token) {
-            throw new Error('No authentication token found');
+            if (refreshAccessToken) {
+                const refreshed = await refreshAccessToken();
+                if (!refreshed) {
+                    if (logout) await logout();
+                    throw new Error('Sesión expirada');
+                }
+                token = await AsyncStorage.getItem('access_token');
+            } else {
+                if (logout) await logout();
+                throw new Error('Sesión expirada');
+            }
         }
 
         if (requestData.empleadoId == 0 && employeeId) {
@@ -38,7 +48,7 @@ export default async function saveLunchTime({
             body: JSON.stringify(requestData),
         });
 
-        if (response.status === 401 || response.status === 403) {
+        if (response.status === 401) {
             if (refreshAccessToken) {
                 const refreshed = await refreshAccessToken();
                 if (refreshed) {
@@ -48,6 +58,11 @@ export default async function saveLunchTime({
                     await logout();
                 }
             }
+        }
+
+        if (response.status === 403) {
+            if (logout) await logout();
+            throw new Error('Acceso denegado');
         }
 
         if (!response.ok) {

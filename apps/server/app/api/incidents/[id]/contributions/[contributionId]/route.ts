@@ -37,8 +37,8 @@ function normalizeBase64(b64: string): string {
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string; contributionId: string }> }) {
   try {
-    const { valid, payload, message } = verifyAccessToken(req);
-    if (!valid) return NextResponse.json({ status: false, message }, { status: 401 });
+    const { valid, expired, payload, message } = verifyAccessToken(req);
+    if (!valid) return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
 
     const { id, contributionId } = await context.params;
     const incidentId = parseInt(id, 10);
@@ -116,8 +116,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
 export async function DELETE(req: NextRequest, context: { params: Promise<{ id: string; contributionId: string }> }) {
   try {
-    const { valid, message } = verifyAccessToken(req);
-    if (!valid) return NextResponse.json({ status: false, message }, { status: 401 });
+    const { valid, expired, payload, message } = verifyAccessToken(req);
+    if (!valid) return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
 
     const { id, contributionId } = await context.params;
     const incidentId = parseInt(id, 10);

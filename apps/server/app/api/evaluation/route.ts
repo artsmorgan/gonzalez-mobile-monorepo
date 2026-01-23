@@ -9,13 +9,8 @@ import { sendNotificationByEmployee } from "../../../utils/sendNotification";
 
 export async function POST(req: NextRequest) {
     try {
-        const { valid, payload, message } = verifyAccessToken(req);
-        if (!valid) {
-            return NextResponse.json(
-                { status: false, message: message },
-                { status: 401 }
-            );
-        }
+        const { valid, expired, payload, message } = verifyAccessToken(req);
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         const { marca_id,
             nombre_colaborador,
@@ -97,7 +92,7 @@ export async function POST(req: NextRequest) {
 
         if (evaluacion_empleado) {
             const description = `Se ha registrado tu evaluación realizada por ${nombre_colaborador} el día ${fecha_evaluacion} para la sucursal ${corpo.nombre} de la empresa ${cliente.nombre}`;
-            await sendNotificationByEmployee(marca_id, "Evaluación realizada", description, [empleado_id]);
+            await sendNotificationByEmployee(corpo.id, [empleado_id], "Evaluación realizada", description, [evaluador_id]);
             const evaluacion_json = JSON.parse(evaluacion);
             for (const item of evaluacion_json) {
                 const questions = item.questions;

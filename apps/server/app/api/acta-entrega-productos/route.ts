@@ -5,6 +5,7 @@ import { toZonedTime } from 'date-fns-tz';
 import fs from 'fs';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
+import { sendNotificationByRole } from '../../../utils/sendNotification';
 
 export const runtime = 'nodejs';
 
@@ -36,8 +37,8 @@ function normalizeBase64(b64: string): string {
 
 export async function POST(req: NextRequest) {
   try {
-    const { valid, payload, message } = verifyAccessToken(req);
-    if (!valid) return NextResponse.json({ status: false, message }, { status: 401 });
+    const { valid, expired, payload, message } = verifyAccessToken(req);
+    if (!valid) return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
 
     const {
       marca_id,
@@ -117,6 +118,33 @@ export async function POST(req: NextRequest) {
       },
       include: { c_imagenes_acta_entrega_producto: true },
     });
+
+    if (newRecord) {
+      let empNombre = "Desconocido";
+      let sucursalNombre = "Desconocida";
+      let clienteNombre = "Desconocido";
+      let fechaRegistro = newRecord.fecha.toISOString().split("T")[0];
+      if (payload.id) {
+        const empleado = await prisma.c_empleado.findUnique({ where: { id: parseInt(String(payload.id), 10) } });
+        if (empleado) {
+          empNombre = empleado.nombre + " " + empleado.primer_apellido + " " + empleado.segundo_apellido;
+        }
+      }
+      if (newRecord.corpo_id) {
+        const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: newRecord.corpo_id } });
+        if (sucursal) {
+          sucursalNombre = sucursal.nombre + " (" + sucursal.nro_sucursal + ")";
+        }
+      }
+      if (newRecord.cliente_id) {
+        const cliente = await prisma.e_estructura_cliente.findUnique({ where: { id: newRecord.cliente_id } });
+        if (cliente) {
+          clienteNombre = cliente.nombre;
+        }
+      }
+      const descriptionNotificacion = "El empleado " + empNombre + " ha creado un registro de acta de entrega de productos para el cliente " + clienteNombre + " en la sucursal " + sucursalNombre + " el día " + fechaRegistro;
+      sendNotificationByRole(newRecord.corpo_id, [parseInt(String(payload.id), 10)], "Acta de entrega de productos creada", descriptionNotificacion, ["ADMINISTRATIVO", "SUPERVISOR"]);
+    }
 
     // Guardar imágenes (si vienen)
     let imagesParsed: ActaImageInput[] = [];

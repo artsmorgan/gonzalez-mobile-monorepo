@@ -307,8 +307,8 @@ export default function OpeningClosingPositionScreen() {
   const buildActividadesForDivision = (divId: number | null): ActividadItem[] => {
     const base =
       divId === 5 ? ACTIVIDADES_ASEO_LIMPIEZA
-      : divId === 4 ? ACTIVIDADES_SEGURIDAD
-      : [];
+        : divId === 4 ? ACTIVIDADES_SEGURIDAD
+          : [];
 
     return base.map((q) => ({
       pregunta: q,
@@ -385,7 +385,10 @@ export default function OpeningClosingPositionScreen() {
       let token = await AsyncStorage.getItem('access_token');
       if (!token) {
         const refreshed = await refreshAccessToken();
-        if (!refreshed) return;
+        if (!refreshed) {
+          if (logout) await logout();
+          throw new Error('Sesión expirada');
+        }
         token = await AsyncStorage.getItem('access_token');
       }
 
@@ -398,11 +401,16 @@ export default function OpeningClosingPositionScreen() {
         },
       });
 
-      if (response.status === 401 || response.status === 403) {
+      if (response.status === 401) {
         const refreshed = await refreshAccessToken();
         if (refreshed) return fetchMainStructure();
         await logout();
         return;
+      }
+
+      if (response.status === 403) {
+        if (logout) await logout();
+        throw new Error('Acceso denegado');
       }
 
       if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
@@ -442,7 +450,10 @@ export default function OpeningClosingPositionScreen() {
       let token = await AsyncStorage.getItem('access_token');
       if (!token) {
         const refreshed = await refreshAccessToken();
-        if (!refreshed) return;
+        if (!refreshed) {
+          if (logout) await logout();
+          throw new Error('Sesión expirada');
+        }
         token = await AsyncStorage.getItem('access_token');
       }
 
@@ -455,11 +466,16 @@ export default function OpeningClosingPositionScreen() {
         },
       });
 
-      if (response.status === 401 || response.status === 403) {
+      if (response.status === 401) {
         const refreshed = await refreshAccessToken();
         if (refreshed) return loadArticulosCatalog();
         await logout();
         return;
+      }
+
+      if (response.status === 403) {
+        if (logout) await logout();
+        throw new Error('Acceso denegado');
       }
 
       if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
@@ -861,19 +877,19 @@ export default function OpeningClosingPositionScreen() {
     }
 
     try {
-      const photo = await cameraRef.current.takePictureAsync({ 
+      const photo = await cameraRef.current.takePictureAsync({
         base64: true,
         quality: 0.7,
         skipProcessing: false
       });
-      
+
       if (!photo || !photo.base64) {
         Alert.alert('Error', 'No se pudo capturar la foto. Por favor intente nuevamente.');
         setIsCameraVisible(false);
         return;
       }
       setIsCameraVisible(false);
-      
+
       setTimeout(() => {
         setImagenesLocal((prev) => [
           ...prev,
@@ -1001,12 +1017,12 @@ export default function OpeningClosingPositionScreen() {
               const imagenesStr =
                 imagenesLocal.length > 0
                   ? JSON.stringify(
-                      imagenesLocal.map((img) => ({
-                        file_base64: img.base64,
-                        extension: img.extension,
-                        original_name: img.original_name,
-                      }))
-                    )
+                    imagenesLocal.map((img) => ({
+                      file_base64: img.base64,
+                      extension: img.extension,
+                      original_name: img.original_name,
+                    }))
+                  )
                   : null;
 
               const requestData: any = {
@@ -1154,12 +1170,12 @@ export default function OpeningClosingPositionScreen() {
               const imagenesStr =
                 imagenesLocal.length > 0
                   ? JSON.stringify(
-                      imagenesLocal.map((img) => ({
-                        file_base64: img.base64,
-                        extension: img.extension,
-                        original_name: img.original_name,
-                      }))
-                    )
+                    imagenesLocal.map((img) => ({
+                      file_base64: img.base64,
+                      extension: img.extension,
+                      original_name: img.original_name,
+                    }))
+                  )
                   : null;
 
               const requestData: any = {
@@ -1408,10 +1424,10 @@ export default function OpeningClosingPositionScreen() {
               <ThemedView style={styles.listItemHeader}>
                 <ThemedView style={styles.listItemContent}>
                   <ThemedText style={styles.listItemTitle}>
-                   {record.puesto_nombre || 'N/A'}
+                    {record.puesto_nombre || 'N/A'}
                   </ThemedText>
                   <ThemedText style={styles.listItemSubtitle}>
-                  Tipo: { record.tipo || 'N/A'}
+                    Tipo: {record.tipo || 'N/A'}
                   </ThemedText>
                   <ThemedText style={styles.listItemSubtitle}>
                     División: {record.division_nombre || 'N/A'}
@@ -1896,7 +1912,7 @@ export default function OpeningClosingPositionScreen() {
                       <ThemedView style={styles.pickerWrapper}>
                         <Picker
                           selectedValue={selectedDivisionId ?? 0}
-                          onValueChange={() => {}}
+                          onValueChange={() => { }}
                           enabled={false}
                           style={styles.picker}
                         >
@@ -2333,7 +2349,7 @@ export default function OpeningClosingPositionScreen() {
                 <Ionicons name="close" size={24} color="#333" />
               </TouchableOpacity>
             </ThemedView>
-            
+
             <View style={styles.modalSignatureContainer}>
               <SignatureScreen
                 ref={signatureRef}
@@ -2345,13 +2361,13 @@ export default function OpeningClosingPositionScreen() {
                 key={signatureKey}
               />
             </View>
-            
+
             <ThemedView style={styles.modalActions}>
               <TouchableOpacity style={styles.modalClearButton} onPress={clearSignatureInModal}>
                 <Ionicons name="trash" size={20} color="#000000" />
                 <ThemedText style={styles.modalClearButtonText}>Limpiar</ThemedText>
               </TouchableOpacity>
-              
+
               <TouchableOpacity style={styles.modalAcceptButton} onPress={acceptSignature}>
                 <Ionicons name="checkmark" size={20} color="#000000" />
                 <ThemedText style={styles.modalAcceptButtonText}>Aceptar</ThemedText>

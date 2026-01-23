@@ -11,14 +11,9 @@ import { getUserMarca } from "../../../utils/getUserMarca";
 
 export async function GET(req: NextRequest) {
     try {
-        const { valid, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = verifyAccessToken(req);
 
-        if (!valid) {
-            return NextResponse.json(
-                { status: false, message: message },
-                { status: 401 }
-            );
-        }
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
         const searchParams = req.nextUrl.searchParams;
         const marca = searchParams.get("m");
 
@@ -107,14 +102,9 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
     try {
-        const { valid, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = verifyAccessToken(req);
 
-        if (!valid) {
-            return NextResponse.json(
-                { status: false, message },
-                { status: 401 }
-            );
-        }
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         const {
             marca_id,
@@ -174,7 +164,7 @@ export async function POST(req: NextRequest) {
                 const hora_entrada = entrada.split("T")[1].split(".")[0];
                 const tipo_visitante = es_funcionario ? "Funcionario" : "Visitante";
                 const desc = `El empleado ${empleado.nombre} ${empleado.primer_apellido} ha registrado la visita de ${nombre} con la cedula ${cedula} el día ${fecha_entrada} a las ${hora_entrada}. Tipo de visitante: ${tipo_visitante}. Razón de la visita: ${razon_visita}`;
-                await sendNotificationByRole(marca_id, "Visita registrada", desc, ["ADMINISTRATIVO", "SUPERVISOR"]);    
+                await sendNotificationByRole(marcaDia.corpo_id, [marcaDia.plaza_id], "Visita registrada", desc, ["ADMINISTRATIVO", "SUPERVISOR"]);
             }
 
             if (activos.length > 0) {

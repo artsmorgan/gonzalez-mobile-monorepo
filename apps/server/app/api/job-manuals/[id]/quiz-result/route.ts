@@ -9,9 +9,9 @@ export async function PUT(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { valid, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = verifyAccessToken(req);
     if (!valid) {
-      return NextResponse.json({ status: false, message }, { status: 401 });
+      return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
     }
 
     const resolvedParams = await context.params;
@@ -84,12 +84,20 @@ export async function PUT(
       },
     });
 
+    const marca = await prisma.c_marca_dia.findUnique({ where: { id: marca_id } });
+    if (!marca) {
+      return NextResponse.json(
+        { status: false, message: "Marca no encontrada" },
+        { status: 200 }
+      );
+    }
+
     // Notificar al usuario que respondió el quiz
     const notifTitle = "Resultado del quiz";
     const notifDesc = approved
       ? `Tu quiz del manual ${manual.title} fue aprobado.`
       : `Tu quiz del manual ${manual.title} fue reprobado. Podrás intentarlo nuevamente cuando corresponda.`;
-    await sendNotificationByEmployee(marca_id, notifTitle, notifDesc, [empleado_id]);
+    await sendNotificationByEmployee(marca.corpo_id, [empleado_id], notifTitle, notifDesc, [empleado_id]);
 
     return NextResponse.json(
       { status: true, message: "Resultado del quiz actualizado" },

@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessToken } from "../../../utils/verifyToken";
 import { prisma } from "../../../utils/prismaClient";
 import { getUserMarca } from "../../../utils/getUserMarca";
+import { sendNotificationByRole } from "../../../utils/sendNotification";
 
 function parseDateOnly(value: any): Date | null {
   if (!value) return null;
@@ -14,10 +15,8 @@ function parseDateOnly(value: any): Date | null {
 
 export async function GET(req: NextRequest) {
   try {
-    const { valid, message } = verifyAccessToken(req);
-    if (!valid) {
-      return NextResponse.json({ status: false, message }, { status: 401 });
-    }
+    const { valid, expired, payload, message } = verifyAccessToken(req);
+    if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
     const marcaIdStr = req.nextUrl.searchParams.get("m");
     if (!marcaIdStr) {
@@ -72,10 +71,8 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const { valid, message } = verifyAccessToken(req);
-    if (!valid) {
-      return NextResponse.json({ status: false, message }, { status: 401 });
-    }
+    const { valid, expired, payload, message } = verifyAccessToken(req);
+    if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
     const body = await req.json();
     const {
@@ -125,6 +122,33 @@ export async function POST(req: NextRequest) {
         firma_responsable: String(firma_responsable),
       },
     });
+
+    if (created) {
+      const payload = (req.body as any)?.payload;
+      let empleadoNombre = "Desconocido";
+      if (payload.id) {
+        const empleado = await prisma.c_empleado.findUnique({ where: { id: payload.id } });
+        if (empleado) {
+          empleadoNombre = empleado.nombre + " " + empleado.primer_apellido + " " + empleado.segundo_apellido;
+        }
+      }
+      let sucursalNombre = "Desconocida";
+      let clienteNombre = "Desconocido";
+      if (marcaDia.cliente_id) {
+        const cliente = await prisma.e_estructura_cliente.findUnique({ where: { id: marcaDia.cliente_id } });
+        if (cliente) {
+          clienteNombre = cliente.nombre;
+        }
+      }
+      if (marcaDia.corpo_id) {
+        const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: marcaDia.corpo_id } });
+        if (sucursal) {
+          sucursalNombre = sucursal.nombre;
+        }
+      }
+      const descriptionNotificacion = "El empleado " + empleadoNombre + " ha registrado un documento entregado para la sucursal del cliente " + clienteNombre + " con la fecha " + fechaDate.toISOString().split("T")[0];
+      sendNotificationByRole(marcaDia.corpo_id, [parseInt(String(payload?.id ?? "0"), 10)], "Documento entregado registrado", descriptionNotificacion, ["ADMINISTRATIVO", "SUPERVISOR"]);
+    }
 
     return NextResponse.json(
       { status: true, message: "Documento entregado creado correctamente", id: created.id },

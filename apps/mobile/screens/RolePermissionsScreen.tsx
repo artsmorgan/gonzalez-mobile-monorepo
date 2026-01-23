@@ -43,74 +43,79 @@ export default function RolePermissionsScreen() {
     if (!searchText.trim()) {
       return modules;
     }
-    return modules.filter(module => 
+    return modules.filter(module =>
       module.module_name.toLowerCase().includes(searchText.toLowerCase())
     );
   }, [modules, searchText]);
 
-  
+
   const updateAction = (action: string, isActive: boolean, roleName: string, moduleName: string) => {
     // ALERT de confirmacion
     let action_text = isActive ? 'desactivar' : 'activar';
     Alert.alert('Confirmacion', `¿Estás seguro de que deseas ${action_text} el permiso "${action}" para el rol "${roleName}" en "${moduleName}"?`, [
-        { text: 'Cancelar', style: 'cancel' },
-        { text: 'Confirmar', style: 'destructive', onPress: async () => {
-            const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-            if (!apiUrl) {
-                Alert.alert('Error', 'URL del servidor no configurada');
-                return;
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Confirmar', style: 'destructive', onPress: async () => {
+          const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+          if (!apiUrl) {
+            Alert.alert('Error', 'URL del servidor no configurada');
+            return;
+          }
+          let token = await AsyncStorage.getItem('access_token');
+          if (!token) {
+            const refreshed = await refreshAccessToken();
+            if (!refreshed) {
+              if (logout) await logout();
+              throw new Error('Sesión expirada');
             }
-            let token = await AsyncStorage.getItem('access_token');
-            
-            // Try to refresh token if we don't have one
-            if (!token) {
-                const refreshed = await refreshAccessToken();
-                if (!refreshed) {
-                    Alert.alert('Error', 'No hay token de autenticación válido');
-                    return;
-                }
-                token = await AsyncStorage.getItem('access_token');
-            }
+            token = await AsyncStorage.getItem('access_token');
+          }
 
-            const response = await fetch(`${apiUrl}/api/reglas/roles`, {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${token}`,
-                    'Content-Type': 'application/json',
-                    'ngrok-skip-browser-warning': '69420'
-                },
-                body: JSON.stringify({
-                    action: action,
-                    isActive: isActive,
-                    roleName: moduleName,
-                    moduleName: roleName
-                })
-            });
+          const response = await fetch(`${apiUrl}/api/reglas/roles`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+              'ngrok-skip-browser-warning': '69420'
+            },
+            body: JSON.stringify({
+              action: action,
+              isActive: isActive,
+              roleName: moduleName,
+              moduleName: roleName
+            })
+          });
 
-            if (response.status === 401 || response.status === 403) {
-                // Token might be expired, try to refresh
-                const refreshed = await refreshAccessToken();
-                if (refreshed) {
-                    // Retry the request with the new token
-                    return updateAction(action, isActive, roleName, moduleName);
-                } else {
-                    // If refresh fails, logout the user
-                    await logout();
-                    Alert.alert('12', 'Sesión expirada. Por favor inicie sesión nuevamente.');
-                    return;
-                }
-            }
-
-            if (!response.ok) {
-                Alert.alert('Error', `Error del servidor: ${response.status}`);
+          if (response.status === 401) {
+            // Token might be expired, try to refresh
+            const refreshed = await refreshAccessToken();
+            if (refreshed) {
+              // Retry the request with the new token
+              return updateAction(action, isActive, roleName, moduleName);
             } else {
-                const responseData = await response.json();
-                Alert.alert('Éxito', responseData.message);
-                fetchRolePermissions();
+              // If refresh fails, logout the user
+              await logout();
+              Alert.alert('12', 'Sesión expirada. Por favor inicie sesión nuevamente.');
+              return;
             }
-        }}
+          }
+
+          if (response.status === 403) {
+            if (logout) await logout();
+            throw new Error('Acceso denegado');
+          }
+
+          if (!response.ok) {
+            Alert.alert('Error', `Error del servidor: ${response.status}`);
+          } else {
+            const responseData = await response.json();
+            Alert.alert('Éxito', responseData.message);
+            fetchRolePermissions();
+          }
+        }
+      }
     ]);
-};
+  };
 
   useEffect(() => {
     if (roleId) {
@@ -129,11 +134,11 @@ export default function RolePermissionsScreen() {
       }
 
       let token = await AsyncStorage.getItem('access_token');
-      
       if (!token) {
         const refreshed = await refreshAccessToken();
         if (!refreshed) {
-          throw new Error('No valid authentication token');
+          if (logout) await logout();
+          throw new Error('Sesión expirada');
         }
         token = await AsyncStorage.getItem('access_token');
       }
@@ -147,7 +152,7 @@ export default function RolePermissionsScreen() {
         },
       });
 
-      if (response.status === 401 || response.status === 403) { 
+      if (response.status === 401) {
         const refreshed = await refreshAccessToken();
         if (refreshed) {
           return fetchRolePermissions();
@@ -158,12 +163,17 @@ export default function RolePermissionsScreen() {
         }
       }
 
+      if (response.status === 403) {
+        if (logout) await logout();
+        throw new Error('Acceso denegado');
+      }
+
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
 
       const data = await response.json();
-      
+
       if (Array.isArray(data)) {
         setModules(data);
       } else if (data.data && Array.isArray(data.data)) {
@@ -180,8 +190,8 @@ export default function RolePermissionsScreen() {
     }
   };
 
-  
-const getActionIcon = (action: string, isActive: boolean) => {
+
+  const getActionIcon = (action: string, isActive: boolean) => {
     switch (action.toLowerCase()) {
       case 'list': return <Ionicons name="list" size={16} color={isActive ? '#FFFFFF' : '#666666'} />;
       case 'create': return <Ionicons name="add" size={16} color={isActive ? '#FFFFFF' : '#666666'} />;
@@ -217,10 +227,10 @@ const getActionIcon = (action: string, isActive: boolean) => {
   };
 
   const handleModulePress = (module: Module) => {
-    const actionsText = module.actions.length > 0 
-      ? `Acciones: ${module.actions.map(action => `${action.nombre} (${action.validate ? 'Activo' : 'Inactivo'})`).join(', ')}` 
+    const actionsText = module.actions.length > 0
+      ? `Acciones: ${module.actions.map(action => `${action.nombre} (${action.validate ? 'Activo' : 'Inactivo'})`).join(', ')}`
       : 'No hay acciones disponibles';
-    
+
     Alert.alert(
       'Detalles del Módulo',
       `Módulo: ${module.module_name}\n${actionsText}`,
@@ -230,7 +240,7 @@ const getActionIcon = (action: string, isActive: boolean) => {
 
   const renderModuleItem = ({ item }: { item: Module }) => (
     <ThemedView style={styles.moduleCard}>
-      <TouchableOpacity 
+      <TouchableOpacity
         style={styles.moduleContent}
         onPress={() => handleModulePress(item)}
       >
@@ -242,21 +252,21 @@ const getActionIcon = (action: string, isActive: boolean) => {
             </Text>
           </View>
         </View>
-         
+
         {item.actions && item.actions.length > 0 && (
           <View style={styles.actionsContainer}>
             <ThemedText style={styles.actionsLabel}>Acciones disponibles:</ThemedText>
             <View style={styles.actionsList}>
               {item.actions.map((action, index) => (
                 <TouchableOpacity
-                    key={`${item.module_name}-${action.nombre}-${index}`}
-                    style={[
-                        styles.actionButton,
-                        action.validate && item.actions.find(a => a.nombre === action.nombre)?.validate && styles.activeActionButton
-                    ]}
-                        onPress={() => updateAction(action.nombre, item.actions.find(a => a.nombre === action.nombre)?.validate || false, item.module_name, roleName)}
-                    >
-                    {getActionIcon(action.nombre, action.validate)}
+                  key={`${item.module_name}-${action.nombre}-${index}`}
+                  style={[
+                    styles.actionButton,
+                    action.validate && item.actions.find(a => a.nombre === action.nombre)?.validate && styles.activeActionButton
+                  ]}
+                  onPress={() => updateAction(action.nombre, item.actions.find(a => a.nombre === action.nombre)?.validate || false, item.module_name, roleName)}
+                >
+                  {getActionIcon(action.nombre, action.validate)}
                 </TouchableOpacity>
               ))}
             </View>
@@ -275,8 +285,8 @@ const getActionIcon = (action: string, isActive: boolean) => {
           <ThemedText style={styles.loadingText}>Cargando permisos...</ThemedText>
         </ThemedView>
         <AppFooter />
-        <SlideMenu 
-          isVisible={isMenuVisible} 
+        <SlideMenu
+          isVisible={isMenuVisible}
           onClose={handleMenuClose}
           onHomePress={handleHomePress}
           currentRoute="role-permissions"
@@ -299,8 +309,8 @@ const getActionIcon = (action: string, isActive: boolean) => {
           </TouchableOpacity>
         </ThemedView>
         <AppFooter />
-        <SlideMenu 
-          isVisible={isMenuVisible} 
+        <SlideMenu
+          isVisible={isMenuVisible}
           onClose={handleMenuClose}
           onHomePress={handleHomePress}
           currentRoute="role-permissions"
@@ -312,7 +322,7 @@ const getActionIcon = (action: string, isActive: boolean) => {
   return (
     <ThemedView style={styles.container}>
       <AppHeader onMenuPress={handleMenuPress} />
-      
+
       <ThemedView style={styles.headerContainer}>
         <TouchableOpacity style={styles.backButtonHeader} onPress={() => router.back()}>
           <ThemedText style={styles.backButtonHeaderText}>← Volver</ThemedText>
@@ -345,8 +355,8 @@ const getActionIcon = (action: string, isActive: boolean) => {
         {filteredModules.length === 0 && !loading && (
           <ThemedView style={styles.emptyContainer}>
             <ThemedText style={styles.emptyText}>
-              {searchText.trim() 
-                ? `No se encontraron módulos que coincidan con "${searchText}"` 
+              {searchText.trim()
+                ? `No se encontraron módulos que coincidan con "${searchText}"`
                 : 'No se encontraron módulos'
               }
             </ThemedText>
@@ -356,8 +366,8 @@ const getActionIcon = (action: string, isActive: boolean) => {
 
       <AppFooter />
 
-      <SlideMenu 
-        isVisible={isMenuVisible} 
+      <SlideMenu
+        isVisible={isMenuVisible}
         onClose={handleMenuClose}
         onHomePress={handleHomePress}
         currentRoute="role-permissions"

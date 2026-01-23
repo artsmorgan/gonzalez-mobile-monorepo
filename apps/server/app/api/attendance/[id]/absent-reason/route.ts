@@ -6,14 +6,9 @@ import { sendNotificationByRole } from "../../../../../utils/sendNotification";
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
-        const { valid, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = verifyAccessToken(req);
 
-        if (!valid) {
-            return NextResponse.json(
-                { status: false, message: message },
-                { status: 401 }
-            );
-        }
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         const resolvedParams = await context.params;
         const id = parseInt(resolvedParams.id);
@@ -41,7 +36,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         else {
             const title = "Motivo de ausencia confirmado";
             const description = `El empleado ${empleado.nombre} ${empleado.primer_apellido} ha confirmado el motivo de ausencia: ${reason}`;
-            await sendNotificationByRole(marcaDia.id, title, description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+            await sendNotificationByRole(marcaDia.corpo_id, [marcaDia.plaza_id], title, description, ["ADMINISTRATIVO", "SUPERVISOR"]);
         }
 
         return NextResponse.json({ status: true, message: "Motivo de ausencia confirmado" }, { status: 200 });

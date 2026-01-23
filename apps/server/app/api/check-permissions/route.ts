@@ -6,13 +6,8 @@ import { prisma } from "../../../utils/prismaClient";
 
 export async function GET(request: NextRequest) {
     try {
-        const { valid, payload, message } = verifyAccessToken(request);
-        if (!valid) {
-            return NextResponse.json(
-                { status: false, message: message },
-                { status: 401 }
-            );
-        }
+        const { valid, expired, payload, message } = verifyAccessToken(request);
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         const { searchParams } = new URL(request.url);
         const id = searchParams.get("id");

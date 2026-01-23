@@ -39,7 +39,7 @@ export default function RolesScreen() {
     if (!searchText.trim()) {
       return roles;
     }
-    return roles.filter(role => 
+    return roles.filter(role =>
       role.name.toLowerCase().includes(searchText.toLowerCase())
     );
   }, [roles, searchText]);
@@ -55,7 +55,7 @@ export default function RolesScreen() {
       }
 
       let token = await AsyncStorage.getItem('access_token');
-      
+
       if (!token) {
         const refreshed = await refreshAccessToken();
         if (!refreshed) {
@@ -73,7 +73,7 @@ export default function RolesScreen() {
         },
       });
 
-      if (response.status === 401 || response.status === 403) {
+      if (response.status === 401) {
         const refreshed = await refreshAccessToken();
         if (refreshed) {
           return fetchRoles();
@@ -84,12 +84,17 @@ export default function RolesScreen() {
         }
       }
 
+      if (response.status === 403) {
+        if (logout) await logout();
+        throw new Error('Acceso denegado');
+      }
+
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
 
       const data = await response.json();
-      
+
       if (Array.isArray(data)) {
         setRoles(data);
       } else if (data.data && Array.isArray(data.data)) {
@@ -139,7 +144,7 @@ export default function RolesScreen() {
 
   const renderRoleItem = ({ item }: { item: Role }) => (
     <ThemedView style={styles.roleCard}>
-      <TouchableOpacity 
+      <TouchableOpacity
         style={styles.roleContent}
         onPress={() => handleRolePress(item)}
       >
@@ -165,8 +170,8 @@ export default function RolesScreen() {
           </View>
         )}
       </TouchableOpacity>
-      
-      <TouchableOpacity 
+
+      <TouchableOpacity
         style={styles.permissionsButton}
         onPress={() => handlePermissionsPress(item)}
       >
@@ -184,8 +189,8 @@ export default function RolesScreen() {
           <ThemedText style={styles.loadingText}>Cargando roles...</ThemedText>
         </ThemedView>
         <AppFooter />
-        <SlideMenu 
-          isVisible={isMenuVisible} 
+        <SlideMenu
+          isVisible={isMenuVisible}
           onClose={handleMenuClose}
           onHomePress={handleHomePress}
           currentRoute="roles"
@@ -205,8 +210,8 @@ export default function RolesScreen() {
           </TouchableOpacity>
         </ThemedView>
         <AppFooter />
-        <SlideMenu 
-          isVisible={isMenuVisible} 
+        <SlideMenu
+          isVisible={isMenuVisible}
           onClose={handleMenuClose}
           onHomePress={handleHomePress}
           currentRoute="roles"
@@ -242,8 +247,8 @@ export default function RolesScreen() {
         {filteredRoles.length === 0 && !loading && (
           <ThemedView style={styles.emptyContainer}>
             <ThemedText style={styles.emptyText}>
-              {searchText.trim() 
-                ? `No se encontraron roles que coincidan con "${searchText}"` 
+              {searchText.trim()
+                ? `No se encontraron roles que coincidan con "${searchText}"`
                 : 'No se encontraron roles'
               }
             </ThemedText>
@@ -253,8 +258,8 @@ export default function RolesScreen() {
 
       <AppFooter />
 
-      <SlideMenu 
-        isVisible={isMenuVisible} 
+      <SlideMenu
+        isVisible={isMenuVisible}
         onClose={handleMenuClose}
         onHomePress={handleHomePress}
         currentRoute="roles"

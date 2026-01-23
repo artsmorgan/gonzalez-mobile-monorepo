@@ -616,10 +616,10 @@ export default function BitacoraVehiculosDetenidosScreen() {
       const marcaStr = String(map.marca ?? '');
       const oficialStr = String(
         map.oficial_transito ??
-          map.nombre_oficial_transito ??
-          map.oficial_seguridad ??
-          map.nombre_oficial_corporacion ??
-          ''
+        map.nombre_oficial_transito ??
+        map.oficial_seguridad ??
+        map.nombre_oficial_corporacion ??
+        ''
       );
 
       const haystack = `${b.tipo ?? ''} ${placa} ${marcaStr} ${oficialStr}`.toLowerCase();
@@ -798,7 +798,15 @@ export default function BitacoraVehiculosDetenidosScreen() {
 
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) return;
-      const token = await AsyncStorage.getItem('access_token');
+      let token = await AsyncStorage.getItem('access_token');
+      if (!token) {
+        const refreshed = await refreshAccessToken();
+        if (!refreshed) {
+          if (logout) await logout();
+          throw new Error('Sesión expirada');
+        }
+        token = await AsyncStorage.getItem('access_token');
+      }
       const res = await fetch(`${apiUrl}/api/main-structure`, {
         method: 'GET',
         headers: {
@@ -807,6 +815,12 @@ export default function BitacoraVehiculosDetenidosScreen() {
           'ngrok-skip-browser-warning': '69420',
         },
       });
+      if (res.status === 401 || res.status === 403) {
+        const refreshed = await refreshAccessToken();
+        if (refreshed) return fetchMainStructure();
+        await logout();
+        return;
+      }
       const data = await res.json().catch(() => ({}));
       const incoming = (data as any)?.structure ?? (data as any)?.data ?? [];
       if (Array.isArray(incoming)) {

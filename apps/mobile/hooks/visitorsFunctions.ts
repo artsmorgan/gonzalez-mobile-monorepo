@@ -34,11 +34,17 @@ export async function createVisitor({
 
     let token = await AsyncStorage.getItem('access_token');
     if (!token) {
-        const refreshed = refreshAccessToken ? await refreshAccessToken() : false;
-        if (!refreshed) {
-            throw new Error('No authentication token found');
+        if (refreshAccessToken) {
+            const refreshed = await refreshAccessToken();
+            if (!refreshed) {
+                if (logout) await logout();
+                throw new Error('Sesión expirada');
+            }
+            token = await AsyncStorage.getItem('access_token');
+        } else {
+            if (logout) await logout();
+            throw new Error('Sesión expirada');
         }
-        token = await AsyncStorage.getItem('access_token');
     }
 
     const response = await fetch(`${apiUrl}/api/visitors`, {
@@ -51,7 +57,7 @@ export async function createVisitor({
         body: JSON.stringify(requestData)
     });
 
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
         const refreshed = refreshAccessToken ? await refreshAccessToken() : false;
         if (refreshed) {
             return createVisitor({
@@ -66,6 +72,11 @@ export async function createVisitor({
             }
             throw new Error('Session expired');
         }
+    }
+
+    if (response.status === 403) {
+        if (logout) await logout();
+        throw new Error('Acceso denegado');
     }
 
     if (!response.ok) {
@@ -89,11 +100,17 @@ export async function updateVisitor({
 
     let token = await AsyncStorage.getItem('access_token');
     if (!token) {
-        const refreshed = refreshAccessToken ? await refreshAccessToken() : false;
-        if (!refreshed) {
-            throw new Error('No authentication token found');
+        if (refreshAccessToken) {
+            const refreshed = await refreshAccessToken();
+            if (!refreshed) {
+                if (logout) await logout();
+                throw new Error('Sesión expirada');
+            }
+            token = await AsyncStorage.getItem('access_token');
+        } else {
+            if (logout) await logout();
+            throw new Error('Sesión expirada');
         }
-        token = await AsyncStorage.getItem('access_token');
     }
 
     const response = await fetch(`${apiUrl}/api/visitors/${visitorId}`, {
@@ -106,7 +123,7 @@ export async function updateVisitor({
         body: JSON.stringify(requestData)
     });
 
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
         const refreshed = refreshAccessToken ? await refreshAccessToken() : false;
         if (refreshed) {
             return updateVisitor({
@@ -121,6 +138,11 @@ export async function updateVisitor({
             }
             throw new Error('Session expired');
         }
+    }
+
+    if (response.status === 403) {
+        if (logout) await logout();
+        throw new Error('Acceso denegado');
     }
 
     if (!response.ok) {
@@ -143,11 +165,17 @@ export async function deleteVisitor({
 
     let token = await AsyncStorage.getItem('access_token');
     if (!token) {
-        const refreshed = refreshAccessToken ? await refreshAccessToken() : false;
-        if (!refreshed) {
-            throw new Error('No authentication token found');
+        if (refreshAccessToken) {
+            const refreshed = await refreshAccessToken();
+            if (!refreshed) {
+                if (logout) await logout();
+                throw new Error('Sesión expirada');
+            }
+            token = await AsyncStorage.getItem('access_token');
+        } else {
+            if (logout) await logout();
+            throw new Error('Sesión expirada');
         }
-        token = await AsyncStorage.getItem('access_token');
     }
 
     const response = await fetch(`${apiUrl}/api/visitors/${visitorId}`, {
@@ -159,7 +187,7 @@ export async function deleteVisitor({
         }
     });
 
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
         const refreshed = refreshAccessToken ? await refreshAccessToken() : false;
         if (refreshed) {
             return deleteVisitor({
@@ -173,6 +201,11 @@ export async function deleteVisitor({
             }
             throw new Error('Session expired');
         }
+    }
+
+    if (response.status === 403) {
+        if (logout) await logout();
+        throw new Error('Acceso denegado');
     }
 
     if (!response.ok) {

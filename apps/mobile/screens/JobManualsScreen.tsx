@@ -276,7 +276,10 @@ export default function JobManualsScreen() {
       let token = await AsyncStorage.getItem('access_token');
       if (!token) {
         const refreshed = await refreshAccessToken();
-        if (!refreshed) throw new Error('No authentication token found');
+        if (!refreshed) {
+          if (logout) await logout();
+          throw new Error('Sesión expirada');
+        }
         token = await AsyncStorage.getItem('access_token');
       }
 
@@ -289,11 +292,16 @@ export default function JobManualsScreen() {
         },
       });
 
-      if (response.status === 401 || response.status === 403) {
+      if (response.status === 401) {
         const refreshed = await refreshAccessToken();
         if (refreshed) return fetchMainStructure();
         await logout();
         return;
+      }
+
+      if (response.status === 403) {
+        if (logout) await logout();
+        throw new Error('Acceso denegado');
       }
 
       if (!response.ok) {
@@ -536,7 +544,7 @@ export default function JobManualsScreen() {
         Alert.alert('Error', 'No se encontró el ID de la marca');
         return;
       }
-      
+
       if (!manualId || !empleadoId) return;
 
       // Evitar cambios si ya hay una acción pending offline (para no "cambiar la respuesta" mientras se sincroniza)
@@ -870,7 +878,7 @@ export default function JobManualsScreen() {
       const asset = result.assets[0];
       const response = await fetch(asset.uri);
       const blob = await response.blob();
-      
+
       // Convertir blob a base64 de forma segura
       const base64 = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
@@ -888,7 +896,7 @@ export default function JobManualsScreen() {
         };
         reader.readAsDataURL(blob);
       });
-      
+
 
       let extension = '';
       if (asset.name && asset.name.includes('.')) {
@@ -1080,9 +1088,19 @@ export default function JobManualsScreen() {
         throw new Error('Server URL not configured');
       }
 
-      const token = await AsyncStorage.getItem('access_token');
+      let token = await AsyncStorage.getItem('access_token');
       if (!token) {
-        throw new Error('No authentication token found');
+        const refreshed = await refreshAccessToken();
+        if (!refreshed) {
+          if (logout) await logout();
+          throw new Error('Sesión expirada');
+        }
+        token = await AsyncStorage.getItem('access_token');
+      }
+
+      if (!token) {
+        Alert.alert('Error', 'No se pudo obtener el token de sesión');
+        return;
       }
 
       const decodedToken: any = jwtDecode(token);
@@ -1095,14 +1113,14 @@ export default function JobManualsScreen() {
 
       const hash = btoa(
         sessionId +
-          ':' +
-          employee.id +
-          ':' +
-          location.latitude +
-          ':' +
-          location.longitude +
-          ':' +
-          horaAccion
+        ':' +
+        employee.id +
+        ':' +
+        location.latitude +
+        ':' +
+        location.longitude +
+        ':' +
+        horaAccion
       );
 
       const decodedHash = atob(hash);
@@ -1175,9 +1193,14 @@ export default function JobManualsScreen() {
             throw new Error('Server URL not configured');
           }
 
-          const token = await AsyncStorage.getItem('access_token');
+          let token = await AsyncStorage.getItem('access_token');
           if (!token) {
-            throw new Error('No authentication token found');
+            const refreshed = await refreshAccessToken();
+            if (!refreshed) {
+              if (logout) await logout();
+              throw new Error('Sesión expirada');
+            }
+            token = await AsyncStorage.getItem('access_token');
           }
 
           const response = await fetch(`${apiUrl}/api/empleados/${empleadoId}`, {
@@ -1290,15 +1313,15 @@ export default function JobManualsScreen() {
           setVideoFiles([]);
           setFirmaResponsable(null);
           setQuizQuestions([]);
-          
+
           // Cerrar formulario
           setIsCreating(false);
-          
+
           // Recargar lista de manuales
           if (marcaId) {
             await fetchManuals(marcaId);
           }
-          
+
           Alert.alert('Éxito', result.message || 'Manual creado correctamente');
         } else {
           Alert.alert('Error', result.message || 'No se pudo crear el manual');
@@ -1347,7 +1370,7 @@ export default function JobManualsScreen() {
         await AsyncStorage.setItem('job_manuals_cache', JSON.stringify(cache));
 
         Alert.alert('Modo Offline', 'Manual registrado localmente. Se sincronizará cuando haya conexión.');
-        
+
         // Limpiar formulario
         tituloRef.current = '';
         descripcionRef.current = '';
@@ -1358,10 +1381,10 @@ export default function JobManualsScreen() {
         setVideoFiles([]);
         setFirmaResponsable(null);
         setQuizQuestions([]);
-        
+
         // Cerrar formulario
         setIsCreating(false);
-        
+
         // Recargar lista de manuales (desde cache)
         if (marcaId) {
           await fetchManuals(marcaId);
@@ -2274,8 +2297,8 @@ export default function JobManualsScreen() {
         onRequestClose={() => {
           setIsViewerVisible(false);
           setSelectedManual(null);
-            setViewSignature(null);
-            setIsSigningManual(false);
+          setViewSignature(null);
+          setIsSigningManual(false);
         }}
       >
         <View style={styles.modalOverlay}>
@@ -2403,7 +2426,7 @@ export default function JobManualsScreen() {
               </View>
             </View>
 
-            <ScrollView 
+            <ScrollView
               style={styles.modalContent}
               nestedScrollEnabled={true}
               showsVerticalScrollIndicator={true}
@@ -2433,9 +2456,9 @@ export default function JobManualsScreen() {
                         const statusLabel =
                           approvedPending ? 'Pendiente de sincronización'
                             : approved === true ? 'Aprobado'
-                            : approved === false ? 'Reprobado'
-                            : hasQuizConfigured ? 'Pendiente de revisión'
-                            : '—';
+                              : approved === false ? 'Reprobado'
+                                : hasQuizConfigured ? 'Pendiente de revisión'
+                                  : '—';
 
                         return (
                           <ThemedView key={firma.id} style={styles.quizReviewCard}>
@@ -2975,18 +2998,18 @@ export default function JobManualsScreen() {
                             // Construir payload de respuestas (incluye respuestas correctas + del usuario)
                             const quizAnswearStr = hasQuiz
                               ? JSON.stringify(
-                                  quizCfg.map((q) => {
-                                    const userV = quizUserAnswers[q.id];
-                                    return {
-                                      question_id: q.id,
-                                      type: q.type,
-                                      correct_answer: q.answer ?? null,
-                                      correct_answers: q.answers ?? null,
-                                      user_answer: typeof userV === 'string' ? userV : null,
-                                      user_answers: Array.isArray(userV) ? userV : null,
-                                    };
-                                  })
-                                )
+                                quizCfg.map((q) => {
+                                  const userV = quizUserAnswers[q.id];
+                                  return {
+                                    question_id: q.id,
+                                    type: q.type,
+                                    correct_answer: q.answer ?? null,
+                                    correct_answers: q.answers ?? null,
+                                    user_answer: typeof userV === 'string' ? userV : null,
+                                    user_answers: Array.isArray(userV) ? userV : null,
+                                  };
+                                })
+                              )
                               : null;
 
                             const isConnected = await getConnectionStatus();
@@ -4053,7 +4076,7 @@ function ManualVideoPlayer({ sourceUrl }: { sourceUrl: string }) {
   const maxContainerWidth = Dimensions.get('window').width - 64; // Ancho máximo del contenedor (pantalla - padding del modal)
 
   return (
-    <View 
+    <View
       style={{
         marginBottom: 8,
         overflow: 'hidden',

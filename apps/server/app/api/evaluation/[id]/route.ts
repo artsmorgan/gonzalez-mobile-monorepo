@@ -11,10 +11,10 @@ export async function DELETE(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { valid, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = verifyAccessToken(req);
     if (!valid) {
       return NextResponse.json(
-        { status: false, message },
+        { status: false, expired: expired, message: message },
         { status: 401 }
       );
     }

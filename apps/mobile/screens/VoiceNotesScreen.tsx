@@ -1,9 +1,9 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { 
-  StyleSheet, 
-  ScrollView, 
-  TouchableOpacity, 
-  Alert, 
+import {
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  Alert,
   ActivityIndicator,
   TextInput,
   View,
@@ -86,14 +86,14 @@ interface VoiceNote {
 }
 
 // Componente para reproducir audio de notas de voz con cleanup
-function VoiceNoteAudioPlayer({ 
-  audioUri, 
-  isPlaying, 
+function VoiceNoteAudioPlayer({
+  audioUri,
+  isPlaying,
   onStatusUpdate,
   shouldReset
-}: { 
-  audioUri: string; 
-  isPlaying: boolean; 
+}: {
+  audioUri: string;
+  isPlaying: boolean;
   onStatusUpdate?: (duration: number, position: number, playing: boolean) => void;
   shouldReset?: boolean;
 }) {
@@ -109,7 +109,7 @@ function VoiceNoteAudioPlayer({
   // Controlar play/pause basado en isPlaying
   useEffect(() => {
     if (!audioPlayer) return;
-    
+
     try {
       if (isPlaying && !playerStatus.playing) {
         audioPlayer.play();
@@ -148,7 +148,7 @@ function VoiceNoteAudioPlayer({
     const duration = playerStatus.duration !== undefined ? playerStatus.duration : 0;
     const position = playerStatus.currentTime !== undefined ? playerStatus.currentTime : 0;
     const playing = playerStatus.playing || false;
-    
+
     onStatusUpdateRef.current(duration, position, playing);
   }, [playerStatus.duration, playerStatus.currentTime, playerStatus.playing]);
 
@@ -184,26 +184,26 @@ export default function VoiceNotesScreen() {
   const { employee, refreshAccessToken, logout } = useAuth();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const navigation = useNavigation<VoiceNotesScreenNavigationProp>();
-  
+
   // Data states
   const [voiceNotes, setVoiceNotes] = useState<VoiceNote[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [hasMarca, setHasMarca] = useState<boolean>(false);
   const [marcaId, setMarcaId] = useState<number | null>(null);
   const [corpoId, setCorpoId] = useState<number | null>(null);
-  
+
   // Form states
   const [isCreating, setIsCreating] = useState(false);
   const [setPuesto, setSetPuesto] = useState<boolean>(false);
   const [puestoActualNombre, setPuestoActualNombre] = useState<string>('');
   const [firmaResponsable, setFirmaResponsable] = useState<FirmaData | null>(null);
   const [isGeneratingFirma, setIsGeneratingFirma] = useState(false);
-  
+
   // Form refs
   const tituloRef = useRef('');
   const descripcionRef = useRef('');
   const [formKey, setFormKey] = useState(0); // Key para forzar re-render de inputs
-  
+
   // Audio recording states
   const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(audioRecorder, 1000); // Actualizar cada segundo
@@ -211,24 +211,24 @@ export default function VoiceNotesScreen() {
   const recordedAudioPlayer = useAudioPlayer(recordedAudioUri || undefined);
   const recordedPlayerStatus = useAudioPlayerStatus(recordedAudioPlayer);
   const [recordedAudioBase64, setRecordedAudioBase64] = useState<string | null>(null);
-  
+
   // Location state
   const [location, setLocation] = useState<Location.LocationObject | null>(null);
-  
+
   // QR Scanner
   const { scanQR, QRScannerComponent } = useQRScanner();
-  
+
   // Helper function to get unique identifier for voice notes
   // Use id_local for offline notes (id: 0), otherwise use id
   const getUniqueKey = (voiceNote: VoiceNote): string => {
-    return voiceNote.id_local && voiceNote.id_local !== '' 
-      ? `local-${voiceNote.id_local}` 
+    return voiceNote.id_local && voiceNote.id_local !== ''
+      ? `local-${voiceNote.id_local}`
       : `server-${voiceNote.id}`;
   };
-  
+
   // Expanded voice notes state
   const [expandedVoiceNotes, setExpandedVoiceNotes] = useState<Set<string>>(new Set());
-  
+
   // Audio players for list items - using Maps to store audio URIs
   const [audioUris, setAudioUris] = useState<Map<string, string>>(new Map());
   const [audioDurations, setAudioDurations] = useState<Map<string, number>>(new Map());
@@ -273,7 +273,7 @@ export default function VoiceNotesScreen() {
   const fetchData = async () => {
     try {
       setIsLoading(true);
-      
+
       const marcaStr = await AsyncStorage.getItem('current_marca');
       if (!marcaStr) {
         setHasMarca(false);
@@ -300,7 +300,8 @@ export default function VoiceNotesScreen() {
         if (!token) {
           const refreshed = await refreshAccessToken();
           if (!refreshed) {
-            throw new Error('No authentication token found');
+            if (logout) await logout();
+            throw new Error('Sesión expirada');
           }
           token = await AsyncStorage.getItem('access_token');
         }
@@ -315,7 +316,7 @@ export default function VoiceNotesScreen() {
           },
         });
 
-        if (response.status === 401 || response.status === 403) {
+        if (response.status === 401) {
           const refreshed = await refreshAccessToken();
           if (refreshed) {
             return fetchData();
@@ -323,6 +324,11 @@ export default function VoiceNotesScreen() {
             await logout();
             return;
           }
+        }
+
+        if (response.status === 403) {
+          if (logout) await logout();
+          throw new Error('Acceso denegado');
         }
 
         if (!response.ok) {
@@ -453,7 +459,16 @@ export default function VoiceNotesScreen() {
         return;
       }
 
-      const token = await AsyncStorage.getItem('access_token');
+      let token = await AsyncStorage.getItem('access_token');
+      if (!token) {
+        const refreshed = await refreshAccessToken();
+        if (!refreshed) {
+          if (logout) await logout();
+          throw new Error('Sesión expirada');
+        }
+        token = await AsyncStorage.getItem('access_token');
+      }
+
       if (!token) {
         Alert.alert('Error', 'No se pudo obtener el token de sesión');
         return;
@@ -522,7 +537,7 @@ export default function VoiceNotesScreen() {
   const handleScanQR = async () => {
     try {
       const qrData = await scanQR();
-      
+
       if (!qrData) {
         return;
       }
@@ -530,7 +545,7 @@ export default function VoiceNotesScreen() {
       // Validate QR structure
       const decodedData = atob(qrData);
       const parts = decodedData.split(':');
-      
+
       if (parts.length !== 5) {
         Alert.alert('Error', 'El QR escaneado no tiene el formato correcto');
         return;
@@ -541,8 +556,16 @@ export default function VoiceNotesScreen() {
       // Fetch employee details
       let empleadoDetalle = undefined;
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-      const token = await AsyncStorage.getItem('access_token');
-      
+      let token = await AsyncStorage.getItem('access_token');
+      if (!token) {
+        const refreshed = await refreshAccessToken();
+        if (!refreshed) {
+          if (logout) await logout();
+          throw new Error('Sesión expirada');
+        }
+        token = await AsyncStorage.getItem('access_token');
+      }
+
       if (apiUrl && token) {
         try {
           const empleadoResponse = await fetch(`${apiUrl}/api/empleados/${empleadoId}`, {
@@ -585,7 +608,7 @@ export default function VoiceNotesScreen() {
     try {
       // Solicitar permisos de grabación
       const { granted, canAskAgain } = await requestRecordingPermissionsAsync();
-      
+
       if (!granted) {
         if (canAskAgain) {
           Alert.alert('Permisos requeridos', 'Se necesitan permisos de audio para grabar');
@@ -594,10 +617,10 @@ export default function VoiceNotesScreen() {
         }
         return;
       }
-      
+
       // Preparar el grabador
       await audioRecorder.prepareToRecordAsync();
-      
+
       // Iniciar grabación (no es async)
       audioRecorder.record();
     } catch (error) {
@@ -611,13 +634,13 @@ export default function VoiceNotesScreen() {
       if (!recorderState.isRecording) return;
 
       await audioRecorder.stop();
-      
+
       const uri = audioRecorder.uri;
       if (!uri) {
         Alert.alert('Error', 'No se pudo obtener el URI del audio');
         return;
       }
-      
+
       setRecordedAudioUri(uri);
 
       // Convert to base64
@@ -657,7 +680,7 @@ export default function VoiceNotesScreen() {
   const resetRecordedAudio = async () => {
     try {
       if (!recordedAudioPlayer) return;
-      
+
       recordedAudioPlayer.seekTo(0);
       recordedAudioPlayer.pause();
     } catch (error) {
@@ -1010,7 +1033,7 @@ export default function VoiceNotesScreen() {
   const playVoiceNoteAudio = (voiceNote: VoiceNote) => {
     const key = getUniqueKey(voiceNote);
     const audioUri = audioUris.get(key);
-    
+
     if (!audioUri) {
       Alert.alert('Error', 'El audio no está cargado. Por favor, expanda el componente de Audio primero.');
       return;
@@ -1085,33 +1108,33 @@ export default function VoiceNotesScreen() {
 
   // Filtered voice notes
   const filteredVoiceNotes = voiceNotes.filter(voiceNote => {
-    const matchesEmpresa = !filterEmpresa || 
+    const matchesEmpresa = !filterEmpresa ||
       (voiceNote.empresa?.nombre && voiceNote.empresa.nombre.toLowerCase().includes(filterEmpresa.toLowerCase()));
-    
-    const matchesCliente = !filterCliente || 
+
+    const matchesCliente = !filterCliente ||
       (voiceNote.cliente?.nombre && voiceNote.cliente.nombre.toLowerCase().includes(filterCliente.toLowerCase()));
-    
-    const matchesSucursal = !filterSucursal || 
+
+    const matchesSucursal = !filterSucursal ||
       (voiceNote.corpo?.nombre && voiceNote.corpo.nombre.toLowerCase().includes(filterSucursal.toLowerCase()));
-    
-    const matchesPuesto = !filterPuesto || 
+
+    const matchesPuesto = !filterPuesto ||
       (voiceNote.puesto?.nombre && voiceNote.puesto.nombre.toLowerCase().includes(filterPuesto.toLowerCase()));
-    
-    const matchesTitulo = !filterTitulo || 
+
+    const matchesTitulo = !filterTitulo ||
       (voiceNote.titulo && voiceNote.titulo.toLowerCase().includes(filterTitulo.toLowerCase()));
-    
-    const matchesDescripcion = !filterDescripcion || 
+
+    const matchesDescripcion = !filterDescripcion ||
       (voiceNote.descripcion && voiceNote.descripcion.toLowerCase().includes(filterDescripcion.toLowerCase()));
-    
-    const matchesTranscripcion = !filterTranscripcion || 
+
+    const matchesTranscripcion = !filterTranscripcion ||
       (voiceNote.transcripcion && voiceNote.transcripcion.toLowerCase().includes(filterTranscripcion.toLowerCase()));
-    
-    const matchesCreatedAt = !filterCreatedAt || 
+
+    const matchesCreatedAt = !filterCreatedAt ||
       (voiceNote.created_at && voiceNote.created_at.split('T')[0] === filterCreatedAt);
-    
-    return matchesEmpresa && matchesCliente && matchesSucursal && 
-           matchesPuesto && matchesTitulo && matchesDescripcion && 
-           matchesTranscripcion && matchesCreatedAt;
+
+    return matchesEmpresa && matchesCliente && matchesSucursal &&
+      matchesPuesto && matchesTitulo && matchesDescripcion &&
+      matchesTranscripcion && matchesCreatedAt;
   });
 
   const getActionIcon = (action: string) => {
@@ -1168,8 +1191,8 @@ export default function VoiceNotesScreen() {
           <ThemedText style={styles.loadingText}>Cargando...</ThemedText>
         </ThemedView>
         <AppFooter />
-        <SlideMenu 
-          isVisible={isMenuVisible} 
+        <SlideMenu
+          isVisible={isMenuVisible}
           onClose={handleMenuClose}
           onHomePress={handleHomePress}
           currentRoute="VoiceNotes"
@@ -1186,8 +1209,8 @@ export default function VoiceNotesScreen() {
           <ThemedText style={styles.emptyText}>No hay una marca registrada</ThemedText>
         </ThemedView>
         <AppFooter />
-        <SlideMenu 
-          isVisible={isMenuVisible} 
+        <SlideMenu
+          isVisible={isMenuVisible}
           onClose={handleMenuClose}
           onHomePress={handleHomePress}
           currentRoute="VoiceNotes"
@@ -1199,7 +1222,7 @@ export default function VoiceNotesScreen() {
   return (
     <ThemedView style={styles.container}>
       <AppHeader onMenuPress={handleMenuPress} title="Notas de Voz" />
-      
+
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollViewContent}>
         {/* Title Section */}
         <ThemedView style={styles.titleContainer}>
@@ -1215,22 +1238,22 @@ export default function VoiceNotesScreen() {
         {!isCreating && (
           <ThemedView style={styles.filtersContainer}>
             <ThemedView style={styles.filtersHeader}>
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={styles.filterToggleButton}
                 onPress={() => setIsFiltersExpanded(!isFiltersExpanded)}
               >
                 <ThemedText style={styles.filtersTitle}>
                   Filtros
                 </ThemedText>
-                <Ionicons 
-                  name={isFiltersExpanded ? "chevron-up" : "chevron-down"} 
-                  size={20} 
-                  color="#007AFF" 
+                <Ionicons
+                  name={isFiltersExpanded ? "chevron-up" : "chevron-down"}
+                  size={20}
+                  color="#007AFF"
                 />
               </TouchableOpacity>
-              
+
               {isFiltersExpanded && (
-                <TouchableOpacity 
+                <TouchableOpacity
                   style={styles.resetFiltersButton}
                   onPress={resetAllFilters}
                 >
@@ -1409,7 +1432,7 @@ export default function VoiceNotesScreen() {
               </ThemedView>
               {puestoActualNombre ? (
                 <ThemedView style={styles.puestoActualContainer}>
-                    <ThemedText style={styles.puestoActualText}>{puestoActualNombre}</ThemedText>
+                  <ThemedText style={styles.puestoActualText}>{puestoActualNombre}</ThemedText>
                 </ThemedView>
               ) : null}
             </ThemedView>
@@ -1417,7 +1440,7 @@ export default function VoiceNotesScreen() {
             {/* Audio Recording */}
             <ThemedView style={styles.formGroup}>
               <ThemedText style={styles.label}>Grabación de Audio *</ThemedText>
-              
+
               {!recordedAudioUri && (
                 <ThemedView style={styles.recordingControls}>
                   {!recorderState.isRecording ? (
@@ -1482,7 +1505,7 @@ export default function VoiceNotesScreen() {
             {/* Firma del responsable */}
             <ThemedView style={styles.formGroup}>
               <ThemedText style={styles.label}>Firma del Responsable *</ThemedText>
-              
+
               {!firmaResponsable ? (
                 <ThemedView style={styles.signatureButtons}>
                   <TouchableOpacity
@@ -1557,12 +1580,12 @@ export default function VoiceNotesScreen() {
               // Create unique key for each voice note (handles offline notes with id: 0)
               const voiceNoteKey = voiceNote.id !== 0 ? `voicenote-${voiceNote.id}` : (voiceNote.id_local || `voicenote-${index}`);
               const key = getUniqueKey(voiceNote);
-              
+
               const isExpanded = expandedVoiceNotes.has(key);
               const isPlaying = playingStates.get(key) || false;
               const duration = audioDurations.get(key) || 0;
               const position = audioPositions.get(key) || 0;
-              
+
               // Decode firma
               let firmaData = null;
               try {
@@ -1584,14 +1607,14 @@ export default function VoiceNotesScreen() {
                   <ThemedView style={styles.voiceNoteHeader}>
                     <ThemedText style={styles.voiceNoteTitle}>{voiceNote.titulo}</ThemedText>
                     {voiceNote.created_by === (employee?.id || 0) && (
-                        <TouchableOpacity
+                      <TouchableOpacity
                         style={styles.deleteButton}
                         onPress={() => deleteVoiceNote(voiceNote)}
-                        >
+                      >
                         <ThemedText style={styles.deleteButtonText}>
-                            {getActionIcon('clear')}
+                          {getActionIcon('clear')}
                         </ThemedText>
-                        </TouchableOpacity>
+                      </TouchableOpacity>
                     )}
                   </ThemedView>
 
@@ -1745,8 +1768,8 @@ export default function VoiceNotesScreen() {
       </ScrollView>
 
       <AppFooter />
-      <SlideMenu 
-        isVisible={isMenuVisible} 
+      <SlideMenu
+        isVisible={isMenuVisible}
         onClose={handleMenuClose}
         onHomePress={handleHomePress}
         currentRoute="VoiceNotes"
