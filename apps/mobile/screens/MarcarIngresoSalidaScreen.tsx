@@ -267,7 +267,7 @@ export default function MarcarIngresoSalidaScreen() {
 
         result = data.status;
 
-        console.log("Result", result);
+        console.log("Result", data.marca);
 
         if (result) {
           marca_send = data.marca;
@@ -285,6 +285,11 @@ export default function MarcarIngresoSalidaScreen() {
             if (marca_cache.id !== marca_send.id) {
               await AsyncStorage.removeItem('current_marca');
             }
+          }
+
+          // Si la marca tiene hora_salida_digitada null, guardarla en current_marca
+          if (marca_send.hora_salida_digitada === null) {
+            await AsyncStorage.setItem('current_marca', JSON.stringify(marca_send));
           }
         }
       }
@@ -1960,6 +1965,16 @@ export default function MarcarIngresoSalidaScreen() {
                 <ThemedView style={styles.infoRow}>
                   <ThemedText style={styles.infoLabel}>Cliente:</ThemedText>
                   <ThemedText style={styles.infoValue}>{attendanceData.marca.cliente.nombre}</ThemedText>
+                </ThemedView>
+
+                <ThemedView style={styles.infoRow}>
+                  <ThemedText style={styles.infoLabel}>División:</ThemedText>
+                  <ThemedText style={styles.infoValue}>{attendanceData.marca.roleDivision.division.nombre}</ThemedText>
+                </ThemedView>
+
+                <ThemedView style={styles.infoRow}>
+                  <ThemedText style={styles.infoLabel}>Rol:</ThemedText>
+                  <ThemedText style={styles.infoValue}>{attendanceData.marca.roleDivision.role.nombre}</ThemedText>
                 </ThemedView>
 
                 <ThemedView style={styles.infoRow}>

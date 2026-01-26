@@ -24,51 +24,51 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
             tipo_turno = "N";
         }
 
-        let info_laboral = { empresa_id: 9, contrato_id: 314, corpo_id: 967, puesto_id: 1728, plaza_id: 6801, horario_id: 1808 }
+        let info_laboral = { empresa_id: 9, cliente_id: 53, contrato_id: 314, corpo_id: 967, puesto_id: 1728, plaza_id: 6801, horario_id: 1808 }
         switch (id) {
             case 11915:
-                info_laboral = { empresa_id: 10, contrato_id: 47, corpo_id: 341, puesto_id: 702, plaza_id: 1804, horario_id: 2734 }
+                info_laboral = { empresa_id: 10, cliente_id: 53, contrato_id: 47, corpo_id: 341, puesto_id: 702, plaza_id: 1804, horario_id: 2734 }
                 break;
             case 11916:
-                info_laboral = { empresa_id: 10, contrato_id: 47, corpo_id: 341, puesto_id: 702, plaza_id: 3077, horario_id: 2734 }
+                info_laboral = { empresa_id: 10, cliente_id: 53, contrato_id: 47, corpo_id: 341, puesto_id: 702, plaza_id: 3077, horario_id: 2734 }
                 break;
             case 11917:
-                info_laboral = { empresa_id: 10, contrato_id: 47, corpo_id: 341, puesto_id: 719, plaza_id: 1805, horario_id: 2734 }
+                info_laboral = { empresa_id: 10, cliente_id: 53, contrato_id: 47, corpo_id: 341, puesto_id: 719, plaza_id: 1805, horario_id: 2734 }
                 break;
             case 11918:
-                info_laboral = { empresa_id: 10, contrato_id: 47, corpo_id: 341, puesto_id: 719, plaza_id: 3066, horario_id: 2734 }
+                info_laboral = { empresa_id: 10, cliente_id: 53, contrato_id: 47, corpo_id: 341, puesto_id: 719, plaza_id: 3066, horario_id: 2734 }
                 break;
             case 11919:
-                info_laboral = { empresa_id: 10, contrato_id: 47, corpo_id: 341, puesto_id: 719, plaza_id: 3577, horario_id: 2734 }
+                info_laboral = { empresa_id: 10, cliente_id: 53, contrato_id: 47, corpo_id: 341, puesto_id: 719, plaza_id: 3577, horario_id: 2734 }
                 break;
             case 11920:
-                info_laboral = { empresa_id: 10, contrato_id: 46, corpo_id: 340, puesto_id: 260, plaza_id: 4461, horario_id: 2734 }
+                info_laboral = { empresa_id: 10, cliente_id: 53, contrato_id: 46, corpo_id: 340, puesto_id: 260, plaza_id: 4461, horario_id: 2734 }
                 break;
             case 11921:
-                info_laboral = { empresa_id: 10, contrato_id: 46, corpo_id: 340, puesto_id: 260, plaza_id: 2714, horario_id: 2734 }
+                info_laboral = { empresa_id: 10, cliente_id: 53, contrato_id: 46, corpo_id: 340, puesto_id: 260, plaza_id: 2714, horario_id: 2734 }
                 break;
             case 11922:
-                info_laboral = { empresa_id: 10, contrato_id: 46, corpo_id: 340, puesto_id: 260, plaza_id: 2542, horario_id: 2734 }
+                info_laboral = { empresa_id: 10, cliente_id: 53, contrato_id: 46, corpo_id: 340, puesto_id: 260, plaza_id: 2542, horario_id: 2734 }
                 break;
             case 11923:
-                info_laboral = { empresa_id: 10, contrato_id: 46, corpo_id: 340, puesto_id: 260, plaza_id: 2540, horario_id: 2734 }
+                info_laboral = { empresa_id: 10, cliente_id: 53, contrato_id: 46, corpo_id: 340, puesto_id: 260, plaza_id: 2540, horario_id: 2734 }
                 break;
             case 11924:
-                info_laboral = { empresa_id: 10, contrato_id: 46, corpo_id: 340, puesto_id: 260, plaza_id: 2530, horario_id: 2734 }
+                info_laboral = { empresa_id: 10, cliente_id: 53, contrato_id: 46, corpo_id: 340, puesto_id: 260, plaza_id: 2530, horario_id: 2734 }
                 break;
         }
 
         const newMarca = await prisma.c_marca_dia.create({
             data: {
                 fecha: toZonedTime(new Date(), "America/Costa_Rica"),
-                cliente_id: 176,
-                contrato_id: 314,
-                corpo_id: 967,
+                cliente_id: info_laboral.cliente_id,
+                contrato_id: info_laboral.contrato_id,
+                corpo_id: info_laboral.corpo_id,
                 empleadoFijo_id: id,
-                empresa_id: 9,
-                horario_id: 1808,
-                plaza_id: 6801,
-                puesto_id: 1728,
+                empresa_id: info_laboral.empresa_id,
+                horario_id: info_laboral.horario_id,
+                plaza_id: info_laboral.plaza_id,
+                puesto_id: info_laboral.puesto_id,
                 hora_fin: new Date("1970-01-01 " + hora_salida),
                 hora_fin_plan: new Date("1970-01-01 " + hora_salida),
                 hora_inicio: new Date("1970-01-01 " + hora_entrada),
