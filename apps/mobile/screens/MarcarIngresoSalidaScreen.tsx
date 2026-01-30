@@ -513,26 +513,19 @@ export default function MarcarIngresoSalidaScreen() {
             await Promise.all([
               getLunchTimeConfig(attendanceData.marca.id),
               getActivities(attendanceData.marca.id),
-              getVehicles(attendanceData.marca.id),
-              getVisitors(attendanceData.marca.id),
               getNotes(attendanceData.marca.id),
               getCategories(),
               getTipoActivo(),
-              getEvaluations(attendanceData.marca.corpo.id),
               getEmployeesCorpo(attendanceData.marca.corpo.id),
-              getIncidents(attendanceData.marca.id),
               getIncidentsClassifications(),
               getDocumentTypes(),
               getExecutives(),
-              getSurveys(attendanceData.marca.id),
               getPuestosCorpo(attendanceData.marca.corpo.id),
-              getTrainings(attendanceData.marca.id),
+              getCorporateVehicles(attendanceData.marca.corpo.id),
               getVoiceNotes(attendanceData.marca.id),
               getArticulos(),
               getJobManuals(attendanceData.marca.id),
               getLlaves(attendanceData.marca.id),
-              getBitacoraVehiculoDetenido(attendanceData.marca.id),
-              getDocumentosEntregados(attendanceData.marca.id),
               getMainStructure()
             ]);
           }
@@ -1348,11 +1341,11 @@ export default function MarcarIngresoSalidaScreen() {
     }
   }
 
-  const getVehicles = async (marcaId: number) => {
+  const getCorporateVehicles = async (corpoId: number) => {
     // Eliminar actions
-    await AsyncStorage.removeItem('vehicles_actions');
-    await AsyncStorage.removeItem('vehicles_cache');
+    await AsyncStorage.removeItem('corporate_vehicles_corpo_cache');
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -1361,7 +1354,7 @@ export default function MarcarIngresoSalidaScreen() {
       throw new Error('No authentication token found');
     }
 
-    const response = await fetch(`${apiUrl}/api/vehicles?m=${marcaId}`, {
+    const response = await fetch(`${apiUrl}/api/corporate-vehicles/corpo/${corpoId}`, {
       method: 'GET',
       headers: {
         'Authorization': `Bearer ${token}`,
@@ -1369,13 +1362,13 @@ export default function MarcarIngresoSalidaScreen() {
         'ngrok-skip-browser-warning': '69420',
       },
     });
-    console.log("getVehicles");
+    console.log("getCorporateVehicles");
     if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status} getVehicles`);
+      throw new Error(`HTTP error! status: ${response.status} getCorporateVehicles`);
     }
     const data = await response.json();
     if (data.status) {
-      await AsyncStorage.setItem('vehicles_cache', JSON.stringify(data));
+      await AsyncStorage.setItem('corporate_vehicles_corpo_cache', JSON.stringify(data.data));
     }
   }
 

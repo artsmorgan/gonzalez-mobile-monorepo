@@ -42,6 +42,16 @@ interface CurrentMarca {
     id: number;
     nombre: string;
   };
+  roleDivision: {
+    division: {
+      id: number;
+      nombre: string;
+    };
+    role: {
+      id: number;
+      nombre: string;
+    };
+  };
 }
 
 interface EntregaPuestosInfo {
@@ -84,6 +94,7 @@ interface ArticuloForm {
   cantidad_requerida: number;
   cantidad_real: number;
   estado: 'Bueno' | 'Malo' | 'No está';
+  observaciones?: string;
 }
 
 const signatureWebStyle = `
@@ -289,6 +300,7 @@ export default function EntregaPuestosScreen() {
         cantidad_requerida: art.cantidad,
         cantidad_real: art.cantidad,
         estado: 'Bueno' as const,
+        observaciones: art.observaciones || '',
       }));
       setArticulos(articulosForm);
     } catch (err: any) {
@@ -318,6 +330,12 @@ export default function EntregaPuestosScreen() {
     if (cantidad === 0) {
       newArticulos[index].estado = 'No está';
     }
+    setArticulos(newArticulos);
+  };
+
+  const handleArticuloObservacionesChange = (index: number, observaciones: string) => {
+    const newArticulos = [...articulos];
+    newArticulos[index].observaciones = observaciones;
     setArticulos(newArticulos);
   };
 
@@ -431,6 +449,7 @@ export default function EntregaPuestosScreen() {
                 cliente_id: currentMarca.cliente.id,
                 corpo_id: currentMarca.corpo.id,
                 puesto_id: currentMarca.puesto.id,
+                division: currentMarca.roleDivision.division.id,
                 oficial_entrega: info.previous_employee.nombre,
                 fecha_entrada_entrega: fechaEntradaEntrega,
                 fecha_salida_entrega: fechaSalidaEntrega,
@@ -784,6 +803,16 @@ export default function EntregaPuestosScreen() {
                       }}
                       keyboardType="numeric"
                       placeholderTextColor="#999"
+                    />
+                    <ThemedText style={styles.label}>Observaciones:</ThemedText>
+                    <TextInput
+                      style={[styles.input, styles.textArea]}
+                      value={articulo.observaciones || ''}
+                      onChangeText={(text) => handleArticuloObservacionesChange(index, text)}
+                      placeholder="Ingrese observaciones..."
+                      placeholderTextColor="#999"
+                      multiline
+                      numberOfLines={3}
                     />
                   </ThemedView>
                 ))}

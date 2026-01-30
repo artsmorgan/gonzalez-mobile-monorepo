@@ -14,6 +14,90 @@ type VehicleImageInput = {
   file_base64: string;
 };
 
+export async function GET(req: NextRequest) {
+  try {
+    const { valid, expired, payload, message } = verifyAccessToken(req);
+    if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
+
+    const empresaIdStr = req.nextUrl.searchParams.get("empresa_id");
+    const clienteIdStr = req.nextUrl.searchParams.get("cliente_id");
+    const corpoIdStr = req.nextUrl.searchParams.get("corpo_id");
+
+    const where: any = {};
+
+    // Si hay filtros jerárquicos, usarlos
+    if (corpoIdStr) {
+      where.sucursal_id = parseInt(corpoIdStr);
+    } else if (clienteIdStr) {
+      // Si hay cliente pero no corpo, filtrar directamente por cliente_id
+      where.cliente_id = parseInt(clienteIdStr);
+    } else if (empresaIdStr) {
+      // Si hay empresa pero no cliente, buscar todos los clientes de la empresa
+      const empresaId = parseInt(empresaIdStr);
+      const clientes = await prisma.e_estructura_cliente.findMany({
+        where: { empresa_id: empresaId },
+        select: { id: true },
+      });
+      const clienteIds = clientes.map((c) => c.id);
+      if (clienteIds.length > 0) {
+        where.cliente_id = { in: clienteIds };
+      } else {
+        return NextResponse.json({ status: true, data: [] }, { status: 200 });
+      }
+    } else {
+      return NextResponse.json({ status: false, message: "Debe especificar filtros jerárquicos" }, { status: 400 });
+    }
+
+    const items = await prisma.c_vehiculos_corporativos.findMany({
+      where,
+      orderBy: { id: "desc" },
+      include: {
+        c_imagenes_vehiculos_corporativos: true,
+        c_usos_vehiculos_corporativos: true,
+        c_mantenimiento_vehiculos_corporativos: true,
+      },
+    });
+
+    // Adjuntamos el registro de bitácora a cada uso (si existe)
+    const bitacoraIds = Array.from(
+      new Set(
+        items
+          .flatMap((v: any) => (v.c_usos_vehiculos_corporativos || []).map((u: any) => u.bitacora_id))
+          .filter((id: any): id is number => typeof id === "number" && Number.isFinite(id))
+      )
+    );
+    const bitacoras = bitacoraIds.length
+      ? await prisma.c_bitacora_vehiculo_detenido.findMany({ where: { id: { in: bitacoraIds } } })
+      : [];
+    const bitacoraById = new Map(bitacoras.map((b: any) => [b.id, b]));
+
+    const mapped = items.map((r: any) => ({
+      ...r,
+      id_local: "",
+      corpo_id: r.sucursal_id, // compat con móvil
+      empresa_id: r.empresa_id,
+      cliente_id: r.cliente_id,
+      images: (r.c_imagenes_vehiculos_corporativos || []).map((i: any) => ({
+        id: i.id,
+        name: i.name,
+      })),
+      usos: (r.c_usos_vehiculos_corporativos || []).map((u: any) => ({
+        ...u,
+        bitacora: u.bitacora_id ? bitacoraById.get(u.bitacora_id) ?? null : null,
+      })),
+      mantenimientos: (r.c_mantenimiento_vehiculos_corporativos || []).map((m: any) => ({
+        ...m,
+      })),
+    }));
+
+    return NextResponse.json({ status: true, data: mapped }, { status: 200 });
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+    console.error("Error in GET /api/corporate-vehicles:", errorMessage);
+    return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
+  }
+}
+
 function safeParseJson<T>(value: any, fallback: T): T {
   try {
     if (typeof value === "string") {
@@ -41,6 +125,7 @@ export async function POST(req: NextRequest) {
     if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
     const {
+      empresa_id,
       cliente_id,
       corpo_id,
       placa,
@@ -58,11 +143,12 @@ export async function POST(req: NextRequest) {
       imagenes,
     } = await req.json();
 
+    const empresaId = Number(empresa_id);
     const clienteId = Number(cliente_id);
     const sucursalId = Number(corpo_id);
-    if (!clienteId || !sucursalId) {
+    if (!empresaId || !clienteId || !sucursalId) {
       return NextResponse.json(
-        { status: false, message: "Cliente y Sucursal son requeridos" },
+        { status: false, message: "Empresa, Cliente y Sucursal son requeridos" },
         { status: 400 }
       );
     }
@@ -79,6 +165,7 @@ export async function POST(req: NextRequest) {
 
     const newRecord = await prisma.c_vehiculos_corporativos.create({
       data: {
+        empresa_id: empresaId,
         cliente_id: clienteId,
         sucursal_id: sucursalId,
         placa: String(placa ?? ""),

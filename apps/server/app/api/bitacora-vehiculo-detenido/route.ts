@@ -74,8 +74,6 @@ export async function GET(req: NextRequest) {
 
     const rows = await prisma.c_bitacora_vehiculo_detenido.findMany({
       where: {
-        empresa_id: Number(empresaId),
-        cliente_id: Number(clienteId),
         sucursal_id: Number(sucursalId),
       },
       orderBy: { id: "desc" },

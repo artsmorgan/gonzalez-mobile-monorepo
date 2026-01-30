@@ -41,6 +41,7 @@ import {
   listBitacoraVehiculoDetenido,
   updateBitacoraVehiculoDetenido,
 } from '@/hooks/bitacoraVehiculoDetenidoFunctions';
+import { listCorporateVehiclesByCorpo } from '@/hooks/evaluationFunctions';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'BitacoraVehiculosDetenidos'>;
 
@@ -117,6 +118,7 @@ const buildGeneralConfig = (tipo: TipoBitacora): GeneralEntry[] => {
     return [
       { key: 'empresa', label: 'Empresa', kind: 'readonly' },
       { key: 'cliente', label: 'Cliente', kind: 'readonly' },
+      { key: 'corpo', label: 'Sucursal', kind: 'readonly' },
       { key: 'nombre_oficial_corporacion', label: 'Nombre oficial de corporación', kind: 'text', required: true },
       { key: 'firma_oficial_corporacion', label: 'Firma (oficial corporación)', kind: 'signature', required: true },
       { key: 'fecha', label: 'Fecha', kind: 'date', required: true },
@@ -134,6 +136,7 @@ const buildGeneralConfig = (tipo: TipoBitacora): GeneralEntry[] => {
     return [
       { key: 'empresa', label: 'Empresa', kind: 'readonly' },
       { key: 'cliente', label: 'Cliente', kind: 'readonly' },
+      { key: 'corpo', label: 'Sucursal', kind: 'readonly' },
       { key: 'nombre_oficial_corporacion', label: 'Nombre oficial de corporación', kind: 'text', required: true },
       { key: 'firma_oficial_corporacion', label: 'Firma del oficial', kind: 'signature', required: true },
       { key: 'fecha', label: 'Fecha', kind: 'date', required: true },
@@ -151,6 +154,7 @@ const buildGeneralConfig = (tipo: TipoBitacora): GeneralEntry[] => {
   return [
     { key: 'empresa', label: 'Empresa', kind: 'readonly' },
     { key: 'cliente', label: 'Cliente', kind: 'readonly' },
+    { key: 'corpo', label: 'Sucursal', kind: 'readonly' },
     { key: 'oficial_transito', label: 'Oficial de tránsito', kind: 'text', required: true },
     { key: 'codigo_oficial_transito', label: 'Código del oficial (tránsito)', kind: 'text', required: true },
     { key: 'firma_oficial_transito', label: 'Firma del oficial (tránsito)', kind: 'signature', required: true },
@@ -423,20 +427,23 @@ export default function BitacoraVehiculosDetenidosScreen() {
 
   const [empresaNombre, setEmpresaNombre] = useState<string>('');
   const [clienteNombre, setClienteNombre] = useState<string>('');
+  const [corpoNombre, setCorpoNombre] = useState<string>('');
   const [marcaId, setMarcaId] = useState<number | null>(null);
 
-  // estructura jerárquica (Empresa -> Cliente -> División -> Contrato -> Sucursal)
-  const [structure, setStructure] = useState<MainStructureTree>([]);
-  const [isStructureLoading, setIsStructureLoading] = useState(false);
-  const [selectedEmpresaId, setSelectedEmpresaId] = useState<number | null>(null);
-  const [selectedClienteId, setSelectedClienteId] = useState<number | null>(null);
-  const [selectedDivisionId, setSelectedDivisionId] = useState<number | null>(null);
-  const [selectedContratoId, setSelectedContratoId] = useState<number | null>(null);
-  const [selectedSucursalId, setSelectedSucursalId] = useState<number | null>(null);
+  // IDs obtenidos de current_marca o del vehículo (prefill)
+  const [marcaEmpresaId, setMarcaEmpresaId] = useState<number | null>(null);
+  const [marcaClienteId, setMarcaClienteId] = useState<number | null>(null);
+  const [marcaCorpoId, setMarcaCorpoId] = useState<number | null>(null);
 
   // Vehículo corporativo / Uso (vinculación bitácora)
   const [selectedCorporateVehicleId, setSelectedCorporateVehicleId] = useState<number | null>(null);
   const [selectedCorporateUseId, setSelectedCorporateUseId] = useState<number | null>(null);
+  const [corporateVehicles, setCorporateVehicles] = useState<any[]>([]);
+  const [availableCorporateUses, setAvailableCorporateUses] = useState<any[]>([]);
+  const [isLoadingVehicles, setIsLoadingVehicles] = useState(false);
+  const [prefillVehicleInfo, setPrefillVehicleInfo] = useState<{ vehiculo?: any; uso?: any } | null>(null);
+  // Vehículo temporal para casos donde el vehículo no está en la lista cargada
+  const [tempVehicle, setTempVehicle] = useState<any | null>(null);
 
   const [generalValues, setGeneralValues] = useState<Record<string, any>>({});
   const [revisionValues, setRevisionValues] = useState<Record<string, any>>({});
@@ -493,101 +500,6 @@ export default function BitacoraVehiculosDetenidosScreen() {
   const generalConfig = useMemo(() => buildGeneralConfig(tipo), [tipo]);
   const revisionConfig = useMemo(() => buildRevisionConfig(tipo), [tipo]);
 
-  // jerarquía: opciones derivadas del cache
-  const empresas = useMemo(() => (Array.isArray(structure) ? structure : []), [structure]);
-  const clientes = useMemo(() => {
-    const emp = empresas.find((e: any) => Number(e.id) === Number(selectedEmpresaId));
-    return emp?.clientes || [];
-  }, [empresas, selectedEmpresaId]);
-  const divisiones = useMemo(() => {
-    const cli = clientes.find((c: any) => Number(c.id) === Number(selectedClienteId));
-    return cli?.division || cli?.divisiones || [];
-  }, [clientes, selectedClienteId]);
-  const contratos = useMemo(() => {
-    const div = divisiones.find((d: any) => Number(d.id) === Number(selectedDivisionId));
-    return div?.contratos || [];
-  }, [divisiones, selectedDivisionId]);
-  const sucursales = useMemo(() => {
-    const cont = contratos.find((c: any) => Number(c.id) === Number(selectedContratoId));
-    return cont?.sucursales || [];
-  }, [contratos, selectedContratoId]);
-
-  const selectedSucursalNode = useMemo(() => {
-    return sucursales.find((s: any) => Number(s.id) === Number(selectedSucursalId)) ?? null;
-  }, [sucursales, selectedSucursalId]);
-
-  const corporateVehicles = useMemo(() => {
-    const list = (selectedSucursalNode as any)?.vehiculos_corporativos || (selectedSucursalNode as any)?.c_vehiculos_corporativos || [];
-    return Array.isArray(list) ? list : [];
-  }, [selectedSucursalNode]);
-
-  const selectedCorporateVehicle = useMemo(() => {
-    return corporateVehicles.find((v: any) => Number(v.id) === Number(selectedCorporateVehicleId)) ?? null;
-  }, [corporateVehicles, selectedCorporateVehicleId]);
-
-  const availableCorporateUses = useMemo(() => {
-    const usos = (selectedCorporateVehicle as any)?.usos || (selectedCorporateVehicle as any)?.c_usos_vehiculos_corporativos || [];
-    const list = Array.isArray(usos) ? usos : [];
-    // solo los que NO tienen bitácora asignada
-    return list.filter((u: any) => u?.bitacora_id == null);
-  }, [selectedCorporateVehicle]);
-
-  const handleEmpresaChange = (empresaId: number | null) => {
-    setSelectedEmpresaId(empresaId);
-    setSelectedClienteId(null);
-    setSelectedDivisionId(null);
-    setSelectedContratoId(null);
-    setSelectedSucursalId(null);
-    setSelectedCorporateVehicleId(null);
-    setSelectedCorporateUseId(null);
-  };
-  const handleClienteChange = (clienteId: number | null) => {
-    setSelectedClienteId(clienteId);
-    setSelectedDivisionId(null);
-    setSelectedContratoId(null);
-    setSelectedSucursalId(null);
-    setSelectedCorporateVehicleId(null);
-    setSelectedCorporateUseId(null);
-  };
-  const handleDivisionChange = (divisionId: number | null) => {
-    setSelectedDivisionId(divisionId);
-    setSelectedContratoId(null);
-    setSelectedSucursalId(null);
-    setSelectedCorporateVehicleId(null);
-    setSelectedCorporateUseId(null);
-  };
-  const handleContratoChange = (contratoId: number | null) => {
-    setSelectedContratoId(contratoId);
-    setSelectedSucursalId(null);
-    setSelectedCorporateVehicleId(null);
-    setSelectedCorporateUseId(null);
-  };
-  const handleSucursalChange = (sucursalId: number | null) => {
-    setSelectedSucursalId(sucursalId);
-    setSelectedCorporateVehicleId(null);
-    setSelectedCorporateUseId(null);
-  };
-
-  const handleCorporateVehicleChange = (vehiculoId: number | null) => {
-    setSelectedCorporateVehicleId(vehiculoId);
-    setSelectedCorporateUseId(null);
-    const v = corporateVehicles.find((x: any) => Number(x.id) === Number(vehiculoId));
-    if (!v) return;
-    const t = String(v.tipo || '').trim() as TipoBitacora;
-    if (TYPE_OPTIONS.includes(t)) {
-      setTipo(t);
-      tipoRef.current = t;
-    }
-    // llenar placa en el campo del formulario
-    if (v.placa) {
-      // compat: en algunos registros antiguos se usa `numero_de_placa`
-      setGeneralValues((prev) => ({
-        ...prev,
-        numero_placa: String(v.placa),
-        numero_de_placa: String(v.placa),
-      }));
-    }
-  };
 
   const handleMenuPress = () => setIsMenuVisible(true);
   const handleMenuClose = () => setIsMenuVisible(false);
@@ -764,75 +676,181 @@ export default function BitacoraVehiculosDetenidosScreen() {
     const currentMarcaStr = await AsyncStorage.getItem('current_marca');
     if (!currentMarcaStr) {
       setHasCurrentMarca(false);
+      setMarcaEmpresaId(null);
+      setMarcaClienteId(null);
+      setMarcaCorpoId(null);
       return null;
     }
     const current = JSON.parse(currentMarcaStr);
     if (!current?.id) {
       setHasCurrentMarca(false);
+      setMarcaEmpresaId(null);
+      setMarcaClienteId(null);
+      setMarcaCorpoId(null);
       return null;
     }
     setHasCurrentMarca(true);
     setMarcaId(current.id);
     setEmpresaNombre(current?.empresa?.nombre ?? '');
     setClienteNombre(current?.cliente?.nombre ?? '');
+    setCorpoNombre(current?.corpo?.nombre ?? '');
 
-    // defaults (solo empresa/cliente; división/contrato/sucursal quedan manuales)
-    const marcaEmpresaId = Number(current?.empresa?.id ?? current?.empresa_id ?? 0) || null;
-    const marcaClienteId = Number(current?.cliente?.id ?? current?.cliente_id ?? 0) || null;
-    if (!selectedEmpresaId && marcaEmpresaId) setSelectedEmpresaId(marcaEmpresaId);
-    if (!selectedClienteId && marcaClienteId) setSelectedClienteId(marcaClienteId);
+    const empresaIdRaw = current?.empresa?.id ?? current?.empresa_id;
+    const clienteIdRaw = current?.cliente?.id ?? current?.cliente_id;
+    const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
+
+    setMarcaEmpresaId(empresaIdRaw !== undefined && empresaIdRaw !== null ? Number(empresaIdRaw) : null);
+    setMarcaClienteId(clienteIdRaw !== undefined && clienteIdRaw !== null ? Number(clienteIdRaw) : null);
+    setMarcaCorpoId(corpoIdRaw !== undefined && corpoIdRaw !== null ? Number(corpoIdRaw) : null);
+
     return current;
   };
 
-  const fetchMainStructure = useCallback(async () => {
+  // Cargar vehículos corporativos desde cache o API
+  const fetchCorporateVehicles = useCallback(async (corpoId: number) => {
     try {
-      setIsStructureLoading(true);
-      const cacheStr = await AsyncStorage.getItem('main_structure_cache');
+      setIsLoadingVehicles(true);
+
+      // Intentar cargar desde cache primero
+      const cacheStr = await AsyncStorage.getItem('corporate_vehicles_corpo_cache');
       if (cacheStr) {
-        const cached = JSON.parse(cacheStr);
-        if (Array.isArray(cached)) setStructure(cached);
-      }
-
-      const isConnected = await getConnectionStatus();
-      if (!isConnected) return;
-
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-      if (!apiUrl) return;
-      let token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (logout) await logout();
-          throw new Error('Sesión expirada');
+        try {
+          const cached = JSON.parse(cacheStr);
+          if (Array.isArray(cached)) {
+            // Filtrar por corpo_id
+            const filtered = cached.filter((v: any) => Number(v?.corpo_id ?? v?.sucursal_id) === corpoId);
+            setCorporateVehicles(filtered);
+            setIsLoadingVehicles(false);
+          }
+        } catch {
+          // ignore parse error
         }
-        token = await AsyncStorage.getItem('access_token');
       }
-      const res = await fetch(`${apiUrl}/api/main-structure`, {
-        method: 'GET',
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': '69420',
-        },
-      });
-      if (res.status === 401 || res.status === 403) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) return fetchMainStructure();
-        await logout();
-        return;
+
+      // Cargar desde API si hay conexión
+      const isConnected = await getConnectionStatus();
+      if (isConnected) {
+        const res = await listCorporateVehiclesByCorpo({
+          corpo_id: String(corpoId),
+          refreshAccessToken,
+          logout,
+        });
+        if (res.status && Array.isArray(res.data)) {
+          setCorporateVehicles(res.data);
+          // Actualizar cache
+          await AsyncStorage.setItem('corporate_vehicles_corpo_cache', JSON.stringify(res.data));
+        }
       }
-      const data = await res.json().catch(() => ({}));
-      const incoming = (data as any)?.structure ?? (data as any)?.data ?? [];
-      if (Array.isArray(incoming)) {
-        setStructure(incoming);
-        await AsyncStorage.setItem('main_structure_cache', JSON.stringify(incoming));
-      }
-    } catch {
-      // ignore
+    } catch (e: any) {
+      console.error('Error fetching corporate vehicles:', e);
     } finally {
-      setIsStructureLoading(false);
+      setIsLoadingVehicles(false);
     }
-  }, []);
+  }, [refreshAccessToken, logout]);
+
+  // Obtener usos disponibles del vehículo seleccionado
+  const selectedCorporateVehicle = useMemo(() => {
+    if (!selectedCorporateVehicleId) return null;
+    // Primero buscar en la lista de vehículos cargados
+    const found = corporateVehicles.find((v: any) => Number(v.id) === Number(selectedCorporateVehicleId));
+    if (found) return found;
+    // Si no está en la lista, usar el vehículo temporal (del prefill)
+    if (tempVehicle && Number(tempVehicle.id) === Number(selectedCorporateVehicleId)) {
+      return tempVehicle;
+    }
+    return null;
+  }, [corporateVehicles, selectedCorporateVehicleId, tempVehicle]);
+
+  // Actualizar usos disponibles cuando cambia el vehículo seleccionado
+  useEffect(() => {
+    if (!selectedCorporateVehicle) {
+      setAvailableCorporateUses([]);
+      setSelectedCorporateUseId(null); // Limpiar uso cuando no hay vehículo
+      return;
+    }
+    const usos = (selectedCorporateVehicle as any)?.usos || (selectedCorporateVehicle as any)?.c_usos_vehiculos_corporativos || [];
+    const list = Array.isArray(usos) ? usos : [];
+    // Solo los que NO tienen bitácora asignada
+    const filtered = list.filter((u: any) => u?.bitacora_id == null);
+    setAvailableCorporateUses(filtered);
+    // Limpiar uso seleccionado si no está en la nueva lista
+    if (selectedCorporateUseId) {
+      const stillAvailable = filtered.some((u: any) => Number(u.id) === Number(selectedCorporateUseId));
+      if (!stillAvailable) {
+        setSelectedCorporateUseId(null);
+      }
+    }
+  }, [selectedCorporateVehicle, selectedCorporateUseId]);
+
+  // Cargar información del vehículo y uso en modo prefill cuando se actualizan los vehículos
+  useEffect(() => {
+    if (!isPrefillMode || !prefill) return;
+
+    // Buscar el vehículo en la lista cargada
+    let vehicle = corporateVehicles.find((v: any) => Number(v.id) === Number(prefill.vehiculo_id));
+
+    // Si no está en la lista, crear un vehículo temporal con los datos del prefill
+    if (!vehicle && prefill.vehiculo_id) {
+      const tempVeh: any = {
+        id: Number(prefill.vehiculo_id),
+        placa: String(prefill.vehiculo_placa || ''),
+        tipo: String(prefill.vehiculo_tipo || ''),
+        corpo_id: Number(prefill.sucursal_id || 0),
+        sucursal_id: Number(prefill.sucursal_id || 0),
+        empresa_id: Number(prefill.empresa_id || 0),
+        cliente_id: Number(prefill.cliente_id || 0),
+        usos: [],
+        c_usos_vehiculos_corporativos: [],
+      };
+      setTempVehicle(tempVeh);
+      vehicle = tempVeh;
+
+      // Si hay conexión, intentar cargar los usos del vehículo específico
+      (async () => {
+        const isConnected = await getConnectionStatus();
+        if (isConnected && prefill.vehiculo_id) {
+          try {
+            const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+            if (apiUrl) {
+              let token = await AsyncStorage.getItem('access_token');
+              if (!token) {
+                const refreshed = await refreshAccessToken();
+                if (refreshed) {
+                  token = await AsyncStorage.getItem('access_token');
+                }
+              }
+              if (token) {
+                const response = await fetch(`${apiUrl}/api/corporate-vehicles/${prefill.vehiculo_id}/uses`, {
+                  method: 'GET',
+                  headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json',
+                    'ngrok-skip-browser-warning': '69420',
+                  },
+                });
+                if (response.ok) {
+                  const data = await response.json();
+                  if (data.status && Array.isArray(data.data)) {
+                    tempVeh.usos = data.data;
+                    tempVeh.c_usos_vehiculos_corporativos = data.data;
+                    setTempVehicle({ ...tempVeh });
+                  }
+                }
+              }
+            }
+          } catch (e) {
+            console.error('Error loading vehicle uses:', e);
+          }
+        }
+      })();
+    }
+
+    if (vehicle) {
+      const usos = (vehicle as any)?.usos || (vehicle as any)?.c_usos_vehiculos_corporativos || [];
+      const uso = Array.isArray(usos) ? usos.find((u: any) => Number(u.id) === Number(prefill.uso_id)) : null;
+      setPrefillVehicleInfo({ vehiculo: vehicle, uso: uso || null });
+    }
+  }, [isPrefillMode, prefill, corporateVehicles, refreshAccessToken]);
 
   const fetchBitacoras = async () => {
     try {
@@ -844,20 +862,33 @@ export default function BitacoraVehiculosDetenidosScreen() {
         return;
       }
 
-      await fetchMainStructure();
+      // Obtener corpoId directamente del objeto current en lugar del estado
+      const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
+      const corpoId = corpoIdRaw !== undefined && corpoIdRaw !== null ? Number(corpoIdRaw) : null;
+      if (!corpoId) {
+        setError('No se encontró el ID de la sucursal (corpo) en la marca actual');
+        setIsLoading(false);
+        return;
+      }
 
       const isConnected = await getConnectionStatus();
       if (isConnected) {
         const res = await listBitacoraVehiculoDetenido({
           marcaId: current?.id ?? 0,
-          empresaId: selectedEmpresaId ?? undefined,
-          clienteId: selectedClienteId ?? undefined,
-          sucursalId: selectedSucursalId ?? undefined,
+          empresaId: marcaEmpresaId ?? undefined,
+          clienteId: marcaClienteId ?? undefined,
+          sucursalId: corpoId ?? undefined,
           refreshAccessToken,
           logout,
         });
         if (res.status) {
-          const list = (res.data || []).map((b: any) => ({
+          const serverItems = Array.isArray(res.data) ? res.data : [];
+          // Filtrar por corpo_id
+          const filteredItems = serverItems.filter((b: any) => {
+            const bCorpoId = Number(b?.sucursal_id ?? b?.corpo_id ?? 0);
+            return bCorpoId === corpoId;
+          });
+          const list = filteredItems.map((b: any) => ({
             ...b,
             id_local: b.id_local || '',
           }));
@@ -865,18 +896,46 @@ export default function BitacoraVehiculosDetenidosScreen() {
           await AsyncStorage.setItem('bitacora_vehiculo_detenido_cache', JSON.stringify(list));
         } else {
           setError(res.message || 'Error al cargar bitácoras');
-          // fallback cache
+          // fallback cache filtrado
           const cacheStr = await AsyncStorage.getItem('bitacora_vehiculo_detenido_cache');
-          if (cacheStr) setBitacoras(JSON.parse(cacheStr));
+          if (cacheStr) {
+            const cache = JSON.parse(cacheStr);
+            const filteredCache = cache.filter((b: any) => {
+              const bCorpoId = Number(b?.sucursal_id ?? b?.corpo_id ?? 0);
+              return bCorpoId === corpoId;
+            });
+            setBitacoras(filteredCache);
+          }
         }
       } else {
+        // Offline: filtrar cache por corpo_id
         const cacheStr = await AsyncStorage.getItem('bitacora_vehiculo_detenido_cache');
-        if (cacheStr) setBitacoras(JSON.parse(cacheStr));
+        if (cacheStr) {
+          const cache = JSON.parse(cacheStr);
+          const filteredCache = cache.filter((b: any) => {
+            const bCorpoId = Number(b?.sucursal_id ?? b?.corpo_id ?? 0);
+            return bCorpoId === corpoId;
+          });
+          setBitacoras(filteredCache);
+        }
       }
     } catch (e: any) {
       setError(e.message || 'Error al cargar bitácoras');
       const cacheStr = await AsyncStorage.getItem('bitacora_vehiculo_detenido_cache');
-      if (cacheStr) setBitacoras(JSON.parse(cacheStr));
+      if (cacheStr) {
+        const cache = JSON.parse(cacheStr);
+        const current = await loadMarcaContext();
+        const corpoId = current?.corpo?.id ?? current?.corpo_id;
+        if (corpoId) {
+          const filteredCache = cache.filter((b: any) => {
+            const bCorpoId = Number(b?.sucursal_id ?? b?.corpo_id ?? 0);
+            return bCorpoId === Number(corpoId);
+          });
+          setBitacoras(filteredCache);
+        } else {
+          setBitacoras(cache);
+        }
+      }
     } finally {
       setIsLoading(false);
     }
@@ -885,7 +944,18 @@ export default function BitacoraVehiculosDetenidosScreen() {
   useFocusEffect(
     useCallback(() => {
       fetchBitacoras();
-    }, [])
+      // Cargar vehículos corporativos cuando se abre la ventana
+      (async () => {
+        const current = await loadMarcaContext();
+        if (current) {
+          const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
+          const corpoId = corpoIdRaw !== undefined && corpoIdRaw !== null ? Number(corpoIdRaw) : null;
+          if (corpoId) {
+            await fetchCorporateVehicles(corpoId);
+          }
+        }
+      })();
+    }, [fetchCorporateVehicles])
   );
 
   useFocusEffect(
@@ -896,16 +966,19 @@ export default function BitacoraVehiculosDetenidosScreen() {
         setIsCreating(true);
         setEditing(null);
 
-        await fetchMainStructure();
-
-        if (prefill.empresa_id) setSelectedEmpresaId(Number(prefill.empresa_id));
-        setSelectedClienteId(Number(prefill.cliente_id));
-        if (prefill.division_id) setSelectedDivisionId(Number(prefill.division_id));
-        if (prefill.contrato_id) setSelectedContratoId(Number(prefill.contrato_id));
-        setSelectedSucursalId(Number(prefill.sucursal_id));
+        // Obtener datos del vehículo pasado como parámetro
+        if (prefill.empresa_id) setMarcaEmpresaId(Number(prefill.empresa_id));
+        if (prefill.cliente_id) setMarcaClienteId(Number(prefill.cliente_id));
+        if (prefill.sucursal_id) setMarcaCorpoId(Number(prefill.sucursal_id));
 
         setSelectedCorporateVehicleId(Number(prefill.vehiculo_id));
         setSelectedCorporateUseId(Number(prefill.uso_id));
+
+        // Cargar información del vehículo y uso desde cache o API para mostrarla
+        const corpoId = Number(prefill.sucursal_id);
+        if (corpoId) {
+          await fetchCorporateVehicles(corpoId);
+        }
 
         const tipoCandidate = String(prefill.vehiculo_tipo || '').trim() as TipoBitacora;
         const tipoNext: TipoBitacora = TYPE_OPTIONS.includes(tipoCandidate) ? tipoCandidate : 'Vehículo';
@@ -922,7 +995,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
           }));
         }
       })();
-    }, [prefill])
+    }, [prefill, fetchCorporateVehicles])
   );
 
   useEffect(() => {
@@ -951,12 +1024,10 @@ export default function BitacoraVehiculosDetenidosScreen() {
     setTipo(tipoNext);
 
     const baseGeneral: Record<string, any> = {};
-    // empresa/cliente para display (readonly en config actual)
-    const empresas = Array.isArray(structure) ? structure : [];
-    const empNode = empresas.find((e: any) => Number(e.id) === Number(selectedEmpresaId));
-    const cliNode = (empNode?.clientes || []).find((c: any) => Number(c.id) === Number(selectedClienteId));
-    baseGeneral.empresa = empNode?.nombre ?? current?.empresa?.nombre ?? empresaNombre ?? '';
-    baseGeneral.cliente = cliNode?.nombre ?? current?.cliente?.nombre ?? clienteNombre ?? '';
+    // empresa/cliente/corpo para display (readonly en config actual)
+    baseGeneral.empresa = current?.empresa?.nombre ?? empresaNombre ?? '';
+    baseGeneral.cliente = current?.cliente?.nombre ?? clienteNombre ?? '';
+    baseGeneral.corpo = current?.corpo?.nombre ?? corpoNombre ?? '';
     baseGeneral.fecha = dateToLocalString(new Date());
     baseGeneral.hora = timeToHHmm(new Date());
     setGeneralValues(baseGeneral);
@@ -983,7 +1054,18 @@ export default function BitacoraVehiculosDetenidosScreen() {
   const startCreating = async () => {
     setIsCreating(true);
     setEditing(null);
+    setPrefillVehicleInfo(null);
     await resetForm('Vehículo');
+
+    // Cargar vehículos corporativos cuando se abre el formulario en modo normal
+    const current = await loadMarcaContext();
+    if (current) {
+      const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
+      const corpoId = corpoIdRaw !== undefined && corpoIdRaw !== null ? Number(corpoIdRaw) : null;
+      if (corpoId) {
+        await fetchCorporateVehicles(corpoId);
+      }
+    }
   };
 
   const startEditing = async (item: BitacoraVehiculoDetenidoItem) => {
@@ -1025,6 +1107,9 @@ export default function BitacoraVehiculosDetenidosScreen() {
   const cancelCreating = () => {
     setIsCreating(false);
     setEditing(null);
+    setSelectedCorporateVehicleId(null);
+    setSelectedCorporateUseId(null);
+    setPrefillVehicleInfo(null);
     if (returnTo) {
       navigation.goBack();
     }
@@ -1082,12 +1167,12 @@ export default function BitacoraVehiculosDetenidosScreen() {
   };
 
   const validateForm = () => {
-    if (!selectedClienteId) {
-      Alert.alert('Error', 'Debes seleccionar un cliente');
+    if (!marcaClienteId) {
+      Alert.alert('Error', 'No se encontró el cliente en la marca actual');
       return false;
     }
-    if (!selectedSucursalId) {
-      Alert.alert('Error', 'Debes seleccionar una sucursal');
+    if (!marcaCorpoId) {
+      Alert.alert('Error', 'No se encontró la sucursal en la marca actual');
       return false;
     }
     if (isPrefillMode && !selectedCorporateUseId) {
@@ -1123,14 +1208,26 @@ export default function BitacoraVehiculosDetenidosScreen() {
     // Si no hay marca activa, el server permite crear usando empresa/cliente/sucursal
     const marca_id = current?.id ? Number(current.id) : undefined;
 
-    const infoGeneralArr = generalConfig.map((g) => ({
-      key: g.key,
-      label: g.label,
-      value: g.kind === 'readonly'
-        ? (g.key === 'empresa' ? (current?.empresa?.nombre ?? empresaNombre) : (current?.cliente?.nombre ?? clienteNombre))
-        : (generalValues[g.key] ?? ''),
-      kind: g.kind,
-    }));
+    const infoGeneralArr = generalConfig.map((g) => {
+      let value = '';
+      if (g.kind === 'readonly') {
+        if (g.key === 'empresa') {
+          value = current?.empresa?.nombre ?? empresaNombre;
+        } else if (g.key === 'cliente') {
+          value = current?.cliente?.nombre ?? clienteNombre;
+        } else if (g.key === 'corpo') {
+          value = current?.corpo?.nombre ?? corpoNombre;
+        }
+      } else {
+        value = generalValues[g.key] ?? '';
+      }
+      return {
+        key: g.key,
+        label: g.label,
+        value,
+        kind: g.kind,
+      };
+    });
 
     const infoRevisionArr: any[] = [];
     for (const r of revisionConfig) {
@@ -1153,9 +1250,10 @@ export default function BitacoraVehiculosDetenidosScreen() {
 
     return {
       ...(marca_id ? { marca_id } : {}),
-      empresa_id: selectedEmpresaId,
-      cliente_id: selectedClienteId,
-      sucursal_id: selectedSucursalId,
+      empresa_id: marcaEmpresaId,
+      cliente_id: marcaClienteId,
+      sucursal_id: marcaCorpoId,
+      vehiculo_id: selectedCorporateVehicleId, // Incluir vehiculo_id en el payload
       uso_id: selectedCorporateUseId,
       tipo: tipoRef.current,
       informacion_general: infoGeneralArr,
@@ -1209,7 +1307,6 @@ export default function BitacoraVehiculosDetenidosScreen() {
 
       if (!changed) return;
       await AsyncStorage.setItem('main_structure_cache', JSON.stringify(tree));
-      setStructure(tree);
     },
     []
   );
@@ -1243,7 +1340,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
           // si se vinculó a un uso, reflejarlo en main_structure_cache
           if (selectedCorporateVehicleId && selectedCorporateUseId) {
             await updateMainStructureCacheUseBitacora({
-              sucursalId: selectedSucursalId,
+              sucursalId: marcaCorpoId,
               vehiculoId: selectedCorporateVehicleId,
               usoId: selectedCorporateUseId,
               bitacora: {
@@ -1271,9 +1368,9 @@ export default function BitacoraVehiculosDetenidosScreen() {
 
         const localItem: any = {
           id: 0,
-          empresa_id: Number(selectedEmpresaId || 0),
-          cliente_id: Number(selectedClienteId || 0),
-          sucursal_id: Number(selectedSucursalId || 0),
+          empresa_id: Number(marcaEmpresaId || 0),
+          cliente_id: Number(marcaClienteId || 0),
+          sucursal_id: Number(marcaCorpoId || 0),
           tipo: tipoRef.current,
           informacion_general: requestData.informacion_general,
           informacion_revision: requestData.informacion_revision,
@@ -1288,7 +1385,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
         // reflejar vínculo en main_structure_cache aun en offline (bitácora local)
         if (selectedCorporateVehicleId && selectedCorporateUseId) {
           await updateMainStructureCacheUseBitacora({
-            sucursalId: selectedSucursalId,
+            sucursalId: marcaCorpoId,
             vehiculoId: selectedCorporateVehicleId,
             usoId: selectedCorporateUseId,
             bitacora: {
@@ -1580,113 +1677,101 @@ export default function BitacoraVehiculosDetenidosScreen() {
                 {editing ? 'Editar registro' : 'Nuevo registro'}
               </ThemedText>
 
-              <ThemedText style={styles.sectionTitle}>Estructura</ThemedText>
-              <ThemedText style={styles.label}>Empresa *</ThemedText>
-              <ThemedView style={styles.pickerContainer}>
-                <Picker
-                  selectedValue={selectedEmpresaId ?? 0}
-                  onValueChange={(v) => handleEmpresaChange(Number(v) || null)}
-                  style={styles.picker}
-                  enabled={!isPrefillMode}
-                >
-                  <Picker.Item label={isStructureLoading ? 'Cargando...' : 'Seleccione...'} value={0} />
-                  {empresas.map((e: any) => (
-                    <Picker.Item key={`emp_${e.id}`} label={String(e.nombre)} value={Number(e.id)} />
-                  ))}
-                </Picker>
-              </ThemedView>
-
-              <ThemedText style={styles.label}>Cliente *</ThemedText>
-              <ThemedView style={styles.pickerContainer}>
-                <Picker
-                  selectedValue={selectedClienteId ?? 0}
-                  onValueChange={(v) => handleClienteChange(Number(v) || null)}
-                  style={styles.picker}
-                  enabled={!isPrefillMode && !!selectedEmpresaId}
-                >
-                  <Picker.Item label={selectedEmpresaId ? 'Seleccione...' : 'Seleccione empresa primero'} value={0} />
-                  {clientes.map((c: any) => (
-                    <Picker.Item key={`cli_${c.id}`} label={String(c.nombre)} value={Number(c.id)} />
-                  ))}
-                </Picker>
-              </ThemedView>
-
-              <ThemedText style={styles.label}>División *</ThemedText>
-              <ThemedView style={styles.pickerContainer}>
-                <Picker
-                  selectedValue={selectedDivisionId ?? 0}
-                  onValueChange={(v) => handleDivisionChange(Number(v) || null)}
-                  style={styles.picker}
-                  enabled={!isPrefillMode && !!selectedClienteId}
-                >
-                  <Picker.Item label={selectedClienteId ? 'Seleccione...' : 'Seleccione cliente primero'} value={0} />
-                  {divisiones.map((d: any) => (
-                    <Picker.Item key={`div_${d.id}`} label={String(d.nombre)} value={Number(d.id)} />
-                  ))}
-                </Picker>
-              </ThemedView>
-
-              <ThemedText style={styles.label}>Contrato *</ThemedText>
-              <ThemedView style={styles.pickerContainer}>
-                <Picker
-                  selectedValue={selectedContratoId ?? 0}
-                  onValueChange={(v) => handleContratoChange(Number(v) || null)}
-                  style={styles.picker}
-                  enabled={!isPrefillMode && !!selectedDivisionId}
-                >
-                  <Picker.Item label={selectedDivisionId ? 'Seleccione...' : 'Seleccione división primero'} value={0} />
-                  {contratos.map((ct: any) => (
-                    <Picker.Item key={`ct_${ct.id}`} label={String(ct.nombre)} value={Number(ct.id)} />
-                  ))}
-                </Picker>
-              </ThemedView>
-
-              <ThemedText style={styles.label}>Sucursal *</ThemedText>
-              <ThemedView style={styles.pickerContainer}>
-                <Picker
-                  selectedValue={selectedSucursalId ?? 0}
-                  onValueChange={(v) => handleSucursalChange(Number(v) || null)}
-                  style={styles.picker}
-                  enabled={!isPrefillMode && !!selectedContratoId}
-                >
-                  <Picker.Item label={selectedContratoId ? 'Seleccione...' : 'Seleccione contrato primero'} value={0} />
-                  {sucursales.map((s: any) => (
-                    <Picker.Item key={`suc_${s.id}`} label={String(s.nombre)} value={Number(s.id)} />
-                  ))}
-                </Picker>
-              </ThemedView>
-
               <ThemedText style={styles.sectionTitle}>Vinculación (Vehículos corporativos)</ThemedText>
-              <ThemedText style={styles.label}>Vehículo corporativo</ThemedText>
-              <ThemedView style={styles.pickerContainer}>
-                <Picker
-                  selectedValue={selectedCorporateVehicleId ?? 0}
-                  onValueChange={(v) => handleCorporateVehicleChange(Number(v) || null)}
-                  style={styles.picker}
-                  enabled={!isPrefillMode && !!selectedSucursalId}
-                >
-                  <Picker.Item label={selectedSucursalId ? 'Seleccione...' : 'Seleccione sucursal primero'} value={0} />
-                  {corporateVehicles.map((v: any) => (
-                    <Picker.Item key={`veh_${v.id}`} label={`${String(v.placa || '—')} (${String(v.tipo || '—')})`} value={Number(v.id)} />
-                  ))}
-                </Picker>
-              </ThemedView>
 
-              <ThemedText style={styles.label}>Uso (solo sin bitácora)</ThemedText>
-              <ThemedView style={styles.pickerContainer}>
-                <Picker
-                  selectedValue={selectedCorporateUseId ?? 0}
-                  onValueChange={(v) => setSelectedCorporateUseId(Number(v) || null)}
-                  style={styles.picker}
-                  enabled={!isPrefillMode && !!selectedCorporateVehicleId}
-                >
-                  <Picker.Item label={selectedCorporateVehicleId ? 'Seleccione...' : 'Seleccione vehículo primero'} value={0} />
-                  {availableCorporateUses.map((u: any) => {
-                    const label = `${String(u.nombre_conductor || '—')} - ${String(u.fecha || '').slice(0, 10)}`;
-                    return <Picker.Item key={`uso_${u.id}`} label={label} value={Number(u.id)} />;
-                  })}
-                </Picker>
-              </ThemedView>
+              {isPrefillMode && prefillVehicleInfo ? (
+                <>
+                  <ThemedView style={styles.row}>
+                    <ThemedText style={styles.label}>Vehículo corporativo</ThemedText>
+                    <ThemedText style={styles.readonlyValue}>
+                      {prefillVehicleInfo.vehiculo ? `${String(prefillVehicleInfo.vehiculo.placa || '—')} (${String(prefillVehicleInfo.vehiculo.tipo || '—')})` : '—'}
+                    </ThemedText>
+                  </ThemedView>
+                  <ThemedView style={styles.row}>
+                    <ThemedText style={styles.label}>Uso</ThemedText>
+                    <ThemedText style={styles.readonlyValue}>
+                      {prefillVehicleInfo.uso ? `${String(prefillVehicleInfo.uso.nombre_conductor || '—')} - ${String(prefillVehicleInfo.uso.fecha || '').slice(0, 10)}` : '—'}
+                    </ThemedText>
+                  </ThemedView>
+                </>
+              ) : (
+                <>
+                  <ThemedText style={styles.label}>Vehículo corporativo</ThemedText>
+                  {isLoadingVehicles ? (
+                    <ThemedView style={styles.inlineLoading}>
+                      <ActivityIndicator size="small" color="#007AFF" />
+                      <ThemedText style={styles.inlineLoadingText}>Cargando vehículos...</ThemedText>
+                    </ThemedView>
+                  ) : (
+                    <ThemedView style={styles.pickerContainer}>
+                      <Picker
+                        selectedValue={selectedCorporateVehicleId ?? 0}
+                        onValueChange={async (v) => {
+                          const newVehicleId = Number(v) || null;
+                          setSelectedCorporateVehicleId(newVehicleId);
+                          // Limpiar el uso seleccionado cuando cambia el vehículo
+                          if (newVehicleId !== selectedCorporateVehicleId) {
+                            setSelectedCorporateUseId(null);
+                          }
+                          // Establecer automáticamente el tipo basándose en el tipo del vehículo seleccionado
+                          if (newVehicleId) {
+                            // Buscar primero en la lista de vehículos cargados
+                            let selectedVehicle = corporateVehicles.find((veh: any) => Number(veh.id) === Number(newVehicleId));
+                            // Si no está en la lista, buscar en el vehículo temporal
+                            if (!selectedVehicle && tempVehicle && Number(tempVehicle.id) === Number(newVehicleId)) {
+                              selectedVehicle = tempVehicle;
+                            }
+                            if (selectedVehicle && selectedVehicle.tipo) {
+                              const vehicleTipo = String(selectedVehicle.tipo).trim();
+                              // Verificar si el tipo del vehículo coincide con uno de los tipos válidos
+                              if (TYPE_OPTIONS.includes(vehicleTipo as TipoBitacora)) {
+                                const tipoToSet = vehicleTipo as TipoBitacora;
+                                setTipo(tipoToSet);
+                                tipoRef.current = tipoToSet;
+                                // Si no estamos editando, resetear el formulario con el nuevo tipo
+                                if (!editing) {
+                                  await resetForm(tipoToSet);
+                                }
+                              }
+                            }
+                          }
+                        }}
+                        style={styles.picker}
+                        enabled={!isPrefillMode}
+                      >
+                        <Picker.Item label="Seleccione..." value={0} />
+                        {corporateVehicles.map((v: any) => (
+                          <Picker.Item key={`veh_${v.id}`} label={`${String(v.placa || '—')} (${String(v.tipo || '—')})`} value={Number(v.id)} />
+                        ))}
+                        {/* Mostrar vehículo temporal si existe y no está en la lista */}
+                        {tempVehicle && !corporateVehicles.find((v: any) => Number(v.id) === Number(tempVehicle.id)) && (
+                          <Picker.Item
+                            key={`veh_temp_${tempVehicle.id}`}
+                            label={`${String(tempVehicle.placa || '—')} (${String(tempVehicle.tipo || '—')})`}
+                            value={Number(tempVehicle.id)}
+                          />
+                        )}
+                      </Picker>
+                    </ThemedView>
+                  )}
+
+                  <ThemedText style={styles.label}>Uso (solo sin bitácora)</ThemedText>
+                  <ThemedView style={styles.pickerContainer}>
+                    <Picker
+                      selectedValue={selectedCorporateUseId ?? 0}
+                      onValueChange={(v) => setSelectedCorporateUseId(Number(v) || null)}
+                      style={styles.picker}
+                      enabled={!isPrefillMode && !!selectedCorporateVehicleId}
+                    >
+                      <Picker.Item label={selectedCorporateVehicleId ? 'Seleccione...' : 'Seleccione vehículo primero'} value={0} />
+                      {availableCorporateUses.map((u: any) => {
+                        const label = `${String(u.nombre_conductor || '—')} - ${String(u.fecha || '').slice(0, 10)}`;
+                        return <Picker.Item key={`uso_${u.id}`} label={label} value={Number(u.id)} />;
+                      })}
+                    </Picker>
+                  </ThemedView>
+                </>
+              )}
 
               {/* Tipo */}
               <ThemedText style={styles.label}>Tipo *</ThemedText>
@@ -1694,6 +1779,8 @@ export default function BitacoraVehiculosDetenidosScreen() {
                 <Picker
                   selectedValue={tipo}
                   onValueChange={(v) => {
+                    // No permitir cambiar el tipo si hay un vehículo seleccionado
+                    if (selectedCorporateVehicleId) return;
                     const next = v as TipoBitacora;
                     if (editing) {
                       // no recreamos completamente en edición, solo cambiamos config (pero mantiene valores)
@@ -1704,20 +1791,34 @@ export default function BitacoraVehiculosDetenidosScreen() {
                     resetForm(next);
                   }}
                   style={styles.picker}
-                  enabled={!isPrefillMode}
+                  enabled={!isPrefillMode && !selectedCorporateVehicleId}
                 >
                   {TYPE_OPTIONS.map((t) => (
                     <Picker.Item key={t} label={t} value={t} />
                   ))}
                 </Picker>
               </ThemedView>
+              {selectedCorporateVehicleId && (
+                <ThemedText style={styles.infoText}>
+                  El tipo se establece automáticamente según el vehículo seleccionado
+                </ThemedText>
+              )}
 
               {/* Formulario dinámico - información general */}
               <ThemedText style={styles.sectionTitle}>Información general</ThemedText>
               {generalConfig.map((f) => {
-                const value = f.kind === 'readonly'
-                  ? (f.key === 'empresa' ? (empresaNombre || generalValues.empresa) : (clienteNombre || generalValues.cliente))
-                  : (generalValues[f.key] ?? '');
+                let value = '';
+                if (f.kind === 'readonly') {
+                  if (f.key === 'empresa') {
+                    value = empresaNombre || generalValues.empresa || '';
+                  } else if (f.key === 'cliente') {
+                    value = clienteNombre || generalValues.cliente || '';
+                  } else if (f.key === 'corpo') {
+                    value = corpoNombre || generalValues.corpo || '';
+                  }
+                } else {
+                  value = generalValues[f.key] ?? '';
+                }
 
                 if (f.kind === 'readonly') {
                   return (
@@ -2492,6 +2593,17 @@ const styles = StyleSheet.create({
   bitLine: { marginBottom: 6, color: '#000' },
   bitLabel: { fontWeight: '700', color: '#333' },
   bitValue: { color: '#000' },
+  inlineLoading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+  },
+  inlineLoadingText: {
+    fontSize: 14,
+    color: '#666',
+  },
 
   collapseButton: {
     flexDirection: 'row',
@@ -2617,6 +2729,13 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     color: '#000000',
+  },
+  infoText: {
+    fontSize: 12,
+    color: '#666666',
+    fontStyle: 'italic',
+    marginTop: 4,
+    marginBottom: 8,
   },
 });
 

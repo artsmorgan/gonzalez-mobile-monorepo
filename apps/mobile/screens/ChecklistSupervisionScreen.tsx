@@ -45,7 +45,7 @@ type StructureNode = {
 // Tipos para evaluación dinámica
 type EvaluationInput = {
   id: string;
-  type: 'text' | 'textarea' | 'select' | 'date' | 'photo';
+  type: 'text' | 'textarea' | 'select' | 'date' | 'photo' | 'checkbox';
   title?: string;
   value: string;
   options?: string[]; // Para select
@@ -65,6 +65,16 @@ type EvaluationSection = {
   subsections: EvaluationSubsection[];
   isPredefined: boolean; // Si es true, no se puede eliminar
 };
+
+// Tipos para artículos del puesto (similar a EntregaPuestosScreen)
+interface ArticuloForm {
+  id: number;
+  nombre: string;
+  cantidad_requerida: number;
+  cantidad_real: number;
+  estado: 'Bueno' | 'Malo' | 'No está';
+  observaciones?: string;
+}
 
 // Constantes predefinidas para Aseo y limpieza
 const ASEO_LIMPIEZA_SECTIONS: EvaluationSection[] = [
@@ -405,63 +415,160 @@ const SEGURIDAD_SECTIONS: EvaluationSection[] = [
     }))
   },
   {
-    id: 'armas',
-    title: 'Armas',
+    id: 'bitacora',
+    title: 'Bitácora',
     isPredefined: true,
     subsections: [
       {
-        id: 'armas-letales',
-        title: 'Letal',
+        id: 'bit-sub-0',
+        title: 'Revisión de bitácora',
         inputs: [
           {
-            id: 'ar-letal-tipo',
-            type: 'select' as const,
-            title: 'Tipo',
-            value: 'Revolver 38',
-            options: ['Revolver 38', 'Pistola 9 MM', 'Escopeta 12', 'No Aplica'],
+            id: 'bit-0-1',
+            type: 'checkbox' as const,
+            title: 'Anotaciones legibles, sin manchones ni tachaduras',
+            value: 'true',
           },
           {
-            id: 'ar-letal-serie',
+            id: 'bit-0-2',
+            type: 'checkbox' as const,
+            title: 'Nombre completo y firma en entrega y recibo de puesto',
+            value: 'true',
+          },
+          {
+            id: 'bit-0-3',
+            type: 'checkbox' as const,
+            title: 'No deben existir espacios en blanco',
+            value: 'true',
+          },
+          {
+            id: 'bit-0-4',
+            type: 'checkbox' as const,
+            title: 'Folios completos',
+            value: 'true',
+          },
+          {
+            id: 'bit-0-5',
+            type: 'checkbox' as const,
+            title: 'Escritura sólo con tinta azul (si aplica según el cliente)',
+            value: 'true',
+          }
+        ]
+      }
+    ]
+  },
+  {
+    id: 'marcas',
+    title: 'Marcas',
+    isPredefined: true,
+    subsections: [
+      {
+        id: 'mar-sub-0',
+        title: 'Recorrido de marcas',
+        inputs: [
+          {
+            id: 'mar-0-1',
+            type: 'checkbox' as const,
+            title: 'Dispositivos (marcas y bastón) en buen estado',
+            value: 'true',
+          },
+          {
+            id: 'mar-0-2',
+            type: 'checkbox' as const,
+            title: 'SEG-F-038-Control de recorrido y marcas Electronicas (Completo, sin manchones ni tachaduras, y no debe estar completo antes de tiempo)',
+            value: 'true',
+          },
+          {
+            id: 'mar-0-3',
+            type: 'checkbox' as const,
+            title: 'Verificación del estado de las pastillas',
+            value: 'true',
+          }
+        ]
+      }
+    ]
+  },
+  {
+    id: 'perimetro',
+    title: 'Perímetro',
+    isPredefined: true,
+    subsections: [
+      {
+        id: 'per-sub-0',
+        title: 'Revisión de perímetro',
+        inputs: [
+          {
+            id: 'per-0-1',
+            type: 'checkbox' as const,
+            title: 'Rerrido por el perimetro revisando barreras perimetrales',
+            value: 'true',
+          },
+          {
+            id: 'per-0-2',
+            type: 'checkbox' as const,
+            title: 'Revisar que no exitan activos cerca de las barreras perimetrales',
+            value: 'true',
+          }
+        ]
+      }
+    ]
+  },
+  {
+    id: 'vehiculos',
+    title: 'Vehículos',
+    isPredefined: true,
+    subsections: [
+      {
+        id: 'veh-sub-0',
+        title: 'Revisión de vehículos',
+        inputs: [
+          {
+            id: 'veh-0-1',
+            type: 'checkbox' as const,
+            title: 'Revisar aleatoriamente el/los vehículos custodiados en el puesto',
+            value: 'true',
+          }
+        ]
+      }
+    ]
+  },
+  {
+    id: 'capacitacion-iso',
+    title: 'Capacitación ISO',
+    isPredefined: true,
+    subsections: [
+      {
+        id: 'cap-sub-0',
+        title: 'Política de Calidad',
+        inputs: [
+          {
+            id: 'cap-0-1',
             type: 'text' as const,
-            title: 'Serie',
+            title: '¿Cual es?',
             value: '',
           },
           {
-            id: 'ar-letal-municiones',
-            type: 'select' as const,
-            title: 'Cantidad de municiones',
-            value: '0',
-            options: ['0', '6', '12', '15', '18', '24', '30', '45'],
-          },
-          {
-            id: 'ar-letal-otra-cantidad',
+            id: 'cap-0-2',
             type: 'text' as const,
-            title: 'Otra cantidad',
+            title: '¿Como aporta?',
             value: '',
           }
         ]
       },
       {
-        id: 'armas-no-letales',
-        title: 'No letal',
+        id: 'cap-sub-1',
+        title: 'Objetivos de Calidad',
         inputs: [
           {
-            id: 'ar-noletal-tipo',
-            type: 'select' as const,
-            title: 'Tipo',
-            value: 'Chuzo Eléctrico',
-            options: ['Chuzo Eléctrico', 'Taser Eléctrico', 'No Letal de Gas', 'Balas de Goma (PepperBall)', 'No Aplica'],
-          },
-          {
-            id: 'ar-noletal-serie',
+            id: 'cap-1-1',
             type: 'text' as const,
-            title: 'Serie',
+            title: '¿Cual es?',
             value: '',
           },
           {
-            id: 'ar-noletal-municiones',
+            id: 'cap-1-2',
             type: 'text' as const,
-            title: 'Cantidad de municiones',
+            title: '¿Como aporta?',
             value: '',
           }
         ]
@@ -469,125 +576,96 @@ const SEGURIDAD_SECTIONS: EvaluationSection[] = [
     ]
   },
   {
-    id: 'equipos-cinturon',
-    title: 'Equipos del Cinturón',
+    id: 'papeleria',
+    title: 'Papelería',
     isPredefined: true,
     subsections: [
       {
-        id: 'ec-sub-0',
-        title: 'Arma',
+        id: 'pap-sub-0',
+        title: 'Papelería completa, y sin manchones o tachones/ Información verídica (Cuando aplique el registro, de utilizarse la papelería del cliente si el contrato lo indica)',
         inputs: [
           {
-            id: 'ec-0-cal',
-            type: 'select' as const,
-            title: 'Respuesta',
-            value: 'Bueno',
-            options: ['Bueno', 'Regular', 'Requiere Cambio', 'No Aplica'],
-          }
-        ]
-      },
-      {
-        id: 'ec-sub-1',
-        title: 'Gas pimienta',
-        inputs: [
-          {
-            id: 'ec-1-cal',
-            type: 'select' as const,
-            title: 'Respuesta',
-            value: 'Bueno',
-            options: ['Bueno', 'Regular', 'Requiere Cambio', 'No Aplica'],
-          }
-        ]
-      },
-      {
-        id: 'ec-sub-2',
-        title: 'Black Jack',
-        inputs: [
-          {
-            id: 'ec-2-cal',
-            type: 'select' as const,
-            title: 'Respuesta',
-            value: 'Bueno',
-            options: ['Bueno', 'Regular', 'Requiere Cambio', 'No Aplica'],
+            id: 'pap-0-1',
+            type: 'checkbox' as const,
+            title: 'SEG-F-016-Pernocte de vehículos',
+            value: 'true',
           },
           {
-            id: 'ec-2-fecha',
-            type: 'date' as const,
-            title: 'Fecha de vencimiento',
+            id: 'pap-0-2',
+            type: 'checkbox' as const,
+            title: 'SEG-F-017-Bitácora de revisión bicicletas detenidas y SEG-F-007-Bitácora de revisión motos detenidas',
+            value: 'true',
+          },
+          {
+            id: 'pap-0-3',
+            type: 'checkbox' as const,
+            title: 'SEG-F-018-Control de ingreso y salida de visitas y vehículos particulares',
+            value: 'true',
+          },
+          {
+            id: 'pap-0-4',
+            type: 'checkbox' as const,
+            title: 'SEG-F-019-Entradas y salida de materiales activos del cliente',
+            value: 'true',
+          },
+          {
+            id: 'pap-0-5',
+            type: 'checkbox' as const,
+            title: 'SEG-F-020-Control de ingreso y salida de vehículos Institucionales',
+            value: 'true',
+          },
+          {
+            id: 'pap-0-6',
+            type: 'checkbox' as const,
+            title: 'SEG-F-021-Registro de llaves',
+            value: 'true',
+          },
+          {
+            id: 'pap-0-7',
+            type: 'checkbox' as const,
+            title: 'SEG-F-022-Boleta de salida de vehículos',
+            value: 'true',
+          },
+          {
+            id: 'pap-0-8',
+            type: 'checkbox' as const,
+            title: 'SEG-F-023-Control de entrega de puesto',
+            value: 'true',
+          },
+          {
+            id: 'pap-0-9',
+            type: 'checkbox' as const,
+            title: 'SEG-F-024-Control de activos visitantes',
+            value: 'true',
+          },
+          {
+            id: 'pap-0-10',
+            type: 'text' as const,
+            title: 'Número de Serie del arma vrs documento de matrícula',
             value: '',
-          }
-        ]
-      },
-      {
-        id: 'ec-sub-3',
-        title: 'Esposas',
-        inputs: [
-          {
-            id: 'ec-3-cal',
-            type: 'select' as const,
-            title: 'Respuesta',
-            value: 'Bueno',
-            options: ['Bueno', 'Regular', 'Requiere Cambio', 'No Aplica'],
-          }
-        ]
-      },
-      {
-        id: 'ec-sub-4',
-        title: 'Cinturón',
-        inputs: [
-          {
-            id: 'ec-4-cal',
-            type: 'select' as const,
-            title: 'Respuesta',
-            value: 'Bueno',
-            options: ['Bueno', 'Regular', 'Requiere Cambio', 'No Aplica'],
           }
         ]
       }
     ]
   },
   {
-    id: 'estado-uniforme',
-    title: 'Estado del Uniforme',
+    id: 'funcion',
+    title: 'Función',
     isPredefined: true,
     subsections: [
-      'Camisa', 'Camisa Tipo Polo', 'Pantalon', 'Corbata', 'Zapatos',
-      'Zapatos Dieléctricos', 'Chaleco', 'Saco', 'Jacket', 'Casco Dieléctrico'
-    ].map((item, idx) => ({
-      id: `eu-sub-${idx}`,
-      title: item,
-      inputs: [
-        {
-          id: `eu-${idx}-cal`,
-          type: 'select' as const,
-          title: 'Respuesta',
-          value: 'Bueno',
-          options: ['Bueno', 'Regular', 'Requiere Cambio', 'No Aplica'],
-        }
-      ]
-    }))
-  },
-  {
-    id: 'equipos-puesto',
-    title: 'Equipos del puesto',
-    isPredefined: true,
-    subsections: [
-      'Linterna portátil', 'Silla', 'Mesa', 'Locker', 'Microondas',
-      'Coffe Maker', 'Capa o Poncho', 'Botas de Hule', 'Paraguas',
-      'Trampabalas', 'Botiquín', 'Caja Fuerte'
-    ].map((item, idx) => ({
-      id: `ep-sub-${idx}`,
-      title: item,
-      inputs: [
-        {
-          id: `ep-${idx}-cal`,
-          type: 'select' as const,
-          title: 'Respuesta',
-          value: 'Bueno',
-          options: ['Bueno', 'Regular', 'Requiere Cambio', 'No Aplica'],
-        }
-      ]
-    }))
+      {
+        id: 'fun-sub-0',
+        title: 'Revisión Funciones',
+        inputs: [
+          {
+            id: 'fun-0-1',
+            type: 'checkbox' as const,
+            title: 'Revisar aleatoriamente 3 puntos de la SEG-F-038-Guia de Funciones del puesto de cada lugar y anotar en las observaciones los hallazgos de todos los corpos visitados',
+            value: 'true',
+          }
+        ]
+      }
+    ]
   }
 ];
 
@@ -653,16 +731,20 @@ export default function ChecklistSupervisionScreen() {
 
   // Estados para estructura jerárquica
   const [structure, setStructure] = useState<StructureNode[]>([]);
+  const [selectedEmpresaId, setSelectedEmpresaId] = useState<number | null>(null);
   const [selectedClienteId, setSelectedClienteId] = useState<number | null>(null);
   const [selectedDivisionId, setSelectedDivisionId] = useState<number | null>(null);
+  const [selectedContratoId, setSelectedContratoId] = useState<number | null>(null);
   const [selectedCorpoId, setSelectedCorpoId] = useState<number | null>(null);
   const [selectedPuestoId, setSelectedPuestoId] = useState<number | null>(null);
 
   // Estados para filtros
   const [isFiltersExpanded, setIsFiltersExpanded] = useState(false);
   const [filterSearch, setFilterSearch] = useState('');
+  const [filterEmpresaId, setFilterEmpresaId] = useState<number | null>(null);
   const [filterClienteId, setFilterClienteId] = useState<number | null>(null);
   const [filterDivisionId, setFilterDivisionId] = useState<number | null>(null);
+  const [filterContratoId, setFilterContratoId] = useState<number | null>(null);
   const [filterCorpoId, setFilterCorpoId] = useState<number | null>(null);
   const [filterPuestoId, setFilterPuestoId] = useState<number | null>(null);
 
@@ -698,22 +780,31 @@ export default function ChecklistSupervisionScreen() {
   // Estado para items expandidos (como StaffEvaluationsScreen)
   const [expandedChecklists, setExpandedChecklists] = useState<Set<string>>(new Set());
 
+  // Estados para artículos del puesto
+  const [articulos, setArticulos] = useState<ArticuloForm[]>([]);
+
   // Nodos computados para estructura jerárquica
+  const empresas = useMemo(() => (Array.isArray(structure) ? structure : []), [structure]);
+
   const clientes = useMemo(() => {
-    const empresa = structure.find((e: any) => e.id);
+    const empresa = empresas.find((e: any) => e.id === selectedEmpresaId);
     return empresa?.clientes || [];
-  }, [structure]);
+  }, [empresas, selectedEmpresaId]);
 
   const divisiones = useMemo(() => {
     const cliente = clientes.find((c: any) => c.id === selectedClienteId);
     return cliente?.division || [];
   }, [clientes, selectedClienteId]);
 
-  const sucursales = useMemo(() => {
+  const contratos = useMemo(() => {
     const division = divisiones.find((d: any) => d.id === selectedDivisionId);
-    const contratos = division?.contratos || [];
-    return contratos.flatMap((c: any) => c.sucursales || []);
+    return division?.contratos || [];
   }, [divisiones, selectedDivisionId]);
+
+  const sucursales = useMemo(() => {
+    const contrato = contratos.find((c: any) => c.id === selectedContratoId);
+    return contrato?.sucursales || [];
+  }, [contratos, selectedContratoId]);
 
   const puestos = useMemo(() => {
     const sucursal = sucursales.find((s: any) => s.id === selectedCorpoId);
@@ -721,21 +812,27 @@ export default function ChecklistSupervisionScreen() {
   }, [sucursales, selectedCorpoId]);
 
   // Mismos nodos para filtros
+  const filterEmpresas = useMemo(() => (Array.isArray(structure) ? structure : []), [structure]);
+
   const filterClientes = useMemo(() => {
-    const empresa = structure.find((e: any) => e.id);
+    const empresa = filterEmpresas.find((e: any) => e.id === filterEmpresaId);
     return empresa?.clientes || [];
-  }, [structure]);
+  }, [filterEmpresas, filterEmpresaId]);
 
   const filterDivisiones = useMemo(() => {
     const cliente = filterClientes.find((c: any) => c.id === filterClienteId);
     return cliente?.division || [];
   }, [filterClientes, filterClienteId]);
 
-  const filterSucursales = useMemo(() => {
+  const filterContratos = useMemo(() => {
     const division = filterDivisiones.find((d: any) => d.id === filterDivisionId);
-    const contratos = division?.contratos || [];
-    return contratos.flatMap((c: any) => c.sucursales || []);
+    return division?.contratos || [];
   }, [filterDivisiones, filterDivisionId]);
+
+  const filterSucursales = useMemo(() => {
+    const contrato = filterContratos.find((c: any) => c.id === filterContratoId);
+    return contrato?.sucursales || [];
+  }, [filterContratos, filterContratoId]);
 
   const filterPuestos = useMemo(() => {
     const sucursal = filterSucursales.find((s: any) => s.id === filterCorpoId);
@@ -897,6 +994,35 @@ export default function ChecklistSupervisionScreen() {
     }
   }, [selectedDivisionId, isCreating, divisiones, editing]);
 
+  // Cargar artículos del puesto cuando se selecciona un puesto (solo si no estamos editando)
+  useEffect(() => {
+    // No cargar artículos si estamos editando un registro existente
+    if (editing) return;
+
+    if (selectedPuestoId && isCreating && selectedDivisionId) {
+      // Buscar el puesto en la estructura
+      const sucursal = sucursales.find((s: any) => s.id === selectedCorpoId);
+      const puesto = sucursal?.puestos?.find((p: any) => p.id === selectedPuestoId);
+
+      if (puesto && (puesto as any).articulos && Array.isArray((puesto as any).articulos)) {
+        // Inicializar artículos con estado por defecto "Bueno"
+        const articulosForm: ArticuloForm[] = (puesto as any).articulos.map((art: any) => ({
+          id: art.id,
+          nombre: art.nombre || 'Desconocido',
+          cantidad_requerida: art.cantidad || 0,
+          cantidad_real: art.cantidad || 0,
+          estado: 'Bueno' as const,
+          observaciones: art.observaciones || '',
+        }));
+        setArticulos(articulosForm);
+      } else {
+        setArticulos([]);
+      }
+    } else if (!selectedPuestoId && isCreating) {
+      setArticulos([]);
+    }
+  }, [selectedPuestoId, selectedCorpoId, selectedDivisionId, isCreating, sucursales, editing]);
+
   // Funciones para manejar evaluación dinámica
   const addSection = () => {
     const newSection: EvaluationSection = {
@@ -931,7 +1057,7 @@ export default function ChecklistSupervisionScreen() {
     setNewSubsectionInputs([]);
   };
 
-  const addInputToNewSubsection = (type: 'text' | 'textarea' | 'select' | 'date' | 'photo') => {
+  const addInputToNewSubsection = (type: 'text' | 'textarea' | 'select' | 'date' | 'photo' | 'checkbox') => {
     const newInput: Omit<EvaluationInput, 'id' | 'value'> = {
       type,
       title: '',
@@ -959,7 +1085,7 @@ export default function ChecklistSupervisionScreen() {
       inputs: newSubsectionInputs.map((input, idx) => ({
         id: `input-${Date.now()}-${idx}`,
         ...input,
-        value: '',
+        value: input.type === 'checkbox' ? 'true' : '',
       })),
     };
 
@@ -991,12 +1117,12 @@ export default function ChecklistSupervisionScreen() {
     );
   };
 
-  const addInput = (sectionId: string, subsectionId: string, type: 'text' | 'textarea' | 'select' | 'date' | 'photo') => {
+  const addInput = (sectionId: string, subsectionId: string, type: 'text' | 'textarea' | 'select' | 'date' | 'photo' | 'checkbox') => {
     const newInput: EvaluationInput = {
       id: `input-${Date.now()}`,
       type,
       title: '',
-      value: '',
+      value: type === 'checkbox' ? 'true' : '',
       options: type === 'select' ? ['Opción 1', 'Opción 2'] : undefined,
     };
     setEvaluation(
@@ -1138,6 +1264,31 @@ export default function ChecklistSupervisionScreen() {
     }
   };
 
+  // Funciones para manejar artículos del puesto (similar a EntregaPuestosScreen)
+  const handleArticuloEstadoChange = (index: number, estado: 'Bueno' | 'Malo' | 'No está') => {
+    const newArticulos = [...articulos];
+    newArticulos[index].estado = estado;
+    if (estado === 'No está') {
+      newArticulos[index].cantidad_real = 0;
+    }
+    setArticulos(newArticulos);
+  };
+
+  const handleArticuloCantidadChange = (index: number, cantidad: number) => {
+    const newArticulos = [...articulos];
+    newArticulos[index].cantidad_real = cantidad;
+    if (cantidad === 0) {
+      newArticulos[index].estado = 'No está';
+    }
+    setArticulos(newArticulos);
+  };
+
+  const handleArticuloObservacionesChange = (index: number, observaciones: string) => {
+    const newArticulos = [...articulos];
+    newArticulos[index].observaciones = observaciones;
+    setArticulos(newArticulos);
+  };
+
   // Funciones para cámara (siguiendo patrón de VehiclesScreen)
   const openCamera = async (target: string) => {
     if (!permission) {
@@ -1243,10 +1394,13 @@ export default function ChecklistSupervisionScreen() {
     setEvaluation([]);
     setFirmaSupervisor('');
     setFirmaResponsable('');
+    setSelectedEmpresaId(null);
     setSelectedClienteId(null);
     setSelectedDivisionId(null);
+    setSelectedContratoId(null);
     setSelectedCorpoId(null);
     setSelectedPuestoId(null);
+    setArticulos([]);
   };
 
   const startCreating = () => {
@@ -1281,10 +1435,38 @@ export default function ChecklistSupervisionScreen() {
       setEvaluation([]);
     }
 
+    // Cargar artículos del puesto si existen
+    try {
+      const articulosData = (it as any).articulos_puesto;
+      if (articulosData) {
+        const parsedArticulos = typeof articulosData === 'string' ? JSON.parse(articulosData) : articulosData;
+        if (Array.isArray(parsedArticulos) && parsedArticulos.length > 0) {
+          // Asegurar que cada artículo tenga observaciones inicializadas
+          const articulosConObservaciones = parsedArticulos.map((art: any) => ({
+            ...art,
+            observaciones: art.observaciones || '',
+          }));
+          setArticulos(articulosConObservaciones);
+        } else {
+          setArticulos([]);
+        }
+      } else {
+        setArticulos([]);
+      }
+    } catch (error) {
+      console.error('startEditing: Error parseando artículos:', error);
+      setArticulos([]);
+    }
+
     // Cargar jerarquía basándose en los IDs del registro (después de cargar evaluación)
+    // Buscar empresa que contiene el cliente
+    const empresa = structure.find((e: any) => e.clientes?.some((c: any) => c.id === it.cliente_id));
+    if (empresa) {
+      setSelectedEmpresaId(empresa.id);
+    }
     setSelectedClienteId(it.cliente_id);
-    // Buscar la división basándose en el cliente
-    const empresa = structure.find((e: any) => e.id);
+
+    // Buscar la división y contrato basándose en el cliente y corpo_id
     const cliente = empresa?.clientes?.find((c: any) => c.id === it.cliente_id);
     if (cliente && cliente.division && cliente.division.length > 0) {
       // Buscar la división que contiene el corpo_id
@@ -1296,6 +1478,7 @@ export default function ChecklistSupervisionScreen() {
             // Usar setTimeout para asegurar que editing esté establecido antes de cambiar selectedDivisionId
             setTimeout(() => {
               setSelectedDivisionId(div.id);
+              setSelectedContratoId(contrato.id);
             }, 100);
             break;
           }
@@ -1313,12 +1496,8 @@ export default function ChecklistSupervisionScreen() {
   };
 
   const validateForm = () => {
-    if (!selectedClienteId || !selectedCorpoId || !selectedPuestoId) {
-      Alert.alert('Error', 'Debes seleccionar Cliente, Sucursal y Puesto');
-      return false;
-    }
-    if (!selectedDivisionId) {
-      Alert.alert('Error', 'Debes seleccionar una División');
+    if (!selectedEmpresaId || !selectedClienteId || !selectedDivisionId || !selectedContratoId || !selectedCorpoId || !selectedPuestoId) {
+      Alert.alert('Error', 'Debes seleccionar todos los campos requeridos (Empresa, Cliente, División, Contrato, Sucursal y Puesto)');
       return false;
     }
     if (!ejecutivoCuenta.trim()) {
@@ -1368,14 +1547,18 @@ export default function ChecklistSupervisionScreen() {
     const evaluationString = JSON.stringify(evaluationWithImages);
     console.log('Tamaño del JSON de evaluación:', evaluationString.length, 'caracteres');
 
+    const articulosPuesto = articulos && articulos.length > 0 ? JSON.stringify(articulos) : '[]';
+
     const requestData = {
       cliente_id: selectedClienteId,
       division_id: selectedDivisionId,
       corpo_id: selectedCorpoId,
       puesto_id: selectedPuestoId,
+      division: selectedDivisionId,
       fecha: fecha.toISOString(),
       ejecutivo_cuenta: ejecutivoCuenta,
       evaluacion: JSON.stringify(evaluationWithImages),
+      articulos_puesto: articulosPuesto,
       firma_supervisor: firmaSupervisor,
       firma_responsable: firmaResponsable,
     };
@@ -1531,8 +1714,10 @@ export default function ChecklistSupervisionScreen() {
 
   const resetAllFilters = () => {
     setFilterSearch('');
+    setFilterEmpresaId(null);
     setFilterClienteId(null);
     setFilterDivisionId(null);
+    setFilterContratoId(null);
     setFilterCorpoId(null);
     setFilterPuestoId(null);
   };
@@ -1550,11 +1735,12 @@ export default function ChecklistSupervisionScreen() {
         if (!matchesSearch) return false;
       }
       if (filterClienteId && c.cliente_id !== filterClienteId) return false;
+      if (filterDivisionId && c.division_id !== filterDivisionId) return false;
       if (filterCorpoId && c.corpo_id !== filterCorpoId) return false;
       if (filterPuestoId && c.puesto_id !== filterPuestoId) return false;
       return true;
     });
-  }, [checklists, filterSearch, filterClienteId, filterCorpoId, filterPuestoId]);
+  }, [checklists, filterSearch, filterClienteId, filterDivisionId, filterCorpoId, filterPuestoId]);
 
   // Renderizar evaluación dinámica (como StaffEvaluationsScreen)
   const renderEvaluationInput = (input: EvaluationInput, sectionId: string, subsectionId: string) => {
@@ -1611,6 +1797,27 @@ export default function ChecklistSupervisionScreen() {
         );
       case 'photo':
         return null; // Las fotos se manejan fuera de renderEvaluationInput
+      case 'checkbox':
+        const isChecked = input.value === 'true';
+        return (
+          <View style={styles.checkboxContainer}>
+            <TouchableOpacity
+              style={[
+                styles.checkbox,
+                isChecked ? styles.checkboxChecked : styles.checkboxUnchecked
+              ]}
+              onPress={() => updateInput(sectionId, subsectionId, input.id, { value: isChecked ? 'false' : 'true' })}
+              activeOpacity={0.8}
+            >
+              {isChecked && (
+                <Ionicons name="checkmark" size={16} color="#fff" />
+              )}
+            </TouchableOpacity>
+            {input.title && (
+              <ThemedText style={styles.checkboxLabel}>Cumplido</ThemedText>
+            )}
+          </View>
+        );
       default:
         return null;
     }
@@ -1735,7 +1942,9 @@ export default function ChecklistSupervisionScreen() {
                                 <ThemedText style={styles.evalValue}>
                                   {input.type === 'photo'
                                     ? (input.value || input.file_name ? 'Imagen adjunta' : '-')
-                                    : (input.value || '-')}
+                                    : input.type === 'checkbox'
+                                      ? (input.value === 'true' ? 'Marcado' : 'No marcado')
+                                      : (input.value || '-')}
                                 </ThemedText>
                               </ThemedText>
                             )}
@@ -1746,7 +1955,9 @@ export default function ChecklistSupervisionScreen() {
                                 <ThemedText style={styles.evalValue}>
                                   {input.type === 'photo'
                                     ? (input.value || input.file_name ? 'Imagen adjunta' : '-')
-                                    : (input.value || '-')}
+                                    : input.type === 'checkbox'
+                                      ? (input.value === 'true' ? 'Marcado' : 'No marcado')
+                                      : (input.value || '-')}
                                 </ThemedText>
                               </ThemedText>
                             )}
@@ -1757,7 +1968,9 @@ export default function ChecklistSupervisionScreen() {
                                 <ThemedText style={styles.evalValue}>
                                   {input.type === 'photo'
                                     ? (input.value || input.file_name ? 'Imagen adjunta' : '-')
-                                    : (input.value || '-')}
+                                    : input.type === 'checkbox'
+                                      ? (input.value === 'true' ? 'Marcado' : 'No marcado')
+                                      : (input.value || '-')}
                                 </ThemedText>
                               </ThemedText>
                             )}
@@ -1855,25 +2068,51 @@ export default function ChecklistSupervisionScreen() {
 
                   {/* Árbol jerárquico para filtros */}
                   <ThemedView style={styles.filterGroup}>
-                    <ThemedText style={styles.filterLabel}>Cliente:</ThemedText>
+                    <ThemedText style={styles.filterLabel}>Empresa:</ThemedText>
                     <View style={styles.pickerContainer}>
                       <Picker
-                        selectedValue={filterClienteId || ''}
+                        selectedValue={filterEmpresaId || ''}
                         onValueChange={(value) => {
-                          setFilterClienteId(value && value !== '' ? Number(value) : null);
+                          setFilterEmpresaId(value && value !== '' ? Number(value) : null);
+                          setFilterClienteId(null);
                           setFilterDivisionId(null);
+                          setFilterContratoId(null);
                           setFilterCorpoId(null);
                           setFilterPuestoId(null);
                         }}
                         style={styles.picker}
                       >
                         <Picker.Item label="Seleccionar..." value="" />
-                        {filterClientes.map((c: any) => (
-                          <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                        {filterEmpresas.map((e: any) => (
+                          <Picker.Item key={e.id} label={e.nombre} value={e.id} />
                         ))}
                       </Picker>
                     </View>
                   </ThemedView>
+
+                  {filterEmpresaId && (
+                    <ThemedView style={styles.filterGroup}>
+                      <ThemedText style={styles.filterLabel}>Cliente:</ThemedText>
+                      <View style={styles.pickerContainer}>
+                        <Picker
+                          selectedValue={filterClienteId || ''}
+                          onValueChange={(value) => {
+                            setFilterClienteId(value && value !== '' ? Number(value) : null);
+                            setFilterDivisionId(null);
+                            setFilterContratoId(null);
+                            setFilterCorpoId(null);
+                            setFilterPuestoId(null);
+                          }}
+                          style={styles.picker}
+                        >
+                          <Picker.Item label="Seleccionar..." value="" />
+                          {filterClientes.map((c: any) => (
+                            <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                          ))}
+                        </Picker>
+                      </View>
+                    </ThemedView>
+                  )}
 
                   {filterClienteId && (
                     <ThemedView style={styles.filterGroup}>
@@ -1883,6 +2122,7 @@ export default function ChecklistSupervisionScreen() {
                           selectedValue={filterDivisionId || ''}
                           onValueChange={(value) => {
                             setFilterDivisionId(value && value !== '' ? Number(value) : null);
+                            setFilterContratoId(null);
                             setFilterCorpoId(null);
                             setFilterPuestoId(null);
                           }}
@@ -1898,6 +2138,28 @@ export default function ChecklistSupervisionScreen() {
                   )}
 
                   {filterDivisionId && (
+                    <ThemedView style={styles.filterGroup}>
+                      <ThemedText style={styles.filterLabel}>Contrato:</ThemedText>
+                      <View style={styles.pickerContainer}>
+                        <Picker
+                          selectedValue={filterContratoId || ''}
+                          onValueChange={(value) => {
+                            setFilterContratoId(value && value !== '' ? Number(value) : null);
+                            setFilterCorpoId(null);
+                            setFilterPuestoId(null);
+                          }}
+                          style={styles.picker}
+                        >
+                          <Picker.Item label="Seleccionar..." value="" />
+                          {filterContratos.map((c: any) => (
+                            <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                          ))}
+                        </Picker>
+                      </View>
+                    </ThemedView>
+                  )}
+
+                  {filterContratoId && (
                     <ThemedView style={styles.filterGroup}>
                       <ThemedText style={styles.filterLabel}>Sucursal:</ThemedText>
                       <View style={styles.pickerContainer}>
@@ -1954,25 +2216,54 @@ export default function ChecklistSupervisionScreen() {
 
               {/* Árbol jerárquico para formulario */}
               <ThemedView style={styles.filterGroup}>
-                <ThemedText style={styles.label}>Cliente *</ThemedText>
+                <ThemedText style={styles.label}>Empresa *</ThemedText>
                 <View style={styles.pickerContainer}>
                   <Picker
-                    selectedValue={selectedClienteId || ''}
+                    selectedValue={selectedEmpresaId || ''}
                     onValueChange={(value) => {
-                      setSelectedClienteId(value && value !== '' ? Number(value) : null);
+                      setSelectedEmpresaId(value && value !== '' ? Number(value) : null);
+                      setSelectedClienteId(null);
                       setSelectedDivisionId(null);
+                      setSelectedContratoId(null);
                       setSelectedCorpoId(null);
                       setSelectedPuestoId(null);
                     }}
                     style={styles.picker}
                   >
                     <Picker.Item label="Seleccionar..." value="" />
-                    {clientes.map((c: any) => (
-                      <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                    {empresas.map((e: any) => (
+                      <Picker.Item key={e.id} label={e.nombre} value={e.id} />
                     ))}
                   </Picker>
                 </View>
               </ThemedView>
+
+              {selectedEmpresaId && (
+                <ThemedView style={styles.filterGroup}>
+                  <ThemedText style={styles.label}>Cliente *</ThemedText>
+                  <View style={styles.pickerContainer}>
+                    <Picker
+                      selectedValue={selectedClienteId || ''}
+                      onValueChange={(value) => {
+                        setSelectedClienteId(value && value !== '' ? Number(value) : null);
+                        setSelectedDivisionId(null);
+                        setSelectedContratoId(null);
+                        setSelectedCorpoId(null);
+                        setSelectedPuestoId(null);
+                      }}
+                      style={styles.picker}
+                    >
+                      <Picker.Item label="Seleccionar..." value="" />
+                      {clientes.map((c: any) => (
+                        <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                      ))}
+                    </Picker>
+                  </View>
+                  {selectedClienteId && clientes.length === 0 && (
+                    <ThemedText style={styles.errorText}>No hay clientes disponibles</ThemedText>
+                  )}
+                </ThemedView>
+              )}
 
               {selectedClienteId && (
                 <ThemedView style={styles.filterGroup}>
@@ -1982,6 +2273,7 @@ export default function ChecklistSupervisionScreen() {
                       selectedValue={selectedDivisionId || ''}
                       onValueChange={(value) => {
                         setSelectedDivisionId(value && value !== '' ? Number(value) : null);
+                        setSelectedContratoId(null);
                         setSelectedCorpoId(null);
                         setSelectedPuestoId(null);
                       }}
@@ -2000,6 +2292,31 @@ export default function ChecklistSupervisionScreen() {
               )}
 
               {selectedDivisionId && (
+                <ThemedView style={styles.filterGroup}>
+                  <ThemedText style={styles.label}>Contrato *</ThemedText>
+                  <View style={styles.pickerContainer}>
+                    <Picker
+                      selectedValue={selectedContratoId || ''}
+                      onValueChange={(value) => {
+                        setSelectedContratoId(value && value !== '' ? Number(value) : null);
+                        setSelectedCorpoId(null);
+                        setSelectedPuestoId(null);
+                      }}
+                      style={styles.picker}
+                    >
+                      <Picker.Item label="Seleccionar..." value="" />
+                      {contratos.map((c: any) => (
+                        <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                      ))}
+                    </Picker>
+                  </View>
+                  {selectedContratoId && contratos.length === 0 && (
+                    <ThemedText style={styles.errorText}>No hay contratos disponibles</ThemedText>
+                  )}
+                </ThemedView>
+              )}
+
+              {selectedContratoId && (
                 <ThemedView style={styles.filterGroup}>
                   <ThemedText style={styles.label}>Sucursal *</ThemedText>
                   <View style={styles.pickerContainer}>
@@ -2163,6 +2480,7 @@ export default function ChecklistSupervisionScreen() {
                                   { text: 'Select', onPress: () => addInput(section.id, subsection.id, 'select') },
                                   { text: 'Fecha', onPress: () => addInput(section.id, subsection.id, 'date') },
                                   { text: 'Foto', onPress: () => addInput(section.id, subsection.id, 'photo') },
+                                  { text: 'Checkbox', onPress: () => addInput(section.id, subsection.id, 'checkbox') },
                                   { text: 'Cancelar', style: 'cancel' },
                                 ]
                               );
@@ -2202,6 +2520,62 @@ export default function ChecklistSupervisionScreen() {
                   </TouchableOpacity>
                 )}
               </ThemedView>
+
+              {/* Sección de artículos */}
+              {selectedDivisionId && selectedPuestoId && (
+                <ThemedView style={styles.infoSection}>
+                  <ThemedText style={styles.sectionTitle}>Artículos</ThemedText>
+                  {articulos.length > 0 ? (
+                    articulos.map((articulo, index) => (
+                      <ThemedView key={articulo.id} style={styles.bitacoraCard}>
+                        <ThemedText style={styles.bitTitle}>{articulo.nombre}</ThemedText>
+                        <ThemedText style={styles.label}>Estado:</ThemedText>
+                        <View style={styles.pickerContainer}>
+                          <Picker
+                            selectedValue={articulo.estado}
+                            onValueChange={(value) => handleArticuloEstadoChange(index, value)}
+                            style={styles.picker}
+                          >
+                            <Picker.Item label="Bueno" value="Bueno" />
+                            <Picker.Item label="Malo" value="Malo" />
+                            <Picker.Item label="No está" value="No está" />
+                          </Picker>
+                        </View>
+                        <ThemedText style={styles.label}>Cantidad Requerida:</ThemedText>
+                        <TextInput
+                          style={[styles.input, styles.inputReadOnly]}
+                          value={String(articulo.cantidad_requerida)}
+                          editable={false}
+                          placeholderTextColor="#999"
+                        />
+                        <ThemedText style={styles.label}>Cantidad Real:</ThemedText>
+                        <TextInput
+                          style={styles.input}
+                          value={String(articulo.cantidad_real)}
+                          onChangeText={(text) => {
+                            const num = parseInt(text) || 0;
+                            handleArticuloCantidadChange(index, num);
+                          }}
+                          keyboardType="numeric"
+                          placeholderTextColor="#999"
+                        />
+                        <ThemedText style={styles.label}>Observaciones:</ThemedText>
+                        <TextInput
+                          style={[styles.input, styles.textArea]}
+                          value={articulo.observaciones || ''}
+                          onChangeText={(text) => handleArticuloObservacionesChange(index, text)}
+                          placeholder="Ingrese observaciones..."
+                          placeholderTextColor="#999"
+                          multiline
+                          numberOfLines={3}
+                        />
+                      </ThemedView>
+                    ))
+                  ) : (
+                    <ThemedText style={styles.errorText}>No hay artículos disponibles para este puesto</ThemedText>
+                  )}
+                </ThemedView>
+              )}
 
               {/* Firma supervisor */}
               <ThemedText style={styles.sectionTitle}>Firma supervisor *</ThemedText>
@@ -2448,6 +2822,7 @@ export default function ChecklistSupervisionScreen() {
                         <Picker.Item label="Select" value="select" />
                         <Picker.Item label="Fecha" value="date" />
                         <Picker.Item label="Foto" value="photo" />
+                        <Picker.Item label="Checkbox" value="checkbox" />
                       </Picker>
                     </View>
                   </ThemedView>
@@ -2501,6 +2876,7 @@ export default function ChecklistSupervisionScreen() {
                       { text: 'Select', onPress: () => addInputToNewSubsection('select') },
                       { text: 'Fecha', onPress: () => addInputToNewSubsection('date') },
                       { text: 'Foto', onPress: () => addInputToNewSubsection('photo') },
+                      { text: 'Checkbox', onPress: () => addInputToNewSubsection('checkbox') },
                       { text: 'Cancelar', style: 'cancel' },
                     ]
                   );
@@ -2623,6 +2999,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
     marginBottom: 12,
   },
+  inputReadOnly: { backgroundColor: '#F0F0F0' },
   textArea: { minHeight: 100, textAlignVertical: 'top' },
   dateButton: {
     flexDirection: 'row',
@@ -2637,6 +3014,13 @@ const styles = StyleSheet.create({
   },
   dateButtonText: { fontSize: 15, color: '#000' },
   sectionTitle: { fontSize: 16, fontWeight: '700', color: '#000', marginTop: 16, marginBottom: 12 },
+  infoSection: {
+    marginTop: 16,
+    marginBottom: 16,
+    paddingBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+  },
   signatureButtons: {
     flexDirection: 'row',
     gap: 12,
@@ -2832,6 +3216,34 @@ const styles = StyleSheet.create({
   inputCard: {
     marginBottom: 8,
     position: 'relative',
+  },
+  checkboxContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+    paddingVertical: 8,
+  },
+  checkbox: {
+    width: 24,
+    height: 24,
+    borderRadius: 4,
+    borderWidth: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkboxChecked: {
+    backgroundColor: '#34C759',
+    borderColor: '#34C759',
+  },
+  checkboxUnchecked: {
+    backgroundColor: '#fff',
+    borderColor: '#E0E0E0',
+  },
+  checkboxLabel: {
+    fontSize: 14,
+    color: '#000',
+    marginLeft: 12,
+    flex: 1,
   },
   questionTitleList: {
     fontSize: 13,

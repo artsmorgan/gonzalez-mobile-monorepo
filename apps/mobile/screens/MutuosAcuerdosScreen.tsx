@@ -45,15 +45,6 @@ import type { RootStackParamList } from '../App';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'MutuosAcuerdos'>;
 
-type MainStructurePlazaNode = { id: number; nombre: string };
-type MainStructurePuestoNode = { id: number; nombre: string; plazas: MainStructurePlazaNode[] };
-type MainStructureSucursalNode = { id: number; nombre: string; puestos: MainStructurePuestoNode[] };
-type MainStructureContratoNode = { id: number; nombre: string; sucursales: MainStructureSucursalNode[] };
-type MainStructureDivisionNode = { id: number; nombre: string; contratos: MainStructureContratoNode[] };
-type MainStructureClienteNode = { id: number; nombre: string; division: MainStructureDivisionNode[] };
-type MainStructureEmpresaNode = { id: number; nombre: string; clientes: MainStructureClienteNode[] };
-type MainStructureTree = MainStructureEmpresaNode[];
-
 type OficialInfoForm = {
   codigo: string;
   nombre: string;
@@ -124,17 +115,9 @@ export default function MutuosAcuerdosScreen() {
   const [records, setRecords] = useState<MutuoAcuerdo[]>([]);
 
   // estructura
-  const [structure, setStructure] = useState<MainStructureTree>([]);
-  const [isStructureLoading, setIsStructureLoading] = useState(false);
   const [marcaDivisionId, setMarcaDivisionId] = useState<number | null>(null);
-
-  const [selectedEmpresaId, setSelectedEmpresaId] = useState<number | null>(null);
-  const [selectedClienteId, setSelectedClienteId] = useState<number | null>(null);
-  const [selectedDivisionId, setSelectedDivisionId] = useState<number | null>(null);
-  const [selectedContratoId, setSelectedContratoId] = useState<number | null>(null);
-  const [selectedSucursalId, setSelectedSucursalId] = useState<number | null>(null);
-  const [divisionOptions, setDivisionOptions] = useState<Array<{ id: number; nombre: string }>>([]);
-  const [isDivisionOptionsLoading, setIsDivisionOptionsLoading] = useState(false);
+  const [marcaCorpoId, setMarcaCorpoId] = useState<number | null>(null);
+  const [marcaClienteId, setMarcaClienteId] = useState<number | null>(null);
 
   // ejecutivos
   const [executives, setExecutives] = useState<ExecutiveOption[]>([]);
@@ -249,87 +232,37 @@ export default function MutuosAcuerdosScreen() {
     const currentMarcaStr = await AsyncStorage.getItem('current_marca');
     if (!currentMarcaStr) {
       setHasCurrentMarca(false);
+      setMarcaDivisionId(null);
+      setMarcaCorpoId(null);
+      setMarcaClienteId(null);
       return null;
     }
     try {
       const current = JSON.parse(currentMarcaStr);
       if (!current) {
         setHasCurrentMarca(false);
+        setMarcaDivisionId(null);
+        setMarcaCorpoId(null);
+        setMarcaClienteId(null);
         return null;
       }
       setHasCurrentMarca(true);
       const divIdRaw = current?.roleDivision?.division?.id;
+      const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
+      const clienteIdRaw = current?.cliente?.id ?? current?.cliente_id;
       setMarcaDivisionId(divIdRaw !== undefined && divIdRaw !== null ? Number(divIdRaw) : null);
+      setMarcaCorpoId(corpoIdRaw !== undefined && corpoIdRaw !== null ? Number(corpoIdRaw) : null);
+      setMarcaClienteId(clienteIdRaw !== undefined && clienteIdRaw !== null ? Number(clienteIdRaw) : null);
       return current;
     } catch {
       setHasCurrentMarca(false);
+      setMarcaDivisionId(null);
+      setMarcaCorpoId(null);
+      setMarcaClienteId(null);
       return null;
     }
   };
 
-  const fetchMainStructure = useCallback(async () => {
-    setIsStructureLoading(true);
-    try {
-      const cacheStr = await AsyncStorage.getItem('main_structure_cache');
-      if (cacheStr) {
-        try {
-          const parsed = JSON.parse(cacheStr);
-          if (Array.isArray(parsed)) setStructure(parsed);
-        } catch {
-          // ignore
-        }
-      }
-
-      const isConnected = await getConnectionStatus();
-      if (!isConnected) return;
-
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-      if (!apiUrl) throw new Error('Server URL not configured');
-
-      let token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (logout) await logout();
-          throw new Error('Sesión expirada');
-        }
-        token = await AsyncStorage.getItem('access_token');
-      }
-
-      const response = await fetch(`${apiUrl}/api/main-structure`, {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': '69420',
-        },
-      });
-
-      if (response.status === 401) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) return fetchMainStructure();
-        await logout();
-        return;
-      }
-
-      if (response.status === 403) {
-        if (logout) await logout();
-        throw new Error('Acceso denegado');
-      }
-
-      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-      const data = await response.json();
-      const incoming = data?.structure;
-      if (data?.status && Array.isArray(incoming)) {
-        setStructure(incoming);
-        await AsyncStorage.setItem('main_structure_cache', JSON.stringify(incoming));
-      }
-    } catch (e) {
-      console.error('Error fetching main structure for mutuos acuerdos:', e);
-    } finally {
-      setIsStructureLoading(false);
-    }
-  }, [refreshAccessToken, logout]);
 
   const fetchExecutives = useCallback(async () => {
     try {
@@ -360,45 +293,69 @@ export default function MutuosAcuerdosScreen() {
         return;
       }
 
-      await fetchMainStructure();
       await fetchExecutives();
 
-      const corpoIdStr = current?.corpo?.id?.toString?.() || current?.corpo_id?.toString?.();
-      if (!corpoIdStr) {
+      const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
+      const corpoId = corpoIdRaw !== undefined && corpoIdRaw !== null ? Number(corpoIdRaw) : null;
+
+      if (!corpoId) {
         setError('No se encontró el ID de la sucursal (corpo) en la marca actual');
         setIsLoading(false);
         return;
       }
 
+      const corpoIdStr = String(corpoId);
+
       const localCache = (await getMutuosAcuerdosCache()) || [];
-      const localOnly = localCache.filter((r: any) => (r?.id === 0 || String(r?.id_local || '').startsWith('local-')));
+      // Filtrar cache local por corpo_id
+      const filteredLocalCache = localCache.filter((r: any) => {
+        const rCorpoId = Number(r?.corpo_id) || 0;
+        return rCorpoId === corpoId;
+      });
+      const localOnly = filteredLocalCache.filter((r: any) => (r?.id === 0 || String(r?.id_local || '').startsWith('local-')));
 
       const isConnected = await getConnectionStatus();
       if (isConnected) {
         const res = await listMutuosAcuerdosByCorpo({ corpo_id: corpoIdStr, refreshAccessToken, logout });
         if (res.status) {
           const serverItems = Array.isArray(res.data) ? res.data : [];
+          // Filtrar items del servidor por corpo_id (por si acaso)
+          const filteredServerItems = serverItems.filter((r: any) => {
+            const rCorpoId = Number(r?.corpo_id) || 0;
+            return rCorpoId === corpoId;
+          });
           const merged: MutuoAcuerdo[] = [
             ...localOnly.map((r: any) => ({ ...r, synced: false })),
-            ...serverItems.map((r: any) => ({ ...r, synced: true })),
+            ...filteredServerItems.map((r: any) => ({ ...r, synced: true })),
           ];
           setRecords(merged);
           await setMutuosAcuerdosCache(merged);
         } else {
-          setRecords(localCache);
+          setRecords(filteredLocalCache);
         }
       } else {
-        setRecords(localCache);
+        setRecords(filteredLocalCache);
       }
     } catch (e: any) {
       console.error('Error fetching mutuos acuerdos:', e);
       setError(e?.message || 'Error al cargar mutuos acuerdos');
       const localCache = (await getMutuosAcuerdosCache()) || [];
-      setRecords(localCache);
+      const current = await loadMarcaContext();
+      const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
+      const corpoId = corpoIdRaw !== undefined && corpoIdRaw !== null ? Number(corpoIdRaw) : null;
+      if (corpoId) {
+        const filteredLocalCache = localCache.filter((r: any) => {
+          const rCorpoId = Number(r?.corpo_id) || 0;
+          return rCorpoId === corpoId;
+        });
+        setRecords(filteredLocalCache);
+      } else {
+        setRecords(localCache);
+      }
     } finally {
       setIsLoading(false);
     }
-  }, [fetchMainStructure, fetchExecutives, refreshAccessToken, logout]);
+  }, [fetchExecutives, refreshAccessToken, logout]);
 
   useFocusEffect(
     useCallback(() => {
@@ -411,104 +368,6 @@ export default function MutuosAcuerdosScreen() {
     }, [fetchRecords])
   );
 
-  // ===== Jerarquía =====
-  const selectedEmpresaNode = useMemo(() => {
-    if (selectedEmpresaId === null) return null;
-    return structure.find((e) => e.id === selectedEmpresaId) ?? null;
-  }, [structure, selectedEmpresaId]);
-
-  const selectedClienteNode = useMemo(() => {
-    if (!selectedEmpresaNode || selectedClienteId === null) return null;
-    return selectedEmpresaNode.clientes.find((c) => c.id === selectedClienteId) ?? null;
-  }, [selectedEmpresaNode, selectedClienteId]);
-
-  const selectedDivisionNode = useMemo(() => {
-    if (!selectedClienteNode || selectedDivisionId === null) return null;
-    return (selectedClienteNode.division || []).find((d) => d.id === selectedDivisionId) ?? null;
-  }, [selectedClienteNode, selectedDivisionId]);
-
-  const selectedContratoNode = useMemo(() => {
-    if (!selectedDivisionNode || selectedContratoId === null) return null;
-    return (selectedDivisionNode.contratos || []).find((c) => c.id === selectedContratoId) ?? null;
-  }, [selectedDivisionNode, selectedContratoId]);
-
-  const selectedSucursalNode = useMemo(() => {
-    if (!selectedContratoNode || selectedSucursalId === null) return null;
-    return (selectedContratoNode.sucursales || []).find((s) => s.id === selectedSucursalId) ?? null;
-  }, [selectedContratoNode, selectedSucursalId]);
-
-  const empresaOptions = useMemo(() => structure.map((e) => ({ id: e.id, nombre: e.nombre })), [structure]);
-  const clienteOptions = useMemo(() => (selectedEmpresaNode?.clientes || []).map((c) => ({ id: c.id, nombre: c.nombre })), [selectedEmpresaNode]);
-  const contratoOptions = useMemo(() => (selectedDivisionNode?.contratos || []).map((c) => ({ id: c.id, nombre: c.nombre })), [selectedDivisionNode]);
-  const sucursalOptions = useMemo(() => (selectedContratoNode?.sucursales || []).map((s) => ({ id: s.id, nombre: s.nombre })), [selectedContratoNode]);
-
-  const handleEmpresaChange = (empresaId: number | null) => {
-    setSelectedEmpresaId(empresaId);
-    setSelectedClienteId(null);
-    setSelectedDivisionId(null);
-    setSelectedContratoId(null);
-    setSelectedSucursalId(null);
-    setDivisionOptions([]);
-  };
-
-  const handleClienteChange = (clienteId: number | null) => {
-    setSelectedClienteId(clienteId);
-    setSelectedDivisionId(null);
-    setSelectedContratoId(null);
-    setSelectedSucursalId(null);
-    setDivisionOptions([]);
-  };
-
-  // 1) cargar divisiones del cliente en opciones
-  useEffect(() => {
-    if (!isCreating || editing) return;
-    if (isStructureLoading) return;
-    setIsDivisionOptionsLoading(true);
-    try {
-      const opts = (selectedClienteNode?.division || []).map((d) => ({ id: Number(d.id), nombre: String(d.nombre || '') }));
-      setDivisionOptions(opts);
-    } finally {
-      setIsDivisionOptionsLoading(false);
-    }
-  }, [selectedClienteNode, isCreating, editing, isStructureLoading]);
-
-  // 2) auto-seleccionar división de marca
-  useEffect(() => {
-    if (!isCreating || editing) return;
-    if (isStructureLoading || isDivisionOptionsLoading) return;
-    if (!selectedClienteId || !marcaDivisionId) {
-      setSelectedDivisionId(null);
-      return;
-    }
-    const marcaDivId = Number(marcaDivisionId);
-    const found = divisionOptions.find((d) => Number(d.id) === marcaDivId) ?? null;
-    const nextId = found ? Number(found.id) : null;
-    setSelectedDivisionId((prev) => (prev === nextId ? prev : nextId));
-  }, [isCreating, editing, selectedClienteId, marcaDivisionId, divisionOptions, isStructureLoading, isDivisionOptionsLoading]);
-
-  // cascada
-  useEffect(() => {
-    if (!selectedDivisionNode) {
-      setSelectedContratoId(null);
-      setSelectedSucursalId(null);
-      return;
-    }
-    if (selectedContratoId !== null) {
-      const exists = (selectedDivisionNode.contratos || []).some((c) => c.id === selectedContratoId);
-      if (!exists) setSelectedContratoId(null);
-    }
-  }, [selectedDivisionNode]);
-
-  useEffect(() => {
-    if (!selectedContratoNode) {
-      setSelectedSucursalId(null);
-      return;
-    }
-    if (selectedSucursalId !== null) {
-      const exists = (selectedContratoNode.sucursales || []).some((s) => s.id === selectedSucursalId);
-      if (!exists) setSelectedSucursalId(null);
-    }
-  }, [selectedContratoNode]);
 
   // ===== firma responsable =====
   const requestLocation = async () => {
@@ -723,12 +582,6 @@ export default function MutuosAcuerdosScreen() {
   };
 
   const resetForm = () => {
-    setSelectedEmpresaId(null);
-    setSelectedClienteId(null);
-    setSelectedDivisionId(null);
-    setSelectedContratoId(null);
-    setSelectedSucursalId(null);
-    setDivisionOptions([]);
     setSelectedEjecutivoCuenta(null);
     setFecha(new Date());
     setTurno('');
@@ -747,22 +600,6 @@ export default function MutuosAcuerdosScreen() {
   const startEditing = (r: MutuoAcuerdo) => {
     setIsCreating(true);
     setEditing({ id: r.id, id_local: r.id_local });
-
-    // reconstruir jerarquía (empresa/contrato) desde cliente + sucursal, usando la división de marca
-    const empresaFound = structure.find((e) => (e.clientes || []).some((c) => c.id === r.cliente_id)) ?? null;
-    if (empresaFound) setSelectedEmpresaId(empresaFound.id);
-    setSelectedClienteId(r.cliente_id);
-
-    // división = marca
-    if (marcaDivisionId) setSelectedDivisionId(Number(marcaDivisionId));
-
-    // contrato que contiene sucursal
-    const clienteNode = empresaFound?.clientes?.find((c) => c.id === r.cliente_id);
-    const divisionNode = clienteNode?.division?.find((d) => d.id === Number(marcaDivisionId)) ?? null;
-    const contratoFound =
-      divisionNode?.contratos?.find((ct) => (ct.sucursales || []).some((s) => s.id === r.corpo_id)) ?? null;
-    if (contratoFound) setSelectedContratoId(contratoFound.id);
-    setSelectedSucursalId(r.corpo_id);
 
     setSelectedEjecutivoCuenta(r.ejecutivo_cuenta || null);
     setFecha(r.fecha ? new Date(String(r.fecha)) : new Date());
@@ -796,8 +633,8 @@ export default function MutuosAcuerdosScreen() {
   };
 
   const validateForm = () => {
-    if (!selectedEmpresaId || !selectedClienteId || !selectedSucursalId) return 'Empresa, Cliente y Sucursal son obligatorios';
-    if (!selectedDivisionId) return 'No se pudo determinar la división (marca actual)';
+    if (!marcaClienteId || !marcaCorpoId) return 'No se encontró la información de cliente o sucursal en la marca actual';
+    if (!marcaDivisionId) return 'No se pudo determinar la división (marca actual)';
     if (!selectedEjecutivoCuenta) return 'El ejecutivo de cuenta es obligatorio';
     if (!turno) return 'El turno es obligatorio';
     if (!motivo.trim()) return 'El motivo es obligatorio';
@@ -835,8 +672,8 @@ export default function MutuosAcuerdosScreen() {
       oficialColaborador.rol_cambio.trim(),
     ];
     return {
-      cliente_id: selectedClienteId,
-      corpo_id: selectedSucursalId,
+      cliente_id: marcaClienteId,
+      corpo_id: marcaCorpoId,
       ejecutivo_cuenta: selectedEjecutivoCuenta,
       fecha: dateToLocalString(fecha),
       turno: turno,
@@ -877,8 +714,9 @@ export default function MutuosAcuerdosScreen() {
       const localId = `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
       const nowIso = new Date().toISOString();
       const exec = executives.find((e) => e.id === selectedEjecutivoCuenta) || null;
-      const clienteNombre = selectedClienteNode?.nombre ?? null;
-      const corpoNombre = selectedSucursalNode?.nombre ?? null;
+      const current = await loadMarcaContext();
+      const clienteNombre = current?.cliente?.nombre ?? null;
+      const corpoNombre = current?.corpo?.nombre ?? null;
 
       const localItem: MutuoAcuerdo = {
         id: 0,
@@ -1167,90 +1005,6 @@ export default function MutuosAcuerdosScreen() {
           {isCreating && (
             <ThemedView style={styles.formCard}>
               <ThemedText style={styles.formTitle}>{editing ? 'Editar registro' : 'Nuevo registro'}</ThemedText>
-
-              {(isStructureLoading || isDivisionOptionsLoading) ? (
-                <ThemedView style={styles.inlineLoading}>
-                  <ActivityIndicator size="small" color="#007AFF" />
-                  <ThemedText style={styles.inlineLoadingText}>
-                    {isStructureLoading ? 'Cargando estructura...' : 'Cargando divisiones...'}
-                  </ThemedText>
-                </ThemedView>
-              ) : null}
-
-              <ThemedText style={styles.sectionTitle}>Jerarquía (hasta sucursal)</ThemedText>
-
-              <ThemedText style={styles.label}>Empresa *</ThemedText>
-              <ThemedView style={styles.pickerWrapper}>
-                <Picker selectedValue={selectedEmpresaId ?? 0} onValueChange={(v) => handleEmpresaChange(Number(v) || null)} style={styles.picker}>
-                  <Picker.Item label="Seleccione empresa..." value={0} />
-                  {empresaOptions.map((e) => (
-                    <Picker.Item key={e.id} label={e.nombre} value={e.id} />
-                  ))}
-                </Picker>
-              </ThemedView>
-
-              <ThemedText style={styles.label}>Cliente *</ThemedText>
-              <ThemedView style={styles.pickerWrapper}>
-                <Picker
-                  selectedValue={selectedClienteId ?? 0}
-                  onValueChange={(v) => handleClienteChange(Number(v) || null)}
-                  enabled={selectedEmpresaId !== null && clienteOptions.length > 0}
-                  style={styles.picker}
-                >
-                  <Picker.Item label={selectedEmpresaId ? 'Seleccione cliente...' : 'Seleccione empresa primero'} value={0} />
-                  {clienteOptions.map((c) => (
-                    <Picker.Item key={c.id} label={c.nombre} value={c.id} />
-                  ))}
-                </Picker>
-              </ThemedView>
-
-              <ThemedText style={styles.label}>División (automática)</ThemedText>
-              <ThemedView style={styles.pickerWrapper}>
-                <Picker selectedValue={selectedDivisionId ?? 0} onValueChange={() => { }} enabled={false} style={styles.picker}>
-                  <Picker.Item
-                    label={
-                      selectedClienteId
-                        ? (selectedDivisionId ? (divisionOptions.find((d) => d.id === selectedDivisionId)?.nombre || 'División') : 'No disponible para su marca')
-                        : 'Seleccione cliente primero'
-                    }
-                    value={0}
-                  />
-                </Picker>
-              </ThemedView>
-
-              <ThemedText style={styles.label}>Contrato</ThemedText>
-              <ThemedView style={styles.pickerWrapper}>
-                <Picker
-                  selectedValue={selectedContratoId ?? 0}
-                  onValueChange={(v) => {
-                    const next = Number(v) || null;
-                    setSelectedContratoId(next);
-                    setSelectedSucursalId(null);
-                  }}
-                  enabled={selectedDivisionId !== null && contratoOptions.length > 0}
-                  style={styles.picker}
-                >
-                  <Picker.Item label={selectedDivisionId ? 'Seleccione contrato...' : 'Seleccione cliente primero'} value={0} />
-                  {contratoOptions.map((c) => (
-                    <Picker.Item key={c.id} label={c.nombre} value={c.id} />
-                  ))}
-                </Picker>
-              </ThemedView>
-
-              <ThemedText style={styles.label}>Sucursal *</ThemedText>
-              <ThemedView style={styles.pickerWrapper}>
-                <Picker
-                  selectedValue={selectedSucursalId ?? 0}
-                  onValueChange={(v) => setSelectedSucursalId(Number(v) || null)}
-                  enabled={selectedContratoId !== null && sucursalOptions.length > 0}
-                  style={styles.picker}
-                >
-                  <Picker.Item label={selectedContratoId ? 'Seleccione sucursal...' : 'Seleccione contrato primero'} value={0} />
-                  {sucursalOptions.map((s) => (
-                    <Picker.Item key={s.id} label={s.nombre} value={s.id} />
-                  ))}
-                </Picker>
-              </ThemedView>
 
               <ThemedText style={styles.sectionTitle}>Datos</ThemedText>
 

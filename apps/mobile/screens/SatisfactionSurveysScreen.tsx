@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   StyleSheet,
   ScrollView,
@@ -105,7 +105,7 @@ interface FirmaData {
   };
 }
 
-const QUESTIONS: Question[] = [
+const QUESTIONS_SEGURIDAD: Question[] = [
   {
     title: "¿Cómo Califica el  trato del personal hacia el  publico y los funcionarios?",
     inputs: { type: "punctuation", length: "5", required: true }
@@ -147,10 +147,68 @@ const QUESTIONS: Question[] = [
     inputs: { type: "punctuation", length: "5", required: true }
   },
   {
-    title: "¿Conoce el procedimiento de atención de quejas de la compañía? Para el caso de Aseo el correo es gerenteaseo@corporaciongonzalez y para el caso de seguridad el correo es gerenteseg@corporaciongonzalez.com",
+    title: "¿Conoce el procedimiento de atención de quejas de la compañía? Para el caso de seguridad el correo es gerenteseg@corporaciongonzalez.com",
     inputs: { type: "radio", options: ["Sí", "No"], required: true }
   },
 ];
+
+const QUESTIONS_ASEO: Question[] = [
+  {
+    title: "¿Cómo Califica el  trato del personal hacia el  publico y los funcionarios?",
+    inputs: { type: "punctuation", length: "5", required: true }
+  },
+  {
+    title: "¿Domina el personal los lineamientos del puesto de trabajo?",
+    inputs: { type: "radio", options: ["Sí", "No"], required: true }
+  },
+  {
+    title: "¿El equipo de trabajo diario se encuentra en optimas condiciones?",
+    inputs: { type: "radio", options: ["Sí", "No"], required: true }
+  },
+  {
+    title: "¿Cómo califica el servicio  recibido por el personal?",
+    inputs: { type: "punctuation", length: "5", required: true }
+  },
+  {
+    title: "¿Cómo califica el servicio de la supervision realizada por nuestro personal?",
+    inputs: { type: "punctuation", length: "5", required: true }
+  },
+  {
+    title: "¿Cómo califica la calidad del servicio en cuanto a nuestro trabajo?",
+    inputs: { type: "punctuation", length: "5", required: true }
+  },
+  {
+    title: "¿La empresa Cumple el servicio con lo estipulado en el contrato? ",
+    inputs: { type: "radio", options: ["Sí", "No"], required: true }
+  },
+  {
+    title: "¿Son atendidas sus quejas en el plazo acordado con el personal que lo atiende?",
+    inputs: { type: "radio", options: ["Sí", "No"], required: true }
+  },
+  {
+    title: "¿Cómo califica la comunicación  entre la compañia y usted como cliente?",
+    inputs: { type: "punctuation", length: "5", required: true }
+  },
+  {
+    title: "¿Cuál es su nivel de satisfacción global respecto al servicio que le brindamos?",
+    inputs: { type: "punctuation", length: "5", required: true }
+  },
+  {
+    title: "¿Conoce el procedimiento de atención de quejas de la compañía? Para el caso de Aseo el correo es gerenteaseo@corporaciongonzalez",
+    inputs: { type: "radio", options: ["Sí", "No"], required: true }
+  },
+];
+
+// Función para obtener las preguntas según la división
+const getQuestionsForDivision = (division: string): Question[] => {
+  if (division === 'Seguridad') {
+    return QUESTIONS_SEGURIDAD;
+  } else if (division === 'Aseo & Limpieza') {
+    return QUESTIONS_ASEO;
+  }
+  // Por defecto, retornar preguntas de Seguridad
+  return QUESTIONS_SEGURIDAD;
+};
 
 export default function SatisfactionSurveysScreen() {
   const { employee, refreshAccessToken, logout } = useAuth();
@@ -162,6 +220,33 @@ export default function SatisfactionSurveysScreen() {
   const [puestos, setPuestos] = useState<Puesto[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [hasCurrentMarca, setHasCurrentMarca] = useState<boolean>(false);
+  const [isCheckingMarca, setIsCheckingMarca] = useState<boolean>(true);
+
+  // Estados para filtros jerárquicos
+  const [structure, setStructure] = useState<any[]>([]);
+  const [isStructureLoading, setIsStructureLoading] = useState(false);
+  const [filterEmpresaId, setFilterEmpresaId] = useState<number | null>(null);
+  const [filterClienteId, setFilterClienteId] = useState<number | null>(null);
+  const [filterDivisionId, setFilterDivisionId] = useState<number | null>(null);
+  const [filterContratoId, setFilterContratoId] = useState<number | null>(null);
+  const [filterCorpoId, setFilterCorpoId] = useState<number | null>(null);
+  const [filterPuestoId, setFilterPuestoId] = useState<number | null>(null);
+
+  // IDs de current_marca para inicialización
+  const [marcaClienteId, setMarcaClienteId] = useState<number | null>(null);
+  const [marcaCorpoId, setMarcaCorpoId] = useState<number | null>(null);
+  const [marcaPuestoId, setMarcaPuestoId] = useState<number | null>(null);
+  const [marcaEmpresaId, setMarcaEmpresaId] = useState<number | null>(null);
+  const [marcaDivisionId, setMarcaDivisionId] = useState<number | null>(null);
+  const [isHierarchyFiltersExpanded, setIsHierarchyFiltersExpanded] = useState(false);
+
+  // Estados para jerarquía seleccionada en el formulario
+  const [formEmpresaId, setFormEmpresaId] = useState<number | null>(null);
+  const [formClienteId, setFormClienteId] = useState<number | null>(null);
+  const [formDivisionId, setFormDivisionId] = useState<number | null>(null);
+  const [formContratoId, setFormContratoId] = useState<number | null>(null);
+  const [formCorpoId, setFormCorpoId] = useState<number | null>(null);
+  const [formPuestoId, setFormPuestoId] = useState<number | null>(null);
 
   // Form states
   const [isCreating, setIsCreating] = useState(false);
@@ -232,48 +317,194 @@ export default function SatisfactionSurveysScreen() {
   const responsableNombreInputRef = useRef<TextInput>(null);
   const responsableCedulaInputRef = useRef<TextInput>(null);
 
-  useFocusEffect(
-    useCallback(() => {
-      fetchSurveys();
-    }, [])
-  );
-
-  useEffect(() => {
-    const handler = () => {
-      fetchSurveys();
-    };
-
-    eventBus.on('connectionRestored', handler);
-    return () => {
-      eventBus.off('connectionRestored', handler);
-    };
-  }, []);
 
   const getConnectionStatus = async (): Promise<boolean> => {
     const networkState = await Network.getNetworkStateAsync();
     return networkState.isConnected && networkState.isInternetReachable ? true : false;
   };
 
+  const loadMarcaContext = async () => {
+    setIsCheckingMarca(true);
+    const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+    if (!currentMarcaStr) {
+      setHasCurrentMarca(false);
+      setMarcaClienteId(null);
+      setMarcaCorpoId(null);
+      setMarcaPuestoId(null);
+      setIsCheckingMarca(false);
+      return null;
+    }
+    try {
+      const current = JSON.parse(currentMarcaStr);
+      if (!current?.id) {
+        setHasCurrentMarca(false);
+        setMarcaClienteId(null);
+        setMarcaCorpoId(null);
+        setMarcaPuestoId(null);
+        setIsCheckingMarca(false);
+        return null;
+      }
+      setHasCurrentMarca(true);
+
+      // Obtener IDs de empresa, cliente, corpo, puesto y división de current_marca
+      const empresaIdRaw = current?.empresa?.id ?? current?.empresa_id;
+      const clienteIdRaw = current?.cliente?.id ?? current?.cliente_id;
+      const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
+      const puestoIdRaw = current?.puesto?.id ?? current?.puesto_id;
+      const divisionIdRaw = current?.division?.id ?? current?.division_id;
+
+      setMarcaEmpresaId(empresaIdRaw !== undefined && empresaIdRaw !== null ? Number(empresaIdRaw) : null);
+      setMarcaClienteId(clienteIdRaw !== undefined && clienteIdRaw !== null ? Number(clienteIdRaw) : null);
+      setMarcaCorpoId(corpoIdRaw !== undefined && corpoIdRaw !== null ? Number(corpoIdRaw) : null);
+      setMarcaPuestoId(puestoIdRaw !== undefined && puestoIdRaw !== null ? Number(puestoIdRaw) : null);
+      setMarcaDivisionId(divisionIdRaw !== undefined && divisionIdRaw !== null ? Number(divisionIdRaw) : null);
+
+      // Inicializar también los valores del formulario
+      setFormEmpresaId(empresaIdRaw !== undefined && empresaIdRaw !== null ? Number(empresaIdRaw) : null);
+      setFormClienteId(clienteIdRaw !== undefined && clienteIdRaw !== null ? Number(clienteIdRaw) : null);
+      setFormCorpoId(corpoIdRaw !== undefined && corpoIdRaw !== null ? Number(corpoIdRaw) : null);
+      setFormPuestoId(puestoIdRaw !== undefined && puestoIdRaw !== null ? Number(puestoIdRaw) : null);
+      setFormDivisionId(divisionIdRaw !== undefined && divisionIdRaw !== null ? Number(divisionIdRaw) : null);
+
+      setIsCheckingMarca(false);
+      return current;
+    } catch {
+      setHasCurrentMarca(false);
+      setMarcaClienteId(null);
+      setMarcaCorpoId(null);
+      setMarcaPuestoId(null);
+      setIsCheckingMarca(false);
+      return null;
+    }
+  };
+
+  const fetchMainStructure = useCallback(async () => {
+    setIsStructureLoading(true);
+    try {
+      const cacheStr = await AsyncStorage.getItem('main_structure_cache');
+      if (cacheStr) {
+        try {
+          const parsed = JSON.parse(cacheStr);
+          if (Array.isArray(parsed)) setStructure(parsed);
+        } catch {
+          // ignore
+        }
+      }
+
+      const isConnected = await getConnectionStatus();
+      if (!isConnected) return;
+
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) throw new Error('Server URL not configured');
+
+      let token = await AsyncStorage.getItem('access_token');
+      if (!token) {
+        const refreshed = await refreshAccessToken();
+        if (!refreshed) {
+          if (logout) await logout();
+          throw new Error('Sesión expirada');
+        }
+        token = await AsyncStorage.getItem('access_token');
+      }
+
+      const response = await fetch(`${apiUrl}/api/main-structure`, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': '69420',
+        },
+      });
+
+      if (response.status === 401) {
+        const refreshed = await refreshAccessToken();
+        if (refreshed) return fetchMainStructure();
+        await logout();
+        return;
+      }
+
+      if (response.status === 403) {
+        if (logout) await logout();
+        throw new Error('Acceso denegado');
+      }
+
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+      const data = await response.json();
+      const incoming = data?.structure;
+      if (data?.status && Array.isArray(incoming)) {
+        setStructure(incoming);
+        await AsyncStorage.setItem('main_structure_cache', JSON.stringify(incoming));
+      }
+    } catch (e) {
+      console.error('Error fetching main structure for satisfaction surveys:', e);
+    } finally {
+      setIsStructureLoading(false);
+    }
+  }, [refreshAccessToken, logout]);
+
+  // Nodos computados para estructura jerárquica de filtros
+  const filterEmpresas = useMemo(() => (Array.isArray(structure) ? structure : []), [structure]);
+
+  const filterClientes = useMemo(() => {
+    const empresa = filterEmpresas.find((e: any) => e.id === filterEmpresaId);
+    return empresa?.clientes || [];
+  }, [filterEmpresas, filterEmpresaId]);
+
+  const filterDivisiones = useMemo(() => {
+    const cliente = filterClientes.find((c: any) => c.id === filterClienteId);
+    return cliente?.division || [];
+  }, [filterClientes, filterClienteId]);
+
+  const filterContratos = useMemo(() => {
+    const division = filterDivisiones.find((d: any) => d.id === filterDivisionId);
+    return division?.contratos || [];
+  }, [filterDivisiones, filterDivisionId]);
+
+  const filterSucursales = useMemo(() => {
+    const contrato = filterContratos.find((c: any) => c.id === filterContratoId);
+    return contrato?.sucursales || [];
+  }, [filterContratos, filterContratoId]);
+
+  const filterPuestos = useMemo(() => {
+    const sucursal = filterSucursales.find((s: any) => s.id === filterCorpoId);
+    return sucursal?.puestos || [];
+  }, [filterSucursales, filterCorpoId]);
+
+  // Nodos computados para estructura jerárquica del formulario
+  const formEmpresas = useMemo(() => (Array.isArray(structure) ? structure : []), [structure]);
+
+  const formClientes = useMemo(() => {
+    const empresa = formEmpresas.find((e: any) => e.id === formEmpresaId);
+    return empresa?.clientes || [];
+  }, [formEmpresas, formEmpresaId]);
+
+  const formDivisiones = useMemo(() => {
+    const cliente = formClientes.find((c: any) => c.id === formClienteId);
+    return cliente?.division || [];
+  }, [formClientes, formClienteId]);
+
+  const formContratos = useMemo(() => {
+    const division = formDivisiones.find((d: any) => d.id === formDivisionId);
+    return division?.contratos || [];
+  }, [formDivisiones, formDivisionId]);
+
+  const formSucursales = useMemo(() => {
+    const contrato = formContratos.find((c: any) => c.id === formContratoId);
+    return contrato?.sucursales || [];
+  }, [formContratos, formContratoId]);
+
+  const formPuestosList = useMemo(() => {
+    const sucursal = formSucursales.find((s: any) => s.id === formCorpoId);
+    return sucursal?.puestos || [];
+  }, [formSucursales, formCorpoId]);
+
   const generateRandomId = (): string => {
     return `local_${Date.now()}_${Math.random().toString(36).substring(7)}`;
   };
 
-  const fetchSurveys = async () => {
+  const fetchSurveys = useCallback(async () => {
     try {
       setIsLoading(true);
-
-      // Verificar si existe current_marca
-      const currentMarca = await AsyncStorage.getItem('current_marca');
-      if (!currentMarca) {
-        setHasCurrentMarca(false);
-        setIsLoading(false);
-        return;
-      }
-
-      const currentMarcaData = JSON.parse(currentMarca);
-      const marcaId = currentMarcaData.id;
-      const corpoId = currentMarcaData.corpo?.id;
-      setHasCurrentMarca(true);
 
       const isConnected = await getConnectionStatus();
 
@@ -294,8 +525,17 @@ export default function SatisfactionSurveysScreen() {
           token = await AsyncStorage.getItem('access_token');
         }
 
+        // Construir parámetros de filtro (jerarquía completa)
+        const params = new URLSearchParams();
+        if (filterEmpresaId) params.append('empresa_id', String(filterEmpresaId));
+        if (filterClienteId) params.append('cliente_id', String(filterClienteId));
+        if (filterDivisionId) params.append('division_id', String(filterDivisionId));
+        if (filterContratoId) params.append('contrato_id', String(filterContratoId));
+        if (filterCorpoId) params.append('corpo_id', String(filterCorpoId));
+        if (filterPuestoId) params.append('puesto_id', String(filterPuestoId));
+
         // Fetch surveys
-        const surveysResponse = await fetch(`${apiUrl}/api/encuesta-nps?m=${marcaId}`, {
+        const surveysResponse = await fetch(`${apiUrl}/api/encuesta-nps?${params.toString()}`, {
           method: 'GET',
           headers: {
             'Authorization': `Bearer ${token}`,
@@ -334,9 +574,9 @@ export default function SatisfactionSurveysScreen() {
           setSurveys([]);
         }
 
-        // Fetch puestos if corpoId exists
-        if (corpoId) {
-          const puestosResponse = await fetch(`${apiUrl}/api/puestos/corpo/${corpoId}`, {
+        // Fetch puestos if filterCorpoId exists
+        if (filterCorpoId) {
+          const puestosResponse = await fetch(`${apiUrl}/api/puestos/corpo/${filterCorpoId}`, {
             method: 'GET',
             headers: {
               'Authorization': `Bearer ${token}`,
@@ -412,7 +652,113 @@ export default function SatisfactionSurveysScreen() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [filterEmpresaId, filterClienteId, filterDivisionId, filterContratoId, filterCorpoId, filterPuestoId, refreshAccessToken, logout]);
+
+  // Inicializar filtros desde current_marca al cargar
+  useFocusEffect(
+    useCallback(() => {
+      (async () => {
+        const current = await loadMarcaContext();
+        await fetchMainStructure();
+        // Inicializar filtros con valores de current_marca después de cargar
+        if (current) {
+          const clienteIdRaw = current?.cliente?.id ?? current?.cliente_id;
+          const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
+          const puestoIdRaw = current?.puesto?.id ?? current?.puesto_id;
+
+          if (clienteIdRaw !== undefined && clienteIdRaw !== null) {
+            setFilterClienteId(Number(clienteIdRaw));
+          }
+          if (corpoIdRaw !== undefined && corpoIdRaw !== null) {
+            setFilterCorpoId(Number(corpoIdRaw));
+          }
+          if (puestoIdRaw !== undefined && puestoIdRaw !== null) {
+            setFilterPuestoId(Number(puestoIdRaw));
+          }
+        }
+        // Cargar encuestas después de inicializar
+        fetchSurveys();
+      })();
+    }, [fetchSurveys, fetchMainStructure])
+  );
+
+  useEffect(() => {
+    const handler = () => {
+      fetchSurveys();
+    };
+
+    eventBus.on('connectionRestored', handler);
+    return () => {
+      eventBus.off('connectionRestored', handler);
+    };
+  }, [fetchSurveys]);
+
+  const fetchPuestosForCorpo = useCallback(async (corpoId: number) => {
+    try {
+      const isConnected = await getConnectionStatus();
+      if (!isConnected) {
+        // Cargar desde cache
+        const puestosCache = await AsyncStorage.getItem('surveys_puestos_cache');
+        if (puestosCache) {
+          const cachedPuestos = JSON.parse(puestosCache);
+          setPuestos(cachedPuestos);
+        }
+        return;
+      }
+
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) return;
+
+      let token = await AsyncStorage.getItem('access_token');
+      if (!token) {
+        const refreshed = await refreshAccessToken();
+        if (!refreshed) return;
+        token = await AsyncStorage.getItem('access_token');
+      }
+
+      const puestosResponse = await fetch(`${apiUrl}/api/puestos/corpo/${corpoId}`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'ngrok-skip-browser-warning': '69420',
+        },
+      });
+
+      if (puestosResponse.status === 401) {
+        const refreshed = await refreshAccessToken();
+        if (refreshed) return fetchPuestosForCorpo(corpoId);
+        return;
+      }
+
+      if (puestosResponse.ok) {
+        const puestosData = await puestosResponse.json();
+        if (puestosData.status && puestosData.puestos) {
+          setPuestos(puestosData.puestos);
+          await AsyncStorage.setItem('surveys_puestos_cache', JSON.stringify(puestosData.puestos));
+        }
+      }
+    } catch (err) {
+      console.error('Error fetching puestos for corpo:', err);
+    }
+  }, [refreshAccessToken, logout]);
+
+  // Función para rastrear el contrato de una sucursal
+  const findContratoForSucursal = useCallback((sucursalId: number): number | null => {
+    for (const empresa of structure) {
+      for (const cliente of empresa.clientes || []) {
+        for (const division of cliente.division || []) {
+          for (const contrato of division.contratos || []) {
+            for (const sucursal of contrato.sucursales || []) {
+              if (sucursal.id === sucursalId) {
+                return contrato.id;
+              }
+            }
+          }
+        }
+      }
+    }
+    return null;
+  }, [structure]);
 
   const fetchEmpleadoDetalle = async (empleadoId: number) => {
     try {
@@ -665,6 +1011,55 @@ export default function SatisfactionSurveysScreen() {
     setFormKey(prev => prev + 1);
     resetForm();
 
+    // Inicializar jerarquía con valores de current_marca
+    setFormEmpresaId(marcaEmpresaId);
+    setFormClienteId(marcaClienteId);
+    setFormDivisionId(marcaDivisionId);
+    setFormCorpoId(marcaCorpoId);
+    setFormPuestoId(marcaPuestoId);
+
+    // Si hay cliente seleccionado, llenar empresa_evaluado
+    if (marcaClienteId) {
+      // Buscar el cliente en la estructura
+      for (const empresa of structure) {
+        const cliente = empresa.clientes?.find((c: any) => c.id === marcaClienteId);
+        if (cliente) {
+          empresaEvaluadaRef.current = cliente.nombre;
+          break;
+        }
+      }
+    }
+
+    // Si hay división seleccionada, determinar el formulario automáticamente
+    if (marcaDivisionId) {
+      // Buscar la división en la estructura
+      for (const empresa of structure) {
+        for (const cliente of empresa.clientes || []) {
+          const division = cliente.division?.find((d: any) => d.id === marcaDivisionId);
+          if (division) {
+            const divisionName = division.nombre;
+            // Establecer selectedDivision basado en el nombre
+            if (divisionName === 'Seguridad' || divisionName.toLowerCase().includes('seguridad')) {
+              setSelectedDivision('Seguridad');
+              divisionRef.current = 'Seguridad';
+            } else if (divisionName === 'Aseo & Limpieza' || divisionName === 'Aseo y limpieza' || divisionName.toLowerCase().includes('aseo') || divisionName.toLowerCase().includes('limpieza')) {
+              setSelectedDivision('Aseo & Limpieza');
+              divisionRef.current = 'Aseo & Limpieza';
+            } else {
+              setSelectedDivision('');
+              divisionRef.current = '';
+            }
+            break;
+          }
+        }
+        if (divisionRef.current) break;
+      }
+    } else {
+      // Por defecto, establecer Seguridad
+      setSelectedDivision('Seguridad');
+      divisionRef.current = 'Seguridad';
+    }
+
     // Set default values
     if (puestos.length > 0) {
       puestoIdRef.current = puestos[0].id;
@@ -675,9 +1070,6 @@ export default function SatisfactionSurveysScreen() {
     setFechaEncuesta(today);
     fechaEncuestaRef.current = formatDateToISO(today);
 
-    setSelectedDivision('Seguridad');
-    divisionRef.current = 'Seguridad';
-
     // Set employee data
     if (employee) {
       responsableNombreRef.current = employee.name || '';
@@ -686,6 +1078,11 @@ export default function SatisfactionSurveysScreen() {
 
     // Generate signature
     generateResponsableSignature();
+
+    // Si hay corpo seleccionado, cargar puestos
+    if (marcaCorpoId) {
+      fetchPuestosForCorpo(marcaCorpoId);
+    }
   };
 
   const cancelCreating = () => {
@@ -713,6 +1110,15 @@ export default function SatisfactionSurveysScreen() {
     setSignatureKey(prev => prev + 1);
     setIsSignatureModalVisible(false);
     setTempSignature(null);
+
+    // Reset jerarquía del formulario
+    setFormEmpresaId(null);
+    setFormClienteId(null);
+    setFormDivisionId(null);
+    setFormContratoId(null);
+    setFormCorpoId(null);
+    setFormPuestoId(null);
+    setSelectedPuesto(0);
 
     // Clear input refs
     if (empresaEvaluadaInputRef.current) empresaEvaluadaInputRef.current.clear();
@@ -763,9 +1169,10 @@ export default function SatisfactionSurveysScreen() {
     }
 
     // Validate all questions answered
-    for (let i = 0; i < QUESTIONS.length; i++) {
+    const currentQuestions = getQuestionsForDivision(selectedDivision);
+    for (let i = 0; i < currentQuestions.length; i++) {
       const answer = answersRef.current[i] || answers[i];
-      if (QUESTIONS[i].inputs.required && !answer) {
+      if (currentQuestions[i].inputs.required && !answer) {
         Alert.alert('Error', `Debe responder la pregunta ${i + 1}`);
         return;
       }
@@ -810,7 +1217,8 @@ export default function SatisfactionSurveysScreen() {
               const currentMarcaData = JSON.parse(currentMarca);
 
               // Build evaluaciones array using ref first, then state
-              const evaluaciones: Answer[] = QUESTIONS.map((question, index) => ({
+              const currentQuestions = getQuestionsForDivision(selectedDivision);
+              const evaluaciones: Answer[] = currentQuestions.map((question, index) => ({
                 question: question.title,
                 value: answersRef.current[index] || answers[index] || ''
               }));
@@ -823,9 +1231,63 @@ export default function SatisfactionSurveysScreen() {
                 `${firmaResponsable.sessionId}:${firmaResponsable.empleadoId}:${firmaResponsable.latitud}:${firmaResponsable.longitud}:${firmaResponsable.timestamp}`
               );
 
+              // Obtener IDs SOLO de la jerarquía seleccionada en el formulario
+              const empresaId = formEmpresaId;
+              const clienteId = formClienteId;
+              const corpoId = formCorpoId;
+              const puestoId = formPuestoId;
+
+              // Obtener division_id de la jerarquía seleccionada
+              let divisionId = formDivisionId;
+
+              // Si no hay divisionId pero hay una división seleccionada en la jerarquía, buscarla por nombre
+              if (!divisionId && formClienteId) {
+                // Buscar la división en la estructura basado en selectedDivision
+                const divisionName = selectedDivision;
+                if (divisionName === 'Seguridad' || divisionName === 'Aseo & Limpieza') {
+                  // Buscar el ID de la división en la estructura
+                  for (const empresa of structure) {
+                    for (const cliente of empresa.clientes || []) {
+                      if (cliente.id === formClienteId) {
+                        const division = cliente.division?.find((d: any) => {
+                          const dName = d.nombre;
+                          if (divisionName === 'Seguridad') {
+                            return dName === 'Seguridad' || dName.toLowerCase().includes('seguridad');
+                          } else if (divisionName === 'Aseo & Limpieza') {
+                            return dName === 'Aseo & Limpieza' || dName === 'Aseo y limpieza' || dName.toLowerCase().includes('aseo') || dName.toLowerCase().includes('limpieza');
+                          }
+                          return false;
+                        });
+                        if (division) {
+                          divisionId = division.id;
+                          break;
+                        }
+                      }
+                    }
+                    if (divisionId) break;
+                  }
+                }
+              }
+
+              // Si hay corpoId pero no contratoId, rastrear el contrato desde la estructura
+              let contratoId = formContratoId;
+              if (corpoId && !contratoId) {
+                contratoId = findContratoForSucursal(corpoId);
+              }
+
+              // Validar que todos los IDs estén presentes (SOLO de la jerarquía del formulario)
+              if (!empresaId || !clienteId || !divisionId || !corpoId || !puestoId) {
+                Alert.alert('Error', 'Faltan datos de la jerarquía. Por favor, complete la selección de Empresa, Cliente, División, Sucursal y Puesto en el formulario.');
+                return;
+              }
+
               const requestBody = {
                 marca_id: currentMarcaData.id,
-                puesto_id: puestoIdRef.current,
+                empresa_id: empresaId,
+                cliente_id: clienteId,
+                division_id: divisionId,
+                corpo_id: corpoId,
+                puesto_id: puestoId,
                 fecha: fechaEncuestaRef.current,
                 evaluaciones: JSON.stringify(evaluaciones),
                 persona_evaluada: personaNombreRef.current,
@@ -1204,13 +1666,15 @@ export default function SatisfactionSurveysScreen() {
   };
 
 
-  if (isLoading) {
+  if (isLoading || isCheckingMarca) {
     return (
       <ThemedView style={styles.container}>
         <AppHeader onMenuPress={handleMenuPress} title="Encuestas de Satisfacción" />
         <ThemedView style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#007AFF" />
-          <ThemedText style={styles.loadingText}>Cargando encuestas...</ThemedText>
+          <ThemedText style={styles.loadingText}>
+            {isCheckingMarca ? 'Verificando marca...' : 'Cargando encuestas...'}
+          </ThemedText>
         </ThemedView>
         <AppFooter />
         <SlideMenu isVisible={isMenuVisible} onClose={handleMenuClose} onHomePress={handleHomePress} />
@@ -1277,6 +1741,145 @@ export default function SatisfactionSurveysScreen() {
                   {/* Filter Content */}
                   {isFiltersExpanded && (
                     <ThemedView style={styles.filtersContent}>
+                      {/* Filtros jerárquicos */}
+                      <ThemedView style={styles.hierarchyFiltersContainer}>
+                        <ThemedView style={styles.hierarchyFiltersHeader}>
+                          <TouchableOpacity
+                            style={styles.filterToggleButton}
+                            onPress={() => setIsHierarchyFiltersExpanded(!isHierarchyFiltersExpanded)}
+                          >
+                            <ThemedText style={styles.filterToggleText}>Filtros jerárquicos</ThemedText>
+                            <Ionicons
+                              name={isHierarchyFiltersExpanded ? 'chevron-up' : 'chevron-down'}
+                              size={20}
+                              color="#007AFF"
+                            />
+                          </TouchableOpacity>
+                          {isHierarchyFiltersExpanded && (
+                            <TouchableOpacity style={styles.resetFiltersButton} onPress={() => {
+                              setFilterEmpresaId(null);
+                              setFilterClienteId(marcaClienteId);
+                              setFilterDivisionId(null);
+                              setFilterContratoId(null);
+                              setFilterCorpoId(marcaCorpoId);
+                              setFilterPuestoId(marcaPuestoId);
+                            }}>
+                              <Ionicons name="refresh" size={16} color="#FF3B30" />
+                              <ThemedText style={styles.resetFiltersText}>Reiniciar</ThemedText>
+                            </TouchableOpacity>
+                          )}
+                        </ThemedView>
+                        {isHierarchyFiltersExpanded && (
+                          <ThemedView style={styles.hierarchyFiltersContent}>
+                            <ThemedView style={styles.filterGroup}>
+                              <ThemedText style={styles.filterLabel}>Empresa:</ThemedText>
+                              <View style={styles.pickerWrapper}>
+                                <Picker
+                                  selectedValue={filterEmpresaId || ''}
+                                  onValueChange={(value) => setFilterEmpresaId(value && value !== '' ? Number(value) : null)}
+                                  style={styles.picker}
+                                >
+                                  <Picker.Item label="Seleccionar..." value="" />
+                                  {filterEmpresas.map((e: any) => (
+                                    <Picker.Item key={e.id} label={e.nombre} value={e.id} />
+                                  ))}
+                                </Picker>
+                              </View>
+                            </ThemedView>
+
+                            {filterEmpresaId && (
+                              <ThemedView style={styles.filterGroup}>
+                                <ThemedText style={styles.filterLabel}>Cliente:</ThemedText>
+                                <View style={styles.pickerWrapper}>
+                                  <Picker
+                                    selectedValue={filterClienteId || ''}
+                                    onValueChange={(value) => setFilterClienteId(value && value !== '' ? Number(value) : null)}
+                                    style={styles.picker}
+                                  >
+                                    <Picker.Item label="Seleccionar..." value="" />
+                                    {filterClientes.map((c: any) => (
+                                      <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                                    ))}
+                                  </Picker>
+                                </View>
+                              </ThemedView>
+                            )}
+
+                            {filterClienteId && (
+                              <ThemedView style={styles.filterGroup}>
+                                <ThemedText style={styles.filterLabel}>División:</ThemedText>
+                                <View style={styles.pickerWrapper}>
+                                  <Picker
+                                    selectedValue={filterDivisionId || ''}
+                                    onValueChange={(value) => setFilterDivisionId(value && value !== '' ? Number(value) : null)}
+                                    style={styles.picker}
+                                  >
+                                    <Picker.Item label="Seleccionar..." value="" />
+                                    {filterDivisiones.map((d: any) => (
+                                      <Picker.Item key={d.id} label={d.nombre} value={d.id} />
+                                    ))}
+                                  </Picker>
+                                </View>
+                              </ThemedView>
+                            )}
+
+                            {filterDivisionId && (
+                              <ThemedView style={styles.filterGroup}>
+                                <ThemedText style={styles.filterLabel}>Contrato:</ThemedText>
+                                <View style={styles.pickerWrapper}>
+                                  <Picker
+                                    selectedValue={filterContratoId || ''}
+                                    onValueChange={(value) => setFilterContratoId(value && value !== '' ? Number(value) : null)}
+                                    style={styles.picker}
+                                  >
+                                    <Picker.Item label="Seleccionar..." value="" />
+                                    {filterContratos.map((c: any) => (
+                                      <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                                    ))}
+                                  </Picker>
+                                </View>
+                              </ThemedView>
+                            )}
+
+                            {filterContratoId && (
+                              <ThemedView style={styles.filterGroup}>
+                                <ThemedText style={styles.filterLabel}>Sucursal:</ThemedText>
+                                <View style={styles.pickerWrapper}>
+                                  <Picker
+                                    selectedValue={filterCorpoId || ''}
+                                    onValueChange={(value) => setFilterCorpoId(value && value !== '' ? Number(value) : null)}
+                                    style={styles.picker}
+                                  >
+                                    <Picker.Item label="Seleccionar..." value="" />
+                                    {filterSucursales.map((s: any) => (
+                                      <Picker.Item key={s.id} label={s.nombre} value={s.id} />
+                                    ))}
+                                  </Picker>
+                                </View>
+                              </ThemedView>
+                            )}
+
+                            {filterCorpoId && (
+                              <ThemedView style={styles.filterGroup}>
+                                <ThemedText style={styles.filterLabel}>Puesto:</ThemedText>
+                                <View style={styles.pickerWrapper}>
+                                  <Picker
+                                    selectedValue={filterPuestoId || ''}
+                                    onValueChange={(value) => setFilterPuestoId(value && value !== '' ? Number(value) : null)}
+                                    style={styles.picker}
+                                  >
+                                    <Picker.Item label="Seleccionar..." value="" />
+                                    {filterPuestos.map((p: any) => (
+                                      <Picker.Item key={p.id} label={p.nombre} value={p.id} />
+                                    ))}
+                                  </Picker>
+                                </View>
+                              </ThemedView>
+                            )}
+                          </ThemedView>
+                        )}
+                      </ThemedView>
+
                       <ThemedView style={styles.filterGroup}>
                         <ThemedText style={styles.filterLabel}>Fecha:</ThemedText>
                         <TouchableOpacity
@@ -1606,6 +2209,217 @@ export default function SatisfactionSurveysScreen() {
               <ThemedView style={styles.formCard}>
                 <ThemedView style={styles.formContainer}>
                   <ThemedText style={styles.formTitle}>Nueva Encuesta</ThemedText>
+
+                  {/* Jerarquía completa */}
+                  <ThemedView style={styles.sectionContainer}>
+                    <ThemedView style={styles.sectionHeader}>
+                      <ThemedText style={styles.sectionTitle}>Jerarquía</ThemedText>
+                    </ThemedView>
+
+                    {/* Empresa */}
+                    <ThemedView style={styles.formGroup}>
+                      <ThemedText style={styles.label}>Empresa:</ThemedText>
+                      <View style={styles.pickerWrapper}>
+                        <Picker
+                          selectedValue={formEmpresaId || ''}
+                          onValueChange={(value) => {
+                            setFormEmpresaId(value && value !== '' ? Number(value) : null);
+                            setFormClienteId(null);
+                            setFormDivisionId(null);
+                            setFormContratoId(null);
+                            setFormCorpoId(null);
+                            setFormPuestoId(null);
+                            empresaEvaluadaRef.current = '';
+                            if (empresaEvaluadaInputRef.current) {
+                              empresaEvaluadaInputRef.current.setNativeProps({ text: '' });
+                            }
+                          }}
+                          style={styles.picker}
+                        >
+                          <Picker.Item label="Seleccionar..." value="" />
+                          {formEmpresas.map((e: any) => (
+                            <Picker.Item key={e.id} label={e.nombre} value={e.id} />
+                          ))}
+                        </Picker>
+                      </View>
+                    </ThemedView>
+
+                    {/* Cliente */}
+                    {formEmpresaId && (
+                      <ThemedView style={styles.formGroup}>
+                        <ThemedText style={styles.label}>Cliente:</ThemedText>
+                        <View style={styles.pickerWrapper}>
+                          <Picker
+                            selectedValue={formClienteId || ''}
+                            onValueChange={(value) => {
+                              const clienteId = value && value !== '' ? Number(value) : null;
+                              setFormClienteId(clienteId);
+                              setFormDivisionId(null);
+                              setFormContratoId(null);
+                              setFormCorpoId(null);
+                              setFormPuestoId(null);
+
+                              // Llenar automáticamente empresa_evaluado con el nombre del cliente
+                              if (clienteId) {
+                                const cliente = formClientes.find((c: any) => c.id === clienteId);
+                                if (cliente) {
+                                  empresaEvaluadaRef.current = cliente.nombre;
+                                  if (empresaEvaluadaInputRef.current) {
+                                    empresaEvaluadaInputRef.current.setNativeProps({ text: cliente.nombre });
+                                  }
+                                }
+                              } else {
+                                empresaEvaluadaRef.current = '';
+                                if (empresaEvaluadaInputRef.current) {
+                                  empresaEvaluadaInputRef.current.setNativeProps({ text: '' });
+                                }
+                              }
+                            }}
+                            style={styles.picker}
+                          >
+                            <Picker.Item label="Seleccionar..." value="" />
+                            {formClientes.map((c: any) => (
+                              <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                            ))}
+                          </Picker>
+                        </View>
+                      </ThemedView>
+                    )}
+
+                    {/* División */}
+                    {formClienteId && (
+                      <ThemedView style={styles.formGroup}>
+                        <ThemedText style={styles.label}>División:</ThemedText>
+                        <View style={styles.pickerWrapper}>
+                          <Picker
+                            selectedValue={formDivisionId || ''}
+                            onValueChange={(value) => {
+                              const divisionId = value && value !== '' ? Number(value) : null;
+                              setFormDivisionId(divisionId);
+                              setFormContratoId(null);
+                              setFormCorpoId(null);
+                              setFormPuestoId(null);
+
+                              // Determinar el formulario basado en el nombre de la división
+                              if (divisionId) {
+                                const division = formDivisiones.find((d: any) => d.id === divisionId);
+                                if (division) {
+                                  const divisionName = division.nombre;
+                                  // Establecer selectedDivision basado en el nombre
+                                  if (divisionName === 'Seguridad' || divisionName.toLowerCase().includes('seguridad')) {
+                                    setSelectedDivision('Seguridad');
+                                    divisionRef.current = 'Seguridad';
+                                  } else if (divisionName === 'Aseo & Limpieza' || divisionName === 'Aseo y limpieza' || divisionName.toLowerCase().includes('aseo') || divisionName.toLowerCase().includes('limpieza')) {
+                                    setSelectedDivision('Aseo & Limpieza');
+                                    divisionRef.current = 'Aseo & Limpieza';
+                                  } else {
+                                    // División no soportada
+                                    setSelectedDivision('');
+                                    divisionRef.current = '';
+                                  }
+                                  // Limpiar respuestas cuando cambia la división
+                                  setAnswers({});
+                                  answersRef.current = {};
+                                  setFormKey(prev => prev + 1);
+                                }
+                              } else {
+                                setSelectedDivision('Seguridad');
+                                divisionRef.current = 'Seguridad';
+                              }
+                            }}
+                            style={styles.picker}
+                          >
+                            <Picker.Item label="Seleccionar..." value="" />
+                            {formDivisiones.map((d: any) => (
+                              <Picker.Item key={d.id} label={d.nombre} value={d.id} />
+                            ))}
+                          </Picker>
+                        </View>
+                        {/* Advertencia si la división seleccionada no tiene formulario */}
+                        {formDivisionId && selectedDivision !== 'Seguridad' && selectedDivision !== 'Aseo & Limpieza' && (
+                          <ThemedView style={styles.warningBox}>
+                            <Ionicons name="warning" size={20} color="#FF9500" />
+                            <ThemedText style={styles.warningText}>
+                              No existe un formulario para esta división. Solo están disponibles formularios para "Seguridad" y "Aseo & Limpieza".
+                            </ThemedText>
+                          </ThemedView>
+                        )}
+                      </ThemedView>
+                    )}
+
+                    {/* Contrato */}
+                    {formDivisionId && (
+                      <ThemedView style={styles.formGroup}>
+                        <ThemedText style={styles.label}>Contrato:</ThemedText>
+                        <View style={styles.pickerWrapper}>
+                          <Picker
+                            selectedValue={formContratoId || ''}
+                            onValueChange={(value) => {
+                              setFormContratoId(value && value !== '' ? Number(value) : null);
+                              setFormCorpoId(null);
+                              setFormPuestoId(null);
+                            }}
+                            style={styles.picker}
+                          >
+                            <Picker.Item label="Seleccionar..." value="" />
+                            {formContratos.map((c: any) => (
+                              <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                            ))}
+                          </Picker>
+                        </View>
+                      </ThemedView>
+                    )}
+
+                    {/* Sucursal */}
+                    {formContratoId && (
+                      <ThemedView style={styles.formGroup}>
+                        <ThemedText style={styles.label}>Sucursal:</ThemedText>
+                        <View style={styles.pickerWrapper}>
+                          <Picker
+                            selectedValue={formCorpoId || ''}
+                            onValueChange={(value) => {
+                              setFormCorpoId(value && value !== '' ? Number(value) : null);
+                              setFormPuestoId(null);
+                              // Cargar puestos cuando se selecciona una sucursal
+                              if (value && value !== '') {
+                                fetchPuestosForCorpo(Number(value));
+                              }
+                            }}
+                            style={styles.picker}
+                          >
+                            <Picker.Item label="Seleccionar..." value="" />
+                            {formSucursales.map((s: any) => (
+                              <Picker.Item key={s.id} label={s.nombre} value={s.id} />
+                            ))}
+                          </Picker>
+                        </View>
+                      </ThemedView>
+                    )}
+
+                    {/* Puesto */}
+                    {formCorpoId && (
+                      <ThemedView style={styles.formGroup}>
+                        <ThemedText style={styles.label}>Puesto:</ThemedText>
+                        <View style={styles.pickerWrapper}>
+                          <Picker
+                            selectedValue={formPuestoId || ''}
+                            onValueChange={(value) => {
+                              const puestoId = value && value !== '' ? Number(value) : null;
+                              setFormPuestoId(puestoId);
+                              puestoIdRef.current = puestoId || 0;
+                            }}
+                            style={styles.picker}
+                          >
+                            <Picker.Item label="Seleccionar..." value="" />
+                            {formPuestosList.map((p: any) => (
+                              <Picker.Item key={p.id} label={p.nombre} value={p.id} />
+                            ))}
+                          </Picker>
+                        </View>
+                      </ThemedView>
+                    )}
+                  </ThemedView>
+
                   {/* Empresa Evaluada */}
                   <ThemedView style={styles.formGroup}>
                     <ThemedText style={styles.label}>Nombre de la empresa evaluada:</ThemedText>
@@ -1683,26 +2497,6 @@ export default function SatisfactionSurveysScreen() {
                     </ThemedView>
                   </ThemedView>
 
-                  {/* Puesto */}
-                  <ThemedView style={styles.formGroup}>
-                    <ThemedText style={styles.label}>Puesto:</ThemedText>
-                    <View style={styles.pickerContainer}>
-                      <Picker
-                        selectedValue={selectedPuesto}
-                        onValueChange={(value) => {
-                          setSelectedPuesto(value);
-                          puestoIdRef.current = value;
-                        }}
-                        style={styles.picker}
-                      >
-                        <Picker.Item label="Seleccione un puesto" value={0} />
-                        {puestos.map((puesto) => (
-                          <Picker.Item key={puesto.id} label={puesto.nombre} value={puesto.id} />
-                        ))}
-                      </Picker>
-                    </View>
-                  </ThemedView>
-
                   {/* Fecha */}
                   <ThemedView style={styles.formGroup}>
                     <ThemedText style={styles.label}>Fecha de la encuesta:</ThemedText>
@@ -1730,49 +2524,15 @@ export default function SatisfactionSurveysScreen() {
                     )}
                   </ThemedView>
 
-                  {/* División */}
-                  <ThemedView style={styles.formGroup}>
-                    <ThemedText style={styles.label}>División:</ThemedText>
-                    <ThemedView style={styles.radioContainerDivision}>
-                      <TouchableOpacity
-                        style={styles.radioOption}
-                        onPress={() => {
-                          setSelectedDivision('Seguridad');
-                          divisionRef.current = 'Seguridad';
-                        }}
-                      >
-                        <Ionicons
-                          name={selectedDivision === 'Seguridad' ? 'radio-button-on' : 'radio-button-off'}
-                          size={24}
-                          color="#007AFF"
-                        />
-                        <ThemedText style={styles.radioLabel}>Seguridad</ThemedText>
-                      </TouchableOpacity>
-
-                      <TouchableOpacity
-                        style={styles.radioOption}
-                        onPress={() => {
-                          setSelectedDivision('Aseo & Limpieza');
-                          divisionRef.current = 'Aseo & Limpieza';
-                        }}
-                      >
-                        <Ionicons
-                          name={selectedDivision === 'Aseo & Limpieza' ? 'radio-button-on' : 'radio-button-off'}
-                          size={24}
-                          color="#007AFF"
-                        />
-                        <ThemedText style={styles.radioLabel}>Aseo & Limpieza</ThemedText>
-                      </TouchableOpacity>
+                  {/* Questions - Solo mostrar si hay una división válida seleccionada */}
+                  {formDivisionId && (selectedDivision === 'Seguridad' || selectedDivision === 'Aseo & Limpieza') && (
+                    <ThemedView style={styles.sectionContainer}>
+                      <ThemedView style={styles.sectionHeader}>
+                        <ThemedText style={styles.sectionTitle}>Preguntas</ThemedText>
+                      </ThemedView>
+                      {getQuestionsForDivision(selectedDivision).map((question, index) => renderQuestion(question, index))}
                     </ThemedView>
-                  </ThemedView>
-
-                  {/* Questions */}
-                  <ThemedView style={styles.sectionContainer}>
-                    <ThemedView style={styles.sectionHeader}>
-                      <ThemedText style={styles.sectionTitle}>Preguntas</ThemedText>
-                    </ThemedView>
-                    {QUESTIONS.map((question, index) => renderQuestion(question, index))}
-                  </ThemedView>
+                  )}
 
                   {/* Observaciones */}
                   <ThemedView style={styles.formGroup}>
@@ -2240,9 +3000,61 @@ const styles = StyleSheet.create({
     backgroundColor: '#F9F9F9',
     overflow: 'hidden',
   },
+  pickerWrapper: {
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 10,
+    overflow: 'hidden',
+    backgroundColor: '#FFFFFF',
+    justifyContent: 'center',
+  },
   picker: {
     width: '100%',
     height: 50,
+    color: '#000',
+  },
+  warningBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    padding: 12,
+    backgroundColor: '#FFF3E0',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#FFB74D',
+    marginTop: 8,
+  },
+  warningText: {
+    flex: 1,
+    fontSize: 13,
+    color: '#E65100',
+    lineHeight: 18,
+  },
+  hierarchyFiltersContainer: {
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    backgroundColor: '#F9F9F9',
+    overflow: 'hidden',
+  },
+  hierarchyFiltersHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 12,
+    backgroundColor: '#F5F5F5',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+  },
+  filterToggleText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#007AFF',
+  },
+  hierarchyFiltersContent: {
+    padding: 12,
+    gap: 8,
   },
   dateButton: {
     borderWidth: 1,

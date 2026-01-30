@@ -4,6 +4,100 @@ import { toZonedTime } from "date-fns-tz";
 import { prisma } from "../../../utils/prismaClient";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
 
+export async function GET(req: NextRequest) {
+    try {
+        const { valid, expired, payload, message } = verifyAccessToken(req);
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
+
+        const empresaIdStr = req.nextUrl.searchParams.get("empresa_id");
+        const clienteIdStr = req.nextUrl.searchParams.get("cliente_id");
+        const contratoIdStr = req.nextUrl.searchParams.get("contrato_id");
+        const corpoIdStr = req.nextUrl.searchParams.get("corpo_id");
+        const puestoIdStr = req.nextUrl.searchParams.get("puesto_id");
+        const plazaIdStr = req.nextUrl.searchParams.get("plaza_id");
+
+        const where: any = {};
+
+        // Si hay filtros jerárquicos, usarlos (prioridad: plaza > puesto > corpo > contrato > cliente > empresa)
+        if (plazaIdStr) {
+            where.plaza_id = parseInt(plazaIdStr);
+        } else if (puestoIdStr) {
+            where.puesto_id = parseInt(puestoIdStr);
+        } else if (corpoIdStr) {
+            where.corpo_id = parseInt(corpoIdStr);
+        } else if (contratoIdStr) {
+            where.contrato_id = parseInt(contratoIdStr);
+        } else if (clienteIdStr) {
+            // Si hay cliente pero no contrato, buscar todos los contratos del cliente
+            const clienteId = parseInt(clienteIdStr);
+            const contratos = await prisma.e_estructura_contrato.findMany({
+                where: {
+                    cliente_id: clienteId,
+                    deleted: null,
+                },
+                select: { id: true },
+            });
+            const contratoIds = contratos.map((c) => c.id);
+            if (contratoIds.length > 0) {
+                where.contrato_id = { in: contratoIds };
+            } else {
+                return NextResponse.json({ status: true, data: [] }, { status: 200 });
+            }
+        } else if (empresaIdStr) {
+            // Si hay empresa pero no cliente, buscar todos los clientes de la empresa
+            const empresaId = parseInt(empresaIdStr);
+            const clientes = await prisma.e_estructura_cliente.findMany({
+                where: { empresa_id: empresaId },
+                select: { id: true },
+            });
+            const clienteIds = clientes.map((c) => c.id);
+            if (clienteIds.length > 0) {
+                // Obtener todos los contratos de estos clientes
+                const contratos = await prisma.e_estructura_contrato.findMany({
+                    where: {
+                        cliente_id: { in: clienteIds },
+                        deleted: null,
+                    },
+                    select: { id: true },
+                });
+                const contratoIds = contratos.map((c) => c.id);
+                if (contratoIds.length > 0) {
+                    where.contrato_id = { in: contratoIds };
+                } else {
+                    return NextResponse.json({ status: true, data: [] }, { status: 200 });
+                }
+            } else {
+                return NextResponse.json({ status: true, data: [] }, { status: 200 });
+            }
+        } else {
+            return NextResponse.json({ status: false, message: "Debe especificar filtros jerárquicos" }, { status: 400 });
+        }
+
+        const records = await prisma.c_registro_induccion_recorrido.findMany({
+            where,
+            orderBy: {
+                created_at: 'desc'
+            }
+        });
+
+        const recordsWithIdLocal = records.map(record => ({
+            ...record,
+            id_local: ""
+        }));
+
+        return NextResponse.json({
+            status: true,
+            message: "Registros de inducción y recorrido obtenidos correctamente",
+            data: recordsWithIdLocal
+        }, { status: 200 });
+
+    } catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        console.error(errorMessage);
+        return NextResponse.json({ status: false, message: errorMessage, data: [] }, { status: 400 });
+    }
+}
+
 function parseFechaInput(fecha: any): Date | undefined {
     if (!fecha) return undefined;
     if (fecha instanceof Date) return fecha;

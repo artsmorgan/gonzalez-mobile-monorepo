@@ -49,6 +49,7 @@ export async function PUT(
 
     const body = await req.json();
     const {
+      empresa_id,
       cliente_id,
       corpo_id,
       placa,
@@ -77,6 +78,7 @@ export async function PUT(
     const updated = await prisma.c_vehiculos_corporativos.update({
       where: { id: vehiculoId },
       data: {
+        empresa_id: empresa_id !== undefined ? Number(empresa_id) : existing.empresa_id,
         cliente_id: cliente_id !== undefined ? Number(cliente_id) : existing.cliente_id,
         sucursal_id: corpo_id !== undefined ? Number(corpo_id) : existing.sucursal_id,
         placa: placa !== undefined ? String(placa ?? "") : existing.placa,
