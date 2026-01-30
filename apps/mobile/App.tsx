@@ -23,6 +23,7 @@ import { createVoiceNote, deleteVoiceNote } from './hooks/voiceNotesFunctions';
 import { createBitacoraVehiculoDetenido, deleteBitacoraVehiculoDetenido, updateBitacoraVehiculoDetenido } from './hooks/bitacoraVehiculoDetenidoFunctions';
 import { createLlave, deleteLlave, updateLlave } from './hooks/llavesFunctions';
 import { createMovimientoLlave, deleteMovimientoLlave, updateMovimientoLlave } from './hooks/movimientosLlavesFunctions';
+import { createMovimientoActivoMantenimiento, deleteMovimientoActivoMantenimiento, updateMovimientoActivoMantenimiento } from './hooks/movimientosActivosMantenimientoFunctions';
 import { createDocumentoEntregado, deleteDocumentoEntregado, updateDocumentoEntregado } from './hooks/documentosEntregadosFunctions';
 import { createApreciacionVulnerabilidad, deleteApreciacionVulnerabilidad, updateApreciacionVulnerabilidad } from './hooks/apreciacionVulnerabilidadFunctions';
 import { eventBus } from './hooks/eventBus';
@@ -104,6 +105,7 @@ import { createJobManual, deleteJobManual, signJobManual, putJobManualQuizResult
 import StaffEvaluationsScreen from './screens/StaffEvaluationsScreen';
 import BitacoraVehiculosDetenidosScreen from './screens/BitacoraVehiculosDetenidosScreen';
 import LlavesScreen from './screens/LlavesScreen';
+import MantenimientoEquipoScreen from './screens/MantenimientoEquipoScreen';
 import DocumentosEntregadosScreen from './screens/DocumentosEntregadosScreen';
 import ApreciacionVulnerabilidadScreen from './screens/ApreciacionVulnerabilidadScreen';
 import MutuosAcuerdosScreen from './screens/MutuosAcuerdosScreen';
@@ -207,6 +209,7 @@ export type RootStackParamList = {
     returnTo?: keyof RootStackParamList;
   };
   Llaves: undefined;
+  MantenimientoEquipo: undefined;
   DocumentosEntregados: undefined;
   ApreciacionVulnerabilidad: undefined;
   EntregaPuestos: undefined;
@@ -293,6 +296,7 @@ function RootNavigator() {
       <Stack.Screen name="StaffEvaluations" component={StaffEvaluationsScreen} />
       <Stack.Screen name="BitacoraVehiculosDetenidos" component={BitacoraVehiculosDetenidosScreen} />
       <Stack.Screen name="Llaves" component={LlavesScreen} />
+      <Stack.Screen name="MantenimientoEquipo" component={MantenimientoEquipoScreen} />
       <Stack.Screen name="DocumentosEntregados" component={DocumentosEntregadosScreen} />
       <Stack.Screen name="ApreciacionVulnerabilidad" component={ApreciacionVulnerabilidadScreen} />
       <Stack.Screen name="EntregaPuestos" component={EntregaPuestosScreen} />
@@ -356,6 +360,8 @@ function AppContent() {
           checkBitacoraVehiculoDetenidoActionsCache(),
           checkLlavesActionsCache(),
           checkMovimientosLlavesActionsCache(),
+          checkActivoMantenimientoActionsCache(),
+          checkMovimientosActivosMantenimientoActionsCache(),
           checkDocumentosEntregadosActionsCache(),
           checkApreciacionVulnerabilidadActionsCache(),
           checkNotificationsActionsCache(),
@@ -978,6 +984,207 @@ function AppContent() {
       }
     }
   }
+
+  const checkMovimientosActivosMantenimientoActionsCache = async () => {
+    if (!employee) return;
+
+    const actionsStr = await AsyncStorage.getItem('movimientos_activos_mantenimiento_actions');
+    if (!actionsStr) return;
+
+    const actions = JSON.parse(actionsStr);
+    if (!actions || actions.length === 0) return;
+
+    console.log('Sincronizando acciones de movimientos de activos de mantenimiento:', actions.length);
+
+    for (const action of actions) {
+      try {
+        // Resolver activoId real si viene de un activo creado offline (activoLocalId)
+        let activoId: number = Number(action.activoId) || 0;
+        if ((!activoId || activoId === 0) && action.activoLocalId) {
+          // Buscar en cache de activos del reporte
+          const reporteId = action.reporteId;
+          if (reporteId) {
+            const cacheStr = await AsyncStorage.getItem(`activos_mantenimiento_${reporteId}_cache`);
+            if (cacheStr) {
+              const cache = JSON.parse(cacheStr);
+              const found = cache.find((it: any) => it.id_local && it.id_local === action.activoLocalId);
+              if (found?.id && found.id !== 0) activoId = found.id;
+            }
+          }
+        }
+
+        // Si aún no hay activoId real, posponer
+        if (!activoId || activoId === 0) continue;
+
+        if (action.type === 'create') {
+          const result = await createMovimientoActivoMantenimiento({
+            activoId,
+            requestData: action.requestData,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result.status) {
+            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'create'));
+            await AsyncStorage.setItem('movimientos_activos_mantenimiento_actions', JSON.stringify(updatedActions));
+
+            // Reemplazar id_local por id real en cache (dentro de movimientos del activo)
+            if (result.id) {
+              const cacheStr = await AsyncStorage.getItem(`movimientos_activo_${activoId}_cache`);
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const nextMovs = cache.map((m: any) => {
+                  if (m.id_local && m.id_local === action.id) {
+                    return { ...m, id: result.id, id_local: '' };
+                  }
+                  return m;
+                });
+                await AsyncStorage.setItem(`movimientos_activo_${activoId}_cache`, JSON.stringify(nextMovs));
+              }
+            }
+          }
+        } else if (action.type === 'update') {
+          const result = await updateMovimientoActivoMantenimiento({
+            activoId,
+            id: action.id,
+            requestData: action.requestData,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result.status) {
+            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'update'));
+            await AsyncStorage.setItem('movimientos_activos_mantenimiento_actions', JSON.stringify(updatedActions));
+          }
+        } else if (action.type === 'delete') {
+          const marcaId = action.marcaId;
+          if (!marcaId) continue;
+
+          const result = await deleteMovimientoActivoMantenimiento({
+            activoId,
+            id: action.id,
+            marcaId,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result.status) {
+            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'delete'));
+            await AsyncStorage.setItem('movimientos_activos_mantenimiento_actions', JSON.stringify(updatedActions));
+
+            const cacheStr = await AsyncStorage.getItem(`movimientos_activo_${activoId}_cache`);
+            if (cacheStr) {
+              const cache = JSON.parse(cacheStr);
+              const nextMovs = cache.filter((m: any) => m.id !== action.id);
+              await AsyncStorage.setItem(`movimientos_activo_${activoId}_cache`, JSON.stringify(nextMovs));
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error procesando acción de movimientos de activos de mantenimiento:', error);
+      }
+    }
+  }
+
+  const checkActivoMantenimientoActionsCache = async () => {
+    if (!employee) return;
+
+    const actionsStr = await AsyncStorage.getItem('activo_mantenimiento_actions');
+    if (!actionsStr) return;
+
+    const actions = JSON.parse(actionsStr);
+    if (!actions || actions.length === 0) return;
+
+    console.log('Sincronizando acciones de activos de mantenimiento:', actions.length);
+
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) return;
+
+    for (const action of actions) {
+      try {
+        if (action.type === 'update') {
+          let token = await AsyncStorage.getItem('access_token');
+          if (!token) {
+            const refreshed = await refreshAccessToken();
+            if (!refreshed) continue;
+            token = await AsyncStorage.getItem('access_token');
+          }
+
+          const response = await fetch(`${apiUrl}/api/activo-mantenimiento/${action.id}`, {
+            method: 'PUT',
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'Content-Type': 'application/json',
+              'ngrok-skip-browser-warning': '69420',
+            },
+            body: JSON.stringify(action.requestData),
+          });
+
+          if (response.status === 401) {
+            const refreshed = await refreshAccessToken();
+            if (refreshed) {
+              token = await AsyncStorage.getItem('access_token');
+              const retryResponse = await fetch(`${apiUrl}/api/activo-mantenimiento/${action.id}`, {
+                method: 'PUT',
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                  'Content-Type': 'application/json',
+                  'ngrok-skip-browser-warning': '69420',
+                },
+                body: JSON.stringify(action.requestData),
+              });
+              if (retryResponse.ok) {
+                const data = await retryResponse.json();
+                if (data.status) {
+                  const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'update'));
+                  await AsyncStorage.setItem('activo_mantenimiento_actions', JSON.stringify(updatedActions));
+
+                  // Actualizar cache si existe
+                  const reporteId = action.reporteId;
+                  if (reporteId) {
+                    const cacheStr = await AsyncStorage.getItem(`activos_mantenimiento_${reporteId}_cache`);
+                    if (cacheStr) {
+                      const cache = JSON.parse(cacheStr);
+                      const updatedCache = cache.map((a: any) =>
+                        a.id === action.id ? { ...a, ...action.requestData, id_local: '' } : a
+                      );
+                      await AsyncStorage.setItem(`activos_mantenimiento_${reporteId}_cache`, JSON.stringify(updatedCache));
+                    }
+                  }
+                }
+              }
+            } else {
+              if (logout) await logout();
+            }
+            continue;
+          }
+
+          if (response.ok) {
+            const data = await response.json();
+            if (data.status) {
+              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'update'));
+              await AsyncStorage.setItem('activo_mantenimiento_actions', JSON.stringify(updatedActions));
+
+              // Actualizar cache si existe
+              const reporteId = action.reporteId;
+              if (reporteId) {
+                const cacheStr = await AsyncStorage.getItem(`activos_mantenimiento_${reporteId}_cache`);
+                if (cacheStr) {
+                  const cache = JSON.parse(cacheStr);
+                  const updatedCache = cache.map((a: any) =>
+                    a.id === action.id ? { ...a, ...action.requestData, id_local: '' } : a
+                  );
+                  await AsyncStorage.setItem(`activos_mantenimiento_${reporteId}_cache`, JSON.stringify(updatedCache));
+                }
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error procesando acción de activo de mantenimiento:', error);
+      }
+    }
+  };
 
   const checkDocumentosEntregadosActionsCache = async () => {
     if (!employee) return;

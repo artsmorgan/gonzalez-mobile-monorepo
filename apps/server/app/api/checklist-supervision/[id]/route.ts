@@ -120,6 +120,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
       fecha: row.fecha,
       ejecutivo_cuenta: row.ejecutivo_cuenta,
       evaluacion: row.evaluacion,
+      articulos_puesto: (row as any).articulos_puesto || null,
       firma_supervisor: row.firma_supervisor,
       firma_responsable: row.firma_responsable,
       created_by: row.created_by,
@@ -157,6 +158,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       fecha,
       ejecutivo_cuenta,
       evaluacion,
+      articulos_puesto,
       firma_supervisor,
       firma_responsable,
     } = body ?? {};
@@ -173,6 +175,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     if (puesto_id !== undefined) updateData.puesto_id = parseInt(String(puesto_id));
     if (fecha !== undefined) updateData.fecha = fecha instanceof Date ? fecha : new Date(fecha);
     if (ejecutivo_cuenta !== undefined) updateData.ejecutivo_cuenta = String(ejecutivo_cuenta);
+    if (articulos_puesto !== undefined) updateData.articulos_puesto = articulos_puesto ? String(articulos_puesto) : '';
     if (firma_supervisor !== undefined) updateData.firma_supervisor = String(firma_supervisor);
     if (firma_responsable !== undefined) updateData.firma_responsable = String(firma_responsable);
 

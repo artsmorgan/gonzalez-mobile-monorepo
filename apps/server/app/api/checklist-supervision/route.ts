@@ -7,6 +7,7 @@ import fs from "fs";
 import path from "path";
 import { v4 as uuidv4 } from "uuid";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
+import { createReport } from "../../../utils/createReporteArticuloMantenimiento";
 
 function safeParseJson<T>(value: any, fallback: T): T {
   if (!value) return fallback;
@@ -121,6 +122,7 @@ export async function GET(req: NextRequest) {
       fecha: r.fecha,
       ejecutivo_cuenta: r.ejecutivo_cuenta,
       evaluacion: r.evaluacion,
+      articulos_puesto: (r as any).articulos_puesto || null,
       firma_supervisor: r.firma_supervisor,
       firma_responsable: r.firma_responsable,
       created_by: r.created_by,
@@ -149,9 +151,11 @@ export async function POST(req: NextRequest) {
       division_id,
       corpo_id,
       puesto_id,
+      division,
       fecha,
       ejecutivo_cuenta,
       evaluacion,
+      articulos_puesto,
       firma_supervisor,
       firma_responsable,
     } = body ?? {};
@@ -161,6 +165,7 @@ export async function POST(req: NextRequest) {
       !division_id ||
       !corpo_id ||
       !puesto_id ||
+      !division ||
       !fecha ||
       !ejecutivo_cuenta ||
       !evaluacion ||
@@ -175,8 +180,6 @@ export async function POST(req: NextRequest) {
 
     // Parsear evaluación para procesar imágenes
     let evaluationParsed = safeParseJson<any>(evaluacion, []);
-    console.log("Evaluación recibida (primeros 500 chars):", typeof evaluacion === 'string' ? evaluacion.substring(0, 500) : JSON.stringify(evaluacion).substring(0, 500));
-    console.log("Evaluación parseada es array:", Array.isArray(evaluationParsed));
 
     // Buscar imágenes en la evaluación antes de procesar (como StaffEvaluationsScreen)
     let imageCount = 0;
@@ -205,6 +208,7 @@ export async function POST(req: NextRequest) {
         fecha: fechaDate,
         ejecutivo_cuenta: String(ejecutivo_cuenta),
         evaluacion: JSON.stringify(evaluationParsed), // Temporal, se actualizará después
+        articulos_puesto: articulos_puesto ? String(articulos_puesto) : '',
         firma_supervisor: String(firma_supervisor),
         firma_responsable: String(firma_responsable),
         created_by: parseInt(String((payload as any)?.id ?? 0)) || 0,
@@ -250,8 +254,54 @@ export async function POST(req: NextRequest) {
       }
       let fechaRegistro = createdAt.toISOString().split("T")[0];
       let horaRegistro = createdAt.toISOString().split("T")[1].split(".")[0];
-      const description = "El empleado " + empNombre + " ha registrado un checklist de supervisión en el puesto " + puestoNombre + " en la sucursal " + sucursalNombre + " el día " + fechaRegistro + " a las " + horaRegistro;
-      sendNotificationByRole(corpo_id, [created.created_by], "Checklist de supervisión registrado", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+
+      // Verificar si hay problemas con los artículos (similar a entrega-puestos)
+      let articulos_desc = ".";
+      let send_notification = false;
+      let articulos_reporte = [];
+      if (articulos_puesto) {
+        try {
+          const articulos_puesto_array = typeof articulos_puesto === 'string' ? JSON.parse(articulos_puesto) : articulos_puesto;
+          if (Array.isArray(articulos_puesto_array) && articulos_puesto_array.length > 0) {
+            let init_desc = false;
+            for (const articulo of articulos_puesto_array) {
+              let articulo_desc = `- ${articulo.cantidad_real} de ${articulo.cantidad_requerida} unidades de "${articulo.nombre}" (Estado: ${articulo.estado})\n`;
+              let add_desc = false;
+              if (articulo.cantidad_requerida > articulo.cantidad_real) {
+                add_desc = true;
+              }
+              if (articulo.estado != "Bueno") {
+                add_desc = true;
+              }
+
+              if (add_desc) {
+                send_notification = true;
+                if (!init_desc) {
+                  articulos_desc = ". Sin embargo, los artículos registrados presentan los siguientes detalles:\n";
+                  init_desc = true;
+                }
+                articulos_desc += articulo_desc;
+                articulos_reporte.push({
+                  id: articulo.id,
+                  nombre: articulo.nombre,
+                  cantidad_requerida: articulo.cantidad_requerida,
+                  cantidad_real: articulo.cantidad_real,
+                  estado: articulo.estado,
+                  observaciones: articulo.observaciones,
+                });
+              }
+            }
+          }
+        } catch (error) {
+          console.error("Error procesando artículos para notificación:", error);
+        }
+      }
+
+      if (send_notification) {
+        const description = "El empleado " + empNombre + " ha registrado un checklist de supervisión en el puesto " + puestoNombre + " en la sucursal " + sucursalNombre + " el día " + fechaRegistro + " a las " + horaRegistro + articulos_desc;
+        sendNotificationByRole(corpo_id, [created.created_by], "Checklist de supervisión registrado", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+        createReport(cliente_id, corpo_id, puesto_id, division, articulos_reporte, created.created_by);
+      }
     }
 
     return NextResponse.json({ status: true, message: "Checklist creado correctamente", id: created.id }, { status: 200 });

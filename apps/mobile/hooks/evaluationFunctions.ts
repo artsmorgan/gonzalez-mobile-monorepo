@@ -2173,6 +2173,77 @@ export const listCorporateVehiclesByCorpo = async ({
   }
 };
 
+export interface ListCorporateVehiclesParams {
+  empresa_id?: number | null;
+  cliente_id?: number | null;
+  corpo_id?: number | null;
+  refreshAccessToken?: () => Promise<boolean>;
+  logout?: () => Promise<{ status: boolean; message: string }>;
+}
+
+export const listCorporateVehicles = async ({
+  empresa_id,
+  cliente_id,
+  corpo_id,
+  refreshAccessToken,
+  logout,
+}: ListCorporateVehiclesParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) throw new Error('Server URL not configured');
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken?.();
+      if (!refreshed) {
+        if (logout) await logout();
+        throw new Error('Sesión expirada');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const queryParams = new URLSearchParams();
+    if (empresa_id) queryParams.append('empresa_id', empresa_id.toString());
+    if (cliente_id) queryParams.append('cliente_id', cliente_id.toString());
+    if (corpo_id) queryParams.append('corpo_id', corpo_id.toString());
+
+    const response = await fetch(`${apiUrl}/api/corporate-vehicles?${queryParams.toString()}`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+    });
+
+    if (response.status === 401) {
+      const refreshed = await refreshAccessToken?.();
+      if (refreshed) return listCorporateVehicles({ empresa_id, cliente_id, corpo_id, refreshAccessToken, logout });
+      if (logout) await logout();
+      throw new Error('Sesión expirada');
+    }
+
+    if (response.status === 403) {
+      if (logout) await logout();
+      throw new Error('Acceso denegado');
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error listing corporate vehicles:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al cargar vehículos corporativos',
+    };
+  }
+};
+
 export const listCorporateVehicleUses = async ({
   vehiculo_id,
   refreshAccessToken,
@@ -7966,6 +8037,90 @@ export const deleteAttendanceControl = async ({
   }
 };
 
+interface ListAttendanceControlParams {
+  empresa_id?: number;
+  cliente_id?: number;
+  division_id?: number;
+  contrato_id?: number;
+  corpo_id?: number;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+export const listAttendanceControl = async ({
+  empresa_id,
+  cliente_id,
+  division_id,
+  contrato_id,
+  corpo_id,
+  refreshAccessToken,
+  logout,
+}: ListAttendanceControlParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        if (logout) await logout();
+        throw new Error('Sesión expirada');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    // Construir query parameters
+    const params = new URLSearchParams();
+    if (empresa_id) params.append('empresa_id', String(empresa_id));
+    if (cliente_id) params.append('cliente_id', String(cliente_id));
+    if (division_id) params.append('division_id', String(division_id));
+    if (contrato_id) params.append('contrato_id', String(contrato_id));
+    if (corpo_id) params.append('corpo_id', String(corpo_id));
+
+    const response = await fetch(`${apiUrl}/api/attendance-control?${params.toString()}`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+    });
+
+    if (response.status === 401) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        return listAttendanceControl({ empresa_id, cliente_id, division_id, contrato_id, corpo_id, refreshAccessToken, logout });
+      } else {
+        await logout();
+        throw new Error('Sesión expirada');
+      }
+    }
+
+    if (response.status === 403) {
+      await logout();
+      throw new Error('Acceso denegado');
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error listing attendance control:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al listar los controles de asistencia',
+      data: [],
+    };
+  }
+};
+
 export const listAttendanceControlByCorpo = async ({
   corpo_id,
   refreshAccessToken,
@@ -8573,6 +8728,89 @@ export const deleteInductionTourRecord = async ({
   }
 };
 
+export interface ListInductionTourRecordsParams {
+  empresa_id?: number;
+  cliente_id?: number;
+  contrato_id?: number;
+  corpo_id?: number;
+  puesto_id?: number;
+  plaza_id?: number;
+  refreshAccessToken?: () => Promise<boolean>;
+  logout?: () => Promise<any>;
+}
+
+export const listInductionTourRecords = async ({
+  empresa_id,
+  cliente_id,
+  contrato_id,
+  corpo_id,
+  puesto_id,
+  plaza_id,
+  refreshAccessToken,
+  logout,
+}: ListInductionTourRecordsParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken?.();
+      if (!refreshed) {
+        if (logout) await logout();
+        throw new Error('Sesión expirada');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const queryParams = new URLSearchParams();
+    if (empresa_id) queryParams.append('empresa_id', empresa_id.toString());
+    if (cliente_id) queryParams.append('cliente_id', cliente_id.toString());
+    if (contrato_id) queryParams.append('contrato_id', contrato_id.toString());
+    if (corpo_id) queryParams.append('corpo_id', corpo_id.toString());
+    if (puesto_id) queryParams.append('puesto_id', puesto_id.toString());
+    if (plaza_id) queryParams.append('plaza_id', plaza_id.toString());
+
+    const response = await fetch(`${apiUrl}/api/induction-tour-record?${queryParams.toString()}`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+    });
+
+    if (response.status === 401) {
+      const refreshed = await refreshAccessToken?.();
+      if (refreshed) return listInductionTourRecords({ empresa_id, cliente_id, contrato_id, corpo_id, puesto_id, plaza_id, refreshAccessToken, logout });
+      if (logout) await logout();
+      throw new Error('Sesión expirada');
+    }
+
+    if (response.status === 403) {
+      if (logout) await logout();
+      throw new Error('Acceso denegado');
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error listing induction tour records:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al listar los registros de inducción y recorrido',
+      data: [],
+    };
+  }
+};
+
 export const listInductionTourRecordByCorpo = async ({
   corpo_id,
   refreshAccessToken,
@@ -8848,6 +9086,78 @@ export const deleteGeneralInductionRegister = async ({
     return {
       status: false,
       message: error instanceof Error ? error.message : 'Error al eliminar el registro de inducción general',
+    };
+  }
+};
+
+export interface ListGeneralInductionRegistersParams {
+  empresa_id?: number;
+  cliente_id?: number;
+  corpo_id?: number;
+  refreshAccessToken?: () => Promise<boolean>;
+  logout?: () => Promise<any>;
+}
+
+export const listGeneralInductionRegisters = async ({
+  empresa_id,
+  cliente_id,
+  corpo_id,
+  refreshAccessToken,
+  logout,
+}: ListGeneralInductionRegistersParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) throw new Error('Server URL not configured');
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken?.();
+      if (!refreshed) {
+        if (logout) await logout();
+        throw new Error('Sesión expirada');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const queryParams = new URLSearchParams();
+    if (empresa_id) queryParams.append('empresa_id', empresa_id.toString());
+    if (cliente_id) queryParams.append('cliente_id', cliente_id.toString());
+    if (corpo_id) queryParams.append('corpo_id', corpo_id.toString());
+
+    const response = await fetch(`${apiUrl}/api/general-induction-register?${queryParams.toString()}`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+    });
+
+    if (response.status === 401) {
+      const refreshed = await refreshAccessToken?.();
+      if (refreshed) return listGeneralInductionRegisters({ empresa_id, cliente_id, corpo_id, refreshAccessToken, logout });
+      if (logout) await logout();
+      throw new Error('Sesión expirada');
+    }
+
+    if (response.status === 403) {
+      if (logout) await logout();
+      throw new Error('Acceso denegado');
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error listing general induction registers:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al listar los registros de inducción general',
+      data: [],
     };
   }
 };

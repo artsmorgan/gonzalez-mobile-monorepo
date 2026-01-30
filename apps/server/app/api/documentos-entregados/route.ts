@@ -41,7 +41,6 @@ export async function GET(req: NextRequest) {
 
     const rows = await prisma.e_control_documento_entregado_cliente.findMany({
       where: {
-        cliente_id: marcaDia.cliente_id,
         corpo_id: marcaDia.corpo_id,
       },
       orderBy: { id: "desc" },

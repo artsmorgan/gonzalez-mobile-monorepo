@@ -99,8 +99,45 @@ export async function GET(req: NextRequest) {
                                     ],
                                 },
                             });
+
                             for (const puesto of puestos) {
-                                const puesto_data = { id: puesto.id, nombre: `${puesto.codigo} - ${puesto.nombre}`, plazas: [] };
+                                const puesto_data = { id: puesto.id, nombre: `${puesto.codigo} - ${puesto.nombre}`, plazas: [], articulos: [] };
+
+                                let articulos_return: { id: number, nombre: string, cantidad: number }[] = [];
+
+                                if (puesto.comboArticulosCP_id) {
+                                    const combo_articulo_cp = await prisma.e_estructura_combo_articulo_cp.findUnique({ where: { id: puesto.comboArticulosCP_id } });
+                                    if (combo_articulo_cp) {
+                                        const articulos_combo_articulo_cp = await prisma.e_estructura_articulo_corpo_puesto_plan.findMany({ where: { combo_id: combo_articulo_cp.id } });
+                                        for (const articulo of articulos_combo_articulo_cp) {
+                                            let art_bd = null;
+                                            if (articulo.articuloCP_id) {
+                                                art_bd = await prisma.n_articulo_corpo_puesto.findUnique({ where: { id: articulo.articuloCP_id } });
+                                            }
+                                            articulos_return.push({
+                                                id: articulo.id,
+                                                nombre: art_bd ? art_bd.nombre : "Desconocido",
+                                                cantidad: articulo.cantidad,
+                                            });
+                                        }
+                                    }
+                                }
+
+                                const articulos_puesto_plan = await prisma.e_estructura_articulo_corpo_puesto_plan.findMany({ where: { puesto_id: puesto.id, id: { notIn: articulos_return.map(articulo => articulo.id) } } });
+                                for (const articulo of articulos_puesto_plan) {
+                                    let art_bd = null;
+                                    if (articulo.articuloCP_id) {
+                                        art_bd = await prisma.n_articulo_corpo_puesto.findUnique({ where: { id: articulo.articuloCP_id } });
+                                    }
+                                    articulos_return.push({
+                                        id: articulo.id,
+                                        nombre: art_bd ? art_bd.nombre : "Desconocido",
+                                        cantidad: articulo.cantidad,
+                                    });
+                                }
+
+                                puesto_data.articulos = articulos_return as never[];
+
                                 const plazas = await prisma.e_estructura_plazas.findMany({
                                     where: {
                                         puesto_id: puesto.id,

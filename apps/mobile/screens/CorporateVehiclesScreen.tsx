@@ -39,6 +39,7 @@ import {
   deleteCorporateVehicle,
   listCorporateVehicleUses,
   listCorporateVehiclesByCorpo,
+  listCorporateVehicles,
   updateCorporateVehicleUse,
   updateCorporateVehicle,
   createCorporateVehicleMaintenance,
@@ -120,6 +121,7 @@ type VehicleRecord = {
   synced?: boolean;
   type?: string;
 
+  empresa_id: number;
   cliente_id: number;
   corpo_id: number; // sucursal_id
 
@@ -544,6 +546,13 @@ export default function CorporateVehiclesScreen() {
   const [marcaDivisionId, setMarcaDivisionId] = useState<number | null>(null);
   const [marcaCorpoId, setMarcaCorpoId] = useState<number | null>(null);
   const [marcaClienteId, setMarcaClienteId] = useState<number | null>(null);
+  const [marcaEmpresaId, setMarcaEmpresaId] = useState<number | null>(null);
+
+  // Estados para filtros jerárquicos
+  const [filterEmpresaId, setFilterEmpresaId] = useState<number | null>(null);
+  const [filterClienteId, setFilterClienteId] = useState<number | null>(null);
+  const [filterCorpoId, setFilterCorpoId] = useState<number | null>(null);
+  const [isHierarchyFiltersExpanded, setIsHierarchyFiltersExpanded] = useState(false);
 
   // estructura
   const [structure, setStructure] = useState<MainStructureTree>([]);
@@ -664,6 +673,7 @@ export default function CorporateVehiclesScreen() {
       setMarcaDivisionId(null);
       setMarcaCorpoId(null);
       setMarcaClienteId(null);
+      setMarcaEmpresaId(null);
       return null;
     }
     try {
@@ -676,15 +686,18 @@ export default function CorporateVehiclesScreen() {
       const divIdRaw = current?.roleDivision?.division?.id;
       const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
       const clienteIdRaw = current?.cliente?.id ?? current?.cliente_id;
+      const empresaIdRaw = current?.empresa?.id ?? current?.empresa_id;
       setMarcaDivisionId(divIdRaw !== undefined && divIdRaw !== null ? Number(divIdRaw) : null);
       setMarcaCorpoId(corpoIdRaw !== undefined && corpoIdRaw !== null ? Number(corpoIdRaw) : null);
       setMarcaClienteId(clienteIdRaw !== undefined && clienteIdRaw !== null ? Number(clienteIdRaw) : null);
+      setMarcaEmpresaId(empresaIdRaw !== undefined && empresaIdRaw !== null ? Number(empresaIdRaw) : null);
       return current;
     } catch {
       setHasCurrentMarca(false);
       setMarcaDivisionId(null);
       setMarcaCorpoId(null);
       setMarcaClienteId(null);
+      setMarcaEmpresaId(null);
       return null;
     }
   };
@@ -727,6 +740,34 @@ export default function CorporateVehiclesScreen() {
     const cont = contratos.find((c: any) => Number(c.id) === Number(selectedContratoId));
     return cont?.sucursales || [];
   }, [contratos, selectedContratoId]);
+
+  // Nodos computados para filtros jerárquicos
+  const filterEmpresas = useMemo(() => (Array.isArray(structure) ? structure : []), [structure]);
+
+  const filterClientes = useMemo(() => {
+    const empresa = filterEmpresas.find((e: any) => e.id === filterEmpresaId);
+    return empresa?.clientes || [];
+  }, [filterEmpresas, filterEmpresaId]);
+
+  const filterSucursales = useMemo(() => {
+    if (!filterClienteId) return [];
+    const empresa = filterEmpresas.find((e: any) => e.id === filterEmpresaId);
+    if (!empresa) return [];
+    const cliente = empresa.clientes?.find((c: any) => c.id === filterClienteId);
+    if (!cliente) return [];
+    // Recopilar todas las sucursales de todas las divisiones y contratos del cliente
+    const sucursales: any[] = [];
+    cliente.division?.forEach((division: any) => {
+      division.contratos?.forEach((contrato: any) => {
+        contrato.sucursales?.forEach((sucursal: any) => {
+          if (!sucursales.find(s => s.id === sucursal.id)) {
+            sucursales.push(sucursal);
+          }
+        });
+      });
+    });
+    return sucursales;
+  }, [filterEmpresas, filterEmpresaId, filterClienteId]);
 
   const findPathForSucursal = useCallback(
     (clienteId: number | null, sucursalId: number | null) => {
@@ -821,7 +862,7 @@ export default function CorporateVehiclesScreen() {
     })();
   }, []);
 
-  // defaults por marca
+  // defaults por marca para formulario
   useEffect(() => {
     if (!structure || structure.length === 0) return;
     if (!marcaClienteId || !marcaCorpoId) return;
@@ -842,6 +883,22 @@ export default function CorporateVehiclesScreen() {
     setSelectedContratoId(null);
     setSelectedSucursalId(null);
   }, [structure, marcaClienteId, marcaCorpoId, marcaDivisionId, empresas]);
+
+  // Inicializar filtros jerárquicos con current_marca (solo una vez cuando se carga la estructura)
+  useEffect(() => {
+    if (!structure || structure.length === 0) return;
+    if (marcaEmpresaId && !filterEmpresaId) setFilterEmpresaId(marcaEmpresaId);
+    if (marcaClienteId && !filterClienteId) setFilterClienteId(marcaClienteId);
+    if (marcaCorpoId && !filterCorpoId) setFilterCorpoId(marcaCorpoId);
+  }, [structure, marcaEmpresaId, marcaClienteId, marcaCorpoId]);
+
+  // Trigger fetch cuando cambien los filtros jerárquicos (pero no al inicializar)
+  useEffect(() => {
+    // Solo hacer fetch si hay al menos un filtro activo y la estructura está cargada
+    if (structure && structure.length > 0 && (filterEmpresaId || filterClienteId || filterCorpoId)) {
+      fetchRecords();
+    }
+  }, [filterEmpresaId, filterClienteId, filterCorpoId]);
 
   const toggleExpanded = (key: string) => {
     setExpanded((prev) => {
@@ -895,7 +952,11 @@ export default function CorporateVehiclesScreen() {
 
       await fetchMainStructure();
 
-      const corpoId = marcaCorpoId ?? Number(current?.corpo?.id ?? current?.corpo_id ?? 0);
+      // Usar filtros jerárquicos si están disponibles, sino usar current_marca
+      const empresaId = filterEmpresaId ?? marcaEmpresaId ?? Number(current?.empresa?.id ?? current?.empresa_id ?? 0);
+      const clienteId = filterClienteId ?? marcaClienteId ?? Number(current?.cliente?.id ?? current?.cliente_id ?? 0);
+      const corpoId = filterCorpoId ?? marcaCorpoId ?? Number(current?.corpo?.id ?? current?.corpo_id ?? 0);
+
       if (!corpoId) {
         setError('No se encontró el ID de la sucursal (corpo) en la marca actual');
         setIsLoading(false);
@@ -905,6 +966,7 @@ export default function CorporateVehiclesScreen() {
       const cacheStr = await AsyncStorage.getItem('evaluations_cache');
       const cache = cacheStr ? JSON.parse(cacheStr) : [];
       const localCacheAll: VehicleRecord[] = cache.filter((item: any) => item.type === 'corporate_vehicle');
+      // Filtrar cache local por corpo_id
       const localCache: VehicleRecord[] = localCacheAll.filter((r: any) => Number(r.corpo_id) === Number(corpoId));
       const localOnly = localCache.filter((r: any) => !r?.synced || String(r?.id_local || '').startsWith('local-'));
 
@@ -914,8 +976,11 @@ export default function CorporateVehiclesScreen() {
         return;
       }
 
-      const res = await listCorporateVehiclesByCorpo({
-        corpo_id: String(corpoId),
+      // Usar nueva función con filtros jerárquicos
+      const res = await listCorporateVehicles({
+        empresa_id: empresaId || undefined,
+        cliente_id: clienteId || undefined,
+        corpo_id: corpoId || undefined,
         refreshAccessToken,
         logout,
       });
@@ -945,7 +1010,7 @@ export default function CorporateVehiclesScreen() {
     } finally {
       setIsLoading(false);
     }
-  }, [fetchMainStructure, refreshAccessToken, logout, marcaCorpoId]);
+  }, [fetchMainStructure, refreshAccessToken, logout, filterEmpresaId, filterClienteId, filterCorpoId, marcaEmpresaId, marcaClienteId, marcaCorpoId]);
 
   useFocusEffect(
     useCallback(() => {
@@ -1360,7 +1425,12 @@ export default function CorporateVehiclesScreen() {
 
       navigation.navigate('BitacoraVehiculosDetenidos', {
         prefill: {
-          ...(path || { cliente_id: Number(usesVehicle.cliente_id), sucursal_id: Number(usesVehicle.corpo_id) }),
+          ...(path || {
+            empresa_id: Number(usesVehicle.empresa_id || 0),
+            cliente_id: Number(usesVehicle.cliente_id),
+            sucursal_id: Number(usesVehicle.corpo_id)
+          }),
+          empresa_id: Number(usesVehicle.empresa_id || 0),
           cliente_id: Number(usesVehicle.cliente_id),
           sucursal_id: Number(usesVehicle.corpo_id),
           vehiculo_id: Number(usesVehicle.id),
@@ -2048,12 +2118,32 @@ export default function CorporateVehiclesScreen() {
 
   const removeImage = (id: string) => setImageFiles((p) => p.filter((f) => f.id !== id));
 
-  const buildRequestData = () => {
+  const buildRequestData = async () => {
     const firmaHash = firmaResponsable
       ? btoa(`${firmaResponsable.sessionId}:${firmaResponsable.empleadoId}:${firmaResponsable.latitud}:${firmaResponsable.longitud}:${firmaResponsable.timestamp}`)
       : '';
 
+    // Obtener empresa_id de current_marca si no está disponible
+    let empresaId = 0;
+    if (selectedEmpresaId) {
+      empresaId = Number(selectedEmpresaId);
+    } else {
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      if (currentMarcaStr) {
+        try {
+          const current = JSON.parse(currentMarcaStr);
+          const empresaIdRaw = current?.empresa?.id ?? current?.empresa_id;
+          if (empresaIdRaw !== undefined && empresaIdRaw !== null) {
+            empresaId = Number(empresaIdRaw);
+          }
+        } catch {
+          // ignore
+        }
+      }
+    }
+
     return {
+      empresa_id: empresaId,
       cliente_id: Number(selectedClienteId),
       corpo_id: Number(selectedSucursalId),
       placa: placa.trim(),
@@ -2082,7 +2172,7 @@ export default function CorporateVehiclesScreen() {
       return;
     }
 
-    const requestData = buildRequestData();
+    const requestData = await buildRequestData();
     const isConnected = await getConnectionStatus();
 
     try {
@@ -2111,6 +2201,7 @@ export default function CorporateVehiclesScreen() {
             id_local: localId,
             synced: false,
             type: 'corporate_vehicle',
+            empresa_id: requestData.empresa_id,
             cliente_id: requestData.cliente_id,
             corpo_id: requestData.corpo_id,
             placa: requestData.placa,
@@ -2270,6 +2361,104 @@ export default function CorporateVehiclesScreen() {
               <ThemedText style={styles.errorText}>Debes tener una marca activa para usar este módulo.</ThemedText>
             </ThemedView>
           ) : null}
+
+          {/* Filtros Jerárquicos */}
+          {!isCreating && (
+            <ThemedView style={styles.filtersContainer}>
+              <ThemedView style={styles.filtersHeader}>
+                <TouchableOpacity
+                  style={styles.filterToggleButton}
+                  onPress={() => setIsHierarchyFiltersExpanded(!isHierarchyFiltersExpanded)}
+                >
+                  <ThemedText style={styles.filtersTitle}>
+                    Filtros Jerárquicos
+                  </ThemedText>
+                  <Ionicons
+                    name={isHierarchyFiltersExpanded ? "chevron-up" : "chevron-down"}
+                    size={20}
+                    color="#007AFF"
+                  />
+                </TouchableOpacity>
+                {isHierarchyFiltersExpanded && (
+                  <TouchableOpacity
+                    style={styles.resetFiltersButton}
+                    onPress={() => {
+                      setFilterEmpresaId(null);
+                      setFilterClienteId(null);
+                      setFilterCorpoId(null);
+                    }}
+                  >
+                    <Ionicons name="refresh" size={16} color="#FF3B30" />
+                    <ThemedText style={styles.resetFiltersText}>Reiniciar</ThemedText>
+                  </TouchableOpacity>
+                )}
+              </ThemedView>
+              {isHierarchyFiltersExpanded && (
+                <ThemedView style={styles.filtersContent}>
+                  <ThemedView style={styles.filterGroup}>
+                    <ThemedText style={styles.filterLabel}>Empresa:</ThemedText>
+                    <View style={styles.pickerWrapper}>
+                      <Picker
+                        selectedValue={filterEmpresaId || ''}
+                        onValueChange={(value) => {
+                          setFilterEmpresaId(value && value !== '' ? Number(value) : null);
+                          setFilterClienteId(null);
+                          setFilterCorpoId(null);
+                        }}
+                        style={styles.picker}
+                      >
+                        <Picker.Item label="Seleccionar..." value="" />
+                        {filterEmpresas.map((e: any) => (
+                          <Picker.Item key={e.id} label={e.nombre} value={e.id} />
+                        ))}
+                      </Picker>
+                    </View>
+                  </ThemedView>
+
+                  {filterEmpresaId && (
+                    <ThemedView style={styles.filterGroup}>
+                      <ThemedText style={styles.filterLabel}>Cliente:</ThemedText>
+                      <View style={styles.pickerWrapper}>
+                        <Picker
+                          selectedValue={filterClienteId || ''}
+                          onValueChange={(value) => {
+                            setFilterClienteId(value && value !== '' ? Number(value) : null);
+                            setFilterCorpoId(null);
+                          }}
+                          style={styles.picker}
+                        >
+                          <Picker.Item label="Seleccionar..." value="" />
+                          {filterClientes.map((c: any) => (
+                            <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                          ))}
+                        </Picker>
+                      </View>
+                    </ThemedView>
+                  )}
+
+                  {filterClienteId && (
+                    <ThemedView style={styles.filterGroup}>
+                      <ThemedText style={styles.filterLabel}>Sucursal:</ThemedText>
+                      <View style={styles.pickerWrapper}>
+                        <Picker
+                          selectedValue={filterCorpoId || ''}
+                          onValueChange={(value) => {
+                            setFilterCorpoId(value && value !== '' ? Number(value) : null);
+                          }}
+                          style={styles.picker}
+                        >
+                          <Picker.Item label="Seleccionar..." value="" />
+                          {filterSucursales.map((s: any) => (
+                            <Picker.Item key={s.id} label={s.nombre} value={s.id} />
+                          ))}
+                        </Picker>
+                      </View>
+                    </ThemedView>
+                  )}
+                </ThemedView>
+              )}
+            </ThemedView>
+          )}
 
           {!isCreating ? (
             <TouchableOpacity style={styles.createButton} onPress={startCreate} activeOpacity={0.85}>
@@ -3526,6 +3715,56 @@ const styles = StyleSheet.create({
   modalClearButtonText: { color: '#111', fontWeight: '800' },
   modalAcceptButton: { backgroundColor: '#D1FAE5', borderRadius: 10, paddingVertical: 10, paddingHorizontal: 12, flexDirection: 'row', gap: 8, alignItems: 'center' },
   modalAcceptButtonText: { color: '#111', fontWeight: '800' },
+
+  // Filtros jerárquicos
+  filtersContainer: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+  },
+  filtersHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  filterToggleButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  filtersTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#000000',
+  },
+  resetFiltersButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  resetFiltersText: {
+    fontSize: 12,
+    color: '#FF3B30',
+    fontWeight: '600',
+  },
+  filtersContent: {
+    gap: 12,
+  },
+  filterGroup: {
+    marginBottom: 12,
+  },
+  filterLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#000000',
+    marginBottom: 8,
+  },
 });
 
 

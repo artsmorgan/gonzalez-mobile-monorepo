@@ -12,71 +12,81 @@ export async function GET(req: NextRequest) {
         const { valid, expired, payload, message } = verifyAccessToken(req);
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
-        const marcaId = req.nextUrl.searchParams.get("m");
-        if (!marcaId) {
-            return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
-        }
+        // Parámetros de la jerarquía completa
+        const empresaIdStr = req.nextUrl.searchParams.get("empresa_id");
+        const clienteIdStr = req.nextUrl.searchParams.get("cliente_id");
+        const divisionIdStr = req.nextUrl.searchParams.get("division_id");
+        const contratoIdStr = req.nextUrl.searchParams.get("contrato_id");
+        const corpoIdStr = req.nextUrl.searchParams.get("corpo_id");
+        const puestoIdStr = req.nextUrl.searchParams.get("puesto_id");
 
-        const marca = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(marcaId) } });
-        if (!marca) {
-            return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
-        }
+        const where: any = {};
 
-        if (!marca.empleadoFijo_id) {
-            return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 200 });
-        }
-
-        const lastMarca = await getUserMarca(marca.empleadoFijo_id);
-        if (!lastMarca) {
-            return NextResponse.json({ status: false, message: "No se encontró la última marca" }, { status: 200 });
-        }
-
-        if (marca.id !== lastMarca.id) {
-            return NextResponse.json({ status: false, message: "Hay una nueva marca más reciente" }, { status: 200 });
-        }
-
-        const empresa = await prisma.e_estructura_empresa.findUnique({ where: { id: marca.empresa_id } });
-        if (!empresa) {
-            return NextResponse.json({ status: false, message: "Empresa no encontrada" }, { status: 200 });
-        }
-
-        const cliente = await prisma.e_estructura_cliente.findUnique({ where: { id: marca.cliente_id } });
-        if (!cliente) {
-            return NextResponse.json({ status: false, message: "Cliente no encontrada" }, { status: 200 });
-        }
-
-        const corpo = await prisma.e_estructura_sucursal.findUnique({ where: { id: marca.corpo_id } });
-        if (!corpo) {
-            return NextResponse.json({ status: false, message: "Corpo no encontrada" }, { status: 200 });
-        }
-
-        const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: marca.puesto_id } });
-        if (!puesto) {
-            return NextResponse.json({ status: false, message: "Puesto no encontrada" }, { status: 200 });
-        }
-
-        const empleado_plaza = await prisma.c_empleado_plaza.findFirst({
-            where: {
-                empleado_id: marca.empleadoFijo_id,
-                plaza_id: marca.plaza_id
+        // Filtro por empresa: filtrar clientes que pertenecen a esa empresa
+        // Solo se aplica si no hay filtro más específico de cliente
+        if (empresaIdStr && !clienteIdStr) {
+            const empresaId = parseInt(empresaIdStr);
+            const clientes = await prisma.e_estructura_cliente.findMany({
+                where: { empresa_id: empresaId },
+                select: { id: true },
+            });
+            const clienteIds = clientes.map((c) => c.id);
+            if (clienteIds.length > 0) {
+                where.cliente_id = { in: clienteIds };
+            } else {
+                // Si no hay clientes, retornar vacío
+                return NextResponse.json({ status: true, encuestas: [] }, { status: 200 });
             }
+        }
+
+        // Filtro directo por cliente (tiene prioridad sobre empresa)
+        if (clienteIdStr) {
+            where.cliente_id = parseInt(clienteIdStr);
+        }
+
+        // Filtro directo por división
+        if (divisionIdStr) {
+            where.division_id = parseInt(divisionIdStr);
+        }
+
+        // Filtro por contrato: filtrar sucursales que pertenecen a ese contrato
+        // Solo se aplica si no hay filtro más específico de corpo
+        if (contratoIdStr && !corpoIdStr) {
+            const contratoId = parseInt(contratoIdStr);
+            const sucursales = await prisma.e_estructura_sucursal.findMany({
+                where: { contrato_id: contratoId },
+                select: { id: true },
+            });
+            const sucursalIds = sucursales.map((s) => s.id);
+            if (sucursalIds.length > 0) {
+                where.corpo_id = { in: sucursalIds };
+            } else {
+                // Si no hay sucursales, retornar vacío
+                return NextResponse.json({ status: true, encuestas: [] }, { status: 200 });
+            }
+        }
+
+        // Filtro directo por corpo (tiene prioridad sobre contrato)
+        if (corpoIdStr) {
+            where.corpo_id = parseInt(corpoIdStr);
+        }
+
+        // Filtro directo por puesto
+        if (puestoIdStr) {
+            where.puesto_id = parseInt(puestoIdStr);
+        }
+
+        const encuestas = await prisma.c_encuesta_cliente.findMany({
+            where,
+            orderBy: { created_at: "desc" },
+            include: {
+                e_estructura_empresa: { select: { id: true, nombre: true } },
+                e_estructura_cliente: { select: { id: true, nombre: true } },
+                e_estructura_sucursal: { select: { id: true, nombre: true } },
+                e_estructura_puesto: { select: { id: true, nombre: true } },
+                n_division: { select: { id: true, nombre: true } },
+            },
         });
-
-        if (!empleado_plaza || !empleado_plaza.division_id || !empleado_plaza.empleado_id) {
-            return NextResponse.json({ status: false, message: "Empleado o división no encontrada" }, { status: 200 });
-        }
-
-        const division = await prisma.n_division.findUnique({ where: { id: empleado_plaza.division_id } });
-        if (!division) {
-            return NextResponse.json({ status: false, message: "Division no encontrada" }, { status: 200 });
-        }
-
-        const responsable = await prisma.c_empleado.findUnique({ where: { id: empleado_plaza.empleado_id } });
-        if (!responsable) {
-            return NextResponse.json({ status: false, message: "Responsable no encontrada" }, { status: 200 });
-        }
-
-        const encuestas = await prisma.c_encuesta_cliente.findMany({ where: { corpo_id: marca.corpo_id, division_id: division.id } });
 
         const encuestas_return: { id: number, nombre_firma: string, persona_evaluada: string, cedula_persona_evaluada: string, empresa: { id: number, nombre: string }, cliente: { id: number, nombre: string }, sucursal: { id: number, nombre: string }, puesto: { id: number, nombre: string }, division: { id: number, nombre: string }, responsable_id: number, responsable: { nombre: string, cedula: string }, firma_responsable: string, fecha: string, evaluaciones: string }[] = [];
         for (const encuesta of encuestas) {
@@ -100,24 +110,24 @@ export async function GET(req: NextRequest) {
                 email_persona_evaluada: encuesta.email_evaluado || "",
                 firma_persona_evaluada: encuesta.firma_evaluado || "",
                 empresa: {
-                    id: empresa.id,
-                    nombre: empresa.nombre
+                    id: (encuesta as any).e_estructura_empresa?.id || encuesta.empresa_id,
+                    nombre: (encuesta as any).e_estructura_empresa?.nombre || ""
                 },
                 cliente: {
-                    id: cliente.id,
-                    nombre: cliente.nombre
+                    id: (encuesta as any).e_estructura_cliente?.id || encuesta.cliente_id,
+                    nombre: (encuesta as any).e_estructura_cliente?.nombre || ""
                 },
                 sucursal: {
-                    id: corpo.id,
-                    nombre: corpo.nombre
+                    id: (encuesta as any).e_estructura_sucursal?.id || encuesta.corpo_id,
+                    nombre: (encuesta as any).e_estructura_sucursal?.nombre || ""
                 },
                 puesto: {
-                    id: puesto.id,
-                    nombre: puesto.nombre
+                    id: (encuesta as any).e_estructura_puesto?.id || encuesta.puesto_id,
+                    nombre: (encuesta as any).e_estructura_puesto?.nombre || ""
                 },
                 division: {
-                    id: division.id,
-                    nombre: division.nombre
+                    id: (encuesta as any).n_division?.id || encuesta.division_id,
+                    nombre: (encuesta as any).n_division?.nombre || ""
                 },
                 responsable_id: encuesta.responsable_id,
                 responsable: {
@@ -149,6 +159,10 @@ export async function POST(req: NextRequest) {
 
         const {
             marca_id,
+            empresa_id,
+            cliente_id,
+            division_id,
+            corpo_id,
             puesto_id,
             fecha,
             evaluaciones,
@@ -184,6 +198,11 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 200 });
         }
 
+        // Validar que los IDs de la jerarquía estén presentes
+        if (!empresa_id || !cliente_id || !division_id || !corpo_id || !puesto_id) {
+            return NextResponse.json({ status: false, message: "IDs de jerarquía incompletos" }, { status: 200 });
+        }
+
         const marca = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(marca_id) } });
         if (!marca) {
             return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
@@ -198,38 +217,28 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 200 });
         }
 
-        const empresa = await prisma.e_estructura_empresa.findUnique({ where: { id: marca.empresa_id } });
+        // Validar que los IDs existan en la base de datos
+        const empresa = await prisma.e_estructura_empresa.findUnique({ where: { id: parseInt(String(empresa_id)) } });
         if (!empresa) {
             return NextResponse.json({ status: false, message: "Empresa no encontrada" }, { status: 200 });
         }
 
-        const cliente = await prisma.e_estructura_cliente.findUnique({ where: { id: marca.cliente_id } });
+        const cliente = await prisma.e_estructura_cliente.findUnique({ where: { id: parseInt(String(cliente_id)) } });
         if (!cliente) {
             return NextResponse.json({ status: false, message: "Cliente no encontrado" }, { status: 200 });
         }
 
-        const corpo = await prisma.e_estructura_sucursal.findUnique({ where: { id: marca.corpo_id } });
+        const corpo = await prisma.e_estructura_sucursal.findUnique({ where: { id: parseInt(String(corpo_id)) } });
         if (!corpo) {
             return NextResponse.json({ status: false, message: "Corpo no encontrado" }, { status: 200 });
         }
 
-        const puesto_db = await prisma.e_estructura_puesto.findUnique({ where: { id: puesto_id } });
+        const puesto_db = await prisma.e_estructura_puesto.findUnique({ where: { id: parseInt(String(puesto_id)) } });
         if (!puesto_db) {
             return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
         }
 
-        const empleado_plaza = await prisma.c_empleado_plaza.findFirst({
-            where: {
-                empleado_id: empleado.id,
-                plaza_id: marca.plaza_id
-            }
-        });
-
-        if (!empleado_plaza || !empleado_plaza.division_id) {
-            return NextResponse.json({ status: false, message: "División no encontrada" }, { status: 200 });
-        }
-
-        const division = await prisma.n_division.findUnique({ where: { id: empleado_plaza.division_id } });
+        const division = await prisma.n_division.findUnique({ where: { id: parseInt(String(division_id)) } });
         if (!division) {
             return NextResponse.json({ status: false, message: "Division no encontrada" }, { status: 200 });
         }

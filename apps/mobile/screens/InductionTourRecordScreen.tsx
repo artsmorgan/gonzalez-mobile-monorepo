@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import {
   StyleSheet,
   ScrollView,
@@ -35,6 +35,7 @@ import {
   updateInductionTourRecord,
   deleteInductionTourRecord,
   listInductionTourRecordByCorpo,
+  listInductionTourRecords,
 } from '@/hooks/evaluationFunctions';
 import { eventBus } from '@/hooks/eventBus';
 import { useQRScanner } from '@/hooks/useQRScanner';
@@ -127,9 +128,37 @@ export default function InductionTourRecordScreen() {
   const [error, setError] = useState<string | null>(null);
   const [hasCurrentMarca, setHasCurrentMarca] = useState<boolean>(false);
 
+  // Main structure y filtros jerárquicos
+  const [structure, setStructure] = useState<any[]>([]);
+  const [isStructureLoading, setIsStructureLoading] = useState(false);
+  const [filterEmpresaId, setFilterEmpresaId] = useState<number | null>(null);
+  const [filterClienteId, setFilterClienteId] = useState<number | null>(null);
+  const [filterContratoId, setFilterContratoId] = useState<number | null>(null);
+  const [filterCorpoId, setFilterCorpoId] = useState<number | null>(null);
+  const [filterPuestoId, setFilterPuestoId] = useState<number | null>(null);
+  const [filterPlazaId, setFilterPlazaId] = useState<number | null>(null);
+  const [isHierarchyFiltersExpanded, setIsHierarchyFiltersExpanded] = useState(false);
+
+  // IDs de current_marca para inicialización
+  const [marcaEmpresaId, setMarcaEmpresaId] = useState<number | null>(null);
+  const [marcaClienteId, setMarcaClienteId] = useState<number | null>(null);
+  const [marcaContratoId, setMarcaContratoId] = useState<number | null>(null);
+  const [marcaCorpoId, setMarcaCorpoId] = useState<number | null>(null);
+  const [marcaPuestoId, setMarcaPuestoId] = useState<number | null>(null);
+  const [marcaPlazaId, setMarcaPlazaId] = useState<number | null>(null);
+
   // Editing state
   const [editingRecord, setEditingRecord] = useState<EditingInductionTourRecord | null>(null);
   const [isCreating, setIsCreating] = useState(false);
+
+  // Form states - Jerarquía
+  const [formEmpresaId, setFormEmpresaId] = useState<number | null>(null);
+  const [formClienteId, setFormClienteId] = useState<number | null>(null);
+  const [formDivisionId, setFormDivisionId] = useState<number | null>(null);
+  const [formContratoId, setFormContratoId] = useState<number | null>(null);
+  const [formCorpoId, setFormCorpoId] = useState<number | null>(null);
+  const [formPuestoId, setFormPuestoId] = useState<number | null>(null);
+  const [formPlazaId, setFormPlazaId] = useState<number | null>(null);
 
   // Form states
   const [fecha, setFecha] = useState<Date>(new Date());
@@ -331,21 +360,182 @@ export default function InductionTourRecordScreen() {
     }
   };
 
+  const loadMarcaContext = async () => {
+    const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+    if (!currentMarcaStr) {
+      setHasCurrentMarca(false);
+      setMarcaEmpresaId(null);
+      setMarcaClienteId(null);
+      setMarcaContratoId(null);
+      setMarcaCorpoId(null);
+      setMarcaPuestoId(null);
+      setMarcaPlazaId(null);
+      return null;
+    }
+    try {
+      const current = JSON.parse(currentMarcaStr);
+      if (!current) {
+        setHasCurrentMarca(false);
+        return null;
+      }
+      setHasCurrentMarca(true);
+      const empresaIdRaw = current?.empresa?.id ?? current?.empresa_id;
+      const clienteIdRaw = current?.cliente?.id ?? current?.cliente_id;
+      const contratoIdRaw = current?.contrato?.id ?? current?.contrato_id;
+      const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
+      const puestoIdRaw = current?.puesto?.id ?? current?.puesto_id;
+      const plazaIdRaw = current?.plaza?.id ?? current?.plaza_id;
+      setMarcaEmpresaId(empresaIdRaw !== undefined && empresaIdRaw !== null ? Number(empresaIdRaw) : null);
+      setMarcaClienteId(clienteIdRaw !== undefined && clienteIdRaw !== null ? Number(clienteIdRaw) : null);
+      setMarcaContratoId(contratoIdRaw !== undefined && contratoIdRaw !== null ? Number(contratoIdRaw) : null);
+      setMarcaCorpoId(corpoIdRaw !== undefined && corpoIdRaw !== null ? Number(corpoIdRaw) : null);
+      setMarcaPuestoId(puestoIdRaw !== undefined && puestoIdRaw !== null ? Number(puestoIdRaw) : null);
+      setMarcaPlazaId(plazaIdRaw !== undefined && plazaIdRaw !== null ? Number(plazaIdRaw) : null);
+      return current;
+    } catch {
+      setHasCurrentMarca(false);
+      setMarcaEmpresaId(null);
+      setMarcaClienteId(null);
+      setMarcaContratoId(null);
+      setMarcaCorpoId(null);
+      setMarcaPuestoId(null);
+      setMarcaPlazaId(null);
+      return null;
+    }
+  };
+
+  const fetchMainStructure = useCallback(async () => {
+    setIsStructureLoading(true);
+    try {
+      const cacheStr = await AsyncStorage.getItem('main_structure_cache');
+      if (cacheStr) {
+        try {
+          const parsed = JSON.parse(cacheStr);
+          if (Array.isArray(parsed)) setStructure(parsed);
+        } catch {
+          // ignore
+        }
+      }
+      const isConnected = await getConnectionStatus();
+      if (!isConnected) {
+        setIsStructureLoading(false);
+        return;
+      }
+      // La estructura ya se guarda desde otras pantallas, aquí solo usamos cache
+    } finally {
+      setIsStructureLoading(false);
+    }
+  }, []);
+
+  // Nodos computados para filtros jerárquicos
+  const filterEmpresas = useMemo(() => (Array.isArray(structure) ? structure : []), [structure]);
+
+  const filterClientes = useMemo(() => {
+    const empresa = filterEmpresas.find((e: any) => e.id === filterEmpresaId);
+    return empresa?.clientes || [];
+  }, [filterEmpresas, filterEmpresaId]);
+
+  const filterDivisiones = useMemo(() => {
+    const cliente = filterClientes.find((c: any) => c.id === filterClienteId);
+    return cliente?.division || [];
+  }, [filterClientes, filterClienteId]);
+
+  const filterContratos = useMemo(() => {
+    if (!filterClienteId) return [];
+    const cliente = filterClientes.find((c: any) => c.id === filterClienteId);
+    if (!cliente) return [];
+    const divisiones = cliente?.division || [];
+    // Recopilar todos los contratos de todas las divisiones del cliente
+    const contratos: any[] = [];
+    divisiones.forEach((division: any) => {
+      division.contratos?.forEach((contrato: any) => {
+        if (!contratos.find(c => c.id === contrato.id)) {
+          contratos.push(contrato);
+        }
+      });
+    });
+    return contratos;
+  }, [filterClientes, filterClienteId]);
+
+  const filterSucursales = useMemo(() => {
+    const contrato = filterContratos.find((c: any) => c.id === filterContratoId);
+    return contrato?.sucursales || [];
+  }, [filterContratos, filterContratoId]);
+
+  const filterPuestos = useMemo(() => {
+    const sucursal = filterSucursales.find((s: any) => s.id === filterCorpoId);
+    return sucursal?.puestos || [];
+  }, [filterSucursales, filterCorpoId]);
+
+  const filterPlazas = useMemo(() => {
+    const puesto = filterPuestos.find((p: any) => p.id === filterPuestoId);
+    return puesto?.plazas || [];
+  }, [filterPuestos, filterPuestoId]);
+
+  // Nodos computados para jerarquía del formulario
+  const formEmpresas = useMemo(() => (Array.isArray(structure) ? structure : []), [structure]);
+
+  const formClientes = useMemo(() => {
+    const empresa = formEmpresas.find((e: any) => e.id === formEmpresaId);
+    return empresa?.clientes || [];
+  }, [formEmpresas, formEmpresaId]);
+
+  const formDivisiones = useMemo(() => {
+    const cliente = formClientes.find((c: any) => c.id === formClienteId);
+    return cliente?.division || [];
+  }, [formClientes, formClienteId]);
+
+  const formContratos = useMemo(() => {
+    if (!formClienteId) return [];
+    const cliente = formClientes.find((c: any) => c.id === formClienteId);
+    if (!cliente) return [];
+    const divisiones = cliente?.division || [];
+    // Recopilar todos los contratos de todas las divisiones del cliente
+    const contratos: any[] = [];
+    divisiones.forEach((division: any) => {
+      division.contratos?.forEach((contrato: any) => {
+        if (!contratos.find(c => c.id === contrato.id)) {
+          contratos.push(contrato);
+        }
+      });
+    });
+    return contratos;
+  }, [formClientes, formClienteId]);
+
+  const formSucursales = useMemo(() => {
+    const contrato = formContratos.find((c: any) => c.id === formContratoId);
+    return contrato?.sucursales || [];
+  }, [formContratos, formContratoId]);
+
+  const formPuestos = useMemo(() => {
+    const sucursal = formSucursales.find((s: any) => s.id === formCorpoId);
+    return sucursal?.puestos || [];
+  }, [formSucursales, formCorpoId]);
+
+  const formPlazas = useMemo(() => {
+    const puesto = formPuestos.find((p: any) => p.id === formPuestoId);
+    return puesto?.plazas || [];
+  }, [formPuestos, formPuestoId]);
+
   const fetchRecords = useCallback(async () => {
     try {
       setIsLoading(true);
       setError(null);
 
-      const currentMarca = await AsyncStorage.getItem('current_marca');
-      if (!currentMarca) {
+      const current = await loadMarcaContext();
+      if (!current && !filterCorpoId) {
         setHasCurrentMarca(false);
         setIsLoading(false);
         return;
       }
 
-      setHasCurrentMarca(true);
-      const currentMarcaData = JSON.parse(currentMarca);
-      const corpoId = currentMarcaData.corpo?.id?.toString?.() || currentMarcaData.corpo_id?.toString?.();
+      // Usar filtros jerárquicos si están disponibles, sino usar current_marca
+      const empresaId = filterEmpresaId ?? marcaEmpresaId ?? Number(current?.empresa?.id ?? current?.empresa_id ?? 0);
+      const clienteId = filterClienteId ?? marcaClienteId ?? Number(current?.cliente?.id ?? current?.cliente_id ?? 0);
+      const contratoId = filterContratoId ?? marcaContratoId ?? Number(current?.contrato?.id ?? current?.contrato_id ?? 0);
+      const corpoId = filterCorpoId ?? marcaCorpoId ?? Number(current?.corpo?.id ?? current?.corpo_id ?? 0);
+      const puestoId = filterPuestoId ?? marcaPuestoId ?? Number(current?.puesto?.id ?? current?.puesto_id ?? 0);
+      const plazaId = filterPlazaId ?? marcaPlazaId ?? Number(current?.plaza?.id ?? current?.plaza_id ?? 0);
 
       if (!corpoId) {
         setError('No se encontró el ID del corpo');
@@ -361,8 +551,13 @@ export default function InductionTourRecordScreen() {
       const localRecords: InductionTourRecord[] = (cache || []).filter((item: any) => item.type === 'induction_tour_record');
 
       if (isConnected) {
-        const result = await listInductionTourRecordByCorpo({
-          corpo_id: corpoId,
+        const result = await listInductionTourRecords({
+          empresa_id: empresaId || undefined,
+          cliente_id: clienteId || undefined,
+          contrato_id: contratoId || undefined,
+          corpo_id: corpoId || undefined,
+          puesto_id: puestoId || undefined,
+          plaza_id: plazaId || undefined,
           refreshAccessToken,
           logout,
         });
@@ -396,16 +591,36 @@ export default function InductionTourRecordScreen() {
     } finally {
       setIsLoading(false);
     }
-  }, [refreshAccessToken, logout]);
+  }, [refreshAccessToken, logout, filterEmpresaId, filterClienteId, filterContratoId, filterCorpoId, filterPuestoId, filterPlazaId, marcaEmpresaId, marcaClienteId, marcaContratoId, marcaCorpoId, marcaPuestoId, marcaPlazaId]);
+
+  // Inicializar filtros jerárquicos con current_marca
+  useEffect(() => {
+    if (!structure || structure.length === 0) return;
+    if (marcaEmpresaId && !filterEmpresaId) setFilterEmpresaId(marcaEmpresaId);
+    if (marcaClienteId && !filterClienteId) setFilterClienteId(marcaClienteId);
+    if (marcaContratoId && !filterContratoId) setFilterContratoId(marcaContratoId);
+    if (marcaCorpoId && !filterCorpoId) setFilterCorpoId(marcaCorpoId);
+    if (marcaPuestoId && !filterPuestoId) setFilterPuestoId(marcaPuestoId);
+    if (marcaPlazaId && !filterPlazaId) setFilterPlazaId(marcaPlazaId);
+  }, [structure, marcaEmpresaId, marcaClienteId, marcaContratoId, marcaCorpoId, marcaPuestoId, marcaPlazaId]);
+
+  // Trigger fetch cuando cambien los filtros jerárquicos (excepto División)
+  useEffect(() => {
+    if (structure && structure.length > 0 && (filterEmpresaId || filterClienteId || filterContratoId || filterCorpoId || filterPuestoId || filterPlazaId)) {
+      fetchRecords();
+    }
+  }, [filterEmpresaId, filterClienteId, filterContratoId, filterCorpoId, filterPuestoId, filterPlazaId]);
 
   useFocusEffect(
     useCallback(() => {
+      loadMarcaContext();
+      fetchMainStructure();
       fetchRecords();
       eventBus.on('connectionRestored', fetchRecords);
       return () => {
         eventBus.off('connectionRestored', fetchRecords);
       };
-    }, [fetchRecords])
+    }, [fetchRecords, fetchMainStructure])
   );
 
   const resetForm = () => {
@@ -414,6 +629,14 @@ export default function InductionTourRecordScreen() {
     setRenglonEdificio('');
     setSupervisorCliente('');
     setSupervisorCorporacion('');
+    // Resetear jerarquía del formulario
+    setFormEmpresaId(null);
+    setFormClienteId(null);
+    setFormDivisionId(null);
+    setFormContratoId(null);
+    setFormCorpoId(null);
+    setFormPuestoId(null);
+    setFormPlazaId(null);
     // Cargar temas predefinidos
     const temasPredefinidos: TemaDesarrollado[] = TEMAS_PREDEFINIDOS.map(tema => ({
       tema: tema,
@@ -511,7 +734,17 @@ export default function InductionTourRecordScreen() {
         if (!Number.isNaN(d.getTime())) setFecha(d);
       }
     }
-    setDivision(record.division || 'Otros');
+    // Cargar división - buscar el ID de división basado en el nombre
+    const divisionName = record.division || 'Otros';
+    setDivision(divisionName);
+    // Mapear nombre de división al ID (4 = Seguridad, 5 = Aseo y limpieza)
+    if (divisionName === 'Seguridad') {
+      setFormDivisionId(4);
+    } else if (divisionName === 'Aseo y limpieza') {
+      setFormDivisionId(5);
+    } else {
+      setFormDivisionId(null);
+    }
     setTemasDesarrollados(temasArray);
     setAspectosEspecificos(aspectosArray);
     setParticipantes(participantesArray);
@@ -689,7 +922,7 @@ export default function InductionTourRecordScreen() {
       if (!signature.startsWith('data:')) {
         formattedSignature = `data:image/png;base64,${signature}`;
       }
-      
+
       if (currentSignatureType === 'supervisor') {
         setFirmaSupervisor(formattedSignature);
       } else if (currentSignatureType.type === 'participante') {
@@ -717,7 +950,7 @@ export default function InductionTourRecordScreen() {
       return;
     }
 
-    if (!division || !division.trim()) {
+    if (!formDivisionId) {
       Alert.alert('Error', 'División es obligatoria');
       return;
     }
@@ -740,6 +973,12 @@ export default function InductionTourRecordScreen() {
             try {
               const requestData = {
                 marca_id: currentMarcaData.id,
+                empresa_id: formEmpresaId,
+                cliente_id: formClienteId,
+                contrato_id: formContratoId,
+                corpo_id: formCorpoId,
+                puesto_id: formPuestoId || null,
+                plaza_id: formPlazaId,
                 fecha: formatDateForRequest(fecha) || null,
                 division: division.trim(),
                 renglon_edificio: renglonEdificio.trim() || null,
@@ -834,7 +1073,7 @@ export default function InductionTourRecordScreen() {
       return;
     }
 
-    if (!division || !division.trim()) {
+    if (!formDivisionId) {
       Alert.alert('Error', 'División es obligatoria');
       return;
     }
@@ -854,6 +1093,12 @@ export default function InductionTourRecordScreen() {
           onPress: async () => {
             try {
               const requestData = {
+                empresa_id: formEmpresaId,
+                cliente_id: formClienteId,
+                contrato_id: formContratoId,
+                corpo_id: formCorpoId,
+                puesto_id: formPuestoId || null,
+                plaza_id: formPlazaId,
                 fecha: formatDateForRequest(fecha) || null,
                 division: division.trim(),
                 renglon_edificio: renglonEdificio.trim() || null,
@@ -1551,22 +1796,188 @@ export default function InductionTourRecordScreen() {
                 )}
               </ThemedView>
 
-              {/* División */}
+              {/* Jerarquía */}
               <ThemedView style={styles.formGroup}>
-                <ThemedText style={styles.formLabel}>División *</ThemedText>
+                <ThemedText style={styles.formLabel}>Empresa *</ThemedText>
                 <View style={styles.pickerContainer}>
                   <Picker
-                    selectedValue={division}
-                    onValueChange={(value) => setDivision(value)}
+                    selectedValue={formEmpresaId || ''}
+                    onValueChange={(value) => {
+                      setFormEmpresaId(value && value !== '' ? Number(value) : null);
+                      setFormClienteId(null);
+                      setFormDivisionId(null);
+                      setFormContratoId(null);
+                      setFormCorpoId(null);
+                      setFormPuestoId(null);
+                      setFormPlazaId(null);
+                      setDivision('Otros');
+                    }}
                     style={styles.picker}
                   >
                     <Picker.Item label="Seleccionar..." value="" />
-                    <Picker.Item label="Seguridad" value="Seguridad" />
-                    <Picker.Item label="Aseo y limpieza" value="Aseo y limpieza" />
-                    <Picker.Item label="Otros" value="Otros" />
+                    {formEmpresas.map((e: any) => (
+                      <Picker.Item key={e.id} label={e.nombre} value={e.id} />
+                    ))}
                   </Picker>
                 </View>
               </ThemedView>
+
+              {formEmpresaId && (
+                <ThemedView style={styles.formGroup}>
+                  <ThemedText style={styles.formLabel}>Cliente *</ThemedText>
+                  <View style={styles.pickerContainer}>
+                    <Picker
+                      selectedValue={formClienteId || ''}
+                      onValueChange={(value) => {
+                        setFormClienteId(value && value !== '' ? Number(value) : null);
+                        setFormDivisionId(null);
+                        setFormContratoId(null);
+                        setFormCorpoId(null);
+                        setFormPuestoId(null);
+                        setFormPlazaId(null);
+                        setDivision('Otros');
+                      }}
+                      style={styles.picker}
+                    >
+                      <Picker.Item label="Seleccionar..." value="" />
+                      {formClientes.map((c: any) => (
+                        <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                      ))}
+                    </Picker>
+                  </View>
+                </ThemedView>
+              )}
+
+              {formClienteId && (
+                <ThemedView style={styles.formGroup}>
+                  <ThemedText style={styles.formLabel}>División *</ThemedText>
+                  <View style={styles.pickerContainer}>
+                    <Picker
+                      selectedValue={formDivisionId || ''}
+                      onValueChange={(value) => {
+                        const divisionId = value && value !== '' ? Number(value) : null;
+                        setFormDivisionId(divisionId);
+                        // Mapear ID de división al nombre
+                        if (divisionId === 4) {
+                          setDivision('Seguridad');
+                        } else if (divisionId === 5) {
+                          setDivision('Aseo y limpieza');
+                        } else {
+                          setDivision('Otros');
+                        }
+                        // Resetear temas y aspectos cuando cambia la división
+                        const temasPredefinidos: TemaDesarrollado[] = TEMAS_PREDEFINIDOS.map(tema => ({
+                          tema: tema,
+                          respuesta: '',
+                          comentarios: '',
+                        }));
+                        setTemasDesarrollados(temasPredefinidos);
+                        setExpandedTemaIndices(temasPredefinidos.map((_, i) => i));
+                        const aspectosPredefinidos: AspectoEspecifico[] = ASPECTOS_PREDEFINIDOS.map(aspecto => ({
+                          aspecto: aspecto,
+                          respuesta: '',
+                          comentarios: '',
+                        }));
+                        setAspectosEspecificos(aspectosPredefinidos);
+                        setExpandedAspectoIndices(aspectosPredefinidos.map((_, i) => i));
+                      }}
+                      style={styles.picker}
+                    >
+                      <Picker.Item label="Seleccionar..." value="" />
+                      {formDivisiones.map((d: any) => (
+                        <Picker.Item key={d.id} label={d.nombre} value={d.id} />
+                      ))}
+                    </Picker>
+                  </View>
+                </ThemedView>
+              )}
+
+              {formClienteId && (
+                <ThemedView style={styles.formGroup}>
+                  <ThemedText style={styles.formLabel}>Contrato *</ThemedText>
+                  <View style={styles.pickerContainer}>
+                    <Picker
+                      selectedValue={formContratoId || ''}
+                      onValueChange={(value) => {
+                        setFormContratoId(value && value !== '' ? Number(value) : null);
+                        setFormCorpoId(null);
+                        setFormPuestoId(null);
+                        setFormPlazaId(null);
+                      }}
+                      style={styles.picker}
+                    >
+                      <Picker.Item label="Seleccionar..." value="" />
+                      {formContratos.map((c: any) => (
+                        <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                      ))}
+                    </Picker>
+                  </View>
+                </ThemedView>
+              )}
+
+              {formContratoId && (
+                <ThemedView style={styles.formGroup}>
+                  <ThemedText style={styles.formLabel}>Sucursal *</ThemedText>
+                  <View style={styles.pickerContainer}>
+                    <Picker
+                      selectedValue={formCorpoId || ''}
+                      onValueChange={(value) => {
+                        setFormCorpoId(value && value !== '' ? Number(value) : null);
+                        setFormPuestoId(null);
+                        setFormPlazaId(null);
+                      }}
+                      style={styles.picker}
+                    >
+                      <Picker.Item label="Seleccionar..." value="" />
+                      {formSucursales.map((s: any) => (
+                        <Picker.Item key={s.id} label={s.nombre} value={s.id} />
+                      ))}
+                    </Picker>
+                  </View>
+                </ThemedView>
+              )}
+
+              {formCorpoId && (
+                <ThemedView style={styles.formGroup}>
+                  <ThemedText style={styles.formLabel}>Puesto</ThemedText>
+                  <View style={styles.pickerContainer}>
+                    <Picker
+                      selectedValue={formPuestoId || ''}
+                      onValueChange={(value) => {
+                        setFormPuestoId(value && value !== '' ? Number(value) : null);
+                        setFormPlazaId(null);
+                      }}
+                      style={styles.picker}
+                    >
+                      <Picker.Item label="Seleccionar..." value="" />
+                      {formPuestos.map((p: any) => (
+                        <Picker.Item key={p.id} label={p.nombre} value={p.id} />
+                      ))}
+                    </Picker>
+                  </View>
+                </ThemedView>
+              )}
+
+              {formPuestoId && (
+                <ThemedView style={styles.formGroup}>
+                  <ThemedText style={styles.formLabel}>Plaza *</ThemedText>
+                  <View style={styles.pickerContainer}>
+                    <Picker
+                      selectedValue={formPlazaId || ''}
+                      onValueChange={(value) => {
+                        setFormPlazaId(value && value !== '' ? Number(value) : null);
+                      }}
+                      style={styles.picker}
+                    >
+                      <Picker.Item label="Seleccionar..." value="" />
+                      {formPlazas.map((p: any) => (
+                        <Picker.Item key={p.id} label={p.nombre} value={p.id} />
+                      ))}
+                    </Picker>
+                  </View>
+                </ThemedView>
+              )}
+
 
               {/* Renglón o Edificio */}
               <ThemedView style={styles.formGroup}>
@@ -1738,6 +2149,195 @@ export default function InductionTourRecordScreen() {
             </ThemedView>
           ) : (
             <ThemedView style={styles.listSection}>
+              {/* Filtros Jerárquicos */}
+              <ThemedView style={styles.filtersContainer}>
+                <ThemedView style={styles.filtersHeader}>
+                  <TouchableOpacity
+                    style={styles.filterToggleButton}
+                    onPress={() => setIsHierarchyFiltersExpanded(!isHierarchyFiltersExpanded)}
+                  >
+                    <ThemedText style={styles.filtersTitle}>
+                      Filtros Jerárquicos
+                    </ThemedText>
+                    <Ionicons
+                      name={isHierarchyFiltersExpanded ? "chevron-up" : "chevron-down"}
+                      size={20}
+                      color="#007AFF"
+                    />
+                  </TouchableOpacity>
+                  {isHierarchyFiltersExpanded && (
+                    <TouchableOpacity
+                      style={styles.resetFiltersButton}
+                      onPress={() => {
+                        setFilterEmpresaId(null);
+                        setFilterClienteId(null);
+                        setFilterContratoId(null);
+                        setFilterCorpoId(null);
+                        setFilterPuestoId(null);
+                        setFilterPlazaId(null);
+                      }}
+                    >
+                      <Ionicons name="refresh" size={16} color="#FF3B30" />
+                      <ThemedText style={styles.resetFiltersText}>Reiniciar</ThemedText>
+                    </TouchableOpacity>
+                  )}
+                </ThemedView>
+                {isHierarchyFiltersExpanded && (
+                  <ThemedView style={styles.filtersContent}>
+                    <ThemedView style={styles.filterGroup}>
+                      <ThemedText style={styles.filterLabel}>Empresa:</ThemedText>
+                      <View style={styles.pickerWrapper}>
+                        <Picker
+                          selectedValue={filterEmpresaId || ''}
+                          onValueChange={(value) => {
+                            setFilterEmpresaId(value && value !== '' ? Number(value) : null);
+                            setFilterClienteId(null);
+                            setFilterContratoId(null);
+                            setFilterCorpoId(null);
+                            setFilterPuestoId(null);
+                            setFilterPlazaId(null);
+                          }}
+                          style={styles.picker}
+                        >
+                          <Picker.Item label="Seleccionar..." value="" />
+                          {filterEmpresas.map((e: any) => (
+                            <Picker.Item key={e.id} label={e.nombre} value={e.id} />
+                          ))}
+                        </Picker>
+                      </View>
+                    </ThemedView>
+
+                    {filterEmpresaId && (
+                      <ThemedView style={styles.filterGroup}>
+                        <ThemedText style={styles.filterLabel}>Cliente:</ThemedText>
+                        <View style={styles.pickerWrapper}>
+                          <Picker
+                            selectedValue={filterClienteId || ''}
+                            onValueChange={(value) => {
+                              setFilterClienteId(value && value !== '' ? Number(value) : null);
+                              setFilterContratoId(null);
+                              setFilterCorpoId(null);
+                              setFilterPuestoId(null);
+                              setFilterPlazaId(null);
+                            }}
+                            style={styles.picker}
+                          >
+                            <Picker.Item label="Seleccionar..." value="" />
+                            {filterClientes.map((c: any) => (
+                              <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                            ))}
+                          </Picker>
+                        </View>
+                      </ThemedView>
+                    )}
+
+                    {filterClienteId && (
+                      <ThemedView style={styles.filterGroup}>
+                        <ThemedText style={styles.filterLabel}>División:</ThemedText>
+                        <View style={styles.pickerWrapper}>
+                          <Picker
+                            selectedValue={''}
+                            enabled={false}
+                            style={styles.picker}
+                          >
+                            <Picker.Item label="Seleccionar..." value="" />
+                            {filterDivisiones.map((d: any) => (
+                              <Picker.Item key={d.id} label={d.nombre} value={d.id} />
+                            ))}
+                          </Picker>
+                        </View>
+                      </ThemedView>
+                    )}
+
+                    {filterClienteId && (
+                      <ThemedView style={styles.filterGroup}>
+                        <ThemedText style={styles.filterLabel}>Contrato:</ThemedText>
+                        <View style={styles.pickerWrapper}>
+                          <Picker
+                            selectedValue={filterContratoId || ''}
+                            onValueChange={(value) => {
+                              setFilterContratoId(value && value !== '' ? Number(value) : null);
+                              setFilterCorpoId(null);
+                              setFilterPuestoId(null);
+                              setFilterPlazaId(null);
+                            }}
+                            style={styles.picker}
+                          >
+                            <Picker.Item label="Seleccionar..." value="" />
+                            {filterContratos.map((c: any) => (
+                              <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                            ))}
+                          </Picker>
+                        </View>
+                      </ThemedView>
+                    )}
+
+                    {filterContratoId && (
+                      <ThemedView style={styles.filterGroup}>
+                        <ThemedText style={styles.filterLabel}>Sucursal:</ThemedText>
+                        <View style={styles.pickerWrapper}>
+                          <Picker
+                            selectedValue={filterCorpoId || ''}
+                            onValueChange={(value) => {
+                              setFilterCorpoId(value && value !== '' ? Number(value) : null);
+                              setFilterPuestoId(null);
+                              setFilterPlazaId(null);
+                            }}
+                            style={styles.picker}
+                          >
+                            <Picker.Item label="Seleccionar..." value="" />
+                            {filterSucursales.map((s: any) => (
+                              <Picker.Item key={s.id} label={s.nombre} value={s.id} />
+                            ))}
+                          </Picker>
+                        </View>
+                      </ThemedView>
+                    )}
+
+                    {filterCorpoId && (
+                      <ThemedView style={styles.filterGroup}>
+                        <ThemedText style={styles.filterLabel}>Puesto:</ThemedText>
+                        <View style={styles.pickerWrapper}>
+                          <Picker
+                            selectedValue={filterPuestoId || ''}
+                            onValueChange={(value) => {
+                              setFilterPuestoId(value && value !== '' ? Number(value) : null);
+                              setFilterPlazaId(null);
+                            }}
+                            style={styles.picker}
+                          >
+                            <Picker.Item label="Seleccionar..." value="" />
+                            {filterPuestos.map((p: any) => (
+                              <Picker.Item key={p.id} label={p.nombre} value={p.id} />
+                            ))}
+                          </Picker>
+                        </View>
+                      </ThemedView>
+                    )}
+
+                    {filterPuestoId && (
+                      <ThemedView style={styles.filterGroup}>
+                        <ThemedText style={styles.filterLabel}>Plaza:</ThemedText>
+                        <View style={styles.pickerWrapper}>
+                          <Picker
+                            selectedValue={filterPlazaId || ''}
+                            onValueChange={(value) => {
+                              setFilterPlazaId(value && value !== '' ? Number(value) : null);
+                            }}
+                            style={styles.picker}
+                          >
+                            <Picker.Item label="Seleccionar..." value="" />
+                            {filterPlazas.map((p: any) => (
+                              <Picker.Item key={p.id} label={p.nombre} value={p.id} />
+                            ))}
+                          </Picker>
+                        </View>
+                      </ThemedView>
+                    )}
+                  </ThemedView>
+                )}
+              </ThemedView>
+
               <TouchableOpacity style={styles.createButton} onPress={startCreating}>
                 <ThemedText style={styles.createButtonText}>
                   <Ionicons name="add" size={20} color="#FFFFFF" />
@@ -1766,7 +2366,7 @@ export default function InductionTourRecordScreen() {
                 <Ionicons name="close" size={24} color="#333" />
               </TouchableOpacity>
             </ThemedView>
-            
+
             <View style={styles.modalSignatureContainer}>
               <SignatureScreen
                 ref={signatureRef}
@@ -1778,13 +2378,13 @@ export default function InductionTourRecordScreen() {
                 key={signatureKey}
               />
             </View>
-            
+
             <ThemedView style={styles.modalActions}>
               <TouchableOpacity style={styles.modalClearButton} onPress={clearSignatureInModal}>
                 <Ionicons name="trash" size={20} color="#000000" />
                 <ThemedText style={styles.modalClearButtonText}>Limpiar</ThemedText>
               </TouchableOpacity>
-              
+
               <TouchableOpacity style={styles.modalAcceptButton} onPress={acceptSignature}>
                 <Ionicons name="checkmark" size={20} color="#000000" />
                 <ThemedText style={styles.modalAcceptButtonText}>Aceptar</ThemedText>
@@ -2419,6 +3019,63 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#FFFFFF',
     fontWeight: '600',
+  },
+  // Filtros jerárquicos
+  filtersContainer: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+  },
+  filtersHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  filterToggleButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  filtersTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#000000',
+  },
+  resetFiltersButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  resetFiltersText: {
+    fontSize: 12,
+    color: '#FF3B30',
+    fontWeight: '600',
+  },
+  filtersContent: {
+    gap: 12,
+  },
+  filterGroup: {
+    marginBottom: 12,
+  },
+  filterLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#000000',
+    marginBottom: 8,
+  },
+  pickerWrapper: {
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    overflow: 'hidden',
+    backgroundColor: '#FFFFFF',
+    justifyContent: 'center',
   },
 });
 

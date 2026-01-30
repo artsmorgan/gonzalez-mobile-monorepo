@@ -4,6 +4,138 @@ import { prisma } from "../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
 
+export async function GET(req: NextRequest) {
+  try {
+    const { valid, expired, payload, message } = verifyAccessToken(req);
+    if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
+
+    const empresaIdStr = req.nextUrl.searchParams.get("empresa_id");
+    const clienteIdStr = req.nextUrl.searchParams.get("cliente_id");
+    const corpoIdStr = req.nextUrl.searchParams.get("corpo_id");
+
+    const where: any = {};
+
+    // Si hay filtros jerárquicos, usarlos (prioridad: corpo > cliente > empresa)
+    if (corpoIdStr) {
+      where.corpo_id = parseInt(corpoIdStr);
+    } else if (clienteIdStr) {
+      // Si hay cliente pero no corpo, buscar todas las sucursales del cliente
+      const clienteId = parseInt(clienteIdStr);
+      const cliente = await prisma.e_estructura_cliente.findUnique({
+        where: { id: clienteId },
+      });
+      if (!cliente) {
+        return NextResponse.json({ status: true, data: [] }, { status: 200 });
+      }
+      // Obtener todos los contratos del cliente y luego todas las sucursales
+      const divisiones = await prisma.n_division.findMany();
+      const contratoIds: number[] = [];
+      for (const division of divisiones) {
+        const contratos = await prisma.e_estructura_contrato.findMany({
+          where: {
+            cliente_id: clienteId,
+            division_id: division.id,
+            deleted: null,
+          },
+          select: { id: true },
+        });
+        contratos.forEach((c) => {
+          if (!contratoIds.includes(c.id)) contratoIds.push(c.id);
+        });
+      }
+      if (contratoIds.length > 0) {
+        const sucursales = await prisma.e_estructura_sucursal.findMany({
+          where: {
+            contrato_id: { in: contratoIds },
+          },
+          select: { id: true },
+        });
+        const sucursalIds = sucursales.map((s) => s.id);
+        if (sucursalIds.length > 0) {
+          where.corpo_id = { in: sucursalIds };
+        } else {
+          return NextResponse.json({ status: true, data: [] }, { status: 200 });
+        }
+      } else {
+        return NextResponse.json({ status: true, data: [] }, { status: 200 });
+      }
+    } else if (empresaIdStr) {
+      // Si hay empresa pero no cliente, buscar todos los clientes de la empresa
+      const empresaId = parseInt(empresaIdStr);
+      const clientes = await prisma.e_estructura_cliente.findMany({
+        where: { empresa_id: empresaId },
+        select: { id: true },
+      });
+      const clienteIds = clientes.map((c) => c.id);
+      if (clienteIds.length > 0) {
+        // Obtener todos los contratos de estos clientes y luego todas las sucursales
+        const divisiones = await prisma.n_division.findMany();
+        const contratoIds: number[] = [];
+        for (const division of divisiones) {
+          const contratos = await prisma.e_estructura_contrato.findMany({
+            where: {
+              cliente_id: { in: clienteIds },
+              division_id: division.id,
+              deleted: null,
+            },
+            select: { id: true },
+          });
+          contratos.forEach((c) => {
+            if (!contratoIds.includes(c.id)) contratoIds.push(c.id);
+          });
+        }
+        if (contratoIds.length > 0) {
+          const sucursales = await prisma.e_estructura_sucursal.findMany({
+            where: {
+              contrato_id: { in: contratoIds },
+            },
+            select: { id: true },
+          });
+          const sucursalIds = sucursales.map((s) => s.id);
+          if (sucursalIds.length > 0) {
+            where.corpo_id = { in: sucursalIds };
+          } else {
+            return NextResponse.json({ status: true, data: [] }, { status: 200 });
+          }
+        } else {
+          return NextResponse.json({ status: true, data: [] }, { status: 200 });
+        }
+      } else {
+        return NextResponse.json({ status: true, data: [] }, { status: 200 });
+      }
+    } else {
+      return NextResponse.json({ status: false, message: "Debe especificar filtros jerárquicos" }, { status: 400 });
+    }
+
+    const records = await prisma.c_registro_induccion_general.findMany({
+      where,
+      orderBy: { created_at: "desc" },
+      include: {
+        e_estructura_empresa: { select: { nombre: true, codigo: true } },
+        e_estructura_cliente: { select: { nombre: true } },
+        e_estructura_sucursal: { select: { nombre: true, nro_sucursal: true } },
+      },
+    });
+
+    const recordsWithNames = records.map((r: any) => ({
+      ...r,
+      id_local: "",
+      empresa_nombre: r.e_estructura_empresa ? `${r.e_estructura_empresa.codigo} - ${r.e_estructura_empresa.nombre}` : null,
+      cliente_nombre: r.e_estructura_cliente?.nombre || null,
+      corpo_nombre: r.e_estructura_sucursal ? `${r.e_estructura_sucursal.nro_sucursal} - ${r.e_estructura_sucursal.nombre}` : null,
+    }));
+
+    return NextResponse.json(
+      { status: true, message: "Registros de inducción general obtenidos correctamente", data: recordsWithNames },
+      { status: 200 }
+    );
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+    console.error(errorMessage);
+    return NextResponse.json({ status: false, message: errorMessage, data: [] }, { status: 400 });
+  }
+}
+
 function parseFechaInput(fecha: any): Date | undefined {
   if (!fecha) return undefined;
   if (fecha instanceof Date) return fecha;

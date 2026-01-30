@@ -159,6 +159,20 @@ export default function PhysicalMinuteAgendaScreen() {
   const [error, setError] = useState<string | null>(null);
   const [hasCurrentMarca, setHasCurrentMarca] = useState<boolean>(false);
 
+  // Estados para filtros
+  const [isFiltersExpanded, setIsFiltersExpanded] = useState(false);
+  const [filterEmpresaId, setFilterEmpresaId] = useState<number | null>(null);
+  const [filterClienteId, setFilterClienteId] = useState<number | null>(null);
+  const [filterDivisionId, setFilterDivisionId] = useState<number | null>(null);
+  const [filterContratoId, setFilterContratoId] = useState<number | null>(null);
+  const [filterCorpoId, setFilterCorpoId] = useState<number | null>(null);
+  const [filterPuestoId, setFilterPuestoId] = useState<number | null>(null);
+
+  // IDs de current_marca para inicialización
+  const [marcaClienteId, setMarcaClienteId] = useState<number | null>(null);
+  const [marcaCorpoId, setMarcaCorpoId] = useState<number | null>(null);
+  const [marcaPuestoId, setMarcaPuestoId] = useState<number | null>(null);
+
   // structure
   const [structure, setStructure] = useState<any[]>([]);
   const [isStructureLoading, setIsStructureLoading] = useState(false);
@@ -245,6 +259,45 @@ export default function PhysicalMinuteAgendaScreen() {
     }
   `;
 
+  const loadMarcaContext = async () => {
+    const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+    if (!currentMarcaStr) {
+      setHasCurrentMarca(false);
+      setMarcaClienteId(null);
+      setMarcaCorpoId(null);
+      setMarcaPuestoId(null);
+      return null;
+    }
+    try {
+      const current = JSON.parse(currentMarcaStr);
+      if (!current?.id) {
+        setHasCurrentMarca(false);
+        setMarcaClienteId(null);
+        setMarcaCorpoId(null);
+        setMarcaPuestoId(null);
+        return null;
+      }
+      setHasCurrentMarca(true);
+
+      // Obtener IDs de cliente, corpo y puesto de current_marca
+      const clienteIdRaw = current?.cliente?.id ?? current?.cliente_id;
+      const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
+      const puestoIdRaw = current?.puesto?.id ?? current?.puesto_id;
+
+      setMarcaClienteId(clienteIdRaw !== undefined && clienteIdRaw !== null ? Number(clienteIdRaw) : null);
+      setMarcaCorpoId(corpoIdRaw !== undefined && corpoIdRaw !== null ? Number(corpoIdRaw) : null);
+      setMarcaPuestoId(puestoIdRaw !== undefined && puestoIdRaw !== null ? Number(puestoIdRaw) : null);
+
+      return current;
+    } catch {
+      setHasCurrentMarca(false);
+      setMarcaClienteId(null);
+      setMarcaCorpoId(null);
+      setMarcaPuestoId(null);
+      return null;
+    }
+  };
+
   const fetchMainStructure = useCallback(async () => {
     setIsStructureLoading(true);
     try {
@@ -308,6 +361,34 @@ export default function PhysicalMinuteAgendaScreen() {
       setIsStructureLoading(false);
     }
   }, [refreshAccessToken, logout]);
+
+  // Nodos computados para estructura jerárquica de filtros
+  const filterEmpresas = useMemo(() => (Array.isArray(structure) ? structure : []), [structure]);
+
+  const filterClientes = useMemo(() => {
+    const empresa = filterEmpresas.find((e: any) => e.id === filterEmpresaId);
+    return empresa?.clientes || [];
+  }, [filterEmpresas, filterEmpresaId]);
+
+  const filterDivisiones = useMemo(() => {
+    const cliente = filterClientes.find((c: any) => c.id === filterClienteId);
+    return cliente?.division || [];
+  }, [filterClientes, filterClienteId]);
+
+  const filterContratos = useMemo(() => {
+    const division = filterDivisiones.find((d: any) => d.id === filterDivisionId);
+    return division?.contratos || [];
+  }, [filterDivisiones, filterDivisionId]);
+
+  const filterSucursales = useMemo(() => {
+    const contrato = filterContratos.find((c: any) => c.id === filterContratoId);
+    return contrato?.sucursales || [];
+  }, [filterContratos, filterContratoId]);
+
+  const filterPuestos = useMemo(() => {
+    const sucursal = filterSucursales.find((s: any) => s.id === filterCorpoId);
+    return sucursal?.puestos || [];
+  }, [filterSucursales, filterCorpoId]);
 
   const selectedEmpresaNode = useMemo<StructureEmpresa | null>(() => {
     if (selectedEmpresaId === null) return null;
@@ -616,31 +697,70 @@ export default function PhysicalMinuteAgendaScreen() {
       setIsLoading(true);
       setError(null);
 
-      const currentMarca = await AsyncStorage.getItem('current_marca');
-      if (!currentMarca) {
-        setHasCurrentMarca(false);
-        setIsLoading(false);
-        return;
-      }
-
-      setHasCurrentMarca(true);
-      const currentMarcaData = JSON.parse(currentMarca);
-      const corpoId = currentMarcaData.corpo?.id?.toString();
-
-      await fetchMainStructure();
-
-      if (!corpoId) {
-        setError('No se encontró el ID del corpo');
-        setIsLoading(false);
-        return;
-      }
-
       const isConnected = await getConnectionStatus();
       if (isConnected) {
-        const result = await listAgendaMinutaByCorpo({ corpo_id: corpoId, refreshAccessToken, logout });
-        if (result.status && result.data) setRecords(result.data as AgendaMinutaRecord[]);
-        else setRecords([]);
+        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        if (!apiUrl) {
+          throw new Error('Server URL not configured');
+        }
+
+        let token = await AsyncStorage.getItem('access_token');
+        if (!token) {
+          const refreshed = await refreshAccessToken();
+          if (!refreshed) {
+            setError('No se pudo autenticar');
+            setIsLoading(false);
+            if (logout) await logout();
+            return;
+          }
+          token = await AsyncStorage.getItem('access_token');
+        }
+
+        // Construir parámetros de filtro (jerarquía completa)
+        const params = new URLSearchParams();
+        if (filterEmpresaId) params.append('empresa_id', String(filterEmpresaId));
+        if (filterClienteId) params.append('cliente_id', String(filterClienteId));
+        if (filterDivisionId) params.append('division_id', String(filterDivisionId));
+        if (filterContratoId) params.append('contrato_id', String(filterContratoId));
+        if (filterCorpoId) params.append('corpo_id', String(filterCorpoId));
+        if (filterPuestoId) params.append('puesto_id', String(filterPuestoId));
+
+        const response = await fetch(`${apiUrl}/api/agenda-minuta?${params.toString()}`, {
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+            'ngrok-skip-browser-warning': '69420',
+          },
+        });
+
+        if (response.status === 401) {
+          const refreshed = await refreshAccessToken();
+          if (refreshed) {
+            return fetchRecords();
+          } else {
+            if (logout) await logout();
+            return;
+          }
+        }
+
+        if (response.status === 403) {
+          if (logout) await logout();
+          throw new Error('Acceso denegado');
+        }
+
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const data = await response.json();
+        if (data.status && data.data) {
+          setRecords(data.data as AgendaMinutaRecord[]);
+        } else {
+          setRecords([]);
+        }
       } else {
+        // Offline: cargar desde cache
         const cacheStr = await AsyncStorage.getItem('evaluations_cache');
         const cache = cacheStr ? JSON.parse(cacheStr) : [];
         setRecords(cache.filter((item: any) => item.type === 'agenda_minuta'));
@@ -658,11 +778,82 @@ export default function PhysicalMinuteAgendaScreen() {
     } finally {
       setIsLoading(false);
     }
-  }, [fetchMainStructure, refreshAccessToken, logout]);
+  }, [filterEmpresaId, filterClienteId, filterDivisionId, filterContratoId, filterCorpoId, filterPuestoId, refreshAccessToken, logout]);
+
+  // Inicializar filtros desde current_marca al cargar
+  useFocusEffect(
+    useCallback(() => {
+      (async () => {
+        const current = await loadMarcaContext();
+        await fetchMainStructure();
+        // Inicializar filtros con valores de current_marca después de cargar
+        if (current) {
+          const clienteIdRaw = current?.cliente?.id ?? current?.cliente_id;
+          const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
+          const puestoIdRaw = current?.puesto?.id ?? current?.puesto_id;
+
+          if (clienteIdRaw !== undefined && clienteIdRaw !== null) {
+            setFilterClienteId(Number(clienteIdRaw));
+          }
+          if (corpoIdRaw !== undefined && corpoIdRaw !== null) {
+            setFilterCorpoId(Number(corpoIdRaw));
+          }
+          if (puestoIdRaw !== undefined && puestoIdRaw !== null) {
+            setFilterPuestoId(Number(puestoIdRaw));
+          }
+        }
+      })();
+    }, [])
+  );
+
+  // Recargar registros cuando cambian los filtros de cualquier nivel de la jerarquía
+  useEffect(() => {
+    fetchRecords();
+  }, [filterEmpresaId, filterClienteId, filterDivisionId, filterContratoId, filterCorpoId, filterPuestoId]);
+
+  // Limpiar filtros dependientes cuando cambia un nivel superior
+  useEffect(() => {
+    if (!filterEmpresaId) {
+      setFilterClienteId(null);
+      setFilterDivisionId(null);
+      setFilterContratoId(null);
+      setFilterCorpoId(null);
+      setFilterPuestoId(null);
+    }
+  }, [filterEmpresaId]);
+
+  useEffect(() => {
+    if (!filterClienteId) {
+      setFilterDivisionId(null);
+      setFilterContratoId(null);
+      setFilterCorpoId(null);
+      setFilterPuestoId(null);
+    }
+  }, [filterClienteId]);
+
+  useEffect(() => {
+    if (!filterDivisionId) {
+      setFilterContratoId(null);
+      setFilterCorpoId(null);
+      setFilterPuestoId(null);
+    }
+  }, [filterDivisionId]);
+
+  useEffect(() => {
+    if (!filterContratoId) {
+      setFilterCorpoId(null);
+      setFilterPuestoId(null);
+    }
+  }, [filterContratoId]);
+
+  useEffect(() => {
+    if (!filterCorpoId) {
+      setFilterPuestoId(null);
+    }
+  }, [filterCorpoId]);
 
   useFocusEffect(
     useCallback(() => {
-      fetchRecords();
       eventBus.on('connectionRestored', fetchRecords);
       return () => {
         eventBus.off('connectionRestored', fetchRecords);
@@ -1351,6 +1542,156 @@ export default function PhysicalMinuteAgendaScreen() {
               <ThemedText style={styles.subtitle}>Registra y consulta agendas de minuta por puesto</ThemedText>
             </ThemedView>
 
+            {/* Filtros */}
+            <ThemedView style={styles.filtersMain}>
+              <ThemedView style={styles.filterHeader}>
+                <TouchableOpacity
+                  style={styles.filterToggleButton}
+                  onPress={() => setIsFiltersExpanded(!isFiltersExpanded)}
+                >
+                  <ThemedText style={styles.filterToggleText}>Filtros</ThemedText>
+                  <Ionicons
+                    name={isFiltersExpanded ? 'chevron-up' : 'chevron-down'}
+                    size={20}
+                    color="#007AFF"
+                  />
+                </TouchableOpacity>
+                {isFiltersExpanded && (
+                  <TouchableOpacity style={styles.resetFiltersButton} onPress={() => {
+                    setFilterEmpresaId(null);
+                    setFilterClienteId(marcaClienteId);
+                    setFilterDivisionId(null);
+                    setFilterContratoId(null);
+                    setFilterCorpoId(marcaCorpoId);
+                    setFilterPuestoId(marcaPuestoId);
+                  }}>
+                    <Ionicons name="refresh" size={16} color="#FF3B30" />
+                    <ThemedText style={styles.resetFiltersText}>Reiniciar</ThemedText>
+                  </TouchableOpacity>
+                )}
+              </ThemedView>
+              {isFiltersExpanded && (
+                <ThemedView style={styles.filterContent}>
+                  {/* Árbol jerárquico para filtros */}
+                  <ThemedView style={styles.filterGroup}>
+                    <ThemedText style={styles.filterLabel}>Empresa:</ThemedText>
+                    <View style={styles.pickerWrapper}>
+                      <Picker
+                        selectedValue={filterEmpresaId || ''}
+                        onValueChange={(value) => {
+                          setFilterEmpresaId(value && value !== '' ? Number(value) : null);
+                        }}
+                        style={styles.picker}
+                      >
+                        <Picker.Item label="Seleccionar..." value="" />
+                        {filterEmpresas.map((e: any) => (
+                          <Picker.Item key={e.id} label={e.nombre} value={e.id} />
+                        ))}
+                      </Picker>
+                    </View>
+                  </ThemedView>
+
+                  {filterEmpresaId && (
+                    <ThemedView style={styles.filterGroup}>
+                      <ThemedText style={styles.filterLabel}>Cliente:</ThemedText>
+                      <View style={styles.pickerWrapper}>
+                        <Picker
+                          selectedValue={filterClienteId || ''}
+                          onValueChange={(value) => {
+                            setFilterClienteId(value && value !== '' ? Number(value) : null);
+                          }}
+                          style={styles.picker}
+                        >
+                          <Picker.Item label="Seleccionar..." value="" />
+                          {filterClientes.map((c: any) => (
+                            <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                          ))}
+                        </Picker>
+                      </View>
+                    </ThemedView>
+                  )}
+
+                  {filterClienteId && (
+                    <ThemedView style={styles.filterGroup}>
+                      <ThemedText style={styles.filterLabel}>División:</ThemedText>
+                      <View style={styles.pickerWrapper}>
+                        <Picker
+                          selectedValue={filterDivisionId || ''}
+                          onValueChange={(value) => {
+                            setFilterDivisionId(value && value !== '' ? Number(value) : null);
+                          }}
+                          style={styles.picker}
+                        >
+                          <Picker.Item label="Seleccionar..." value="" />
+                          {filterDivisiones.map((d: any) => (
+                            <Picker.Item key={d.id} label={d.nombre} value={d.id} />
+                          ))}
+                        </Picker>
+                      </View>
+                    </ThemedView>
+                  )}
+
+                  {filterDivisionId && (
+                    <ThemedView style={styles.filterGroup}>
+                      <ThemedText style={styles.filterLabel}>Contrato:</ThemedText>
+                      <View style={styles.pickerWrapper}>
+                        <Picker
+                          selectedValue={filterContratoId || ''}
+                          onValueChange={(value) => {
+                            setFilterContratoId(value && value !== '' ? Number(value) : null);
+                          }}
+                          style={styles.picker}
+                        >
+                          <Picker.Item label="Seleccionar..." value="" />
+                          {filterContratos.map((c: any) => (
+                            <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                          ))}
+                        </Picker>
+                      </View>
+                    </ThemedView>
+                  )}
+
+                  {filterContratoId && (
+                    <ThemedView style={styles.filterGroup}>
+                      <ThemedText style={styles.filterLabel}>Sucursal:</ThemedText>
+                      <View style={styles.pickerWrapper}>
+                        <Picker
+                          selectedValue={filterCorpoId || ''}
+                          onValueChange={(value) => {
+                            setFilterCorpoId(value && value !== '' ? Number(value) : null);
+                          }}
+                          style={styles.picker}
+                        >
+                          <Picker.Item label="Seleccionar..." value="" />
+                          {filterSucursales.map((s: any) => (
+                            <Picker.Item key={s.id} label={s.nombre} value={s.id} />
+                          ))}
+                        </Picker>
+                      </View>
+                    </ThemedView>
+                  )}
+
+                  {filterCorpoId && (
+                    <ThemedView style={styles.filterGroup}>
+                      <ThemedText style={styles.filterLabel}>Puesto:</ThemedText>
+                      <View style={styles.pickerWrapper}>
+                        <Picker
+                          selectedValue={filterPuestoId || ''}
+                          onValueChange={(value) => setFilterPuestoId(value && value !== '' ? Number(value) : null)}
+                          style={styles.picker}
+                        >
+                          <Picker.Item label="Seleccionar..." value="" />
+                          {filterPuestos.map((p: any) => (
+                            <Picker.Item key={p.id} label={p.nombre} value={p.id} />
+                          ))}
+                        </Picker>
+                      </View>
+                    </ThemedView>
+                  )}
+                </ThemedView>
+              )}
+            </ThemedView>
+
             <TouchableOpacity style={styles.createButton} onPress={startCreate} activeOpacity={0.85}>
               <ThemedText style={styles.createButtonText}>
                 <Ionicons name="add" size={18} color="#FFFFFF" />
@@ -1419,6 +1760,38 @@ const styles = StyleSheet.create({
 
   createButton: { backgroundColor: '#007AFF', padding: 14, borderRadius: 10, alignItems: 'center', marginBottom: 12 },
   createButtonText: { color: '#FFFFFF', fontSize: 16, fontWeight: '800' },
+
+  // Filtros
+  filtersMain: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 10,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+  },
+  filterHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+  },
+  filterToggleButton: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  filterToggleText: { fontSize: 14, fontWeight: '600', color: '#007AFF' },
+  resetFiltersButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6,
+    backgroundColor: '#FFECEC',
+  },
+  resetFiltersText: { fontSize: 12, color: '#FF3B30', fontWeight: '600' },
+  filterContent: { padding: 12, backgroundColor: '#F9F9F9', gap: 8 },
+  filterGroup: { marginBottom: 12 },
+  filterLabel: { fontSize: 13, fontWeight: '600', marginBottom: 4, color: '#000' },
 
   noMarcaContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 16 },
   noMarcaText: { color: '#000', opacity: 0.7, fontSize: 14 },

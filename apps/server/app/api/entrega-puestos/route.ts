@@ -4,6 +4,7 @@ import { toZonedTime, format } from "date-fns-tz";
 import { prisma } from "../../../utils/prismaClient";
 import { getUserMarca } from "../../../utils/getUserMarca";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
+import { createReport } from "../../../utils/createReporteArticuloMantenimiento";
 
 export async function GET(req: NextRequest) {
     try {
@@ -216,6 +217,7 @@ export async function POST(req: NextRequest) {
             cliente_id,
             corpo_id,
             puesto_id,
+            division,
             oficial_entrega,
             fecha_entrada_entrega,
             fecha_salida_entrega,
@@ -234,7 +236,7 @@ export async function POST(req: NextRequest) {
             marca_id,
         } = body;
 
-        if (!cliente_id || !corpo_id || !puesto_id || !oficial_entrega || !oficial_recibe || !firma_responsable) {
+        if (!cliente_id || !corpo_id || !puesto_id || !oficial_entrega || !oficial_recibe || !firma_responsable || !division) {
             return NextResponse.json({ status: false, message: "Faltan campos requeridos" }, { status: 400 });
         }
 
@@ -324,6 +326,7 @@ export async function POST(req: NextRequest) {
 
             let articulos_desc = ".";
             let send_notification = false;
+            let articulos_reporte = [];
             if (JSON.parse(articulos_puesto).length > 0) {
                 const articulos_puesto_array = JSON.parse(articulos_puesto);
                 let init_desc = false;
@@ -344,6 +347,14 @@ export async function POST(req: NextRequest) {
                             init_desc = true;
                         }
                         articulos_desc += articulo_desc;
+                        articulos_reporte.push({
+                            id: articulo.id,
+                            nombre: articulo.nombre,
+                            cantidad_requerida: articulo.cantidad_requerida,
+                            cantidad_real: articulo.cantidad_real,
+                            estado: articulo.estado,
+                            observaciones: articulo.observaciones,
+                        });
                     }
                 }
             }
@@ -351,6 +362,7 @@ export async function POST(req: NextRequest) {
             if (send_notification) {
                 const description = `El usuario ${employee} ha registrado una entrega de puesto${location} (Ocupado anteriormente por ${oficial_entrega}) el día ${fecha_entrada_entrega.split("T")[0]} a las ${hora_entrada_entrega.split("T")[1].split(".")[0]}${articulos_desc}`;
                 sendNotificationByRole(nuevoRegistro.corpo_id, [], "Registro de entrega de puesto creado", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+                createReport(nuevoRegistro.cliente_id, nuevoRegistro.corpo_id, nuevoRegistro.puesto_id, parseInt(division), articulos_reporte, nuevoRegistro.created_by);
             }
         }
 

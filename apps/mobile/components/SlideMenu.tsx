@@ -63,6 +63,8 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
           setRole(null);
           setDivision(null);
         }
+        console.log('Role:', role);
+        console.log('Division:', division);
       };
       loadCurrentMarca();
     } else {
@@ -264,6 +266,11 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
     navigation.navigate('Llaves');
   };
 
+  const handleMantenimientoEquipoPress = () => {
+    onClose();
+    navigation.navigate('MantenimientoEquipo');
+  };
+
   const handleApreciacionVulnerabilidadPress = () => {
     onClose();
     navigation.navigate('ApreciacionVulnerabilidad');
@@ -380,6 +387,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
       case 'corporate-vehicles': return <Ionicons name="car-sport" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'bitacora-vehiculos-detenidos': return <Ionicons name="car-sport" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'llaves': return <Ionicons name="key" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'mantenimiento-equipo': return <Ionicons name="construct" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'entrega-puestos': return <Ionicons name="document-text" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'documentos-entregados': return <Ionicons name="document-text" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'apreciacion-vulnerabilidad': return <Ionicons name="shield-checkmark" size={20} color={isActive ? '#007AFF' : '#000000'} />;
@@ -604,7 +612,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </ThemedText>
             </TouchableOpacity>
 
-            {((role === 'Operativo' || role === 'Supervisor') && division === 'Seguridad') && (
+            {((role === 'OPERATIVO' || role === 'SUPERVISOR') && division === 'Seguridad') && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -708,7 +716,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {role === 'Operativo' && division === 'Seguridad' && (
+            {role === 'OPERATIVO' && division === 'Seguridad' && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -760,7 +768,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </ThemedText>
             </TouchableOpacity>
 
-            {role === 'Operativo' && division === 'Seguridad' && (
+            {role === 'OPERATIVO' && division === 'Seguridad' && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -787,7 +795,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {role === 'Supervisor' && division === 'Seguridad' && (
+            {role === 'SUPERVISOR' && division === 'Seguridad' && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -814,7 +822,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {role === 'Operativo' && division === 'Seguridad' && (
+            {role === 'OPERATIVO' && division === 'Seguridad' && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -841,7 +849,35 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {(role === 'Administrativo' || role === 'Supervisor') && (
+            {/* Estamos aquí */}
+            {role === 'ADMINISTRATIVO' || role === 'SUPERVISOR' && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('MantenimientoEquipo') && styles.activeMenuItem
+                ]}
+                onPress={handleMantenimientoEquipoPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('MantenimientoEquipo') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('mantenimiento-equipo', isActiveRoute('MantenimientoEquipo'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('MantenimientoEquipo') && styles.activeMenuItemText
+                  ]}
+                >
+                  Mantenimiento de equipo
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+
+            {(role === 'ADMINISTRATIVO' || role === 'SUPERVISOR') && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -868,7 +904,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {role === 'Operativo' && division === 'Seguridad' && (
+            {role === 'OPERATIVO' && division === 'Seguridad' && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -895,7 +931,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {(role === 'Operativo' || role === 'Supervisor') && division === 'Seguridad' && (
+            {(role === 'OPERATIVO' || role === 'SUPERVISOR') && division === 'Seguridad' && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -922,7 +958,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {role === 'Supervisor' && division === 'Seguridad' && (
+            {role === 'SUPERVISOR' && division === 'Seguridad' && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -949,55 +985,59 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            <TouchableOpacity
-              style={[
-                styles.menuItem,
-                isActiveRoute('SatisfactionSurveys') && styles.activeMenuItem
-              ]}
-              onPress={handleSurveysPress}
-            >
-              <ThemedText
+            {(role === 'SUPERVISOR' || role === 'ADMINISTRATIVO') && (
+              <TouchableOpacity
                 style={[
-                  styles.menuItemText,
-                  isActiveRoute('SatisfactionSurveys') && styles.activeMenuItemText
+                  styles.menuItem,
+                  isActiveRoute('SatisfactionSurveys') && styles.activeMenuItem
                 ]}
+                onPress={handleSurveysPress}
               >
-                {getActionIcon('surveys', isActiveRoute('SatisfactionSurveys'))}
-              </ThemedText>
-              <ThemedText
-                style={[
-                  styles.menuItemText,
-                  isActiveRoute('SatisfactionSurveys') && styles.activeMenuItemText
-                ]}
-              >
-                Encuestas de Satisfacción
-              </ThemedText>
-            </TouchableOpacity>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('SatisfactionSurveys') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('surveys', isActiveRoute('SatisfactionSurveys'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('SatisfactionSurveys') && styles.activeMenuItemText
+                  ]}
+                >
+                  Encuestas de Satisfacción
+                </ThemedText>
+              </TouchableOpacity>
+            )}
 
-            <TouchableOpacity
-              style={[
-                styles.menuItem,
-                isActiveRoute('Trainings') && styles.activeMenuItem
-              ]}
-              onPress={handleTrainingsPress}
-            >
-              <ThemedText
+            {(role === 'SUPERVISOR' || role === 'ADMINISTRATIVO') && (
+              <TouchableOpacity
                 style={[
-                  styles.menuItemText,
-                  isActiveRoute('Trainings') && styles.activeMenuItemText
+                  styles.menuItem,
+                  isActiveRoute('Trainings') && styles.activeMenuItem
                 ]}
+                onPress={handleTrainingsPress}
               >
-                {getActionIcon('trainings', isActiveRoute('Trainings'))}
-              </ThemedText>
-              <ThemedText
-                style={[
-                  styles.menuItemText,
-                  isActiveRoute('Trainings') && styles.activeMenuItemText
-                ]}
-              >
-                Registro de Capacitaciones
-              </ThemedText>
-            </TouchableOpacity>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('Trainings') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('trainings', isActiveRoute('Trainings'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('Trainings') && styles.activeMenuItemText
+                  ]}
+                >
+                  Registro de Capacitaciones
+                </ThemedText>
+              </TouchableOpacity>
+            )}
 
             <TouchableOpacity
               style={[
@@ -1074,7 +1114,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </ThemedText>
             </TouchableOpacity>
 
-            {(role === 'Administrativo' || role === 'Supervisor') && division === 'Aseo y Limpieza' && (
+            {(role === 'ADMINISTRATIVO' || role === 'SUPERVISOR') && division === 'Aseo y Limpieza' && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -1101,7 +1141,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {(role === 'Administrativo' || role === 'Supervisor') && (
+            {(role === 'ADMINISTRATIVO' || role === 'SUPERVISOR') && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -1128,7 +1168,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {(role === 'Supervisor' || role === 'Administrativo') && division === 'Aseo y Limpieza' && (
+            {(role === 'SUPERVISOR' || role === 'ADMINISTRATIVO') && division === 'Aseo y Limpieza' && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -1180,7 +1220,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </ThemedText>
             </TouchableOpacity>
 
-            {(role === 'Operativo' || role === 'Supervisor') && division === 'Aseo y Limpieza' && (
+            {(role === 'OPERATIVO' || role === 'SUPERVISOR') && division === 'Aseo y Limpieza' && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -1207,32 +1247,31 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {role === 'Operativo' && (
-              <TouchableOpacity
+            { /* Empezamos aquí */}
+            <TouchableOpacity
+              style={[
+                styles.menuItem,
+                isActiveRoute('PermitRequest') && styles.activeMenuItem
+              ]}
+              onPress={handlePermitRequestPress}
+            >
+              <ThemedText
                 style={[
-                  styles.menuItem,
-                  isActiveRoute('PermitRequest') && styles.activeMenuItem
+                  styles.menuItemText,
+                  isActiveRoute('PermitRequest') && styles.activeMenuItemText
                 ]}
-                onPress={handlePermitRequestPress}
               >
-                <ThemedText
-                  style={[
-                    styles.menuItemText,
-                    isActiveRoute('PermitRequest') && styles.activeMenuItemText
-                  ]}
-                >
-                  {getActionIcon('permit-request', isActiveRoute('PermitRequest'))}
-                </ThemedText>
-                <ThemedText
-                  style={[
-                    styles.menuItemText,
-                    isActiveRoute('PermitRequest') && styles.activeMenuItemText
-                  ]}
-                >
-                  Solicitud de permiso
-                </ThemedText>
-              </TouchableOpacity>
-            )}
+                {getActionIcon('permit-request', isActiveRoute('PermitRequest'))}
+              </ThemedText>
+              <ThemedText
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('PermitRequest') && styles.activeMenuItemText
+                ]}
+              >
+                Solicitud de permiso
+              </ThemedText>
+            </TouchableOpacity>
 
             <TouchableOpacity
               style={[
@@ -1259,7 +1298,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </ThemedText>
             </TouchableOpacity>
 
-            {(role === 'Administrativo' || role === 'Supervisor') && division === 'Aseo y Limpieza' && (
+            {(role === 'ADMINISTRADOR' || role === 'SUPERVISOR') && division === 'Aseo y Limpieza' && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,

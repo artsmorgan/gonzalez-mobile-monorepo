@@ -35,6 +35,11 @@ export async function PUT(
         const resolvedParams = await context.params;
         const { id } = resolvedParams;
         const {
+            empresa_id,
+            cliente_id,
+            division_id,
+            contrato_id,
+            corpo_id,
             cliente,
             fecha,
             turno,
@@ -65,19 +70,35 @@ export async function PUT(
             return NextResponse.json({ status: false, message: "Fijos inválido" }, { status: 400 });
         }
 
+        const updateData: any = {
+            // El modelo usa nombre_cliente (no cliente)
+            nombre_cliente: cliente !== undefined ? String(cliente) : undefined,
+            fecha: fecha !== undefined ? (fechaDate as Date) : undefined,
+            turno: turno !== undefined ? turno : undefined,
+            area_piso: area_piso !== undefined ? area_piso : undefined,
+            total_presentes: total_presentes !== undefined ? (totalPresentesInt as number) : undefined,
+            fijos: fijos !== undefined ? (fijosInt as number) : undefined,
+            colaboradores: colaboradores !== undefined ? colaboradores : undefined,
+            firma_responsable: firma_responsable !== undefined ? String(firma_responsable) : undefined,
+        };
+
+        // Añadir campos jerárquicos si están presentes
+        if (empresa_id !== undefined) updateData.empresa_id = parseInt(String(empresa_id), 10);
+        if (cliente_id !== undefined) updateData.cliente_id = parseInt(String(cliente_id), 10);
+        if (division_id !== undefined) updateData.division_id = parseInt(String(division_id), 10);
+        if (contrato_id !== undefined) updateData.contrato_id = parseInt(String(contrato_id), 10);
+        if (corpo_id !== undefined) updateData.corpo_id = parseInt(String(corpo_id), 10);
+
+        // Eliminar campos undefined
+        Object.keys(updateData).forEach(key => {
+            if (updateData[key] === undefined) {
+                delete updateData[key];
+            }
+        });
+
         const updated_record = await prisma.c_control_asistencia.update({
             where: { id: idInt },
-            data: {
-                // El modelo usa nombre_cliente (no cliente)
-                nombre_cliente: cliente !== undefined ? String(cliente) : undefined,
-                fecha: fecha !== undefined ? (fechaDate as Date) : undefined,
-                turno: turno !== undefined ? turno : undefined,
-                area_piso: area_piso !== undefined ? area_piso : undefined,
-                total_presentes: total_presentes !== undefined ? (totalPresentesInt as number) : undefined,
-                fijos: fijos !== undefined ? (fijosInt as number) : undefined,
-                colaboradores: colaboradores !== undefined ? colaboradores : undefined,
-                firma_responsable: firma_responsable !== undefined ? String(firma_responsable) : undefined,
-            }
+            data: updateData
         });
 
         return NextResponse.json({

@@ -482,6 +482,7 @@ model c_checklist_supervision {
   fecha                 DateTime              @db.DateTime
   ejecutivo_cuenta      String                @db.VarChar(55)
   evaluacion            String                @db.LongText
+  articulos_puesto      String                @db.LongText
   firma_supervisor      String                @db.LongText
   firma_responsable     String                @db.LongText
   created_by            Int
@@ -490,6 +491,92 @@ model c_checklist_supervision {
   e_estructura_cliente  e_estructura_cliente @relation(fields: [cliente_id], references: [id], onDelete: Cascade)
   e_estructura_sucursal e_estructura_sucursal @relation(fields: [corpo_id], references: [id], onDelete: Cascade)
   e_estructura_puesto   e_estructura_puesto   @relation(fields: [puesto_id], references: [id], onDelete: Cascade)
+}
+
+model c_reporte_articulo_mantenimiento {
+  id                    Int                   @id @default(autoincrement())
+  cliente_id            Int
+  corpo_id              Int
+  puesto_id             Int
+  division              String                @db.VarChar(25)
+  fecha_reporte         DateTime              @db.DateTime
+  created_by            Int
+  solucionado           Boolean               @default(true)
+  c_activo_mantenimiento c_activo_mantenimiento[]
+  
+  e_estructura_cliente  e_estructura_cliente @relation(fields: [cliente_id], references: [id], onDelete: Cascade)
+  e_estructura_sucursal e_estructura_sucursal @relation(fields: [corpo_id], references: [id], onDelete: Cascade)
+  e_estructura_puesto   e_estructura_puesto   @relation(fields: [puesto_id], references: [id], onDelete: Cascade)
+}
+
+model c_activo_mantenimiento {
+  id                        Int                    @id @default(autoincrement())
+  reporte_id                Int
+  articulo_id               Int
+  estado                    String                 @db.VarChar(55)
+  cantidad_necesaria        Int
+  cantidad_real             Int
+  observaciones             String                 @db.LongText
+  fecha_solucion            DateTime?              @db.DateTime
+  accion                    String?                @db.VarChar(55)
+  fecha_inicio              DateTime?              @db.DateTime
+  tipo                      String?                @db.LongText
+  marca                     String?                @db.LongText
+  modelo                    String?                @db.LongText
+  serie_placa               String?                @db.LongText
+  categoria                 String?                @db.LongText
+  fecha_salida              DateTime?              @db.DateTime
+  fecha_entrada             DateTime?              @db.DateTime
+  kilometraje               Int?
+  categoria_mantinimiento   String?                @db.LongText
+  detalle                   String?                @db.LongText
+  numero_fc                 String?                @db.LongText
+  proveedor                 String?                @db.LongText
+  costo_mo                  Int?
+  costo_i                   Int?
+  iva                       Int?
+  costo_total               Int?
+  fecha_fin                 DateTime?              @db.DateTime
+  reincidencia_treinta_dias Boolean?
+
+  c_archivos_adjuntos_archivo_mantenimiento c_archivos_adjuntos_archivo_mantenimiento[]
+  c_movimientos_activo_mantenimiento c_movimientos_activo_mantenimiento[]
+  
+  c_reporte_articulo_mantenimiento c_reporte_articulo_mantenimiento @relation(fields: [reporte_id], references: [id], onDelete: Cascade)
+}
+
+model c_archivos_adjuntos_archivo_mantenimiento {
+  id                     Int         @id @default(autoincrement())
+  name                   String      @db.LongText
+  original_name          String      @db.LongText
+  type                   String      @db.VarChar(25)
+  extension              String      @db.VarChar(25)
+  activo_mantenimiento_id   Int
+
+  c_activo_mantenimiento c_activo_mantenimiento @relation(fields: [activo_mantenimiento_id], references: [id], onDelete: Cascade)
+}
+
+model c_movimientos_activo_mantenimiento {
+  id                     Int           @id @default(autoincrement())
+  activo_mantenimiento_id   Int
+  nombre_persona_recibe  String   @db.VarChar(255)
+  nombre_persona_entrega String   @db.VarChar(255)
+  departamento           String   @db.VarChar(255)
+  telefono               String   @db.VarChar(20)
+  entrega                String   @db.VarChar(255)
+  recibe                 String   @db.VarChar(255)
+  fecha                  DateTime @db.Date
+  hora                   DateTime @db.Time
+  firma_entrega          String   @db.LongText
+  firma_recibe           String   @db.LongText
+  firma_responsable      String   @db.LongText
+
+  c_activo_mantenimiento c_activo_mantenimiento @relation(fields: [activo_mantenimiento_id], references: [id], onDelete: Cascade)
+}
+
+model c_categoria_mantenimiento {
+  id      Int      @id @default(autoincrement())
+  nombre  String   @db.VarChar(255)
 }
 
 model c_combo_uniforme_plaza {
@@ -1456,10 +1543,9 @@ model c_control_asistencia {
   id                Int      @id @default(autoincrement())
   empresa_id        Int
   cliente_id        Int
+  division_id       Int
   contrato_id       Int
   corpo_id          Int
-  puesto_id         Int
-  plaza_id          Int
   fecha             DateTime
   turno             String
   area_piso         String
@@ -2612,6 +2698,7 @@ model c_bitacora_vehiculo_detenido {
 
 model c_vehiculos_corporativos {
   id                    Int       @id @default(autoincrement())
+  empresa_id            Int
   cliente_id            Int
   sucursal_id           Int
   placa                 String    @db.VarChar(52)
@@ -3119,6 +3206,7 @@ model e_estructura_cliente {
   usuario_actualizacion        String?                        @db.VarChar(255)
   fecha_inactivacion           DateTime?                      @db.DateTime(0)
   usuario_inactivacion         String?                        @db.VarChar(255)
+  c_reporte_articulo_mantenimiento c_reporte_articulo_mantenimiento[]    
   c_checklist_supervision      c_checklist_supervision[]    
   e_registro_entrega_puesto    e_registro_entrega_puesto[]
   c_vehiculos_corporativos     c_vehiculos_corporativos[]
@@ -3491,6 +3579,7 @@ model e_estructura_puesto {
   fecha_inactivacion                         DateTime?                                    @db.DateTime(0)
   usuario_inactivacion                       String?                                      @db.VarChar(255)
   es_cubrevacaciones                         Boolean?
+  c_reporte_articulo_mantenimiento c_reporte_articulo_mantenimiento[]
   c_checklist_supervision      c_checklist_supervision[]    
   e_registro_entrega_puesto    e_registro_entrega_puesto[]
   c_agenda_minuta              c_agenda_minuta[]
@@ -3628,6 +3717,7 @@ model e_estructura_sucursal {
   usuario_actualizacion                      String?                                      @db.VarChar(255)
   fecha_inactivacion                         DateTime?                                    @db.DateTime(0)
   usuario_inactivacion                       String?                                      @db.VarChar(255)
+  c_reporte_articulo_mantenimiento c_reporte_articulo_mantenimiento[]
   c_checklist_supervision      c_checklist_supervision[]    
   e_registro_entrega_puesto    e_registro_entrega_puesto[]
   c_vehiculos_corporativos     c_vehiculos_corporativos[]
