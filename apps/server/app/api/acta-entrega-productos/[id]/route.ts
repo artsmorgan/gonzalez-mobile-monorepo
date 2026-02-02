@@ -44,9 +44,12 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
     const {
       tipo_entrega,
-      cliente,
+      empresa_id,
+      cliente_id,
+      division_id,
+      contrato_id,
+      corpo_id,
       mensual,
-      division,
       detalle,
       observaciones,
       nombre_entrega,
@@ -67,10 +70,13 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     const updated = await prisma.c_acta_entre_producto.update({
       where: { id: actaId },
       data: {
+        empresa_id: empresa_id !== undefined ? Number(empresa_id) : existing.empresa_id,
+        cliente_id: cliente_id !== undefined ? Number(cliente_id) : existing.cliente_id,
+        division_id: division_id !== undefined ? Number(division_id) : existing.division_id,
+        contrato_id: contrato_id !== undefined ? Number(contrato_id) : existing.contrato_id,
+        corpo_id: corpo_id !== undefined ? Number(corpo_id) : existing.corpo_id,
         tipo_entrega: tipo_entrega !== undefined ? String(tipo_entrega ?? '') : existing.tipo_entrega,
-        cliente: cliente !== undefined ? String(cliente ?? '') : existing.cliente,
         mensual: mensual !== undefined ? String(mensual ?? '') : existing.mensual,
-        division: division !== undefined ? String(division ?? '') : existing.division,
         detalle: detalle !== undefined ? String(detalle ?? '') : existing.detalle,
         observaciones: observaciones !== undefined ? String(observaciones ?? '') : existing.observaciones,
         nombre_entrega: nombre_entrega !== undefined ? String(nombre_entrega ?? '') : existing.nombre_entrega,

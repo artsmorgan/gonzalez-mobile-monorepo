@@ -14,6 +14,77 @@ type ActaImageInput = {
   extension?: string; // jpg | png | etc
 };
 
+export async function GET(req: NextRequest) {
+  try {
+    const { valid, expired, payload, message } = verifyAccessToken(req);
+    if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
+
+    const empresaIdStr = req.nextUrl.searchParams.get("empresa_id");
+    const clienteIdStr = req.nextUrl.searchParams.get("cliente_id");
+    const divisionIdStr = req.nextUrl.searchParams.get("division_id");
+    const contratoIdStr = req.nextUrl.searchParams.get("contrato_id");
+    const corpoIdStr = req.nextUrl.searchParams.get("corpo_id");
+
+    const where: any = {};
+
+    // Prioridad: corpo_id > contrato_id > division_id > cliente_id > empresa_id
+    if (corpoIdStr) {
+      where.corpo_id = parseInt(corpoIdStr);
+    } else if (contratoIdStr) {
+      where.contrato_id = parseInt(contratoIdStr);
+    } else if (divisionIdStr) {
+      where.division_id = parseInt(divisionIdStr);
+    } else if (clienteIdStr) {
+      where.cliente_id = parseInt(clienteIdStr);
+    } else if (empresaIdStr) {
+      // Si hay empresa pero no cliente, buscar todos los clientes de la empresa
+      const empresaId = parseInt(empresaIdStr);
+      const clientes = await prisma.e_estructura_cliente.findMany({
+        where: { empresa_id: empresaId },
+        select: { id: true },
+      });
+      const clienteIds = clientes.map((c) => c.id);
+      if (clienteIds.length > 0) {
+        where.cliente_id = { in: clienteIds };
+      } else {
+        return NextResponse.json({ status: true, data: [] }, { status: 200 });
+      }
+    } else {
+      return NextResponse.json({ status: false, message: "Debe especificar filtros jerárquicos" }, { status: 400 });
+    }
+
+    const records = await prisma.c_acta_entre_producto.findMany({
+      where,
+      orderBy: {
+        fecha: 'desc'
+      },
+      include: {
+        c_imagenes_acta_entrega_producto: true,
+      },
+    });
+
+    const recordsWithIdLocal = records.map(record => ({
+      ...record,
+      id_local: "",
+      images: (record.c_imagenes_acta_entrega_producto || []).map((img: any) => ({
+        id: img.id,
+        name: img.name,
+      })),
+    }));
+
+    return NextResponse.json({
+      status: true,
+      message: "Actas de entrega de productos obtenidas correctamente",
+      data: recordsWithIdLocal
+    }, { status: 200 });
+
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+    console.error(errorMessage);
+    return NextResponse.json({ status: false, message: errorMessage, data: [] }, { status: 400 });
+  }
+}
+
 function safeParseJson<T>(value: any, fallback: T): T {
   try {
     if (typeof value === 'string') {
@@ -43,9 +114,12 @@ export async function POST(req: NextRequest) {
     const {
       marca_id,
       tipo_entrega,
-      cliente,
+      empresa_id,
+      cliente_id,
+      division_id,
+      contrato_id,
+      corpo_id,
       mensual,
-      division,
       detalle,
       observaciones,
       nombre_entrega,
@@ -68,9 +142,12 @@ export async function POST(req: NextRequest) {
     // Validaciones mínimas (campos NOT NULL en prisma)
     const required: Array<[string, any]> = [
       ['tipo_entrega', tipo_entrega],
-      ['cliente', cliente],
+      ['empresa_id', empresa_id],
+      ['cliente_id', cliente_id],
+      ['division_id', division_id],
+      ['contrato_id', contrato_id],
+      ['corpo_id', corpo_id],
       ['mensual', mensual],
-      ['division', division],
       ['detalle', detalle],
       ['observaciones', observaciones],
       ['nombre_entrega', nombre_entrega],
@@ -93,17 +170,15 @@ export async function POST(req: NextRequest) {
 
     const newRecord = await prisma.c_acta_entre_producto.create({
       data: {
-        empresa_id: marcaDia.empresa_id,
-        cliente_id: marcaDia.cliente_id,
-        contrato_id: marcaDia.contrato_id,
-        corpo_id: marcaDia.corpo_id,
-        puesto_id: marcaDia.puesto_id,
-        plaza_id: marcaDia.plaza_id,
+        empresa_id: Number(empresa_id),
+        cliente_id: Number(cliente_id),
+        division_id: Number(division_id),
+        contrato_id: Number(contrato_id),
+        corpo_id: Number(corpo_id),
         fecha: createdAt,
         tipo_entrega: String(tipo_entrega),
-        cliente: String(cliente),
         mensual: String(mensual),
-        division: String(division),
+        division: "",
         detalle: String(detalle),
         observaciones: String(observaciones),
         nombre_entrega: String(nombre_entrega),

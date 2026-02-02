@@ -85,8 +85,8 @@ export default function EmployeeProfileScreen() {
           <ThemedText>No hay datos de empleado disponibles</ThemedText>
         </ThemedView>
         <AppFooter />
-        <SlideMenu 
-          isVisible={isMenuVisible} 
+        <SlideMenu
+          isVisible={isMenuVisible}
           onClose={handleMenuClose}
           onHomePress={handleHomePress}
           currentRoute="EmployeeProfile"
@@ -98,7 +98,7 @@ export default function EmployeeProfileScreen() {
   return (
     <ThemedView style={styles.container}>
       <AppHeader onMenuPress={handleMenuPress} title="Perfil de Empleado" />
-      <ScrollView 
+      <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={true}
@@ -116,7 +116,7 @@ export default function EmployeeProfileScreen() {
           </ThemedView>
 
           <ThemedView style={styles.tableContainer}>
-            
+
             <ThemedView style={styles.dataItem}>
               <ThemedText style={styles.label}>Nombre:</ThemedText>
               <ThemedText style={styles.value}>{employee.name || 'No disponible'}</ThemedText>
@@ -142,33 +142,12 @@ export default function EmployeeProfileScreen() {
               <ThemedText style={styles.value}>{employee.fechaContratacion ? formatDate(employee.fechaContratacion) : 'No disponible'}</ThemedText>
             </ThemedView>
 
-            <ThemedView style={styles.dataItem}>
-              <ThemedText style={styles.label}>Roles y Divisiones:</ThemedText>
-              <ThemedView style={styles.rolesContainer}>
-                {employee.roles && employee.roles.length > 0 ? (
-                  employee.roles.map((employeeRole, index) => (
-                    <ThemedView key={index} style={styles.roleItem}>
-                      <ThemedText style={styles.roleText}>
-                        <ThemedText style={styles.roleLabel}>Rol: </ThemedText>
-                        {employeeRole.role.name}
-                      </ThemedText>
-                      <ThemedText style={styles.roleText}>
-                        <ThemedText style={styles.roleLabel}>División: </ThemedText>
-                        {employeeRole.division.name}
-                      </ThemedText>
-                    </ThemedView>
-                  ))
-                ) : (
-                  <ThemedText style={styles.value}>No hay roles asignados</ThemedText>
-                )}
-              </ThemedView>
-            </ThemedView>
           </ThemedView>
         </ThemedView>
       </ScrollView>
       <AppFooter />
-      <SlideMenu 
-        isVisible={isMenuVisible} 
+      <SlideMenu
+        isVisible={isMenuVisible}
         onClose={handleMenuClose}
         onHomePress={handleHomePress}
         currentRoute="EmployeeProfile"

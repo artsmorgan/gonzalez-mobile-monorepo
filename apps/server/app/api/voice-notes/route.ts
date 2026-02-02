@@ -211,8 +211,9 @@ export async function POST(req: NextRequest) {
 
             const empleado = await prisma.c_empleado.findUnique({ where: { id: payload.id } });
             if (empleado) {
-                const fecha = created_at.toISOString().split("T")[0];
-                const hora = created_at.toISOString().split("T")[1].split(".")[0];
+                const datetime = new Date(created_at);
+                const fecha = datetime.toISOString().split("T")[0];
+                const hora = datetime.toISOString().split("T")[1].split(".")[0];
                 const desc = `El usuario ${empleado.nombre} ${empleado.primer_apellido} ha creado una nueva nota de voz llamada ${titulo} el día ${fecha} a las ${hora}`;
                 if (!setPuesto) {
                     await sendNotificationByRole(marca.corpo_id, [marca.plaza_id], "Nota de voz creada", desc, ["ADMINISTRATIVO", "SUPERVISOR", "OPERATIVO"]);

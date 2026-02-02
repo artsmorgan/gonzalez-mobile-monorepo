@@ -2360,11 +2360,6 @@ export default function ActivitiesScreen() {
           </ThemedView>
 
           {/* Create Button */}
-          {!isCreateActivityVisible && (
-            <TouchableOpacity style={styles.createButton} onPress={openRepetitionModal}>
-              <Ionicons name="add" size={24} color="#fff" />
-            </TouchableOpacity>
-          )}
 
           {/* Activities List */}
           {!isCreateActivityVisible && (

@@ -1298,7 +1298,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </ThemedText>
             </TouchableOpacity>
 
-            {(role === 'ADMINISTRADOR' || role === 'SUPERVISOR') && division === 'Aseo y Limpieza' && (
+            {(role === 'ADMINISTRATIVO' || role === 'SUPERVISOR') && division === 'Aseo y Limpieza' && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,

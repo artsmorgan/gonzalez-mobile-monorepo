@@ -7522,10 +7522,13 @@ interface ActaEntregaProductoImageInput {
 interface CreateActaEntregaProductoParams {
   requestData: {
     marca_id: number;
+    empresa_id?: number;
+    cliente_id?: number;
+    division_id?: number;
+    contrato_id?: number;
+    corpo_id?: number;
     tipo_entrega: string;
-    cliente: string;
     mensual: string;
-    division: string;
     detalle: string; // JSON string
     observaciones: string;
     nombre_entrega: string;
@@ -7546,10 +7549,13 @@ interface CreateActaEntregaProductoParams {
 interface UpdateActaEntregaProductoParams {
   id: string | number;
   requestData: {
+    empresa_id?: number | null;
+    cliente_id?: number | null;
+    division_id?: number | null;
+    contrato_id?: number | null;
+    corpo_id?: number | null;
     tipo_entrega?: string | null;
-    cliente?: string | null;
     mensual?: string | null;
-    division?: string | null;
     detalle?: string | null;
     observaciones?: string | null;
     nombre_entrega?: string | null;
@@ -7746,6 +7752,89 @@ export const deleteActaEntregaProducto = async ({
     return {
       status: false,
       message: error instanceof Error ? error.message : 'Error al eliminar el acta de entrega de productos',
+    };
+  }
+};
+
+interface ListActaEntregaProductoParams {
+  empresa_id?: number;
+  cliente_id?: number;
+  division_id?: number;
+  contrato_id?: number;
+  corpo_id?: number;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+export const listActaEntregaProducto = async ({
+  empresa_id,
+  cliente_id,
+  division_id,
+  contrato_id,
+  corpo_id,
+  refreshAccessToken,
+  logout,
+}: ListActaEntregaProductoParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        if (logout) await logout();
+        throw new Error('Sesión expirada');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    // Construir query parameters
+    const params = new URLSearchParams();
+    if (empresa_id) params.append('empresa_id', String(empresa_id));
+    if (cliente_id) params.append('cliente_id', String(cliente_id));
+    if (contrato_id) params.append('contrato_id', String(contrato_id));
+    if (corpo_id) params.append('corpo_id', String(corpo_id));
+
+    const response = await fetch(`${apiUrl}/api/acta-entrega-productos?${params.toString()}`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+    });
+
+    if (response.status === 401) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        return listActaEntregaProducto({ empresa_id, cliente_id, division_id, contrato_id, corpo_id, refreshAccessToken, logout });
+      } else {
+        await logout();
+        throw new Error('Sesión expirada');
+      }
+    }
+
+    if (response.status === 403) {
+      await logout();
+      throw new Error('Acceso denegado');
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error listing actas entrega producto:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al listar actas de entrega de productos',
+      data: [],
     };
   }
 };
