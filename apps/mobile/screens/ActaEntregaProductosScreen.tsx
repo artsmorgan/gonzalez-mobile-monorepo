@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -37,11 +37,19 @@ import { useQRScanner } from '@/hooks/useQRScanner';
 import {
   createActaEntregaProducto,
   deleteActaEntregaProducto,
+  listActaEntregaProducto,
   listActaEntregaProductoByCorpo,
   updateActaEntregaProducto,
 } from '@/hooks/evaluationFunctions';
 
 type NavProp = NativeStackNavigationProp<RootStackParamList, 'ActaEntregaProductos'>;
+
+type MainStructureSucursalNode = { id: number; nombre: string; nro_sucursal: string };
+type MainStructureContratoNode = { id: number; nombre: string; sucursales: MainStructureSucursalNode[] };
+type MainStructureDivisionNode = { id: number; nombre: string; contratos: MainStructureContratoNode[] };
+type MainStructureClienteNode = { id: number; nombre: string; division: MainStructureDivisionNode[] };
+type MainStructureEmpresaNode = { id: number; nombre: string; clientes: MainStructureClienteNode[] };
+type MainStructureTree = MainStructureEmpresaNode[];
 
 type DetalleItem = {
   id_local: string;
@@ -64,11 +72,15 @@ type ActaEntregaProducto = {
   id_local: string;
   synced?: boolean;
 
+  empresa_id?: number;
+  cliente_id?: number;
+  division_id?: number;
+  contrato_id?: number;
+  corpo_id?: number;
+
   fecha?: string;
   tipo_entrega: string;
-  cliente: string;
   mensual: string;
-  division: string;
   detalle: string; // JSON string
   observaciones: string;
 
@@ -115,12 +127,36 @@ export default function ActaEntregaProductosScreen() {
   const [isCreating, setIsCreating] = useState(false);
   const [editingRecord, setEditingRecord] = useState<ActaEntregaProducto | null>(null);
 
+  // Filtros jerárquicos
+  const [filterEmpresaId, setFilterEmpresaId] = useState<number | null>(null);
+  const [filterClienteId, setFilterClienteId] = useState<number | null>(null);
+  const [filterDivisionId, setFilterDivisionId] = useState<number | null>(null);
+  const [filterContratoId, setFilterContratoId] = useState<number | null>(null);
+  const [filterCorpoId, setFilterCorpoId] = useState<number | null>(null);
+  const [isHierarchyFiltersExpanded, setIsHierarchyFiltersExpanded] = useState(false);
+
+  // IDs de current_marca para inicialización
+  const [marcaEmpresaId, setMarcaEmpresaId] = useState<number | null>(null);
+  const [marcaClienteId, setMarcaClienteId] = useState<number | null>(null);
+  const [marcaDivisionId, setMarcaDivisionId] = useState<number | null>(null);
+  const [marcaContratoId, setMarcaContratoId] = useState<number | null>(null);
+  const [marcaCorpoId, setMarcaCorpoId] = useState<number | null>(null);
+
+  // Estructura jerárquica
+  const [structure, setStructure] = useState<MainStructureTree>([]);
+  const [isStructureLoading, setIsStructureLoading] = useState(false);
+
+  // Form - Jerarquía
+  const [formEmpresaId, setFormEmpresaId] = useState<number | null>(null);
+  const [formClienteId, setFormClienteId] = useState<number | null>(null);
+  const [formDivisionId, setFormDivisionId] = useState<number | null>(null);
+  const [formContratoId, setFormContratoId] = useState<number | null>(null);
+  const [formCorpoId, setFormCorpoId] = useState<number | null>(null);
+
   // Form
   const [fecha, setFecha] = useState<Date>(new Date());
   const [tipoEntrega, setTipoEntrega] = useState('');
-  const [cliente, setCliente] = useState('');
   const [mensual, setMensual] = useState('');
-  const [division, setDivision] = useState<'Seguridad' | 'Aseo y limpieza' | 'Otros' | ''>('');
   const [observaciones, setObservaciones] = useState('');
 
   const [nombreEntrega, setNombreEntrega] = useState('');
@@ -174,9 +210,7 @@ export default function ActaEntregaProductosScreen() {
   const resetForm = () => {
     setFecha(new Date());
     setTipoEntrega('');
-    setCliente('');
     setMensual('');
-    setDivision('');
     setObservaciones('');
     setNombreEntrega('');
     setCedulaEntrega('');
@@ -480,6 +514,61 @@ export default function ActaEntregaProductosScreen() {
     extension: img.extension || 'jpg',
   })));
 
+  const loadMarcaContext = useCallback(async () => {
+    try {
+      const currentMarca = await AsyncStorage.getItem('current_marca');
+      if (!currentMarca) {
+        setMarcaEmpresaId(null);
+        setMarcaClienteId(null);
+        setMarcaContratoId(null);
+        setMarcaCorpoId(null);
+        return null;
+      }
+      const current = JSON.parse(currentMarca);
+      const empresaIdRaw = current?.empresa?.id ?? current?.empresa_id;
+      const clienteIdRaw = current?.cliente?.id ?? current?.cliente_id;
+      const divisionIdRaw = current?.division?.id ?? current?.division_id;
+      const contratoIdRaw = current?.contrato?.id ?? current?.contrato_id;
+      const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
+      setMarcaEmpresaId(empresaIdRaw ? Number(empresaIdRaw) : null);
+      setMarcaClienteId(clienteIdRaw ? Number(clienteIdRaw) : null);
+      setMarcaDivisionId(divisionIdRaw ? Number(divisionIdRaw) : null);
+      setMarcaContratoId(contratoIdRaw ? Number(contratoIdRaw) : null);
+      setMarcaCorpoId(corpoIdRaw ? Number(corpoIdRaw) : null);
+      return current;
+    } catch {
+      setMarcaEmpresaId(null);
+      setMarcaClienteId(null);
+      setMarcaDivisionId(null);
+      setMarcaContratoId(null);
+      setMarcaCorpoId(null);
+      return null;
+    }
+  }, []);
+
+  const fetchMainStructure = useCallback(async () => {
+    setIsStructureLoading(true);
+    try {
+      const cacheStr = await AsyncStorage.getItem('main_structure_cache');
+      if (cacheStr) {
+        try {
+          const parsed = JSON.parse(cacheStr);
+          if (Array.isArray(parsed)) setStructure(parsed);
+        } catch {
+          // ignore
+        }
+      }
+      const isConnected = await getConnectionStatus();
+      if (!isConnected) {
+        setIsStructureLoading(false);
+        return;
+      }
+      // La estructura ya se guarda desde otras pantallas, aquí solo usamos cache
+    } finally {
+      setIsStructureLoading(false);
+    }
+  }, []);
+
   const fetchRecords = useCallback(async () => {
     setIsLoadingData(true);
     setError(null);
@@ -495,16 +584,33 @@ export default function ActaEntregaProductosScreen() {
       const currentMarca = JSON.parse(currentMarcaStr);
       setHasCurrentMarca(true);
 
-      // En la mayoría de módulos, corpo viene como currentMarca.corpo.id
-      const corpoId =
-        String(
-          currentMarca?.corpo?.id ??
-          currentMarca?.corpo_id ??
-          currentMarca?.corpoId ??
-          ''
-        );
-      if (!corpoId) {
-        setError('No se encontró el ID del corpo');
+      // Obtener IDs de current_marca directamente sin usar estados
+      const empresaIdRaw = currentMarca?.empresa?.id ?? currentMarca?.empresa_id;
+      const clienteIdRaw = currentMarca?.cliente?.id ?? currentMarca?.cliente_id;
+      const divisionIdRaw = currentMarca?.division?.id ?? currentMarca?.division_id;
+      const contratoIdRaw = currentMarca?.contrato?.id ?? currentMarca?.contrato_id;
+      const corpoIdRaw = currentMarca?.corpo?.id ?? currentMarca?.corpo_id;
+
+      const empresaIdFromMarca = empresaIdRaw ? Number(empresaIdRaw) : null;
+      const clienteIdFromMarca = clienteIdRaw ? Number(clienteIdRaw) : null;
+      const divisionIdFromMarca = divisionIdRaw ? Number(divisionIdRaw) : null;
+      const contratoIdFromMarca = contratoIdRaw ? Number(contratoIdRaw) : null;
+      const corpoIdFromMarca = corpoIdRaw ? Number(corpoIdRaw) : null;
+
+      // Determinar si hay filtros explícitamente seleccionados
+      const hasExplicitFilters = filterEmpresaId !== null || filterClienteId !== null || filterDivisionId !== null || filterContratoId !== null || filterCorpoId !== null;
+
+      // Si hay filtros explícitos, usar SOLO esos (sin fallback a current_marca)
+      // Si NO hay filtros explícitos, usar current_marca como valores iniciales
+      const empresaId = hasExplicitFilters ? filterEmpresaId : (filterEmpresaId ?? empresaIdFromMarca);
+      const clienteId = hasExplicitFilters ? filterClienteId : (filterClienteId ?? clienteIdFromMarca);
+      const divisionId = hasExplicitFilters ? filterDivisionId : (filterDivisionId ?? divisionIdFromMarca);
+      const contratoId = hasExplicitFilters ? filterContratoId : (filterContratoId ?? contratoIdFromMarca);
+      const corpoId = hasExplicitFilters ? filterCorpoId : (filterCorpoId ?? corpoIdFromMarca);
+
+      // Si no hay ningún filtro seleccionado, no hacer búsqueda
+      if (!empresaId && !clienteId && !divisionId && !contratoId && !corpoId) {
+        setRecords([]);
         setIsLoadingData(false);
         return;
       }
@@ -514,9 +620,29 @@ export default function ActaEntregaProductosScreen() {
       // cache local (siempre)
       const cacheStr = await AsyncStorage.getItem('evaluations_cache');
       const cache = cacheStr ? JSON.parse(cacheStr) : [];
-      const localRecords: ActaEntregaProducto[] = (cache || [])
+      const localRecordsAll: ActaEntregaProducto[] = (cache || [])
         .filter((x: any) => x.type === 'acta_entrega_producto')
         .map((x: any) => x as ActaEntregaProducto);
+
+      // Filtrar cache local aplicando TODOS los filtros seleccionados (no solo el más específico)
+      let localRecords: ActaEntregaProducto[] = localRecordsAll;
+      if (empresaId) {
+        localRecords = localRecords.filter((r: any) => Number(r.empresa_id) === Number(empresaId));
+      }
+      if (clienteId) {
+        localRecords = localRecords.filter((r: any) => Number(r.cliente_id) === Number(clienteId));
+      }
+      if (divisionId) {
+        localRecords = localRecords.filter((r: any) => Number(r.division_id) === Number(divisionId));
+      }
+      if (contratoId) {
+        localRecords = localRecords.filter((r: any) => Number(r.contrato_id) === Number(contratoId));
+      }
+      if (corpoId) {
+        localRecords = localRecords.filter((r: any) => Number(r.corpo_id) === Number(corpoId));
+      }
+
+      const unsynced = localRecords.filter((r) => r.synced === false);
 
       if (!isConnected) {
         setRecords(localRecords);
@@ -524,7 +650,16 @@ export default function ActaEntregaProductosScreen() {
         return;
       }
 
-      const res = await listActaEntregaProductoByCorpo({ corpo_id: corpoId, refreshAccessToken, logout });
+      // Usar nueva función con filtros jerárquicos (solo enviar los que no son null)
+      const res = await listActaEntregaProducto({
+        empresa_id: empresaId ?? undefined,
+        cliente_id: clienteId ?? undefined,
+        division_id: divisionId ?? undefined,
+        contrato_id: contratoId ?? undefined,
+        corpo_id: corpoId ?? undefined,
+        refreshAccessToken,
+        logout,
+      });
       if (!res.status) {
         setRecords(localRecords);
         setError(res.message || 'Error al obtener actas');
@@ -534,22 +669,112 @@ export default function ActaEntregaProductosScreen() {
 
       const serverRecords: ActaEntregaProducto[] = Array.isArray(res.data) ? res.data : [];
       // merge: server + local no sincronizados
-      const unsynced = localRecords.filter((r) => r.synced === false);
-      setRecords([...unsynced, ...serverRecords]);
+      const unsyncedIds = new Set(unsynced.map((r) => String(r.id || r.id_local || '')));
+      const filteredServer = serverRecords.filter((r) => !unsyncedIds.has(String(r.id || r.id_local || '')));
+      setRecords([...unsynced, ...filteredServer]);
       setIsLoadingData(false);
     } catch (e) {
       console.error('Error fetching actas:', e);
       setError('Error al cargar actas');
       setIsLoadingData(false);
     }
-  }, [logout, refreshAccessToken]);
+  }, [logout, refreshAccessToken, filterEmpresaId, filterClienteId, filterDivisionId, filterContratoId, filterCorpoId]);
+
+  // Nodos computados para filtros jerárquicos
+  const filterEmpresas = useMemo(() => (Array.isArray(structure) ? structure : []), [structure]);
+
+  const filterClientes = useMemo(() => {
+    const empresa = filterEmpresas.find((e: any) => e.id === filterEmpresaId);
+    return empresa?.clientes || [];
+  }, [filterEmpresas, filterEmpresaId]);
+
+  const filterDivisiones = useMemo(() => {
+    if (!filterClienteId) return [];
+    const cliente = filterClientes.find((c: any) => c.id === filterClienteId);
+    return cliente?.division || [];
+  }, [filterClientes, filterClienteId]);
+
+  const filterContratos = useMemo(() => {
+    if (!filterDivisionId) return [];
+    const division = filterDivisiones.find((d: any) => d.id === filterDivisionId);
+    return division?.contratos || [];
+  }, [filterDivisiones, filterDivisionId]);
+
+  const filterSucursales = useMemo(() => {
+    if (!filterContratoId) return [];
+    const division = filterDivisiones.find((d: any) => d.id === filterDivisionId);
+    if (!division) return [];
+    const contrato = division.contratos?.find((c: any) => c.id === filterContratoId);
+    return contrato?.sucursales || [];
+  }, [filterDivisiones, filterDivisionId, filterContratoId]);
+
+  // Nodos computados para jerarquía del formulario
+  const formEmpresas = useMemo(() => (Array.isArray(structure) ? structure : []), [structure]);
+
+  const formClientes = useMemo(() => {
+    const empresa = formEmpresas.find((e: any) => e.id === formEmpresaId);
+    return empresa?.clientes || [];
+  }, [formEmpresas, formEmpresaId]);
+
+  const formDivisiones = useMemo(() => {
+    if (!formClienteId) return [];
+    const cliente = formClientes.find((c: any) => c.id === formClienteId);
+    return cliente?.division || [];
+  }, [formClientes, formClienteId]);
+
+  const formContratos = useMemo(() => {
+    if (!formDivisionId) return [];
+    const division = formDivisiones.find((d: any) => d.id === formDivisionId);
+    return division?.contratos || [];
+  }, [formDivisiones, formDivisionId]);
+
+  const formSucursales = useMemo(() => {
+    if (!formContratoId) return [];
+    const division = formDivisiones.find((d: any) => d.id === formDivisionId);
+    if (!division) return [];
+    const contrato = division.contratos?.find((c: any) => c.id === formContratoId);
+    return contrato?.sucursales || [];
+  }, [formDivisiones, formDivisionId, formContratoId]);
+
+  // Inicializar filtros jerárquicos con current_marca
+  useEffect(() => {
+    if (!structure || structure.length === 0) return;
+    // Solo inicializar si los filtros no están establecidos
+    if (marcaEmpresaId && filterEmpresaId === null) setFilterEmpresaId(marcaEmpresaId);
+    if (marcaClienteId && filterClienteId === null) setFilterClienteId(marcaClienteId);
+    if (marcaContratoId && filterContratoId === null) setFilterContratoId(marcaContratoId);
+    if (marcaCorpoId && filterCorpoId === null) setFilterCorpoId(marcaCorpoId);
+  }, [structure, marcaEmpresaId, marcaClienteId, marcaContratoId, marcaCorpoId, filterEmpresaId, filterClienteId, filterContratoId, filterCorpoId]);
+
+  // Inicializar jerarquía del formulario con current_marca
+  useEffect(() => {
+    if (!structure || structure.length === 0) return;
+    if (!isCreating && !editingRecord) {
+      // Solo inicializar si no estamos creando o editando
+      if (marcaEmpresaId && formEmpresaId === null) setFormEmpresaId(marcaEmpresaId);
+      if (marcaClienteId && formClienteId === null) setFormClienteId(marcaClienteId);
+      if (marcaDivisionId && formDivisionId === null) setFormDivisionId(marcaDivisionId);
+      if (marcaContratoId && formContratoId === null) setFormContratoId(marcaContratoId);
+      if (marcaCorpoId && formCorpoId === null) setFormCorpoId(marcaCorpoId);
+    }
+  }, [structure, marcaEmpresaId, marcaClienteId, marcaDivisionId, marcaContratoId, marcaCorpoId, isCreating, editingRecord, formEmpresaId, formClienteId, formDivisionId, formContratoId, formCorpoId]);
+
+  // Trigger fetch cuando cambien los filtros jerárquicos
+  useEffect(() => {
+    if (structure && structure.length > 0 && (filterEmpresaId || filterClienteId || filterDivisionId || filterContratoId || filterCorpoId)) {
+      fetchRecords();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterEmpresaId, filterClienteId, filterDivisionId, filterContratoId, filterCorpoId, structure]);
 
   useFocusEffect(
     useCallback(() => {
+      fetchMainStructure();
+      loadMarcaContext();
       fetchRecords();
       eventBus.on('connectionRestored', fetchRecords);
       return () => eventBus.off('connectionRestored', fetchRecords);
-    }, [fetchRecords])
+    }, [fetchRecords, fetchMainStructure, loadMarcaContext])
   );
 
   const startCreating = () => {
@@ -567,11 +792,16 @@ export default function ActaEntregaProductosScreen() {
     setIsCreating(false);
     setEditingRecord(record);
 
+    // Cargar IDs jerárquicos del registro
+    setFormEmpresaId(record.empresa_id ? Number(record.empresa_id) : null);
+    setFormClienteId(record.cliente_id ? Number(record.cliente_id) : null);
+    setFormDivisionId(record.division_id ? Number(record.division_id) : null);
+    setFormContratoId(record.contrato_id ? Number(record.contrato_id) : null);
+    setFormCorpoId(record.corpo_id ? Number(record.corpo_id) : null);
+
     setFecha(record.fecha ? new Date(record.fecha) : new Date());
     setTipoEntrega(record.tipo_entrega || '');
-    setCliente(record.cliente || '');
     setMensual(record.mensual || '');
-    setDivision((record.division as any) || '');
     setObservaciones(record.observaciones || '');
 
     setNombreEntrega(record.nombre_entrega || '');
@@ -619,9 +849,12 @@ export default function ActaEntregaProductosScreen() {
 
   const validateForm = () => {
     if (!tipoEntrega.trim()) return 'Tipo de entrega es obligatorio';
-    if (!cliente.trim()) return 'Cliente es obligatorio';
+    if (!formEmpresaId) return 'Empresa es obligatoria';
+    if (!formClienteId) return 'Cliente es obligatorio';
+    if (!formDivisionId) return 'División es obligatoria';
+    if (!formContratoId) return 'Contrato es obligatorio';
+    if (!formCorpoId) return 'Sucursal es obligatoria';
     if (!mensual.trim()) return 'Mensual es obligatorio';
-    if (!division) return 'División es obligatoria';
     if (!observaciones.trim()) return 'Observaciones es obligatorio';
     if (!nombreEntrega.trim()) return 'Nombre (entrega) es obligatorio';
     if (!cedulaEntrega.trim()) return 'Cédula (entrega) es obligatorio';
@@ -650,10 +883,13 @@ export default function ActaEntregaProductosScreen() {
           try {
             const requestData = {
               marca_id: currentMarca.id,
+              empresa_id: formEmpresaId ?? undefined,
+              cliente_id: formClienteId ?? undefined,
+              division_id: formDivisionId ?? undefined,
+              contrato_id: formContratoId ?? undefined,
+              corpo_id: formCorpoId ?? undefined,
               tipo_entrega: tipoEntrega.trim(),
-              cliente: cliente.trim(),
               mensual: mensual.trim(),
-              division: division,
               detalle: buildDetalleJson(),
               observaciones: observaciones.trim(),
               nombre_entrega: nombreEntrega.trim(),
@@ -702,10 +938,13 @@ export default function ActaEntregaProductosScreen() {
               id_local: localId,
               synced: false,
               fecha: new Date().toISOString(),
+              empresa_id: requestData.empresa_id,
+              cliente_id: requestData.cliente_id,
+              division_id: requestData.division_id,
+              contrato_id: requestData.contrato_id,
+              corpo_id: requestData.corpo_id,
               tipo_entrega: requestData.tipo_entrega,
-              cliente: requestData.cliente,
               mensual: requestData.mensual,
-              division: requestData.division,
               detalle: requestData.detalle,
               observaciones: requestData.observaciones,
               nombre_entrega: requestData.nombre_entrega,
@@ -750,10 +989,13 @@ export default function ActaEntregaProductosScreen() {
         onPress: async () => {
           try {
             const requestData = {
+              empresa_id: formEmpresaId,
+              cliente_id: formClienteId,
+              division_id: formDivisionId,
+              contrato_id: formContratoId,
+              corpo_id: formCorpoId,
               tipo_entrega: tipoEntrega.trim(),
-              cliente: cliente.trim(),
               mensual: mensual.trim(),
-              division: division,
               detalle: buildDetalleJson(),
               observaciones: observaciones.trim(),
               nombre_entrega: nombreEntrega.trim(),
@@ -892,7 +1134,7 @@ export default function ActaEntregaProductosScreen() {
   const renderSignaturesPreview = (record: ActaEntregaProducto) => {
     const firmaEntrega = record.firma_entrega || '';
     const firmaRecibe = record.firma_recibe || '';
-    
+
     if (!firmaEntrega && !firmaRecibe) return null;
 
     const recordId = String(record.id || record.id_local || '');
@@ -996,8 +1238,8 @@ export default function ActaEntregaProductosScreen() {
           <ThemedView key={String(r.id || r.id_local)} style={styles.listItem}>
             <ThemedView style={styles.listItemHeader}>
               <ThemedView style={styles.listItemContent}>
-                <ThemedText style={styles.listItemTitle}>{r.cliente || 'N/A'}</ThemedText>
-                <ThemedText style={styles.listItemSubtitle}>División: {r.division || ''}</ThemedText>
+                <ThemedText style={styles.listItemTitle}>{r.tipo_entrega || 'N/A'}</ThemedText>
+                <ThemedText style={styles.listItemSubtitle}>Mensual: {r.mensual || ''}</ThemedText>
                 <ThemedText style={styles.listItemSubtitle}>
                   Fecha: {r.fecha ? String(r.fecha).split('T')[0] : (r.fecha_entrega ? String(r.fecha_entrega).split('T')[0] : 'N/A')}
                 </ThemedText>
@@ -1127,6 +1369,145 @@ export default function ActaEntregaProductosScreen() {
             </ThemedView>
           )}
 
+          {hasCurrentMarca && !isCreating && !editingRecord && (
+            <ThemedView style={styles.filtersContainer}>
+              <TouchableOpacity
+                style={styles.filtersHeader}
+                onPress={() => setIsHierarchyFiltersExpanded(!isHierarchyFiltersExpanded)}
+              >
+                <ThemedText style={styles.filtersTitle}>Filtros Jerárquicos</ThemedText>
+                <Ionicons
+                  name={isHierarchyFiltersExpanded ? 'chevron-up' : 'chevron-down'}
+                  size={24}
+                  color="#000000"
+                />
+              </TouchableOpacity>
+              {isHierarchyFiltersExpanded && (
+                <ThemedView style={styles.filtersContent}>
+                  <ThemedView style={styles.filterGroup}>
+                    <ThemedText style={styles.filterLabel}>Empresa:</ThemedText>
+                    <View style={styles.pickerWrapper}>
+                      <Picker
+                        selectedValue={filterEmpresaId || ''}
+                        onValueChange={(value) => {
+                          setFilterEmpresaId(value && value !== '' ? Number(value) : null);
+                          setFilterClienteId(null);
+                          setFilterContratoId(null);
+                          setFilterCorpoId(null);
+                        }}
+                        style={styles.picker}
+                      >
+                        <Picker.Item label="Seleccionar..." value="" />
+                        {filterEmpresas.map((e: any) => (
+                          <Picker.Item key={e.id} label={e.nombre} value={e.id} />
+                        ))}
+                      </Picker>
+                    </View>
+                  </ThemedView>
+
+                  {filterEmpresaId && (
+                    <ThemedView style={styles.filterGroup}>
+                      <ThemedText style={styles.filterLabel}>Cliente:</ThemedText>
+                      <View style={styles.pickerWrapper}>
+                        <Picker
+                          selectedValue={filterClienteId || ''}
+                          onValueChange={(value) => {
+                            setFilterClienteId(value && value !== '' ? Number(value) : null);
+                            setFilterDivisionId(null);
+                            setFilterContratoId(null);
+                            setFilterCorpoId(null);
+                          }}
+                          style={styles.picker}
+                        >
+                          <Picker.Item label="Seleccionar..." value="" />
+                          {filterClientes.map((c: any) => (
+                            <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                          ))}
+                        </Picker>
+                      </View>
+                    </ThemedView>
+                  )}
+
+                  {filterClienteId && (
+                    <ThemedView style={styles.filterGroup}>
+                      <ThemedText style={styles.filterLabel}>División:</ThemedText>
+                      <View style={styles.pickerWrapper}>
+                        <Picker
+                          selectedValue={filterDivisionId || ''}
+                          onValueChange={(value) => {
+                            setFilterDivisionId(value && value !== '' ? Number(value) : null);
+                            setFilterContratoId(null);
+                            setFilterCorpoId(null);
+                          }}
+                          style={styles.picker}
+                        >
+                          <Picker.Item label="Seleccionar..." value="" />
+                          {filterDivisiones.map((d: any) => (
+                            <Picker.Item key={d.id} label={d.nombre} value={d.id} />
+                          ))}
+                        </Picker>
+                      </View>
+                    </ThemedView>
+                  )}
+
+                  {filterDivisionId && (
+                    <ThemedView style={styles.filterGroup}>
+                      <ThemedText style={styles.filterLabel}>Contrato:</ThemedText>
+                      <View style={styles.pickerWrapper}>
+                        <Picker
+                          selectedValue={filterContratoId || ''}
+                          onValueChange={(value) => {
+                            setFilterContratoId(value && value !== '' ? Number(value) : null);
+                            setFilterCorpoId(null);
+                          }}
+                          style={styles.picker}
+                        >
+                          <Picker.Item label="Seleccionar..." value="" />
+                          {filterContratos.map((c: any) => (
+                            <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                          ))}
+                        </Picker>
+                      </View>
+                    </ThemedView>
+                  )}
+
+                  {filterContratoId && (
+                    <ThemedView style={styles.filterGroup}>
+                      <ThemedText style={styles.filterLabel}>Sucursal:</ThemedText>
+                      <View style={styles.pickerWrapper}>
+                        <Picker
+                          selectedValue={filterCorpoId || ''}
+                          onValueChange={(value) => {
+                            setFilterCorpoId(value && value !== '' ? Number(value) : null);
+                          }}
+                          style={styles.picker}
+                        >
+                          <Picker.Item label="Seleccionar..." value="" />
+                          {filterSucursales.map((s: any) => (
+                            <Picker.Item key={s.id} label={s.nombre} value={s.id} />
+                          ))}
+                        </Picker>
+                      </View>
+                    </ThemedView>
+                  )}
+
+                  <TouchableOpacity
+                    style={styles.resetFiltersButton}
+                    onPress={() => {
+                      setFilterEmpresaId(null);
+                      setFilterClienteId(null);
+                      setFilterDivisionId(null);
+                      setFilterContratoId(null);
+                      setFilterCorpoId(null);
+                    }}
+                  >
+                    <ThemedText style={styles.resetFiltersText}>Limpiar Filtros</ThemedText>
+                  </TouchableOpacity>
+                </ThemedView>
+              )}
+            </ThemedView>
+          )}
+
           {isCreating || editingRecord ? (
             <ThemedView style={[styles.vehicleCard, styles.formCard]}>
               {/* Tipo entrega */}
@@ -1135,33 +1516,126 @@ export default function ActaEntregaProductosScreen() {
                 <TextInput style={styles.formInput} value={tipoEntrega} onChangeText={setTipoEntrega} placeholder="Tipo de entrega" placeholderTextColor="#999" />
               </ThemedView>
 
-              {/* Cliente */}
+              {/* Jerarquía del formulario */}
+              <ThemedText style={styles.sectionTitle}>Jerarquía</ThemedText>
+
+              {/* Empresa */}
               <ThemedView style={styles.formGroup}>
-                <ThemedText style={styles.formLabel}>Cliente *</ThemedText>
-                <TextInput style={styles.formInput} value={cliente} onChangeText={setCliente} placeholder="Cliente" placeholderTextColor="#999" />
+                <ThemedText style={styles.formLabel}>Empresa *</ThemedText>
+                <View style={styles.pickerWrapper}>
+                  <Picker
+                    selectedValue={formEmpresaId || ''}
+                    onValueChange={(value) => {
+                      setFormEmpresaId(value && value !== '' ? Number(value) : null);
+                      setFormClienteId(null);
+                      setFormDivisionId(null);
+                      setFormContratoId(null);
+                      setFormCorpoId(null);
+                    }}
+                    style={styles.picker}
+                  >
+                    <Picker.Item label="Seleccionar..." value="" />
+                    {formEmpresas.map((e: any) => (
+                      <Picker.Item key={e.id} label={e.nombre} value={e.id} />
+                    ))}
+                  </Picker>
+                </View>
               </ThemedView>
+
+              {/* Cliente */}
+              {formEmpresaId && (
+                <ThemedView style={styles.formGroup}>
+                  <ThemedText style={styles.formLabel}>Cliente *</ThemedText>
+                  <View style={styles.pickerWrapper}>
+                    <Picker
+                      selectedValue={formClienteId || ''}
+                      onValueChange={(value) => {
+                        setFormClienteId(value && value !== '' ? Number(value) : null);
+                        setFormDivisionId(null);
+                        setFormContratoId(null);
+                        setFormCorpoId(null);
+                      }}
+                      style={styles.picker}
+                    >
+                      <Picker.Item label="Seleccionar..." value="" />
+                      {formClientes.map((c: any) => (
+                        <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                      ))}
+                    </Picker>
+                  </View>
+                </ThemedView>
+              )}
+
+              {/* División */}
+              {formClienteId && (
+                <ThemedView style={styles.formGroup}>
+                  <ThemedText style={styles.formLabel}>División *</ThemedText>
+                  <View style={styles.pickerWrapper}>
+                    <Picker
+                      selectedValue={formDivisionId || ''}
+                      onValueChange={(value) => {
+                        setFormDivisionId(value && value !== '' ? Number(value) : null);
+                        setFormContratoId(null);
+                        setFormCorpoId(null);
+                      }}
+                      style={styles.picker}
+                    >
+                      <Picker.Item label="Seleccionar..." value="" />
+                      {formDivisiones.map((d: any) => (
+                        <Picker.Item key={d.id} label={d.nombre} value={d.id} />
+                      ))}
+                    </Picker>
+                  </View>
+                </ThemedView>
+              )}
+
+              {/* Contrato */}
+              {formDivisionId && (
+                <ThemedView style={styles.formGroup}>
+                  <ThemedText style={styles.formLabel}>Contrato *</ThemedText>
+                  <View style={styles.pickerWrapper}>
+                    <Picker
+                      selectedValue={formContratoId || ''}
+                      onValueChange={(value) => {
+                        setFormContratoId(value && value !== '' ? Number(value) : null);
+                        setFormCorpoId(null);
+                      }}
+                      style={styles.picker}
+                    >
+                      <Picker.Item label="Seleccionar..." value="" />
+                      {formContratos.map((c: any) => (
+                        <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                      ))}
+                    </Picker>
+                  </View>
+                </ThemedView>
+              )}
+
+              {/* Sucursal */}
+              {formContratoId && (
+                <ThemedView style={styles.formGroup}>
+                  <ThemedText style={styles.formLabel}>Sucursal *</ThemedText>
+                  <View style={styles.pickerWrapper}>
+                    <Picker
+                      selectedValue={formCorpoId || ''}
+                      onValueChange={(value) => {
+                        setFormCorpoId(value && value !== '' ? Number(value) : null);
+                      }}
+                      style={styles.picker}
+                    >
+                      <Picker.Item label="Seleccionar..." value="" />
+                      {formSucursales.map((s: any) => (
+                        <Picker.Item key={s.id} label={s.nombre} value={s.id} />
+                      ))}
+                    </Picker>
+                  </View>
+                </ThemedView>
+              )}
 
               {/* Mensual */}
               <ThemedView style={styles.formGroup}>
                 <ThemedText style={styles.formLabel}>Mensual *</ThemedText>
                 <TextInput style={styles.formInput} value={mensual} onChangeText={setMensual} placeholder="Mensual" placeholderTextColor="#999" />
-              </ThemedView>
-
-              {/* División */}
-              <ThemedView style={styles.formGroup}>
-                <ThemedText style={styles.formLabel}>División *</ThemedText>
-                <ThemedView style={styles.pickerContainer}>
-                  <Picker
-                    selectedValue={division}
-                    onValueChange={(val) => setDivision(val as any)}
-                    style={styles.picker}
-                  >
-                    <Picker.Item label="Seleccionar" value="" />
-                    <Picker.Item label="Seguridad" value="Seguridad" />
-                    <Picker.Item label="Aseo y limpieza" value="Aseo y limpieza" />
-                    <Picker.Item label="Otros" value="Otros" />
-                  </Picker>
-                </ThemedView>
               </ThemedView>
 
               {renderDetalleSection()}
@@ -1299,7 +1773,7 @@ export default function ActaEntregaProductosScreen() {
                   </ThemedView>
                 ) : (
                   <ThemedView style={styles.signatureInfo}>
-                    <ThemedView style={{ flex: 1, paddingRight: 10 , backgroundColor: '#F9F9F9'}}>
+                    <ThemedView style={{ flex: 1, paddingRight: 10, backgroundColor: '#F9F9F9' }}>
                       <ThemedText style={styles.signatureInfoText}>Información de la firma:</ThemedText>
                       {(() => {
                         const info = decodeFirmaHash(firmaResponsableHash);
@@ -1439,7 +1913,7 @@ const styles = StyleSheet.create({
   noMarcaTitle: { fontSize: 24, fontWeight: 'bold', color: '#FF9500', textAlign: 'center' },
   noMarcaMessage: { fontSize: 16, color: '#666', textAlign: 'center', lineHeight: 24 },
 
-  listSection: { width: '100%'},
+  listSection: { width: '100%' },
   createButton: {
     backgroundColor: '#007AFF',
     padding: 16,
@@ -1544,6 +2018,13 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     backgroundColor: '#F9F9F9',
     overflow: 'hidden',
+  },
+  pickerWrapper: {
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    overflow: 'hidden',
+    backgroundColor: '#F9F9F9',
   },
   picker: { width: '100%', height: 50 },
   textArea: { height: 100, textAlignVertical: 'top' },
@@ -1663,6 +2144,51 @@ const styles = StyleSheet.create({
   modalClearButtonText: { color: '#111', fontWeight: '800' },
   modalAcceptButton: { backgroundColor: '#D1FAE5', borderRadius: 10, paddingVertical: 10, paddingHorizontal: 12, flexDirection: 'row', gap: 8, alignItems: 'center' },
   modalAcceptButtonText: { color: '#111', fontWeight: '800' },
+  // Filtros jerárquicos
+  filtersContainer: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    marginBottom: 15,
+    overflow: 'hidden',
+  },
+  filtersHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 15,
+    backgroundColor: '#F5F5F5',
+  },
+  filtersTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#000000',
+  },
+  filtersContent: {
+    padding: 15,
+  },
+  filterGroup: {
+    marginBottom: 15,
+  },
+  filterLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 8,
+    color: '#000000',
+  },
+  resetFiltersButton: {
+    marginTop: 10,
+    padding: 12,
+    backgroundColor: '#FF3B30',
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  resetFiltersText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
+  },
 });
 
 

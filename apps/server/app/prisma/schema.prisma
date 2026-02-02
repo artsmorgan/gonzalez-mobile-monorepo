@@ -1154,13 +1154,11 @@ model c_acta_entre_producto {
   id                               Int                                @id @default(autoincrement())
   empresa_id                       Int
   cliente_id                       Int
+  division_id                      Int
   contrato_id                      Int
   corpo_id                         Int
-  puesto_id                        Int
-  plaza_id                         Int
   fecha                            DateTime                           @default(now())
   tipo_entrega                     String                             @db.LongText
-  cliente                          String                             @db.LongText
   mensual                          String                             @db.LongText
   division                         String                             @db.VarChar(25)
   detalle                          String                             @db.LongText
