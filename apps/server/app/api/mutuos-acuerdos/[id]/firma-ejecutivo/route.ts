@@ -42,6 +42,24 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       data: { firma_ejecutivo_cuenta: firma },
     });
 
+    // Registrar cambio de firma (solo si cambió)
+    if (existing.firma_ejecutivo_cuenta !== firma) {
+      const createdBy = currentEmployeeId;
+      await prisma.c_cambios_apps_modules.create({
+        data: {
+          nombre_tabla: "e_mutuos_acuerdos",
+          registro_id: idNum,
+          cambios: JSON.stringify([{
+            prop: "firma_ejecutivo_cuenta",
+            before: existing.firma_ejecutivo_cuenta || null,
+            after: firma,
+          }]),
+          created_at: toZonedTime(new Date(), "America/Costa_Rica"),
+          created_by: createdBy,
+        },
+      });
+    }
+
     if (updated) {
       const cliente = await prisma.e_estructura_cliente.findUnique({ where: { id: updated.cliente_id } });
       if (cliente) {

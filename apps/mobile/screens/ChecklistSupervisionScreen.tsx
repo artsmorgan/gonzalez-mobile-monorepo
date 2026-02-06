@@ -70,6 +70,7 @@ type EvaluationSection = {
 interface ArticuloForm {
   id: number;
   nombre: string;
+  tipo?: string;
   cantidad_requerida: number;
   cantidad_real: number;
   estado: 'Bueno' | 'Malo' | 'No está';
@@ -1005,15 +1006,34 @@ export default function ChecklistSupervisionScreen() {
       const puesto = sucursal?.puestos?.find((p: any) => p.id === selectedPuestoId);
 
       if (puesto && (puesto as any).articulos && Array.isArray((puesto as any).articulos)) {
-        // Inicializar artículos con estado por defecto "Bueno"
-        const articulosForm: ArticuloForm[] = (puesto as any).articulos.map((art: any) => ({
-          id: art.id,
-          nombre: art.nombre || 'Desconocido',
-          cantidad_requerida: art.cantidad || 0,
-          cantidad_real: art.cantidad || 0,
-          estado: 'Bueno' as const,
-          observaciones: art.observaciones || '',
-        }));
+        // Inicializar artículos: precargar estado + cantidad_real según último mantenimiento (si existe)
+        const articulosForm: ArticuloForm[] = (puesto as any).articulos.map((art: any) => {
+          const ultimo = art?.ultimo_mantenimiento ?? null;
+          const estadoUltimo = ultimo?.estado;
+          const estado =
+            estadoUltimo === 'Bueno' || estadoUltimo === 'Malo' || estadoUltimo === 'No está'
+              ? (estadoUltimo as ArticuloForm['estado'])
+              : ('Bueno' as const);
+
+          const cantidadRealRaw =
+            typeof ultimo?.cantidad_real === 'number'
+              ? ultimo.cantidad_real
+              : typeof art?.cantidad === 'number'
+                ? art.cantidad
+                : Number(art?.cantidad) || 0;
+
+          const cantidad_real = estado === 'No está' ? 0 : Math.max(0, Number(cantidadRealRaw) || 0);
+
+          return {
+            id: art.id,
+            nombre: art.nombre || 'Desconocido',
+            tipo: art.tipo || '',
+            cantidad_requerida: typeof art?.cantidad === 'number' ? art.cantidad : Number(art?.cantidad) || 0,
+            cantidad_real,
+            estado,
+            observaciones: art.observaciones || '',
+          };
+        });
         setArticulos(articulosForm);
       } else {
         setArticulos([]);
@@ -2526,51 +2546,107 @@ export default function ChecklistSupervisionScreen() {
                 <ThemedView style={styles.infoSection}>
                   <ThemedText style={styles.sectionTitle}>Artículos</ThemedText>
                   {articulos.length > 0 ? (
-                    articulos.map((articulo, index) => (
-                      <ThemedView key={articulo.id} style={styles.bitacoraCard}>
-                        <ThemedText style={styles.bitTitle}>{articulo.nombre}</ThemedText>
-                        <ThemedText style={styles.label}>Estado:</ThemedText>
-                        <View style={styles.pickerContainer}>
-                          <Picker
-                            selectedValue={articulo.estado}
-                            onValueChange={(value) => handleArticuloEstadoChange(index, value)}
-                            style={styles.picker}
-                          >
-                            <Picker.Item label="Bueno" value="Bueno" />
-                            <Picker.Item label="Malo" value="Malo" />
-                            <Picker.Item label="No está" value="No está" />
-                          </Picker>
+                    <View style={styles.tableWrapper}>
+                      {/* Columna fija: Artículo */}
+                      <View style={styles.tableFixedColumn}>
+                        {/* Encabezado fijo */}
+                        <View style={styles.tableHeaderFixed}>
+                          <View style={styles.tableHeaderCellFirst}>
+                            <ThemedText style={styles.tableHeaderText}>Artículo</ThemedText>
+                          </View>
                         </View>
-                        <ThemedText style={styles.label}>Cantidad Requerida:</ThemedText>
-                        <TextInput
-                          style={[styles.input, styles.inputReadOnly]}
-                          value={String(articulo.cantidad_requerida)}
-                          editable={false}
-                          placeholderTextColor="#999"
-                        />
-                        <ThemedText style={styles.label}>Cantidad Real:</ThemedText>
-                        <TextInput
-                          style={styles.input}
-                          value={String(articulo.cantidad_real)}
-                          onChangeText={(text) => {
-                            const num = parseInt(text) || 0;
-                            handleArticuloCantidadChange(index, num);
-                          }}
-                          keyboardType="numeric"
-                          placeholderTextColor="#999"
-                        />
-                        <ThemedText style={styles.label}>Observaciones:</ThemedText>
-                        <TextInput
-                          style={[styles.input, styles.textArea]}
-                          value={articulo.observaciones || ''}
-                          onChangeText={(text) => handleArticuloObservacionesChange(index, text)}
-                          placeholder="Ingrese observaciones..."
-                          placeholderTextColor="#999"
-                          multiline
-                          numberOfLines={3}
-                        />
-                      </ThemedView>
-                    ))
+                        {/* Filas fijas */}
+                        {articulos.map((articulo, index) => (
+                          <View key={articulo.id} style={styles.tableRowFixed}>
+                            <View style={styles.tableCellFirst}>
+                              <ThemedText style={styles.tableCellFirstText}>
+                                {articulo.nombre}
+                              </ThemedText>
+                            </View>
+                          </View>
+                        ))}
+                      </View>
+                      {/* Columnas con scroll horizontal */}
+                      <ScrollView
+                        horizontal
+                        showsHorizontalScrollIndicator={true}
+                        contentContainerStyle={styles.tableScrollContent}
+                        style={styles.tableScrollView}
+                      >
+                        <View style={styles.tableScrollableContainer}>
+                          {/* Encabezados de la tabla */}
+                          <View style={styles.tableHeader}>
+                            <View style={styles.tableHeaderCell}>
+                              <ThemedText style={styles.tableHeaderText}>Tipo</ThemedText>
+                            </View>
+                            <View style={styles.tableHeaderCell}>
+                              <ThemedText style={styles.tableHeaderText}>Estado</ThemedText>
+                            </View>
+                            <View style={styles.tableHeaderCell}>
+                              <ThemedText style={styles.tableHeaderText}>Cant. Requerida</ThemedText>
+                            </View>
+                            <View style={styles.tableHeaderCell}>
+                              <ThemedText style={styles.tableHeaderText}>Cant. Real</ThemedText>
+                            </View>
+                            <View style={styles.tableHeaderCell}>
+                              <ThemedText style={styles.tableHeaderText}>Observaciones</ThemedText>
+                            </View>
+                          </View>
+                          {/* Filas de datos */}
+                          {articulos.map((articulo, index) => (
+                            <View key={articulo.id} style={styles.tableRow}>
+                              <View style={styles.tableCell}>
+                                <ThemedText style={styles.tableCellText}>
+                                  {articulo.tipo || '-'}
+                                </ThemedText>
+                              </View>
+                              <View style={styles.tableCell}>
+                                <View style={styles.pickerContainerTable}>
+                                  <Picker
+                                    selectedValue={articulo.estado}
+                                    onValueChange={(value) => handleArticuloEstadoChange(index, value)}
+                                    style={styles.pickerTable}
+                                    itemStyle={styles.pickerItemStyle}
+                                  >
+                                    <Picker.Item label="Bueno" value="Bueno" />
+                                    <Picker.Item label="Malo" value="Malo" />
+                                    <Picker.Item label="No está" value="No está" />
+                                  </Picker>
+                                </View>
+                              </View>
+                              <View style={styles.tableCell}>
+                                <ThemedText style={styles.tableCellText}>
+                                  {String(articulo.cantidad_requerida)}
+                                </ThemedText>
+                              </View>
+                              <View style={styles.tableCell}>
+                                <TextInput
+                                  style={styles.inputTable}
+                                  value={String(articulo.cantidad_real)}
+                                  onChangeText={(text) => {
+                                    const num = parseInt(text) || 0;
+                                    handleArticuloCantidadChange(index, num);
+                                  }}
+                                  keyboardType="numeric"
+                                  placeholderTextColor="#999"
+                                />
+                              </View>
+                              <View style={styles.tableCell}>
+                                <TextInput
+                                  style={[styles.inputTable, styles.textAreaTable]}
+                                  value={articulo.observaciones || ''}
+                                  onChangeText={(text) => handleArticuloObservacionesChange(index, text)}
+                                  placeholder="Observaciones..."
+                                  placeholderTextColor="#999"
+                                  multiline
+                                  numberOfLines={3}
+                                />
+                              </View>
+                            </View>
+                          ))}
+                        </View>
+                      </ScrollView>
+                    </View>
                   ) : (
                     <ThemedText style={styles.errorText}>No hay artículos disponibles para este puesto</ThemedText>
                   )}
@@ -3429,5 +3505,132 @@ const styles = StyleSheet.create({
   modalPrimaryBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#007AFF', borderRadius: 10, paddingVertical: 12 },
   modalPrimaryBtnText: { color: '#FFFFFF', fontSize: 14, fontWeight: '900' },
   modalFormCard: { backgroundColor: '#fff', borderRadius: 10, padding: 12, borderWidth: 1, borderColor: '#E0E0E0', marginBottom: 14 },
+  // Estilos de tabla (replicados de EntregaPuestosScreen)
+  tableWrapper: {
+    flexDirection: 'row',
+    marginTop: 10,
+  },
+  tableFixedColumn: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRightWidth: 0,
+  },
+  tableHeaderFixed: {
+    backgroundColor: '#F5F5F5',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+    height: 50,
+  },
+  tableRowFixed: {
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+    height: 70,
+  },
+  tableScrollView: {
+    flex: 1,
+  },
+  tableScrollContent: {
+    paddingRight: 16,
+  },
+  tableScrollableContainer: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderLeftWidth: 0,
+  },
+  tableHeader: {
+    flexDirection: 'row',
+    backgroundColor: '#F5F5F5',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+    height: 50,
+  },
+  tableHeaderCell: {
+    padding: 10,
+    borderRightWidth: 1,
+    borderRightColor: '#E0E0E0',
+    width: 150,
+    justifyContent: 'center',
+    height: 50,
+  },
+  tableHeaderCellFirst: {
+    padding: 10,
+    borderRightWidth: 1,
+    borderRightColor: '#E0E0E0',
+    width: 100,
+    justifyContent: 'center',
+    height: 50,
+  },
+  tableHeaderText: {
+    color: '#333',
+    fontWeight: '600',
+    fontSize: 13,
+    textAlign: 'center',
+  },
+  tableRow: {
+    flexDirection: 'row',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+    height: 70,
+  },
+  tableCell: {
+    padding: 10,
+    borderRightWidth: 1,
+    borderRightColor: '#E0E0E0',
+    width: 150,
+    justifyContent: 'center',
+    height: 70,
+  },
+  tableCellFirst: {
+    padding: 10,
+    borderRightWidth: 1,
+    borderRightColor: '#E0E0E0',
+    width: 100,
+    justifyContent: 'center',
+    height: 70,
+  },
+  tableCellFirstText: {
+    color: '#000',
+    fontSize: 10,
+    textAlign: 'center',
+    flexShrink: 1,
+  },
+  tableCellText: {
+    color: '#000',
+    fontSize: 13,
+    textAlign: 'center',
+    flexShrink: 1,
+  },
+  pickerContainerTable: {
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 4,
+    backgroundColor: '#fff',
+    overflow: 'hidden',
+  },
+  pickerTable: {
+    height: 50,
+    color: '#000',
+  },
+  pickerItemStyle: {
+    color: '#000',
+    fontSize: 13,
+  },
+  inputTable: {
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 4,
+    padding: 8,
+    fontSize: 13,
+    backgroundColor: '#fff',
+    minHeight: 35,
+    textAlign: 'center',
+  },
+  textAreaTable: {
+    minHeight: 50,
+    textAlignVertical: 'top',
+    textAlign: 'left',
+  },
 });
 

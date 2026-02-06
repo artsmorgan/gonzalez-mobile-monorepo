@@ -4,6 +4,45 @@ import { prisma } from "../../../../../utils/prismaClient";
 
 export const runtime = "nodejs";
 
+export async function GET(
+  req: NextRequest,
+  context: { params: Promise<{ use_id: string }> }
+) {
+  try {
+    const { valid, expired, payload, message } = verifyAccessToken(req);
+    if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
+
+    const { use_id } = await context.params;
+    const usoId = parseInt(String(use_id), 10);
+    if (!usoId) {
+      return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
+    }
+
+    const uso = await prisma.c_usos_vehiculos_corporativos.findUnique({ where: { id: usoId } });
+    if (!uso) {
+      return NextResponse.json({ status: false, message: "Uso no encontrado" }, { status: 404 });
+    }
+
+    // Adjuntar bitácora si existe
+    let bitacora = null;
+    if (uso.bitacora_id) {
+      bitacora = await prisma.c_bitacora_vehiculo_detenido.findUnique({ where: { id: uso.bitacora_id } });
+    }
+
+    return NextResponse.json({
+      status: true,
+      data: {
+        ...uso,
+        bitacora: bitacora,
+      },
+    }, { status: 200 });
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+    console.error("Error in GET /api/corporate-vehicles/uses/[use_id]:", errorMessage);
+    return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
+  }
+}
+
 export async function PUT(
   req: NextRequest,
   context: { params: Promise<{ use_id: string }> }

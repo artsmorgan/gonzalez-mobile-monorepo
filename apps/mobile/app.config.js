@@ -69,7 +69,7 @@ module.exports = {
       API_SERVER: process.env.EXPO_PUBLIC_API_SERVER ||
         process.env.API_SERVER ||
         process.env.NEXT_PUBLIC_API_SERVER ||
-        "https://1cd8e0007bce.ngrok-free.app", // Local dev fallback
+        "https://142f-177-93-0-42.ngrok-free.app", // Local dev fallback
       APP_MODE: process.env.APP_MODE || process.env.NODE_ENV || "dev",
       router: {},
       eas: {

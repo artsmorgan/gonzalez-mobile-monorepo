@@ -103,7 +103,7 @@ export async function GET(req: NextRequest) {
                             for (const puesto of puestos) {
                                 const puesto_data = { id: puesto.id, nombre: `${puesto.codigo} - ${puesto.nombre}`, plazas: [], articulos: [] };
 
-                                let articulos_return: { id: number, nombre: string, cantidad: number }[] = [];
+                                let articulos_return: { id: number, tipo: string, nombre: string, marca: string, serie: string, cantidad: number }[] = [];
 
                                 if (puesto.comboArticulosCP_id) {
                                     const combo_articulo_cp = await prisma.e_estructura_combo_articulo_cp.findUnique({ where: { id: puesto.comboArticulosCP_id } });
@@ -117,6 +117,9 @@ export async function GET(req: NextRequest) {
                                             articulos_return.push({
                                                 id: articulo.id,
                                                 nombre: art_bd ? art_bd.nombre : "Desconocido",
+                                                tipo: "Plan",
+                                                marca: "",
+                                                serie: "",
                                                 cantidad: articulo.cantidad,
                                             });
                                         }
@@ -132,8 +135,115 @@ export async function GET(req: NextRequest) {
                                     articulos_return.push({
                                         id: articulo.id,
                                         nombre: art_bd ? art_bd.nombre : "Desconocido",
+                                        tipo: "Plan",
+                                        marca: "",
+                                        serie: "",
                                         cantidad: articulo.cantidad,
                                     });
+                                }
+
+                                const articulos_puesto_entrega = await prisma.e_estructura_articulo_corpo_puesto_entrega.findMany({ where: { puesto_id: puesto.id } });
+                                for (const articulo of articulos_puesto_entrega) {
+                                    let art_bd = null;
+                                    if (articulo.nomencladorArticuloCP_id) {
+                                        art_bd = await prisma.n_articulo_corpo_puesto.findUnique({ where: { id: articulo.nomencladorArticuloCP_id } });
+                                    }
+                                    articulos_return.push({
+                                        id: articulo.id,
+                                        nombre: art_bd ? art_bd.nombre : `Artículo inidentificable`,
+                                        tipo: "Asignado",
+                                        marca: articulo.marca,
+                                        serie: articulo.serie,
+                                        cantidad: 1,
+                                    });
+                                }
+
+                                // Adjuntar último mantenimiento a cada artículo del puesto
+                                const planIds = articulos_return.filter((a) => a.tipo === "Plan").map((a) => a.id);
+                                const asignadoIds = articulos_return.filter((a) => a.tipo === "Asignado").map((a) => a.id);
+
+                                if (planIds.length > 0 || asignadoIds.length > 0) {
+                                    const or: any[] = [];
+                                    if (planIds.length) or.push({ articulo_plan_id: { in: planIds } });
+                                    if (asignadoIds.length) or.push({ articulo_asignado_id: { in: asignadoIds } });
+
+                                    const mantenimientos = await prisma.c_articulo_mantenimiento.findMany({
+                                        where: { OR: or },
+                                        orderBy: { id: "desc" },
+                                        select: {
+                                            id: true,
+                                            articulo_plan_id: true,
+                                            articulo_asignado_id: true,
+                                            estado: true,
+                                            cantidad_necesaria: true,
+                                            cantidad_real: true,
+                                            observaciones: true,
+                                            fecha_solucion: true,
+                                            mant_armas_form: true,
+                                        },
+                                    });
+
+                                    const latestByPlanId = new Map<number, any>();
+                                    const latestByAsignadoId = new Map<number, any>();
+                                    for (const m of mantenimientos) {
+                                        if (m.articulo_plan_id && !latestByPlanId.has(m.articulo_plan_id)) latestByPlanId.set(m.articulo_plan_id, m);
+                                        if (m.articulo_asignado_id && !latestByAsignadoId.has(m.articulo_asignado_id)) latestByAsignadoId.set(m.articulo_asignado_id, m);
+                                    }
+
+                                    // Adjuntar movimientos a cada artículo del puesto
+                                    const movimientos = await prisma.c_movimientos_articulo_mantenimiento.findMany({
+                                        where: { OR: or },
+                                        orderBy: { id: "desc" },
+                                        select: {
+                                            id: true,
+                                            articulo_plan_id: true,
+                                            articulo_asignado_id: true,
+                                            nombre_persona_recibe: true,
+                                            nombre_persona_entrega: true,
+                                            departamento: true,
+                                            telefono: true,
+                                            entrega: true,
+                                            recibe: true,
+                                            fecha: true,
+                                            hora: true,
+                                            firma_entrega: true,
+                                            firma_recibe: true,
+                                            firma_responsable: true,
+                                        },
+                                    });
+
+                                    const movsByPlanId = new Map<number, any[]>();
+                                    const movsByAsignadoId = new Map<number, any[]>();
+                                    for (const mov of movimientos) {
+                                        if (mov.articulo_plan_id) {
+                                            const list = movsByPlanId.get(mov.articulo_plan_id) ?? [];
+                                            list.push(mov);
+                                            movsByPlanId.set(mov.articulo_plan_id, list);
+                                        }
+                                        if (mov.articulo_asignado_id) {
+                                            const list = movsByAsignadoId.get(mov.articulo_asignado_id) ?? [];
+                                            list.push(mov);
+                                            movsByAsignadoId.set(mov.articulo_asignado_id, list);
+                                        }
+                                    }
+
+                                    articulos_return = (articulos_return as any[]).map((a) => ({
+                                        ...a,
+                                        ultimo_mantenimiento:
+                                            a.tipo === "Plan"
+                                                ? latestByPlanId.get(a.id) ?? null
+                                                : a.tipo === "Asignado"
+                                                    ? latestByAsignadoId.get(a.id) ?? null
+                                                    : null,
+                                        movimientos:
+                                            a.tipo === "Plan"
+                                                ? movsByPlanId.get(a.id) ?? []
+                                                : a.tipo === "Asignado"
+                                                    ? movsByAsignadoId.get(a.id) ?? []
+                                                    : [],
+                                    }));
+                                } else {
+                                    articulos_return = (articulos_return as any[]).map((a) => ({ ...a, ultimo_mantenimiento: null, movimientos: [] }));
                                 }
 
                                 puesto_data.articulos = articulos_return as never[];

@@ -8,6 +8,8 @@ export type BitacoraVehiculoDetenidoItem = {
   empresa_id: number;
   cliente_id: number;
   sucursal_id: number;
+  vehiculo_id?: number | null;
+  uso_id?: number | null;
   tipo: string;
   informacion_general: any[]; // array de objetos
   informacion_revision: any[]; // array de objetos

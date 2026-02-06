@@ -244,6 +244,37 @@ export async function POST(req: NextRequest) {
       include: { c_imagenes_vehiculos_corporativos: true },
     });
 
+    // Registrar cambio de creación
+    await prisma.c_cambios_apps_modules.create({
+      data: {
+        nombre_tabla: "c_vehiculos_corporativos",
+        registro_id: newRecord.id,
+        cambios: JSON.stringify([{
+          prop: "__created__",
+          before: null,
+          after: {
+            id: newRecord.id,
+            empresa_id: newRecord.empresa_id,
+            cliente_id: newRecord.cliente_id,
+            sucursal_id: newRecord.sucursal_id,
+            placa: newRecord.placa,
+            tipo: newRecord.tipo,
+            estado: (newRecord as any).estado,
+            kilometraje: newRecord.kilometraje,
+            prox_cambio_aceite: newRecord.prox_cambio_aceite,
+            modelo: newRecord.modelo,
+            anno: newRecord.anno,
+            descripcion: newRecord.descripcion,
+            titulo_propiedad: newRecord.titulo_propiedad,
+            rtv: newRecord.rtv,
+            marchamo: newRecord.marchamo,
+          },
+        }]),
+        created_at: createdAt,
+        created_by: createdBy,
+      },
+    });
+
     return NextResponse.json(
       {
         status: true,

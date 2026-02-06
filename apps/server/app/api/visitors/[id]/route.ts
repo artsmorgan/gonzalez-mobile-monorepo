@@ -39,18 +39,80 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             return NextResponse.json({ status: false, message: "Visita no encontrada" }, { status: 200 });
         }
 
-        visitor.nombre = nombre;
-        visitor.cedula = cedula;
-        visitor.hora_entrada = new Date(hora_entrada);
-        visitor.hora_salida = hora_salida ? new Date(hora_salida) : null;
-        visitor.razon_visita = razon_visita;
-        visitor.es_funcionario = es_funcionario;
-        visitor.observaciones = observaciones;
-        visitor.tipo_accion = tipo_accion;
-        visitor.pers_autoriza_salida = pers_autoriza_salida;
-        visitor.updated_at = toZonedTime(new Date(), "America/Costa_Rica");
+        // Preparar datos de actualización
+        const updateData: any = {
+            nombre,
+            cedula,
+            hora_entrada: new Date(hora_entrada),
+            hora_salida: hora_salida ? new Date(hora_salida) : null,
+            razon_visita,
+            es_funcionario,
+            observaciones,
+            tipo_accion,
+            pers_autoriza_salida,
+            updated_at: toZonedTime(new Date(), "America/Costa_Rica"),
+        };
 
-        await prisma.e_registro_personas.update({ where: { id }, data: visitor });
+        // Registrar cambios (solo campos actualizados)
+        const eq = (a: any, b: any) => {
+            if (a === b) return true;
+            if (a == null && b == null) return true;
+            const da = a instanceof Date ? a : (typeof a === "string" && /^\d{4}-\d{2}-\d{2}T/.test(a) ? new Date(a) : null);
+            const db = b instanceof Date ? b : (typeof b === "string" && /^\d{4}-\d{2}-\d{2}T/.test(b) ? new Date(b) : null);
+            if (da && db) return da.getTime() === db.getTime();
+            return false;
+        };
+
+        // Obtener activos existentes antes de eliminarlos
+        const activosExistentes = await prisma.e_activo_visitante.findMany({ where: { visitante_id: visitor.id } });
+        const activosExistentesArray = activosExistentes.map(a => ({
+            tipo_id: a.tipo_id,
+            detalles: a.detalles ? JSON.parse(a.detalles) : [],
+            numero_serie: a.numero_serie,
+            numero_activo: a.numero_activo,
+        }));
+
+        const cambiosArr: Array<{ prop: string; before: any; after: any }> = [];
+        for (const [k, v] of Object.entries(updateData)) {
+            // No registramos archivos: esos vienen en `foto_cedula` y se guardan aparte.
+            if (k === "foto_cedula") continue;
+
+            const before = (visitor as any)[k];
+            const after = v;
+            if (!eq(before, after)) {
+                cambiosArr.push({
+                    prop: k,
+                    before: before instanceof Date ? before.toISOString() : before,
+                    after: after instanceof Date ? after.toISOString() : after,
+                });
+            }
+        }
+
+        // Comparar activos (como array completo)
+        const activosBeforeStr = JSON.stringify(activosExistentesArray);
+        const activosAfterStr = JSON.stringify(activos);
+        if (activosBeforeStr !== activosAfterStr) {
+            cambiosArr.push({
+                prop: "activos",
+                before: activosExistentesArray,
+                after: activos,
+            });
+        }
+
+        await prisma.e_registro_personas.update({ where: { id }, data: updateData });
+
+        if (cambiosArr.length > 0) {
+            const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
+            await prisma.c_cambios_apps_modules.create({
+                data: {
+                    nombre_tabla: "e_registro_personas",
+                    registro_id: id,
+                    cambios: JSON.stringify(cambiosArr),
+                    created_at: toZonedTime(new Date(), "America/Costa_Rica"),
+                    created_by: createdBy,
+                },
+            });
+        }
 
         // Eliminar activos existentes
         await prisma.e_activo_visitante.deleteMany({ where: { visitante_id: visitor.id } });
@@ -143,7 +205,34 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
             return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
         }
 
+        const existing = await prisma.e_registro_personas.findUnique({ where: { id } });
+        if (!existing) {
+            return NextResponse.json({ status: false, message: "Visita no encontrada" }, { status: 200 });
+        }
+
         await prisma.e_registro_personas.delete({ where: { id } });
+
+        // Registrar cambio de eliminación
+        const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
+        await prisma.c_cambios_apps_modules.create({
+            data: {
+                nombre_tabla: "e_registro_personas",
+                registro_id: id,
+                cambios: JSON.stringify([{
+                    prop: "__deleted__",
+                    before: {
+                        id: existing.id,
+                        nombre: existing.nombre,
+                        cedula: existing.cedula,
+                        razon_visita: existing.razon_visita,
+                    },
+                    after: null,
+                }]),
+                created_at: toZonedTime(new Date(), "America/Costa_Rica"),
+                created_by: createdBy,
+            },
+        });
+
         return NextResponse.json({ status: true, message: "Visita eliminada correctamente" }, { status: 200 });
     }
     catch (error: unknown) {

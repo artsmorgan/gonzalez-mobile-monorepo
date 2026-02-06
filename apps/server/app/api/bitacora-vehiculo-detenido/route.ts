@@ -84,6 +84,8 @@ export async function GET(req: NextRequest) {
       empresa_id: r.empresa_id,
       cliente_id: r.cliente_id,
       sucursal_id: r.sucursal_id,
+      vehiculo_id: r.vehiculo_id ?? null,
+      uso_id: r.uso_id ?? null,
       tipo: r.tipo,
       informacion_general: safeParseJson<any[]>(r.informacion_general, []),
       informacion_revision: safeParseJson<any[]>(r.informacion_revision, []),
@@ -116,6 +118,7 @@ export async function POST(req: NextRequest) {
       empresa_id,
       cliente_id,
       sucursal_id,
+      vehiculo_id,
       uso_id,
       tipo,
       informacion_general,
@@ -156,6 +159,7 @@ export async function POST(req: NextRequest) {
         empresa_id: empresaId,
         cliente_id: clienteId,
         sucursal_id: sucursalId,
+        vehiculo_id: vehiculo_id ? Number(vehiculo_id) : null,
         uso_id: uso_id ? Number(uso_id) : null,
         tipo: String(tipo),
         informacion_general: normalizeToStringifiedJson(informacion_general),
@@ -207,6 +211,29 @@ export async function POST(req: NextRequest) {
       description += " en la sucursal " + sucursalNombre + " el día " + fechaEntrada + " a las " + horaEntrada;
       sendNotificationByRole(sucursalId, [], "Bitácora de vehículo detenido creada", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
     }
+
+    // Registrar cambio de creación
+    await prisma.c_cambios_apps_modules.create({
+      data: {
+        nombre_tabla: "c_bitacora_vehiculo_detenido",
+        registro_id: created.id,
+        cambios: JSON.stringify([{
+          prop: "__created__",
+          before: null,
+          after: {
+            id: created.id,
+            empresa_id: created.empresa_id,
+            cliente_id: created.cliente_id,
+            sucursal_id: created.sucursal_id,
+            tipo: created.tipo,
+            observaciones: created.observaciones,
+            firma_responsable: created.firma_responsable,
+          },
+        }]),
+        created_at: createdAt,
+        created_by: created.created_by,
+      },
+    });
 
     return NextResponse.json({ status: true, message: "Bitácora creada correctamente", id: created.id }, { status: 200 });
   } catch (error: unknown) {

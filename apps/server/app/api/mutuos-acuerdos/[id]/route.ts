@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessToken } from "../../../../utils/verifyToken";
 import { prisma } from "../../../../utils/prismaClient";
+import { toZonedTime } from "date-fns-tz";
 
 function parseFechaInput(fecha: any): Date | undefined {
   if (!fecha) return undefined;
@@ -83,6 +84,32 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       );
     }
 
+    // Registrar cambios (solo campos actualizados)
+    const eq = (a: any, b: any) => {
+      if (a === b) return true;
+      if (a == null && b == null) return true;
+      const da = a instanceof Date ? a : (typeof a === "string" && /^\d{4}-\d{2}-\d{2}T/.test(a) ? new Date(a) : null);
+      const db = b instanceof Date ? b : (typeof b === "string" && /^\d{4}-\d{2}-\d{2}T/.test(b) ? new Date(b) : null);
+      if (da && db) return da.getTime() === db.getTime();
+      return false;
+    };
+
+    const cambiosArr: Array<{ prop: string; before: any; after: any }> = [];
+    for (const [k, v] of Object.entries(data)) {
+      // No registramos firmas: esas se guardan aparte y no son "datos escritos"
+      if (k === "firma_responsable" || k === "firma_ejecutivo_cuenta") continue;
+
+      const before = (existing as any)[k];
+      const after = v;
+      if (!eq(before, after)) {
+        cambiosArr.push({
+          prop: k,
+          before: before instanceof Date ? before.toISOString() : before,
+          after: after instanceof Date ? after.toISOString() : after,
+        });
+      }
+    }
+
     const updated = await prisma.e_mutuos_acuerdos.update({
       where: { id: idNum },
       data,
@@ -92,6 +119,19 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         n_ejecutivo_cuenta: { select: { id: true, nombre: true } },
       },
     });
+
+    if (cambiosArr.length > 0) {
+      const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
+      await prisma.c_cambios_apps_modules.create({
+        data: {
+          nombre_tabla: "e_mutuos_acuerdos",
+          registro_id: idNum,
+          cambios: JSON.stringify(cambiosArr),
+          created_at: toZonedTime(new Date(), "America/Costa_Rica"),
+          created_by: createdBy,
+        },
+      });
+    }
 
     return NextResponse.json(
       {
@@ -133,6 +173,27 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
     }
 
     await prisma.e_mutuos_acuerdos.delete({ where: { id: idNum } });
+
+    // Registrar cambio de eliminación
+    const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
+    await prisma.c_cambios_apps_modules.create({
+      data: {
+        nombre_tabla: "e_mutuos_acuerdos",
+        registro_id: idNum,
+        cambios: JSON.stringify([{
+          prop: "__deleted__",
+          before: {
+            id: existing.id,
+            fecha: existing.fecha.toISOString(),
+            turno: existing.turno,
+            motivo: existing.motivo,
+          },
+          after: null,
+        }]),
+        created_at: toZonedTime(new Date(), "America/Costa_Rica"),
+        created_by: createdBy,
+      },
+    });
 
     return NextResponse.json({ status: true, message: "Mutuo acuerdo eliminado correctamente" }, { status: 200 });
   } catch (error: unknown) {

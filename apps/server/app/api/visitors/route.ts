@@ -136,14 +136,17 @@ export async function POST(req: NextRequest) {
         }
 
         // Crear registro
+        const createdAt = toZonedTime(new Date(), "America/Costa_Rica");
+        const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
+
         const new_visita = await prisma.e_registro_personas.create({
             data: {
                 cliente_id: marcaDia.cliente_id,
                 corpo_id: marcaDia.corpo_id,
                 puesto_id: marcaDia.puesto_id,
-                responsable_id: payload.id,
-                created_at: toZonedTime(new Date(), "America/Costa_Rica"),
-                updated_at: toZonedTime(new Date(), "America/Costa_Rica"),
+                responsable_id: createdBy,
+                created_at: createdAt,
+                updated_at: createdAt,
                 nombre,
                 cedula,
                 hora_entrada: new Date(hora_entrada),
@@ -153,6 +156,33 @@ export async function POST(req: NextRequest) {
                 observaciones,
                 tipo_accion,
                 pers_autoriza_salida,
+            },
+        });
+
+        // Registrar cambio de creación
+        await prisma.c_cambios_apps_modules.create({
+            data: {
+                nombre_tabla: "e_registro_personas",
+                registro_id: new_visita.id,
+                cambios: JSON.stringify([{
+                    prop: "__created__",
+                    before: null,
+                    after: {
+                        id: new_visita.id,
+                        nombre: new_visita.nombre,
+                        cedula: new_visita.cedula,
+                        hora_entrada: new_visita.hora_entrada.toISOString(),
+                        hora_salida: new_visita.hora_salida ? new_visita.hora_salida.toISOString() : null,
+                        razon_visita: new_visita.razon_visita,
+                        es_funcionario: new_visita.es_funcionario,
+                        observaciones: new_visita.observaciones,
+                        tipo_accion: new_visita.tipo_accion,
+                        pers_autoriza_salida: new_visita.pers_autoriza_salida,
+                        activos: activos,
+                    },
+                }]),
+                created_at: createdAt,
+                created_by: createdBy,
             },
         });
 

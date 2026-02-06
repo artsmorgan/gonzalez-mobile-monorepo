@@ -107,6 +107,24 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
 
             const bitacora = await prisma.c_puesto_notas_bitacora_cambios.create({ data: { nota_id: newNote.id, titulo, description, relevancia: relevanciaValue, created_at, empleado_id, categoria: categoriaData.nombre } });
 
+            // Registro de cambios (nueva modalidad) - create
+            await prisma.c_cambios_apps_modules.create({
+                data: {
+                    nombre_tabla: "c_puesto_notas",
+                    registro_id: newNote.id,
+                    cambios: JSON.stringify([
+                        { prop: "__created__", before: null, after: true },
+                        { prop: "titulo", before: null, after: titulo },
+                        { prop: "description", before: null, after: description },
+                        { prop: "categoria_id", before: null, after: categoria_id ?? null },
+                        { prop: "relevancia", before: null, after: relevanciaValue ?? null },
+                        { prop: "puesto_id", before: null, after: puesto_id },
+                    ]),
+                    created_at: created_at,
+                    created_by: empleado_id,
+                },
+            });
+
             if (bitacora) {
                 const plazaIds = await prisma.e_estructura_plazas.findMany({ where: { puesto_id: puesto.id } });
                 await sendNotificationByPlaza(marca_id, "Bitácora creada", `${empleado.nombre} ${empleado.primer_apellido} ha creado una nota llamada ${newNote.titulo} de tipo ${categoriaData.nombre}`, plazaIds.map(plaza => plaza.id));

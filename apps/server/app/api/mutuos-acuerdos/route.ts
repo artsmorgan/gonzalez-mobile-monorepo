@@ -108,6 +108,32 @@ export async function POST(req: NextRequest) {
       },
     });
 
+    // Registrar cambio de creación
+    await prisma.c_cambios_apps_modules.create({
+      data: {
+        nombre_tabla: "e_mutuos_acuerdos",
+        registro_id: record.id,
+        cambios: JSON.stringify([{
+          prop: "__created__",
+          before: null,
+          after: {
+            id: record.id,
+            cliente_id: record.cliente_id,
+            corpo_id: record.corpo_id,
+            ejecutivo_cuenta: record.ejecutivo_cuenta,
+            fecha: record.fecha.toISOString(),
+            turno: record.turno,
+            informacion_oficial_interesado: record.informacion_oficial_interesado,
+            informacion_oficial_colaborador: record.informacion_oficial_colaborador,
+            motivo: record.motivo,
+            firma_responsable: record.firma_responsable,
+          },
+        }]),
+        created_at: createdAt,
+        created_by: createdBy,
+      },
+    });
+
     // owned: misma lógica que incidencias (supervisor_id === ejecutivo_cuenta)
     const empleado = createdBy ? await prisma.c_empleado.findUnique({ where: { id: createdBy } }) : null;
     const myEjecutivoCuentaId = empleado?.supervisor_id ?? null;
