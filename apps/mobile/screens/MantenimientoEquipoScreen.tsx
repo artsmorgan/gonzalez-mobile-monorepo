@@ -21,31 +21,23 @@ import { ThemedView } from '../components/ThemedView';
 import { useAuth } from '../contexts/AuthContext';
 import { eventBus } from '../hooks/eventBus';
 import { useQRScanner } from '../hooks/useQRScanner';
-import { createMovimientoActivoMantenimiento, deleteMovimientoActivoMantenimiento, listMovimientosActivoMantenimiento, MovimientoActivoMantenimientoItem, updateMovimientoActivoMantenimiento } from '../hooks/movimientosActivosMantenimientoFunctions';
+import {
+    createMovimientoArticuloMantenimiento,
+    deleteMovimientoArticuloMantenimiento,
+    listMovimientosArticuloMantenimiento,
+    MovimientoArticuloMantenimientoItem,
+    updateMovimientoArticuloMantenimiento,
+} from '../hooks/movimientosArticulosMantenimientoFunctions';
 import Constants from 'expo-constants';
+import getHoraAccion from '../hooks/getHoraAccion';
 
-type ReporteMantenimiento = {
+type TipoMantenimientoArticulo = { id: number; nombre: string };
+
+type ArticuloMantenimiento = {
     id: number;
     id_local?: string;
-    cliente_id: number;
-    corpo_id: number;
-    puesto_id: number;
-    division: string;
-    fecha_reporte: string;
-    created_by: number;
-    solucionado: boolean;
-    cliente?: { id: number; nombre: string };
-    corpo?: { id: number; nombre: string };
-    puesto?: { id: number; nombre: string; codigo?: string };
-    activos?: ActivoMantenimiento[];
-};
-
-type ActivoMantenimiento = {
-    id: number;
-    id_local?: string;
-    reporte_id: number;
-    articulo_id: number;
-    articulo_nombre?: string;
+    articulo_plan_id?: number | null;
+    articulo_asignado_id?: number | null;
     estado: string;
     cantidad_necesaria: number;
     cantidad_real: number;
@@ -53,11 +45,16 @@ type ActivoMantenimiento = {
     fecha_solucion?: string | null;
     accion?: string | null;
     fecha_inicio?: string | null;
+    numero_boleta_proveeduria?: string | null;
     tipo?: string | null;
     marca?: string | null;
     modelo?: string | null;
     serie_placa?: string | null;
+    marca_nuevo?: string | null;
+    modelo_nuevo?: string | null;
+    serie_placa_nuevo?: string | null;
     categoria?: string | null;
+    tipo_mantenimiento_art?: string | null;
     fecha_salida?: string | null;
     fecha_entrada?: string | null;
     kilometraje?: number | null;
@@ -71,14 +68,73 @@ type ActivoMantenimiento = {
     costo_total?: number | null;
     fecha_fin?: string | null;
     reincidencia_treinta_dias?: boolean | null;
+    tipo_mant_art_reincid?: string | null;
+    mant_armas_form?: string | null;
     archivos?: ActivoFileRemote[];
-    movimientos?: MovimientoActivoMantenimientoItem[];
+};
+
+type ArticuloPuestoMantenimientoItem = {
+    key: string;
+    source: 'plan' | 'asignado';
+    estructura_id: number;
+    articulo_nomenclador_id: number | null;
+    articulo_nombre: string;
+    tipo: string; // "Plan de puesto" | "Asignado al puesto"
+    marca?: string | null;
+    serie?: string | null;
+    tipos_mantenimiento: TipoMantenimientoArticulo[];
+    mantenimientos: ArticuloMantenimiento[];
+    movimientos: MovimientoArticuloMantenimientoItem[];
+    ultimo_mantenimiento: null | {
+        id: number;
+        estado: string;
+        cantidad_necesaria: number;
+        cantidad_real: number;
+        observaciones: string;
+    };
 };
 
 type CategoriaMantenimiento = {
     id: number;
     nombre: string;
 };
+
+type ArmaChecklistItem = { key: string; label: string; level?: number };
+
+// Basado en el formato de la imagen (Mantenimiento Preventivo)
+const ARMAS_PREVENTIVO_ITEMS: ArmaChecklistItem[] = [
+    { key: 'remocion_corrosion', label: 'Remoción de Corrosión' },
+    { key: 'limpieza_suciedad', label: 'Limpieza de Suciedad' },
+    { key: 'revision_funcionamiento', label: 'Revisión de Funcionamiento' },
+    { key: 'revision_func_disparador', label: 'Disparador (Revolver y Pistola)', level: 1 },
+    { key: 'revision_func_corredera', label: 'Corredera (Pistola)', level: 1 },
+    { key: 'revision_estetica_externa', label: 'Revisión de Estética Externa' },
+    { key: 'revision_est_empunadura', label: 'Empuñadura', level: 1 },
+    { key: 'revision_est_tornillos', label: 'Tornillos', level: 1 },
+    { key: 'revision_est_mira_adelante', label: 'Mira Adelante', level: 1 },
+    { key: 'revision_est_mira_atras', label: 'Mira Atrás', level: 1 },
+    { key: 'revision_est_pasadores', label: 'Pasadores', level: 1 },
+    { key: 'revision_est_seguro', label: 'Seguro', level: 1 },
+    { key: 'lubricacion', label: 'Lubricación' },
+    { key: 'lubricacion_percutor_extractor_pistola', label: 'Percutor y Extractor (Pistola)', level: 1 },
+    { key: 'lubricacion_percutor_union_cilindro_revolver', label: 'Percutor y Unión con Cilindro (Revolver)', level: 1 },
+    { key: 'lubricacion_cilindro_revolver', label: 'Lubricación Cilindro (Revolver)', level: 1 },
+];
+
+// Basado en el formato de la imagen (Mantenimiento Correctivo)
+const ARMAS_CORRECTIVO_ITEMS: ArmaChecklistItem[] = [
+    { key: 'desmontaje_completo_parte_mecanica', label: 'Desmontaje completo Parte Mecánica' },
+    { key: 'disparador', label: 'Disparador' },
+    { key: 'percutor', label: 'Percutor' },
+    { key: 'conjuntos_internos_disparador', label: 'Conjuntos Internos del Disparador' },
+    { key: 'pasadores', label: 'Pasadores' },
+    { key: 'resortes', label: 'Resortes' },
+    { key: 'conjuntos_empunadura', label: 'Conjuntos de la Empuñadura' },
+    { key: 'pistola', label: 'Pistola' },
+    { key: 'sistema_gas', label: 'Sistema de Gas' },
+    { key: 'externo', label: 'Externo' },
+    { key: 'mira', label: 'Mira' },
+];
 
 // Función helper para obtener íconos de acciones
 const getActionIcon = (action: string) => {
@@ -110,15 +166,15 @@ function ActivoFilesViewer({ activoId, files }: { activoId: number; files: Activ
         if (!apiUrl) return '';
 
         if (file.type === 'image') {
-            return `${apiUrl}/api/activo-mantenimiento/${activoId}/get-image/${encodeURIComponent(file.name)}`;
+            return `${apiUrl}/api/articulo-mantenimiento/${activoId}/get-image/${encodeURIComponent(file.name)}`;
         }
         if (file.type === 'audio') {
-            return `${apiUrl}/api/activo-mantenimiento/${activoId}/get-audio/${encodeURIComponent(file.name)}`;
+            return `${apiUrl}/api/articulo-mantenimiento/${activoId}/get-audio/${encodeURIComponent(file.name)}`;
         }
         if (file.type === 'video') {
-            return `${apiUrl}/api/activo-mantenimiento/${activoId}/get-video/${encodeURIComponent(file.name)}`;
+            return `${apiUrl}/api/articulo-mantenimiento/${activoId}/get-video/${encodeURIComponent(file.name)}`;
         }
-        return `${apiUrl}/api/activo-mantenimiento/${activoId}/get-file/${encodeURIComponent(file.name)}`;
+        return `${apiUrl}/api/articulo-mantenimiento/${activoId}/get-file/${encodeURIComponent(file.name)}`;
     };
 
     const getFileDisplayName = (file: ActivoFileRemote) => {
@@ -409,11 +465,11 @@ export default function MantenimientoEquipoScreen() {
     const [hasCurrentMarca, setHasCurrentMarca] = useState(true);
     const [marcaId, setMarcaId] = useState<number | null>(null);
 
-    // Estados para estructura jerárquica
-    const [structure, setStructure] = useState<any[]>([]);
-    const [isStructureLoading, setIsStructureLoading] = useState(false);
+    // IDs de current_marca para inicialización
+    const [marcaPuestoId, setMarcaPuestoId] = useState<number | null>(null);
 
-    // Estados para filtros
+    // Estructura principal (main_structure) para filtros jerárquicos (Empresa → ... → Puesto)
+    const [structure, setStructure] = useState<any[]>([]);
     const [isFiltersExpanded, setIsFiltersExpanded] = useState(false);
     const [filterEmpresaId, setFilterEmpresaId] = useState<number | null>(null);
     const [filterClienteId, setFilterClienteId] = useState<number | null>(null);
@@ -421,17 +477,19 @@ export default function MantenimientoEquipoScreen() {
     const [filterContratoId, setFilterContratoId] = useState<number | null>(null);
     const [filterCorpoId, setFilterCorpoId] = useState<number | null>(null);
     const [filterPuestoId, setFilterPuestoId] = useState<number | null>(null);
+    const didInitFiltersFromMarca = useRef(false);
+    const lastMarcaPuestoIdRef = useRef<number | null>(null);
+    const isFetchingReportesRef = useRef(false);
 
-    // IDs de current_marca para inicialización
-    const [marcaClienteId, setMarcaClienteId] = useState<number | null>(null);
-    const [marcaCorpoId, setMarcaCorpoId] = useState<number | null>(null);
-    const [marcaPuestoId, setMarcaPuestoId] = useState<number | null>(null);
+    const activePuestoId = filterPuestoId ?? marcaPuestoId;
 
-    const [reportes, setReportes] = useState<ReporteMantenimiento[]>([]);
-    const [selectedReporte, setSelectedReporte] = useState<ReporteMantenimiento | null>(null);
-    const [activos, setActivos] = useState<ActivoMantenimiento[]>([]);
+
+    // Nota: este módulo ahora lista artículos del puesto (Plan + Asignado) y sus mantenimientos
+    const [reportes, setReportes] = useState<ArticuloPuestoMantenimientoItem[]>([]);
+    const [selectedReporte, setSelectedReporte] = useState<ArticuloPuestoMantenimientoItem | null>(null);
+    const [activos, setActivos] = useState<ArticuloMantenimiento[]>([]);
     const [showActivos, setShowActivos] = useState(false);
-    const [selectedActivo, setSelectedActivo] = useState<ActivoMantenimiento | null>(null);
+    const [selectedActivo, setSelectedActivo] = useState<ArticuloMantenimiento | null>(null);
     const [isUpdating, setIsUpdating] = useState(false);
 
     const [categoriasMantenimiento, setCategoriasMantenimiento] = useState<CategoriaMantenimiento[]>([]);
@@ -449,11 +507,17 @@ export default function MantenimientoEquipoScreen() {
     const [accion, setAccion] = useState<string>('');
     const [fechaInicio, setFechaInicio] = useState<Date | null>(null);
     const [showFechaInicioPicker, setShowFechaInicioPicker] = useState(false);
+    const [numeroBoletaProveeduria, setNumeroBoletaProveeduria] = useState<string>('');
     const [tipo, setTipo] = useState<string>('');
     const [marca, setMarca] = useState<string>('');
     const [modelo, setModelo] = useState<string>('');
     const [seriePlaca, setSeriePlaca] = useState<string>('');
+    const [marcaNuevo, setMarcaNuevo] = useState<string>('');
+    const [modeloNuevo, setModeloNuevo] = useState<string>('');
+    const [seriePlacaNuevo, setSeriePlacaNuevo] = useState<string>('');
     const [categoria, setCategoria] = useState<string>('');
+    const [tipoMantenimientoArticulo, setTipoMantenimientoArticulo] = useState<string>('');
+    const [tipoMantenimientoReincidencia, setTipoMantenimientoReincidencia] = useState<string>('');
     const [esVehiculo, setEsVehiculo] = useState<boolean>(false);
     const [kilometraje, setKilometraje] = useState<string>('');
     const [fechaSalida, setFechaSalida] = useState<Date | null>(null);
@@ -473,13 +537,42 @@ export default function MantenimientoEquipoScreen() {
     const [reincidenciaTreintaDias, setReincidenciaTreintaDias] = useState<boolean>(false);
     const [marcarComoResuelto, setMarcarComoResuelto] = useState<boolean>(false);
 
+    // Formulario especial: armas (se guarda como string en mant_armas_form)
+    const [esArma, setEsArma] = useState<boolean>(false);
+    const [armaTipoArma, setArmaTipoArma] = useState<'Letal' | 'Menos Letal' | ''>('');
+    const [armaMecanismo, setArmaMecanismo] = useState<'Pistola' | 'Revolver' | ''>('');
+    const [armaMarca, setArmaMarca] = useState<string>('');
+    const [armaModelo, setArmaModelo] = useState<string>('');
+    const [armaSerie, setArmaSerie] = useState<string>('');
+    const [armaCalibre, setArmaCalibre] = useState<string>('');
+    const [armaCargadorAdicional, setArmaCargadorAdicional] = useState<boolean>(false);
+    const [armaCargadorCantidad, setArmaCargadorCantidad] = useState<string>('');
+    const [armaCapacidadBalas, setArmaCapacidadBalas] = useState<string>('');
+    const [armaPreventivoChecks, setArmaPreventivoChecks] = useState<Record<string, boolean>>({});
+    const [armaCorrectivoChecks, setArmaCorrectivoChecks] = useState<Record<string, boolean>>({});
+    // Fotos de armas: se guardan como adjuntos (igual que el resto de imágenes), no dentro del JSON
+    const [armaFotoAntesName, setArmaFotoAntesName] = useState<string>('');
+    const [armaFotoDespuesName, setArmaFotoDespuesName] = useState<string>('');
+    const [armaFotoAntesLocal, setArmaFotoAntesLocal] = useState<ActivoFileLocal | null>(null);
+    const [armaFotoDespuesLocal, setArmaFotoDespuesLocal] = useState<ActivoFileLocal | null>(null);
+    const [armaDiagnostico, setArmaDiagnostico] = useState<string>('');
+    const [armaArmeroNombre, setArmaArmeroNombre] = useState<string>('');
+    const [armaFirma, setArmaFirma] = useState<string>('');
+    const [mantArmasForm, setMantArmasForm] = useState<string>('');
+
+    // Modal firma (arma)
+    const [isArmaSignatureModalVisible, setIsArmaSignatureModalVisible] = useState(false);
+    const armaSignatureRef = useRef<any>(null);
+    const [armaSignatureKey, setArmaSignatureKey] = useState(0);
+    const [isReadingArmaSignature, setIsReadingArmaSignature] = useState(false);
+
     // Submódulo: Movimiento de activos (CRUD dentro de modal)
     const { scanQR, QRScannerComponent } = useQRScanner();
     const [isMovModalVisible, setIsMovModalVisible] = useState(false);
-    const [movActivo, setMovActivo] = useState<ActivoMantenimiento | null>(null);
-    const [movimientos, setMovimientos] = useState<MovimientoActivoMantenimientoItem[]>([]);
+    const [movActivo, setMovActivo] = useState<ArticuloPuestoMantenimientoItem | null>(null);
+    const [movimientos, setMovimientos] = useState<MovimientoArticuloMantenimientoItem[]>([]);
     const [movIsCreating, setMovIsCreating] = useState(false);
-    const [movEditing, setMovEditing] = useState<MovimientoActivoMantenimientoItem | null>(null);
+    const [movEditing, setMovEditing] = useState<MovimientoArticuloMantenimientoItem | null>(null);
 
     const [movFilterSearch, setMovFilterSearch] = useState('');
     const [movFilterFecha, setMovFilterFecha] = useState('');
@@ -502,6 +595,12 @@ export default function MantenimientoEquipoScreen() {
     const [movFirmaResponsable, setMovFirmaResponsable] = useState('');
     const [isGeneratingMovFirma, setIsGeneratingMovFirma] = useState(false);
 
+    // Modal: ver cambios (auditoría)
+    const [isCambiosModalVisible, setIsCambiosModalVisible] = useState(false);
+    const [cambiosTitle, setCambiosTitle] = useState<string>('Cambios');
+    const [cambiosItems, setCambiosItems] = useState<any[]>([]);
+    const [expandedCambioId, setExpandedCambioId] = useState<number | null>(null);
+
     // Modal firma dibujada (entrega/recibe)
     const [isDrawSignatureModalVisible, setIsDrawSignatureModalVisible] = useState(false);
     const [drawSignatureTarget, setDrawSignatureTarget] = useState<'entrega' | 'recibe'>('entrega');
@@ -509,6 +608,201 @@ export default function MantenimientoEquipoScreen() {
     const [signatureKey, setSignatureKey] = useState(0);
     const [isReadingSignature, setIsReadingSignature] = useState(false);
     const [location, setLocation] = useState<Location.LocationObject | null>(null);
+
+    // Nodos computados para filtros jerárquicos
+    const filterEmpresas = useMemo(() => (Array.isArray(structure) ? structure : []), [structure]);
+    const filterClientes = useMemo(() => {
+        const empresa = filterEmpresas.find((e: any) => e.id === filterEmpresaId);
+        return empresa?.clientes || [];
+    }, [filterEmpresas, filterEmpresaId]);
+    const filterDivisiones = useMemo(() => {
+        const cliente = filterClientes.find((c: any) => c.id === filterClienteId);
+        return cliente?.division || [];
+    }, [filterClientes, filterClienteId]);
+    const filterContratos = useMemo(() => {
+        const division = filterDivisiones.find((d: any) => d.id === filterDivisionId);
+        return division?.contratos || [];
+    }, [filterDivisiones, filterDivisionId]);
+    const filterSucursales = useMemo(() => {
+        const contrato = filterContratos.find((c: any) => c.id === filterContratoId);
+        return contrato?.sucursales || [];
+    }, [filterContratos, filterContratoId]);
+    const filterPuestos = useMemo(() => {
+        const sucursal = filterSucursales.find((s: any) => s.id === filterCorpoId);
+        return sucursal?.puestos || [];
+    }, [filterSucursales, filterCorpoId]);
+
+    const estadoIsBueno = useCallback((value?: string | null) => {
+        const v = String(value ?? '').trim().toLowerCase();
+        return v === 'bueno';
+    }, []);
+
+    const toggleChecklistItem = useCallback((prev: Record<string, boolean>, key: string) => {
+        return { ...prev, [key]: !prev[key] };
+    }, []);
+
+    const pickImageAsBase64 = useCallback(async () => {
+        const res = await DocumentPicker.getDocumentAsync({
+            type: 'image/*',
+            copyToCacheDirectory: true,
+            multiple: false,
+        });
+        if (res.canceled) return null;
+        const asset = res.assets?.[0];
+        if (!asset?.uri) return null;
+
+        const blob = await fetch(asset.uri).then(r => r.blob());
+        const base64 = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+                const result = reader.result;
+                if (typeof result !== 'string') return reject(new Error('No se pudo leer la imagen'));
+                // result = "data:mime;base64,XXXX"
+                const idx = result.indexOf('base64,');
+                if (idx === -1) return reject(new Error('Formato base64 inválido'));
+                resolve(result.substring(idx + 'base64,'.length));
+            };
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+        });
+
+        return { mime: blob.type || 'image/jpeg', base64 };
+    }, []);
+
+    const pickArmaImageAsFile = useCallback(async (baseName: string) => {
+        const result = await DocumentPicker.getDocumentAsync({
+            type: 'image/*',
+            multiple: false,
+            copyToCacheDirectory: true,
+        });
+
+        if (result.canceled || !result.assets || result.assets.length === 0) return null;
+
+        const asset = result.assets[0];
+        const response = await fetch(asset.uri);
+        const blob = await response.blob();
+
+        const base64 = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+                const r = reader.result;
+                if (typeof r === 'string') {
+                    const parts = r.split(',');
+                    resolve(parts.length > 1 ? parts[1] : parts[0]);
+                } else {
+                    reject(new Error('No se pudo leer la imagen seleccionada'));
+                }
+            };
+            reader.onerror = () => reject(reader.error ?? new Error('Error al leer la imagen seleccionada'));
+            reader.readAsDataURL(blob);
+        });
+
+        let extension = '';
+        if (asset.name && asset.name.includes('.')) {
+            extension = asset.name.split('.').pop() || '';
+        } else if (blob.type && blob.type.includes('/')) {
+            extension = blob.type.split('/').pop() || '';
+        }
+        if (!extension) extension = 'jpg';
+
+        const localId = `arma_file_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+        const fileName = `${baseName}.${extension}`;
+
+        const newFile: ActivoFileLocal = {
+            id: localId,
+            type: 'image',
+            name: fileName,
+            extension,
+            base64,
+            uri: asset.uri,
+            mimeType: blob.type || asset.mimeType,
+        };
+
+        return newFile;
+    }, []);
+
+    const openArmaSignatureModal = useCallback(() => {
+        setArmaSignatureKey(k => k + 1);
+        setIsReadingArmaSignature(false);
+        setIsArmaSignatureModalVisible(true);
+    }, []);
+
+    const closeArmaSignatureModal = useCallback(() => {
+        setIsArmaSignatureModalVisible(false);
+        setIsReadingArmaSignature(false);
+    }, []);
+
+    const clearArmaSignatureInModal = useCallback(() => {
+        if (armaSignatureRef.current) {
+            armaSignatureRef.current.clearSignature();
+        }
+    }, []);
+
+    const acceptArmaSignature = useCallback(() => {
+        if (armaSignatureRef.current) {
+            armaSignatureRef.current.readSignature();
+        }
+    }, []);
+
+    const handleArmaSignatureRead = useCallback((signature: string) => {
+        setIsReadingArmaSignature(true);
+        setArmaFirma(signature);
+        setTimeout(() => {
+            setIsReadingArmaSignature(false);
+            closeArmaSignatureModal();
+        }, 300);
+    }, [closeArmaSignatureModal]);
+
+    useEffect(() => {
+        if (!esArma) {
+            setMantArmasForm('');
+            return;
+        }
+        const formObj = {
+            version: 1,
+            caracteristicas: {
+                tipo_arma: armaTipoArma || null,
+                mecanismo: armaMecanismo || null,
+                marca: armaMarca || null,
+                modelo: armaModelo || null,
+                serie: armaSerie || null,
+                calibre: armaCalibre || null,
+                cargador_adicional: armaCargadorAdicional,
+                cargador_cantidad: armaCargadorCantidad || null,
+                capacidad_balas: armaCapacidadBalas || null,
+            },
+            mantenimiento: {
+                tipo: tipo || null,
+                preventivo: armaPreventivoChecks,
+                correctivo: armaCorrectivoChecks,
+            },
+            diagnostico: armaDiagnostico || null,
+            foto_antes_nombre: armaFotoAntesName || null,
+            foto_despues_nombre: armaFotoDespuesName || null,
+            armero_nombre: armaArmeroNombre || null,
+            firma: armaFirma || null,
+        };
+        setMantArmasForm(JSON.stringify(formObj));
+    }, [
+        armaCalibre,
+        armaCapacidadBalas,
+        armaCargadorAdicional,
+        armaCargadorCantidad,
+        armaCorrectivoChecks,
+        armaDiagnostico,
+        armaFirma,
+        armaFotoAntesName,
+        armaFotoDespuesName,
+        armaMarca,
+        armaMecanismo,
+        armaModelo,
+        armaArmeroNombre,
+        armaPreventivoChecks,
+        armaSerie,
+        armaTipoArma,
+        esArma,
+        tipo,
+    ]);
 
     const dateToLocalString = (d: Date | null): string => {
         if (!d) return '';
@@ -561,54 +855,146 @@ export default function MantenimientoEquipoScreen() {
         }
     };
 
-    const getConnectionStatus = async (): Promise<boolean> => {
+    const getConnectionStatus = useCallback(async (): Promise<boolean> => {
         const state = await Network.getNetworkStateAsync();
-        return !!(state.isConnected && state.isInternetReachable);
+        // `isInternetReachable` puede venir null/undefined aunque haya internet.
+        // Solo consideramos offline cuando explícitamente es false.
+        if (!state.isConnected) return false;
+        if (state.isInternetReachable === false) return false;
+        return true;
+    }, []);
+
+    const closeCambiosModal = () => {
+        setIsCambiosModalVisible(false);
+        setCambiosItems([]);
+        setExpandedCambioId(null);
     };
+
+    const formatCambioCreatedAt = (value: any) => {
+        if (!value) return '';
+        try {
+            const d = new Date(String(value));
+            if (isNaN(d.getTime())) return String(value);
+            const day = d.getDate().toString().padStart(2, '0');
+            const month = (d.getMonth() + 1).toString().padStart(2, '0');
+            const year = d.getFullYear();
+            const hours = d.getHours().toString().padStart(2, '0');
+            const minutes = d.getMinutes().toString().padStart(2, '0');
+            return `${day}/${month}/${year} ${hours}:${minutes}`;
+        } catch {
+            return String(value);
+        }
+    };
+
+    const fetchCambios = useCallback(async (tabla: string, registroId: number) => {
+        const isConnected = await getConnectionStatus();
+        if (!isConnected) {
+            Alert.alert('Sin conexión', 'Esta función solo está disponible con conexión a internet.');
+            return;
+        }
+        try {
+            const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+            if (!apiUrl) throw new Error('Server URL not configured');
+
+            let token = await AsyncStorage.getItem('access_token');
+            if (!token) {
+                const refreshed = await refreshAccessToken();
+                if (!refreshed) {
+                    if (logout) await logout();
+                    return;
+                }
+                token = await AsyncStorage.getItem('access_token');
+            }
+            if (!token) return;
+
+            const doRequest = async (tk: string) =>
+                fetch(`${apiUrl}/api/cambios-apps-modules?tabla=${encodeURIComponent(tabla)}&registro_id=${registroId}`, {
+                    method: 'GET',
+                    headers: {
+                        Authorization: `Bearer ${tk}`,
+                        'Content-Type': 'application/json',
+                        'ngrok-skip-browser-warning': '69420',
+                    },
+                });
+
+            let resp = await doRequest(token);
+            if (resp.status === 401) {
+                const refreshed = await refreshAccessToken();
+                if (!refreshed) {
+                    if (logout) await logout();
+                    return;
+                }
+                const nextToken = await AsyncStorage.getItem('access_token');
+                if (!nextToken) return;
+                resp = await doRequest(nextToken);
+            }
+
+            const data = await resp.json().catch(() => ({}));
+            if (!resp.ok || !data.status) {
+                throw new Error(data.message || 'No se pudieron cargar los cambios');
+            }
+            setCambiosItems(Array.isArray(data.data) ? data.data : []);
+            setIsCambiosModalVisible(true);
+        } catch (e: any) {
+            Alert.alert('Error', e.message || 'No se pudieron cargar los cambios');
+        }
+    }, [getConnectionStatus, refreshAccessToken, logout]);
+
 
     const loadMarcaContext = async () => {
         const currentMarcaStr = await AsyncStorage.getItem('current_marca');
         if (!currentMarcaStr) {
             setHasCurrentMarca(false);
-            setMarcaClienteId(null);
-            setMarcaCorpoId(null);
             setMarcaPuestoId(null);
             return null;
         }
         const current = JSON.parse(currentMarcaStr);
         if (!current?.id) {
             setHasCurrentMarca(false);
-            setMarcaClienteId(null);
-            setMarcaCorpoId(null);
             setMarcaPuestoId(null);
             return null;
         }
         setHasCurrentMarca(true);
         setMarcaId(current.id);
 
-        // Obtener IDs de cliente, corpo y puesto de current_marca
-        const clienteIdRaw = current?.cliente?.id ?? current?.cliente_id;
-        const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
         const puestoIdRaw = current?.puesto?.id ?? current?.puesto_id;
 
-        setMarcaClienteId(clienteIdRaw !== undefined && clienteIdRaw !== null ? Number(clienteIdRaw) : null);
-        setMarcaCorpoId(corpoIdRaw !== undefined && corpoIdRaw !== null ? Number(corpoIdRaw) : null);
         setMarcaPuestoId(puestoIdRaw !== undefined && puestoIdRaw !== null ? Number(puestoIdRaw) : null);
 
         return current;
     };
 
+    const findPathByPuestoId = useCallback((tree: any[], targetPuestoId: number) => {
+        for (const empresa of tree) {
+            for (const cliente of empresa?.clientes || []) {
+                for (const division of cliente?.division || []) {
+                    for (const contrato of division?.contratos || []) {
+                        for (const sucursal of contrato?.sucursales || []) {
+                            const puesto = (sucursal?.puestos || []).find((p: any) => Number(p.id) === Number(targetPuestoId));
+                            if (puesto) {
+                                return {
+                                    empresaId: Number(empresa.id),
+                                    clienteId: Number(cliente.id),
+                                    divisionId: Number(division.id),
+                                    contratoId: Number(contrato.id),
+                                    sucursalId: Number(sucursal.id),
+                                    puestoId: Number(puesto.id),
+                                };
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return null;
+    }, []);
+
     const fetchMainStructure = useCallback(async () => {
-        setIsStructureLoading(true);
         try {
             const cacheStr = await AsyncStorage.getItem('main_structure_cache');
             if (cacheStr) {
-                try {
-                    const parsed = JSON.parse(cacheStr);
-                    if (Array.isArray(parsed)) setStructure(parsed);
-                } catch {
-                    // ignore
-                }
+                const parsed = JSON.parse(cacheStr);
+                if (Array.isArray(parsed)) setStructure(parsed);
             }
 
             const isConnected = await getConnectionStatus();
@@ -622,30 +1008,40 @@ export default function MantenimientoEquipoScreen() {
                 const refreshed = await refreshAccessToken();
                 if (!refreshed) {
                     if (logout) await logout();
-                    throw new Error('Sesión expirada');
+                    return;
                 }
                 token = await AsyncStorage.getItem('access_token');
             }
 
-            const response = await fetch(`${apiUrl}/api/main-structure`, {
-                method: 'GET',
-                headers: {
-                    Authorization: `Bearer ${token}`,
-                    'Content-Type': 'application/json',
-                    'ngrok-skip-browser-warning': '69420',
-                },
-            });
+            const doRequest = async (tk: string) =>
+                fetch(`${apiUrl}/api/main-structure`, {
+                    method: 'GET',
+                    headers: {
+                        Authorization: `Bearer ${tk}`,
+                        'Content-Type': 'application/json',
+                        'ngrok-skip-browser-warning': '69420',
+                    },
+                });
 
+            if (!token) return;
+            let response = await doRequest(token);
             if (response.status === 401) {
                 const refreshed = await refreshAccessToken();
-                if (refreshed) return fetchMainStructure();
-                await logout();
-                return;
+                if (!refreshed) {
+                    if (logout) await logout();
+                    return;
+                }
+                const nextToken = await AsyncStorage.getItem('access_token');
+                if (!nextToken) {
+                    if (logout) await logout();
+                    return;
+                }
+                response = await doRequest(nextToken);
             }
 
             if (response.status === 403) {
                 if (logout) await logout();
-                throw new Error('Acceso denegado');
+                return;
             }
 
             if (response.ok) {
@@ -655,40 +1051,38 @@ export default function MantenimientoEquipoScreen() {
                     await AsyncStorage.setItem('main_structure_cache', JSON.stringify(data.structure));
                 }
             }
-        } catch (error) {
-            console.error('Error fetching main structure:', error);
-        } finally {
-            setIsStructureLoading(false);
+        } catch (e) {
+            console.error('Error fetching main structure:', e);
         }
-    }, [refreshAccessToken, logout]);
+    }, [getConnectionStatus, refreshAccessToken, logout]);
 
-    // Nodos computados para estructura jerárquica de filtros
-    const filterEmpresas = useMemo(() => (Array.isArray(structure) ? structure : []), [structure]);
+    const applyFiltersFromPuestoId = useCallback((puestoIdToApply: number | null) => {
+        if (!puestoIdToApply) return;
+        const path = findPathByPuestoId(filterEmpresas, puestoIdToApply);
+        if (!path) return;
+        setFilterEmpresaId(path.empresaId);
+        setFilterClienteId(path.clienteId);
+        setFilterDivisionId(path.divisionId);
+        setFilterContratoId(path.contratoId);
+        setFilterCorpoId(path.sucursalId);
+        setFilterPuestoId(path.puestoId);
+    }, [filterEmpresas, findPathByPuestoId]);
 
-    const filterClientes = useMemo(() => {
-        const empresa = filterEmpresas.find((e: any) => e.id === filterEmpresaId);
-        return empresa?.clientes || [];
-    }, [filterEmpresas, filterEmpresaId]);
+    const resetFiltersToCurrentMarca = useCallback(() => {
+        // Reinicia el árbol al puesto de current_marca (si existe)
+        setFilterEmpresaId(null);
+        setFilterClienteId(null);
+        setFilterDivisionId(null);
+        setFilterContratoId(null);
+        setFilterCorpoId(null);
+        setFilterPuestoId(null);
+        if (marcaPuestoId) {
+            // Se aplica en el siguiente tick cuando los nodos estén listos
+            setTimeout(() => applyFiltersFromPuestoId(marcaPuestoId), 0);
+        }
+    }, [applyFiltersFromPuestoId, marcaPuestoId]);
 
-    const filterDivisiones = useMemo(() => {
-        const cliente = filterClientes.find((c: any) => c.id === filterClienteId);
-        return cliente?.division || [];
-    }, [filterClientes, filterClienteId]);
-
-    const filterContratos = useMemo(() => {
-        const division = filterDivisiones.find((d: any) => d.id === filterDivisionId);
-        return division?.contratos || [];
-    }, [filterDivisiones, filterDivisionId]);
-
-    const filterSucursales = useMemo(() => {
-        const contrato = filterContratos.find((c: any) => c.id === filterContratoId);
-        return contrato?.sucursales || [];
-    }, [filterContratos, filterContratoId]);
-
-    const filterPuestos = useMemo(() => {
-        const sucursal = filterSucursales.find((s: any) => s.id === filterCorpoId);
-        return sucursal?.puestos || [];
-    }, [filterSucursales, filterCorpoId]);
+    const didFetchMainStructureOnceRef = useRef(false);
 
     const fetchCategoriasMantenimiento = async () => {
         try {
@@ -745,10 +1139,89 @@ export default function MantenimientoEquipoScreen() {
         }
     };
 
-    const fetchReportes = async () => {
+    const getMainStructureTree = useCallback(async (): Promise<any[] | null> => {
+        if (Array.isArray(structure) && structure.length > 0) return structure;
+        const cacheStr = await AsyncStorage.getItem('main_structure_cache');
+        if (!cacheStr) return null;
         try {
+            const parsed = JSON.parse(cacheStr);
+            return Array.isArray(parsed) ? parsed : null;
+        } catch {
+            return null;
+        }
+    }, [structure]);
+
+    const findPuestoNodeInTree = useCallback((tree: any[], targetPuestoId: number) => {
+        for (const empresa of tree) {
+            for (const cliente of empresa?.clientes || []) {
+                for (const division of cliente?.division || []) {
+                    for (const contrato of division?.contratos || []) {
+                        for (const sucursal of contrato?.sucursales || []) {
+                            const puesto = (sucursal?.puestos || []).find((p: any) => Number(p.id) === Number(targetPuestoId));
+                            if (puesto) return puesto;
+                        }
+                    }
+                }
+            }
+        }
+        return null;
+    }, []);
+
+    const getArticuloFromMainStructure = useCallback(async (opts: { puestoId: number; source: 'plan' | 'asignado'; estructuraId: number }) => {
+        const tree = await getMainStructureTree();
+        if (!tree) return null;
+        const puestoNode: any = findPuestoNodeInTree(tree, opts.puestoId);
+        const articulosRaw: any[] = Array.isArray(puestoNode?.articulos) ? puestoNode.articulos : [];
+        const tipoWanted = opts.source === 'asignado' ? 'Asignado' : 'Plan';
+        return articulosRaw.find((a: any) => Number(a.id) === Number(opts.estructuraId) && String(a.tipo) === tipoWanted) ?? null;
+    }, [findPuestoNodeInTree, getMainStructureTree]);
+
+    const fetchReportes = async () => {
+        // Evitar llamadas múltiples simultáneas
+        if (isFetchingReportesRef.current) {
+            return;
+        }
+
+        try {
+            isFetchingReportesRef.current = true;
             setIsLoading(true);
             setError(null);
+
+            const current = await loadMarcaContext();
+            const currentMarcaId = current?.id ?? marcaId;
+            if (!currentMarcaId) {
+                setHasCurrentMarca(false);
+                setReportes([]);
+                setIsLoading(false);
+                isFetchingReportesRef.current = false;
+                return;
+            }
+
+            const puestoIdForQuery = activePuestoId ?? marcaPuestoId ?? null;
+            if (!puestoIdForQuery) {
+                setError('Puesto no especificado');
+                setReportes([]);
+                setIsLoading(false);
+                isFetchingReportesRef.current = false;
+                return;
+            }
+            const cacheKey = `mantenimiento_equipo_${String(puestoIdForQuery ?? 'current')}_cache`;
+
+            const normalizeMantenimiento = (m: any): ArticuloMantenimiento => ({
+                ...m,
+                id_local: m.id_local || '',
+                archivos: Array.isArray(m.c_archivos_adjuntos_articulo_mantenimiento)
+                    ? m.c_archivos_adjuntos_articulo_mantenimiento.map((a: any) => ({
+                        id: a.id,
+                        name: a.name,
+                        original_name: a.original_name,
+                        type: a.type,
+                        extension: a.extension,
+                    }))
+                    : Array.isArray(m.archivos)
+                        ? m.archivos
+                        : [],
+            });
 
             const isConnected = await getConnectionStatus();
             if (isConnected) {
@@ -763,22 +1236,18 @@ export default function MantenimientoEquipoScreen() {
                     if (!refreshed) {
                         setError('No se pudo autenticar');
                         setIsLoading(false);
+                        isFetchingReportesRef.current = false;
                         if (logout) await logout();
                         return;
                     }
                     token = await AsyncStorage.getItem('access_token');
                 }
 
-                // Construir parámetros de filtro (jerarquía completa)
-                const params = new URLSearchParams();
-                if (filterEmpresaId) params.append('empresa_id', String(filterEmpresaId));
-                if (filterClienteId) params.append('cliente_id', String(filterClienteId));
-                if (filterDivisionId) params.append('division_id', String(filterDivisionId));
-                if (filterContratoId) params.append('contrato_id', String(filterContratoId));
-                if (filterCorpoId) params.append('corpo_id', String(filterCorpoId));
-                if (filterPuestoId) params.append('puesto_id', String(filterPuestoId));
+                const url = `${apiUrl}/api/articulo-mantenimiento/puesto/${puestoIdForQuery}`;
 
-                const response = await fetch(`${apiUrl}/api/reporte-articulo-mantenimiento?${params.toString()}`, {
+                console.log('url: ', url);
+
+                const response = await fetch(url, {
                     method: 'GET',
                     headers: {
                         Authorization: `Bearer ${token}`,
@@ -790,14 +1259,19 @@ export default function MantenimientoEquipoScreen() {
                 if (response.status === 401) {
                     const refreshed = await refreshAccessToken();
                     if (refreshed) {
+                        isFetchingReportesRef.current = false;
+                        setIsLoading(false);
                         return fetchReportes();
-                    } else {
-                        if (logout) await logout();
-                        return;
                     }
+                    setIsLoading(false);
+                    isFetchingReportesRef.current = false;
+                    if (logout) await logout();
+                    return;
                 }
 
                 if (response.status === 403) {
+                    setIsLoading(false);
+                    isFetchingReportesRef.current = false;
                     if (logout) await logout();
                     throw new Error('Acceso denegado');
                 }
@@ -807,171 +1281,179 @@ export default function MantenimientoEquipoScreen() {
                 }
 
                 const data = await response.json();
-                if (data.status && data.data) {
-                    const list = (data.data || []).map((it: any) => ({
+                if (data.status && Array.isArray(data.data)) {
+                    const list: ArticuloPuestoMantenimientoItem[] = data.data.map((it: any) => ({
                         ...it,
-                        id_local: it.id_local || '',
-                        activos: (it.activos || []).map((a: any) => ({ ...a, id_local: a.id_local || '' })),
+                        tipos_mantenimiento: Array.isArray(it.tipos_mantenimiento) ? it.tipos_mantenimiento : [],
+                        mantenimientos: Array.isArray(it.mantenimientos) ? it.mantenimientos.map(normalizeMantenimiento) : [],
+                        movimientos: Array.isArray(it.movimientos) ? it.movimientos : [],
                     }));
                     setReportes(list);
-                    await AsyncStorage.setItem('reporte_mantenimiento_cache', JSON.stringify(list));
+                    await AsyncStorage.setItem(cacheKey, JSON.stringify(list));
                 } else {
-                    setError(data.message || 'Error al cargar reportes');
-                    const cacheStr = await AsyncStorage.getItem('reporte_mantenimiento_cache');
-                    if (cacheStr) setReportes(JSON.parse(cacheStr));
+                    setError(data.message || 'Error al cargar artículos');
+                    const cacheStr = await AsyncStorage.getItem(cacheKey);
+                    if (cacheStr) {
+                        setReportes(JSON.parse(cacheStr));
+                    } else {
+                        setReportes([]);
+                    }
                 }
             } else {
-                const cacheStr = await AsyncStorage.getItem('reporte_mantenimiento_cache');
-                if (cacheStr) setReportes(JSON.parse(cacheStr));
+                // Offline: mostrar artículos del puesto desde main_structure_cache
+                const tree = await getMainStructureTree();
+                if (tree && puestoIdForQuery) {
+                    const puestoNode: any = findPuestoNodeInTree(tree, puestoIdForQuery);
+                    const articulosRaw: any[] = Array.isArray(puestoNode?.articulos) ? puestoNode.articulos : [];
+                    const listFromStructure: ArticuloPuestoMantenimientoItem[] = articulosRaw.map((a: any) => {
+                        const source = String(a.tipo || '').toLowerCase() === 'asignado' ? 'asignado' : 'plan';
+                        const estructuraId = Number(a.id);
+                        const ultimo = a.ultimo_mantenimiento ?? null;
+                        const mantenimientosOffline = Array.isArray(a.mantenimientos)
+                            ? a.mantenimientos.map(normalizeMantenimiento)
+                            : ultimo
+                                ? [normalizeMantenimiento(ultimo)]
+                                : [];
+                        return {
+                            key: `${source}-${estructuraId}`,
+                            source,
+                            estructura_id: estructuraId,
+                            articulo_nomenclador_id: null,
+                            articulo_nombre: a.nombre ?? 'Desconocido',
+                            tipo: source === 'plan' ? 'Plan de puesto' : 'Asignado al puesto',
+                            marca: a.marca ?? null,
+                            serie: a.serie ?? null,
+                            tipos_mantenimiento: [],
+                            mantenimientos: mantenimientosOffline,
+                            movimientos: Array.isArray(a.movimientos) ? a.movimientos : [],
+                            ultimo_mantenimiento: ultimo,
+                        };
+                    });
+
+                    if (listFromStructure.length > 0) {
+                        setReportes(listFromStructure);
+                        await AsyncStorage.setItem(cacheKey, JSON.stringify(listFromStructure));
+                    } else {
+                        // Fallback: cache propio del módulo si no hay estructura disponible
+                        const cacheStr = await AsyncStorage.getItem(cacheKey);
+                        if (cacheStr) {
+                            setReportes(JSON.parse(cacheStr));
+                        } else {
+                            setReportes([]);
+                        }
+                    }
+                } else {
+                    // Fallback: cache propio del módulo si no hay estructura disponible
+                    const cacheStr = await AsyncStorage.getItem(cacheKey);
+                    if (cacheStr) {
+                        setReportes(JSON.parse(cacheStr));
+                    } else {
+                        setReportes([]);
+                    }
+                }
             }
         } catch (e: any) {
-            setError(e.message || 'Error al cargar reportes');
-            const cacheStr = await AsyncStorage.getItem('reporte_mantenimiento_cache');
-            if (cacheStr) setReportes(JSON.parse(cacheStr));
+            setError(e.message || 'Error al cargar artículos');
+            const puestoIdForQuery = activePuestoId ?? null;
+            const cacheKey = `mantenimiento_equipo_${String(puestoIdForQuery ?? 'current')}_cache`;
+            const cacheStr = await AsyncStorage.getItem(cacheKey);
+            if (cacheStr) {
+                setReportes(JSON.parse(cacheStr));
+            } else {
+                setReportes([]);
+            }
         } finally {
             setIsLoading(false);
+            isFetchingReportesRef.current = false;
         }
     };
 
-    const fetchActivos = async (reporteId: number) => {
+    // Ahora los "activos" son los últimos registros de `c_articulo_mantenimiento` del artículo seleccionado
+    // Online vienen en el payload (últimos 8). Offline: se toman desde `main_structure_cache` (último mantenimiento o lista si existe).
+    const fetchActivos = async (item: ArticuloPuestoMantenimientoItem) => {
         try {
             setIsLoading(true);
             const isConnected = await getConnectionStatus();
             if (isConnected) {
-                const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-                if (!apiUrl) {
-                    throw new Error('Server URL not configured');
-                }
+                const list = Array.isArray(item.mantenimientos) ? item.mantenimientos : [];
+                setActivos(list);
+                return;
+            }
 
-                let token = await AsyncStorage.getItem('access_token');
-                if (!token) {
-                    const refreshed = await refreshAccessToken();
-                    if (!refreshed) return;
-                    token = await AsyncStorage.getItem('access_token');
-                }
-
-                const response = await fetch(`${apiUrl}/api/reporte-articulo-mantenimiento/${reporteId}/activos`, {
-                    method: 'GET',
-                    headers: {
-                        Authorization: `Bearer ${token}`,
-                        'Content-Type': 'application/json',
-                        'ngrok-skip-browser-warning': '69420',
-                    },
+            // Offline: preferir main_structure_cache
+            if (activePuestoId && item?.estructura_id) {
+                const artNode = await getArticuloFromMainStructure({
+                    puestoId: activePuestoId,
+                    source: item.source,
+                    estructuraId: item.estructura_id,
                 });
+                const mantenimientosOffline = Array.isArray(artNode?.mantenimientos)
+                    ? artNode.mantenimientos.map((m: any) => ({ ...m, id_local: m.id_local || '', archivos: Array.isArray(m.archivos) ? m.archivos : [] }))
+                    : artNode?.ultimo_mantenimiento
+                        ? [{ ...artNode.ultimo_mantenimiento, id_local: '', archivos: [] }]
+                        : [];
 
-                if (response.status === 401) {
-                    const refreshed = await refreshAccessToken();
-                    if (refreshed) {
-                        return fetchActivos(reporteId);
-                    } else {
-                        if (logout) await logout();
-                        return;
-                    }
-                }
-
-                if (response.ok) {
-                    const data = await response.json();
-                    if (data.status && data.data) {
-                        const list = (data.data || []).map((it: any) => ({
-                            ...it,
-                            id_local: it.id_local || '',
-                        }));
-                        setActivos(list);
-                        await AsyncStorage.setItem(`activos_mantenimiento_${reporteId}_cache`, JSON.stringify(list));
-                    }
-                }
-            } else {
-                const cacheStr = await AsyncStorage.getItem(`activos_mantenimiento_${reporteId}_cache`);
-                if (cacheStr) {
-                    setActivos(JSON.parse(cacheStr));
-                } else if (selectedReporte?.activos) {
-                    setActivos(selectedReporte.activos);
+                if (mantenimientosOffline.length > 0) {
+                    setActivos(mantenimientosOffline as any);
+                    return;
                 }
             }
-        } catch (e: any) {
-            console.error('Error fetching activos:', e);
-            const cacheStr = await AsyncStorage.getItem(`activos_mantenimiento_${reporteId}_cache`);
-            if (cacheStr) {
-                setActivos(JSON.parse(cacheStr));
-            } else if (selectedReporte?.activos) {
-                setActivos(selectedReporte.activos);
+
+            // Fallback: lo que ya tenga el item
+            if (Array.isArray(item.mantenimientos) && item.mantenimientos.length > 0) {
+                setActivos(item.mantenimientos);
+            } else if ((item as any).ultimo_mantenimiento) {
+                setActivos([{ ...(item as any).ultimo_mantenimiento, id_local: '', archivos: [] }] as any);
+            } else {
+                setActivos([]);
             }
         } finally {
             setIsLoading(false);
         }
     };
 
-    // Inicializar filtros desde current_marca al cargar
+    // Cargar contexto de marca al entrar (solo contexto). No debe disparar /api/main-structure en loop.
     useFocusEffect(
         useCallback(() => {
             (async () => {
-                const current = await loadMarcaContext();
-                await fetchMainStructure();
-                // Inicializar filtros con valores de current_marca después de cargar
-                if (current) {
-                    const clienteIdRaw = current?.cliente?.id ?? current?.cliente_id;
-                    const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
-                    const puestoIdRaw = current?.puesto?.id ?? current?.puesto_id;
-
-                    if (clienteIdRaw !== undefined && clienteIdRaw !== null) {
-                        setFilterClienteId(Number(clienteIdRaw));
-                    }
-                    if (corpoIdRaw !== undefined && corpoIdRaw !== null) {
-                        setFilterCorpoId(Number(corpoIdRaw));
-                    }
-                    if (puestoIdRaw !== undefined && puestoIdRaw !== null) {
-                        setFilterPuestoId(Number(puestoIdRaw));
-                    }
-                }
+                await loadMarcaContext();
             })();
         }, [])
     );
 
-    // Recargar reportes cuando cambian los filtros de cualquier nivel de la jerarquía
+    // Cargar estructura principal una sola vez al montar la pantalla
     useEffect(() => {
+        if (didFetchMainStructureOnceRef.current) return;
+        didFetchMainStructureOnceRef.current = true;
+        fetchMainStructure();
+    }, [fetchMainStructure]);
+
+    // Inicializar filtros (Empresa → ... → Puesto) a partir del puesto de `current_marca`
+    useEffect(() => {
+        if (!marcaPuestoId) return;
+        if (!filterEmpresas.length) return;
+
+        const prevMarcaPuestoId = lastMarcaPuestoIdRef.current;
+        const shouldSyncToMarca =
+            filterPuestoId === null || (prevMarcaPuestoId !== null && Number(filterPuestoId) === Number(prevMarcaPuestoId));
+
+        if (!didInitFiltersFromMarca.current) {
+            applyFiltersFromPuestoId(marcaPuestoId);
+            didInitFiltersFromMarca.current = true;
+        } else if (prevMarcaPuestoId !== null && prevMarcaPuestoId !== marcaPuestoId && shouldSyncToMarca) {
+            applyFiltersFromPuestoId(marcaPuestoId);
+        }
+
+        lastMarcaPuestoIdRef.current = marcaPuestoId;
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [marcaPuestoId, filterEmpresas, applyFiltersFromPuestoId]);
+
+    // Cargar artículos del puesto (plan + asignados) al entrar / cuando cambia la marca actual
+    useEffect(() => {
+        if (!hasCurrentMarca) return;
         fetchReportes();
-    }, [filterEmpresaId, filterClienteId, filterDivisionId, filterContratoId, filterCorpoId, filterPuestoId]);
-
-    // Limpiar filtros dependientes cuando cambia un nivel superior
-    useEffect(() => {
-        if (!filterEmpresaId) {
-            setFilterClienteId(null);
-            setFilterDivisionId(null);
-            setFilterContratoId(null);
-            setFilterCorpoId(null);
-            setFilterPuestoId(null);
-        }
-    }, [filterEmpresaId]);
-
-    useEffect(() => {
-        if (!filterClienteId) {
-            setFilterDivisionId(null);
-            setFilterContratoId(null);
-            setFilterCorpoId(null);
-            setFilterPuestoId(null);
-        }
-    }, [filterClienteId]);
-
-    useEffect(() => {
-        if (!filterDivisionId) {
-            setFilterContratoId(null);
-            setFilterCorpoId(null);
-            setFilterPuestoId(null);
-        }
-    }, [filterDivisionId]);
-
-    useEffect(() => {
-        if (!filterContratoId) {
-            setFilterCorpoId(null);
-            setFilterPuestoId(null);
-        }
-    }, [filterContratoId]);
-
-    useEffect(() => {
-        if (!filterCorpoId) {
-            setFilterPuestoId(null);
-        }
-    }, [filterCorpoId]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [marcaId, activePuestoId, hasCurrentMarca]);
 
     useFocusEffect(
         useCallback(() => {
@@ -988,12 +1470,13 @@ export default function MantenimientoEquipoScreen() {
         return () => {
             eventBus.off('connectionRestored', handler);
         };
-    }, []);
+        // Re-registrar para que use el puesto activo actual
+    }, [activePuestoId, marcaId, hasCurrentMarca]);
 
-    const handleVerActivos = (reporte: ReporteMantenimiento) => {
+    const handleVerActivos = (reporte: ArticuloPuestoMantenimientoItem) => {
         setSelectedReporte(reporte);
         setShowActivos(true);
-        fetchActivos(reporte.id);
+        fetchActivos(reporte);
     };
 
     const handleVolverReportes = () => {
@@ -1005,7 +1488,7 @@ export default function MantenimientoEquipoScreen() {
         resetForm();
     };
 
-    const handleActualizar = (activo: ActivoMantenimiento) => {
+    const handleActualizar = (activo: ArticuloMantenimiento) => {
         setSelectedActivo(activo);
         setIsUpdating(true);
         setShowActivos(false);
@@ -1014,11 +1497,17 @@ export default function MantenimientoEquipoScreen() {
         setFechaSolucion(activo.fecha_solucion ? new Date(activo.fecha_solucion) : null);
         setAccion(activo.accion || '');
         setFechaInicio(activo.fecha_inicio ? new Date(activo.fecha_inicio) : null);
+        setNumeroBoletaProveeduria(activo.numero_boleta_proveeduria || '');
         setTipo(activo.tipo || '');
         setMarca(activo.marca || '');
         setModelo(activo.modelo || '');
         setSeriePlaca(activo.serie_placa || '');
+        setMarcaNuevo(activo.marca_nuevo || '');
+        setModeloNuevo(activo.modelo_nuevo || '');
+        setSeriePlacaNuevo(activo.serie_placa_nuevo || '');
         setCategoria(activo.categoria || '');
+        setTipoMantenimientoArticulo(activo.tipo_mantenimiento_art || '');
+        setTipoMantenimientoReincidencia(activo.tipo_mant_art_reincid || '');
         setEsVehiculo(!!activo.kilometraje);
         setKilometraje(activo.kilometraje ? String(activo.kilometraje) : '');
         setFechaSalida(activo.fecha_salida ? new Date(activo.fecha_salida) : null);
@@ -1033,7 +1522,79 @@ export default function MantenimientoEquipoScreen() {
         setCostoTotal(activo.costo_total ? String(activo.costo_total) : '');
         setFechaFin(activo.fecha_fin ? new Date(activo.fecha_fin) : null);
         setReincidenciaTreintaDias(activo.reincidencia_treinta_dias || false);
-        setMarcarComoResuelto(false);
+        setMarcarComoResuelto(activo.fecha_solucion !== null && activo.fecha_solucion !== undefined);
+
+        // Formulario de armas (si existe)
+        try {
+            const raw = activo.mant_armas_form;
+            if (raw && String(raw).trim().length > 0) {
+                const parsed = JSON.parse(String(raw));
+                setEsArma(true);
+                const caracteristicas = parsed?.caracteristicas ?? {};
+                const mantenimiento = parsed?.mantenimiento ?? parsed ?? {};
+                setArmaTipoArma((caracteristicas?.tipo_arma as any) || '');
+                setArmaMecanismo((caracteristicas?.mecanismo as any) || '');
+                setArmaMarca(typeof caracteristicas?.marca === 'string' ? caracteristicas.marca : '');
+                setArmaModelo(typeof caracteristicas?.modelo === 'string' ? caracteristicas.modelo : '');
+                setArmaSerie(typeof caracteristicas?.serie === 'string' ? caracteristicas.serie : '');
+                setArmaCalibre(typeof caracteristicas?.calibre === 'string' ? caracteristicas.calibre : '');
+                setArmaCargadorAdicional(!!caracteristicas?.cargador_adicional);
+                setArmaCargadorCantidad(typeof caracteristicas?.cargador_cantidad === 'string' ? caracteristicas.cargador_cantidad : '');
+                setArmaCapacidadBalas(typeof caracteristicas?.capacidad_balas === 'string' ? caracteristicas.capacidad_balas : '');
+                setArmaPreventivoChecks(mantenimiento?.preventivo && typeof mantenimiento.preventivo === 'object' ? mantenimiento.preventivo : {});
+                setArmaCorrectivoChecks(mantenimiento?.correctivo && typeof mantenimiento.correctivo === 'object' ? mantenimiento.correctivo : {});
+                setArmaDiagnostico(typeof parsed?.diagnostico === 'string' ? parsed.diagnostico : '');
+                setArmaFotoAntesName(typeof parsed?.foto_antes_nombre === 'string' ? parsed.foto_antes_nombre : '');
+                setArmaFotoDespuesName(typeof parsed?.foto_despues_nombre === 'string' ? parsed.foto_despues_nombre : '');
+                setArmaFotoAntesLocal(null);
+                setArmaFotoDespuesLocal(null);
+                setArmaArmeroNombre(typeof parsed?.armero_nombre === 'string' ? parsed.armero_nombre : '');
+                setArmaFirma(typeof parsed?.firma === 'string' ? parsed.firma : '');
+                setMantArmasForm(String(raw));
+            } else {
+                setEsArma(false);
+                setArmaTipoArma('');
+                setArmaMecanismo('');
+                setArmaMarca('');
+                setArmaModelo('');
+                setArmaSerie('');
+                setArmaCalibre('');
+                setArmaCargadorAdicional(false);
+                setArmaCargadorCantidad('');
+                setArmaCapacidadBalas('');
+                setArmaPreventivoChecks({});
+                setArmaCorrectivoChecks({});
+                setArmaDiagnostico('');
+                setArmaFotoAntesName('');
+                setArmaFotoDespuesName('');
+                setArmaFotoAntesLocal(null);
+                setArmaFotoDespuesLocal(null);
+                setArmaArmeroNombre('');
+                setArmaFirma('');
+                setMantArmasForm('');
+            }
+        } catch {
+            setEsArma(false);
+            setArmaTipoArma('');
+            setArmaMecanismo('');
+            setArmaMarca('');
+            setArmaModelo('');
+            setArmaSerie('');
+            setArmaCalibre('');
+            setArmaCargadorAdicional(false);
+            setArmaCargadorCantidad('');
+            setArmaCapacidadBalas('');
+            setArmaPreventivoChecks({});
+            setArmaCorrectivoChecks({});
+            setArmaDiagnostico('');
+            setArmaFotoAntesName('');
+            setArmaFotoDespuesName('');
+            setArmaFotoAntesLocal(null);
+            setArmaFotoDespuesLocal(null);
+            setArmaArmeroNombre('');
+            setArmaFirma('');
+            setMantArmasForm('');
+        }
 
         // Cargar archivos existentes del activo
         if (activo.archivos && activo.archivos.length > 0) {
@@ -1047,11 +1608,17 @@ export default function MantenimientoEquipoScreen() {
         setFechaSolucion(null);
         setAccion('');
         setFechaInicio(null);
+        setNumeroBoletaProveeduria('');
         setTipo('');
         setMarca('');
         setModelo('');
         setSeriePlaca('');
+        setMarcaNuevo('');
+        setModeloNuevo('');
+        setSeriePlacaNuevo('');
         setCategoria('');
+        setTipoMantenimientoArticulo('');
+        setTipoMantenimientoReincidencia('');
         setEsVehiculo(false);
         setKilometraje('');
         setFechaSalida(null);
@@ -1067,6 +1634,26 @@ export default function MantenimientoEquipoScreen() {
         setFechaFin(null);
         setReincidenciaTreintaDias(false);
         setMarcarComoResuelto(false);
+        setEsArma(false);
+        setArmaTipoArma('');
+        setArmaMecanismo('');
+        setArmaMarca('');
+        setArmaModelo('');
+        setArmaSerie('');
+        setArmaCalibre('');
+        setArmaCargadorAdicional(false);
+        setArmaCargadorCantidad('');
+        setArmaCapacidadBalas('');
+        setArmaPreventivoChecks({});
+        setArmaCorrectivoChecks({});
+        setArmaFotoAntesName('');
+        setArmaFotoDespuesName('');
+        setArmaFotoAntesLocal(null);
+        setArmaFotoDespuesLocal(null);
+        setArmaDiagnostico('');
+        setArmaArmeroNombre('');
+        setArmaFirma('');
+        setMantArmasForm('');
         setTextFiles([]);
         setImageFiles([]);
         setAudioFiles([]);
@@ -1200,19 +1787,19 @@ export default function MantenimientoEquipoScreen() {
     const getActivoImageUrl = (activoId: number, fileName: string) => {
         const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
         if (!apiUrl) return '';
-        return `${apiUrl}/api/activo-mantenimiento/${activoId}/get-image/${encodeURIComponent(fileName)}`;
+        return `${apiUrl}/api/articulo-mantenimiento/${activoId}/get-image/${encodeURIComponent(fileName)}`;
     };
 
     const getActivoAudioUrl = (activoId: number, fileName: string) => {
         const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
         if (!apiUrl) return '';
-        return `${apiUrl}/api/activo-mantenimiento/${activoId}/get-audio/${encodeURIComponent(fileName)}`;
+        return `${apiUrl}/api/articulo-mantenimiento/${activoId}/get-audio/${encodeURIComponent(fileName)}`;
     };
 
     const getActivoVideoUrl = (activoId: number, fileName: string) => {
         const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
         if (!apiUrl) return '';
-        return `${apiUrl}/api/activo-mantenimiento/${activoId}/get-video/${encodeURIComponent(fileName)}`;
+        return `${apiUrl}/api/articulo-mantenimiento/${activoId}/get-video/${encodeURIComponent(fileName)}`;
     };
 
     const buildFileUrl = (activoId: number | undefined, file: ActivoFileRemote) => {
@@ -1227,12 +1814,73 @@ export default function MantenimientoEquipoScreen() {
             if (file.type === 'audio') return getActivoAudioUrl(activoId, file.name);
             if (file.type === 'video') return getActivoVideoUrl(activoId, file.name);
             const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-            if (apiUrl) return `${apiUrl}/api/activo-mantenimiento/${activoId}/get-file/${encodeURIComponent(file.name)}`;
+            if (apiUrl) return `${apiUrl}/api/articulo-mantenimiento/${activoId}/get-file/${encodeURIComponent(file.name)}`;
         }
 
         if (file.url) return file.url;
         return '';
     };
+
+    const updateMainStructureCacheIfSameUltimoMantenimiento = useCallback(
+        async (params: {
+            puestoId: number | null;
+            source: 'plan' | 'asignado' | null;
+            estructuraId: number | null;
+            mantenimientoId: number | null;
+            patch: Record<string, any>;
+        }) => {
+            try {
+                const { puestoId, source, estructuraId, mantenimientoId, patch } = params;
+                if (!puestoId || !source || !estructuraId || !mantenimientoId) return;
+
+                const cacheStr = await AsyncStorage.getItem('main_structure_cache');
+                if (!cacheStr) return;
+
+                const tree = JSON.parse(cacheStr);
+                if (!Array.isArray(tree)) return;
+
+                const expectedTipo = source === 'plan' ? 'Plan' : 'Asignado';
+                let updated = false;
+
+                for (const empresa of tree) {
+                    const clientes = empresa?.clientes || [];
+                    for (const cliente of clientes) {
+                        const divisiones = cliente?.division || [];
+                        for (const division of divisiones) {
+                            const contratos = division?.contratos || [];
+                            for (const contrato of contratos) {
+                                const sucursales = contrato?.sucursales || [];
+                                for (const sucursal of sucursales) {
+                                    const puestos = sucursal?.puestos || [];
+                                    for (const puesto of puestos) {
+                                        if (Number(puesto?.id) !== Number(puestoId)) continue;
+                                        const articulos = Array.isArray(puesto?.articulos) ? puesto.articulos : [];
+                                        for (const art of articulos) {
+                                            if (Number(art?.id) !== Number(estructuraId)) continue;
+                                            if (String(art?.tipo) !== expectedTipo) continue;
+
+                                            const ultimo = art?.ultimo_mantenimiento;
+                                            if (!ultimo || Number(ultimo?.id) !== Number(mantenimientoId)) continue;
+
+                                            art.ultimo_mantenimiento = { ...ultimo, ...patch, id: mantenimientoId };
+                                            updated = true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (updated) {
+                    await AsyncStorage.setItem('main_structure_cache', JSON.stringify(tree));
+                }
+            } catch (e) {
+                console.error('Error updating main_structure_cache (ultimo_mantenimiento):', e);
+            }
+        },
+        []
+    );
 
     const handleSave = async () => {
         if (!selectedActivo) return;
@@ -1251,15 +1899,27 @@ export default function MantenimientoEquipoScreen() {
             ...videoFiles,
         ];
 
+        // Fotos de armas (subidas como adjuntos estándar)
+        if (esArma && armaFotoAntesLocal) {
+            filesPayload.push(armaFotoAntesLocal);
+        }
+        if (esArma && armaFotoDespuesLocal) {
+            filesPayload.push(armaFotoDespuesLocal);
+        }
+
         const requestData: any = {
-            fecha_solucion: fechaSolucion ? fechaSolucion.toISOString() : null,
             accion: accion || null,
             fecha_inicio: fechaInicio ? fechaInicio.toISOString() : null,
+            numero_boleta_proveeduria: numeroBoletaProveeduria || null,
             tipo: tipo || null,
             marca: marca || null,
             modelo: modelo || null,
             serie_placa: seriePlaca || null,
+            marca_nuevo: accion === 'Reemplazar' ? (marcaNuevo || null) : null,
+            modelo_nuevo: accion === 'Reemplazar' ? (modeloNuevo || null) : null,
+            serie_placa_nuevo: accion === 'Reemplazar' ? (seriePlacaNuevo || null) : null,
             categoria: categoria || null,
+            tipo_mantenimiento_art: tipoMantenimientoArticulo || null,
             kilometraje: esVehiculo && kilometraje ? parseInt(kilometraje) : null,
             fecha_salida: accion === 'Reparar en taller' && fechaSalida ? fechaSalida.toISOString() : null,
             fecha_entrada: accion === 'Reparar en taller' && fechaEntrada ? fechaEntrada.toISOString() : null,
@@ -1273,7 +1933,8 @@ export default function MantenimientoEquipoScreen() {
             costo_total: costoTotal ? parseInt(costoTotal) : null,
             fecha_fin: fechaFin ? fechaFin.toISOString() : null,
             reincidencia_treinta_dias: reincidenciaTreintaDias,
-            marcar_como_resuelto: marcarComoResuelto,
+            tipo_mant_art_reincid: reincidenciaTreintaDias ? (tipoMantenimientoReincidencia || null) : null,
+            mant_armas_form: esArma ? (mantArmasForm || null) : null,
             files: filesPayload.length > 0 ? JSON.stringify(
                 filesPayload.map(f => ({
                     type: f.type,
@@ -1283,6 +1944,70 @@ export default function MantenimientoEquipoScreen() {
                 }))
             ) : null,
         };
+
+        // Regla "Marcar como resuelto":
+        // - Si el registro ya tenía fecha_solucion, el checkbox debe verse marcado,
+        //   pero NO enviamos marcar_como_resuelto=true para no sobre-escribir la fecha en el backend.
+        if (marcarComoResuelto) {
+            // Fecha solución desde getHoraAccion (tiempo servidor ajustado) y enviar a API
+            let iso = '';
+            try {
+                const horaAccion = await getHoraAccion(); // ms epoch ajustado
+                iso = new Date(Number(horaAccion)).toISOString();
+            } catch {
+                iso = new Date().toISOString();
+            }
+
+            requestData.marcar_como_resuelto = true;
+            requestData.fecha_solucion = iso;
+
+            // Cuando se marca como resuelto, actualizar estado a "Bueno" y cantidad_real = cantidad_necesaria
+            requestData.estado = 'Bueno';
+            requestData.cantidad_real = selectedActivo.cantidad_necesaria;
+        } else {
+            // Si se desmarca, permitir limpiar fecha_solucion
+            requestData.fecha_solucion = null;
+        }
+
+        // Patch permitido para actualizar main_structure_cache (solo si el ultimo_mantenimiento coincide)
+        const allowedKeys = new Set([
+            'estado',
+            'cantidad_real',
+            'fecha_solucion',
+            'accion',
+            'fecha_inicio',
+            'numero_boleta_proveeduria',
+            'tipo',
+            'marca',
+            'modelo',
+            'serie_placa',
+            'marca_nuevo',
+            'modelo_nuevo',
+            'serie_placa_nuevo',
+            'categoria',
+            'tipo_mantenimiento_art',
+            'fecha_salida',
+            'fecha_entrada',
+            'kilometraje',
+            'mant_armas_form',
+            'categoria_mantinimiento',
+            'detalle',
+            'numero_fc',
+            'proveedor',
+            'costo_mo',
+            'costo_i',
+            'iva',
+            'costo_total',
+            'fecha_fin',
+            'reincidencia_treinta_dias',
+            'tipo_mant_art_reincid',
+        ]);
+        const mainStructurePatch: Record<string, any> = {};
+        for (const k of Array.from(allowedKeys)) {
+            if (Object.prototype.hasOwnProperty.call(requestData, k)) {
+                mainStructurePatch[k] = requestData[k];
+            }
+        }
 
         if (isConnected) {
             try {
@@ -1297,7 +2022,7 @@ export default function MantenimientoEquipoScreen() {
                     token = await AsyncStorage.getItem('access_token');
                 }
 
-                const response = await fetch(`${apiUrl}/api/activo-mantenimiento/${selectedActivo.id}`, {
+                const response = await fetch(`${apiUrl}/api/articulo-mantenimiento/${selectedActivo.id}`, {
                     method: 'PUT',
                     headers: {
                         Authorization: `Bearer ${token}`,
@@ -1320,46 +2045,93 @@ export default function MantenimientoEquipoScreen() {
                 if (response.ok) {
                     const data = await response.json();
                     if (data.status) {
-                        Alert.alert('Éxito', 'Activo actualizado correctamente');
+                        await updateMainStructureCacheIfSameUltimoMantenimiento({
+                            puestoId: activePuestoId,
+                            source: selectedReporte?.source ?? null,
+                            estructuraId: selectedReporte?.estructura_id ?? null,
+                            mantenimientoId: selectedActivo.id,
+                            patch: mainStructurePatch,
+                        });
+                        Alert.alert('Éxito', 'Mantenimiento actualizado correctamente');
                         setIsUpdating(false);
                         setSelectedActivo(null);
                         setShowActivos(true);
                         resetForm();
                         if (selectedReporte) {
-                            await fetchActivos(selectedReporte.id);
+                            await fetchActivos(selectedReporte);
                         }
                         await fetchReportes();
                     } else {
-                        Alert.alert('Error', data.message || 'No se pudo actualizar el activo');
+                        Alert.alert('Error', data.message || 'No se pudo actualizar el mantenimiento');
                     }
                 } else {
-                    Alert.alert('Error', 'No se pudo actualizar el activo');
+                    Alert.alert('Error', 'No se pudo actualizar el mantenimiento');
                 }
             } catch (error: any) {
-                Alert.alert('Error', error.message || 'No se pudo actualizar el activo');
+                Alert.alert('Error', error.message || 'No se pudo actualizar el mantenimiento');
             }
         } else {
             // Modo offline
             const localId = selectedActivo.id_local || generateRandomId();
-            const actionsStr = await AsyncStorage.getItem('activo_mantenimiento_actions');
+            const actionsStr = await AsyncStorage.getItem('articulo_mantenimiento_actions');
             const actions = actionsStr ? JSON.parse(actionsStr) : [];
             actions.push({
                 type: 'update',
                 id: selectedActivo.id,
                 id_local: localId,
-                reporteId: selectedReporte?.id,
+                parentKey: selectedReporte?.key,
+                // Metadatos para trazabilidad/sincronización (IDs del artículo/puesto)
+                meta: {
+                    puestoId: activePuestoId,
+                    source: selectedReporte?.source ?? null,
+                    estructuraId: selectedReporte?.estructura_id ?? null,
+                },
                 requestData,
             });
-            await AsyncStorage.setItem('activo_mantenimiento_actions', JSON.stringify(actions));
+            await AsyncStorage.setItem('articulo_mantenimiento_actions', JSON.stringify(actions));
 
             // Actualizar cache
             const updatedActivos = activos.map((a) =>
                 a.id === selectedActivo.id ? { ...a, ...requestData, id_local: localId } : a
             );
             setActivos(updatedActivos);
+            // Actualizar el listado/caché para que el cambio sea visible sin conexión
             if (selectedReporte) {
-                await AsyncStorage.setItem(`activos_mantenimiento_${selectedReporte.id}_cache`, JSON.stringify(updatedActivos));
+                const nextMantenimientos = updatedActivos;
+                const first = nextMantenimientos[0] ?? null;
+
+                const nextReporte: ArticuloPuestoMantenimientoItem = {
+                    ...selectedReporte,
+                    mantenimientos: nextMantenimientos,
+                    ultimo_mantenimiento: first
+                        ? {
+                            id: first.id,
+                            estado: first.estado,
+                            cantidad_necesaria: first.cantidad_necesaria,
+                            cantidad_real: first.cantidad_real,
+                            observaciones: first.observaciones,
+                        }
+                        : null,
+                };
+
+                setSelectedReporte(nextReporte);
+                setReportes((prev) => prev.map((r) => (r.key === nextReporte.key ? nextReporte : r)));
+
+                const cacheKey = `mantenimiento_equipo_${String(activePuestoId ?? 'current')}_cache`;
+                const cacheStr = await AsyncStorage.getItem(cacheKey);
+                const base = cacheStr ? JSON.parse(cacheStr) : reportes;
+                const baseArr: any[] = Array.isArray(base) ? base : [];
+                const nextCache = baseArr.map((r) => (r.key === nextReporte.key ? nextReporte : r));
+                await AsyncStorage.setItem(cacheKey, JSON.stringify(nextCache));
             }
+
+            await updateMainStructureCacheIfSameUltimoMantenimiento({
+                puestoId: activePuestoId,
+                source: selectedReporte?.source ?? null,
+                estructuraId: selectedReporte?.estructura_id ?? null,
+                mantenimientoId: selectedActivo.id,
+                patch: mainStructurePatch,
+            });
 
             Alert.alert('Guardado (offline)', 'Los cambios se sincronizarán cuando vuelva la conexión.');
             setIsUpdating(false);
@@ -1369,41 +2141,54 @@ export default function MantenimientoEquipoScreen() {
         }
     };
 
-    const renderReporte = (reporte: ReporteMantenimiento) => {
-        const fecha = reporte.fecha_reporte ? String(reporte.fecha_reporte).split('T')[0] : '';
+    const renderReporte = (reporte: ArticuloPuestoMantenimientoItem) => {
+        const ultimo = reporte.ultimo_mantenimiento;
         return (
-            <ThemedView key={reporte.id} style={styles.bitacoraCard}>
+            <ThemedView key={reporte.key} style={styles.bitacoraCard}>
                 <ThemedText style={styles.bitTitle}>
-                    Reporte #{reporte.id} - {reporte.division}
-                    {reporte.id_local ? ' (offline)' : ''}
+                    {reporte.articulo_nombre} ({reporte.tipo})
                 </ThemedText>
-                <ThemedText style={styles.bitLine}>
-                    <ThemedText style={styles.bitLabel}>Cliente: </ThemedText>
-                    <ThemedText style={styles.bitValue}>{reporte.cliente?.nombre || '-'}</ThemedText>
-                </ThemedText>
-                <ThemedText style={styles.bitLine}>
-                    <ThemedText style={styles.bitLabel}>Sucursal: </ThemedText>
-                    <ThemedText style={styles.bitValue}>{reporte.corpo?.nombre || '-'}</ThemedText>
-                </ThemedText>
-                <ThemedText style={styles.bitLine}>
-                    <ThemedText style={styles.bitLabel}>Puesto: </ThemedText>
-                    <ThemedText style={styles.bitValue}>{reporte.puesto?.nombre || '-'}</ThemedText>
-                </ThemedText>
-                <ThemedText style={styles.bitLine}>
-                    <ThemedText style={styles.bitLabel}>Fecha: </ThemedText>
-                    <ThemedText style={styles.bitValue}>{fecha}</ThemedText>
-                </ThemedText>
+
                 <ThemedText style={styles.bitLine}>
                     <ThemedText style={styles.bitLabel}>Estado: </ThemedText>
-                    <ThemedText style={styles.bitValue}>{reporte.solucionado ? 'Solucionado' : 'Pendiente'}</ThemedText>
+                    <ThemedText
+                        style={[
+                            styles.bitValue,
+                            estadoIsBueno(ultimo?.estado) ? styles.estadoBueno : styles.estadoMalo,
+                        ]}
+                    >
+                        {ultimo?.estado ?? '-'}
+                    </ThemedText>
                 </ThemedText>
-                <TouchableOpacity
-                    style={[styles.listItemButton, styles.viewButton]}
-                    onPress={() => handleVerActivos(reporte)}
-                >
-                    <Ionicons name="eye" size={18} color="#FFFFFF" />
-                    <ThemedText style={styles.listItemButtonText}>Ver activos</ThemedText>
-                </TouchableOpacity>
+                <ThemedText style={styles.bitLine}>
+                    <ThemedText style={styles.bitLabel}>Cantidad necesaria: </ThemedText>
+                    <ThemedText style={styles.bitValue}>{ultimo?.cantidad_necesaria ?? '-'}</ThemedText>
+                </ThemedText>
+                <ThemedText style={styles.bitLine}>
+                    <ThemedText style={styles.bitLabel}>Cantidad real: </ThemedText>
+                    <ThemedText style={styles.bitValue}>{ultimo?.cantidad_real ?? '-'}</ThemedText>
+                </ThemedText>
+                <ThemedText style={styles.bitLine}>
+                    <ThemedText style={styles.bitLabel}>Observaciones: </ThemedText>
+                    <ThemedText style={styles.bitValue}>{ultimo?.observaciones ?? '-'}</ThemedText>
+                </ThemedText>
+
+                <ThemedView style={styles.listItemButtons}>
+                    <TouchableOpacity
+                        style={[styles.listItemButton, styles.viewButton]}
+                        onPress={() => handleVerActivos(reporte)}
+                    >
+                        <Ionicons name="list" size={18} color="#FFFFFF" />
+                        <ThemedText style={styles.listItemButtonText}>Mantenimientos</ThemedText>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                        style={[styles.listItemButton, styles.movementsButton]}
+                        onPress={() => openMovimientosModal(reporte)}
+                    >
+                        <Ionicons name="repeat" size={18} color="#FFFFFF" />
+                        <ThemedText style={styles.listItemButtonText}>Movimientos</ThemedText>
+                    </TouchableOpacity>
+                </ThemedView>
             </ThemedView>
         );
     };
@@ -1423,7 +2208,7 @@ export default function MantenimientoEquipoScreen() {
         }
     };
 
-    const renderActivo = (activo: ActivoMantenimiento) => {
+    const renderActivo = (activo: ArticuloMantenimiento) => {
         const archivos = activo.archivos || [];
         const isSolucionado = activo.fecha_solucion !== null && activo.fecha_solucion !== undefined;
         const fechaFormateada = formatFechaSolucion(activo.fecha_solucion);
@@ -1432,7 +2217,7 @@ export default function MantenimientoEquipoScreen() {
             <ThemedView key={activo.id} style={styles.bitacoraCard}>
                 <ThemedView style={styles.activoHeader}>
                     <ThemedText style={styles.bitTitle}>
-                        {activo.articulo_nombre || 'Artículo desconocido'}
+                        {selectedReporte?.articulo_nombre || 'Artículo'} - Mantenimiento #{activo.id}
                         {activo.id_local ? ' (offline)' : ''}
                     </ThemedText>
                     <ThemedView style={[
@@ -1446,7 +2231,14 @@ export default function MantenimientoEquipoScreen() {
                 </ThemedView>
                 <ThemedText style={styles.bitLine}>
                     <ThemedText style={styles.bitLabel}>Estado: </ThemedText>
-                    <ThemedText style={styles.bitValue}>{activo.estado}</ThemedText>
+                    <ThemedText
+                        style={[
+                            styles.bitValue,
+                            estadoIsBueno(activo.estado) ? styles.estadoBueno : styles.estadoMalo,
+                        ]}
+                    >
+                        {activo.estado}
+                    </ThemedText>
                 </ThemedText>
                 <ThemedText style={styles.bitLine}>
                     <ThemedText style={styles.bitLabel}>Cantidad necesaria: </ThemedText>
@@ -1474,11 +2266,14 @@ export default function MantenimientoEquipoScreen() {
                         <ThemedText style={styles.listItemButtonText}>Actualizar</ThemedText>
                     </TouchableOpacity>
                     <TouchableOpacity
-                        style={[styles.listItemButton, styles.movementsButton]}
-                        onPress={() => openMovimientosModal(activo)}
+                        style={[styles.listItemButton, styles.changesButton]}
+                        onPress={() => {
+                            setCambiosTitle(`Cambios - Mantenimiento #${activo.id}`);
+                            fetchCambios('c_articulo_mantenimiento', activo.id);
+                        }}
                     >
-                        <Ionicons name="repeat" size={18} color="#FFFFFF" />
-                        <ThemedText style={styles.listItemButtonText}>Movimientos</ThemedText>
+                        <Ionicons name="list-outline" size={18} color="#FFFFFF" />
+                        <ThemedText style={styles.listItemButtonText}>Cambios</ThemedText>
                     </TouchableOpacity>
                 </ThemedView>
             </ThemedView>
@@ -1503,22 +2298,22 @@ export default function MantenimientoEquipoScreen() {
     };
 
     const upsertMovAction = async (action: any) => {
-        const actionsStr = await AsyncStorage.getItem('movimientos_activos_mantenimiento_actions');
+        const actionsStr = await AsyncStorage.getItem('movimientos_articulos_mantenimiento_actions');
         const actions = actionsStr ? JSON.parse(actionsStr) : [];
         actions.push(action);
-        await AsyncStorage.setItem('movimientos_activos_mantenimiento_actions', JSON.stringify(actions));
+        await AsyncStorage.setItem('movimientos_articulos_mantenimiento_actions', JSON.stringify(actions));
     };
 
     const removeMovActionsForLocalId = async (localId: string) => {
-        const actionsStr = await AsyncStorage.getItem('movimientos_activos_mantenimiento_actions');
+        const actionsStr = await AsyncStorage.getItem('movimientos_articulos_mantenimiento_actions');
         if (!actionsStr) return;
         const actions = JSON.parse(actionsStr) || [];
         const updated = actions.filter((a: any) => a.id !== localId);
-        await AsyncStorage.setItem('movimientos_activos_mantenimiento_actions', JSON.stringify(updated));
+        await AsyncStorage.setItem('movimientos_articulos_mantenimiento_actions', JSON.stringify(updated));
     };
 
     const updateMovCreateActionForLocalId = async (localId: string, requestData: any) => {
-        const actionsStr = await AsyncStorage.getItem('movimientos_activos_mantenimiento_actions');
+        const actionsStr = await AsyncStorage.getItem('movimientos_articulos_mantenimiento_actions');
         if (!actionsStr) return false;
         const actions = JSON.parse(actionsStr) || [];
         let updatedAny = false;
@@ -1530,7 +2325,7 @@ export default function MantenimientoEquipoScreen() {
             return a;
         });
         if (updatedAny) {
-            await AsyncStorage.setItem('movimientos_activos_mantenimiento_actions', JSON.stringify(updated));
+            await AsyncStorage.setItem('movimientos_articulos_mantenimiento_actions', JSON.stringify(updated));
             return true;
         }
         return false;
@@ -1623,7 +2418,7 @@ export default function MantenimientoEquipoScreen() {
         }
     };
 
-    const openMovimientosModal = async (activo: ActivoMantenimiento) => {
+    const openMovimientosModal = async (activo: ArticuloPuestoMantenimientoItem) => {
         setMovActivo(activo);
         const current = await loadMarcaContext();
         if (!current?.id) {
@@ -1632,9 +2427,10 @@ export default function MantenimientoEquipoScreen() {
         }
 
         const isConnected = await getConnectionStatus();
-        if (isConnected && activo.id && activo.id !== 0) {
-            const res = await listMovimientosActivoMantenimiento({
-                activoId: activo.id,
+        const cacheKey = `movimientos_articulo_${activo.key}_cache`;
+        if (isConnected && activo.estructura_id) {
+            const res = await listMovimientosArticuloMantenimiento({
+                parent: { source: activo.source, estructuraId: activo.estructura_id },
                 marcaId: current.id,
                 refreshAccessToken,
                 logout,
@@ -1642,17 +2438,32 @@ export default function MantenimientoEquipoScreen() {
             if (res.status && res.data) {
                 const list = res.data.map((m: any) => ({ ...m, id_local: m.id_local || '' }));
                 setMovimientos(list);
+                await AsyncStorage.setItem(cacheKey, JSON.stringify(list));
             } else {
-                setMovimientos([]);
+                setMovimientos(Array.isArray(activo.movimientos) ? activo.movimientos : []);
             }
         } else {
             // Cargar desde cache si existe
-            const cacheStr = await AsyncStorage.getItem(`movimientos_activo_${activo.id}_cache`);
+            const cacheStr = await AsyncStorage.getItem(cacheKey);
             if (cacheStr) {
                 const cached = JSON.parse(cacheStr);
                 setMovimientos(cached.map((m: any) => ({ ...m, id_local: m.id_local || '' })));
             } else {
-                setMovimientos([]);
+                // Offline: preferir main_structure_cache
+                if (activePuestoId && activo?.estructura_id) {
+                    const artNode = await getArticuloFromMainStructure({
+                        puestoId: activePuestoId,
+                        source: activo.source,
+                        estructuraId: activo.estructura_id,
+                    });
+                    if (Array.isArray(artNode?.movimientos)) {
+                        setMovimientos(artNode.movimientos.map((m: any) => ({ ...m, id_local: m.id_local || '' })));
+                    } else {
+                        setMovimientos(Array.isArray(activo.movimientos) ? activo.movimientos : []);
+                    }
+                } else {
+                    setMovimientos(Array.isArray(activo.movimientos) ? activo.movimientos : []);
+                }
             }
         }
 
@@ -1682,7 +2493,7 @@ export default function MantenimientoEquipoScreen() {
         setMovHora(timeToHHMMSS(new Date()));
     };
 
-    const startMovEditing = (m: MovimientoActivoMantenimientoItem) => {
+    const startMovEditing = (m: MovimientoArticuloMantenimientoItem) => {
         setMovEditing(m);
         setMovIsCreating(true);
         setMovNombreRecibe(m.nombre_persona_recibe || '');
@@ -1705,17 +2516,12 @@ export default function MantenimientoEquipoScreen() {
         resetMovForm();
     };
 
-    const persistMovimientosToActivosCache = async (activo: ActivoMantenimiento, nextMovs: MovimientoActivoMantenimientoItem[]) => {
-        const nextActivos = activos.map((it) => {
-            const match = (activo.id_local && it.id_local === activo.id_local) || (!activo.id_local && it.id === activo.id);
-            if (!match) return it;
-            return { ...it, movimientos: nextMovs };
-        });
-        setActivos(nextActivos);
-        if (activo.id && activo.id !== 0) {
-            await AsyncStorage.setItem(`movimientos_activo_${activo.id}_cache`, JSON.stringify(nextMovs));
-        }
-
+    const persistMovimientosToActivosCache = async (
+        parent: ArticuloPuestoMantenimientoItem,
+        nextMovs: MovimientoArticuloMantenimientoItem[]
+    ) => {
+        const cacheKey = `movimientos_articulo_${parent.key}_cache`;
+        await AsyncStorage.setItem(cacheKey, JSON.stringify(nextMovs));
         setMovimientos(nextMovs);
         setMovActivo((prev) => (prev ? { ...prev, movimientos: nextMovs } : prev));
     };
@@ -1730,8 +2536,9 @@ export default function MantenimientoEquipoScreen() {
 
         // create
         if (!movEditing) {
-            if (isConnected && movActivo.id && movActivo.id !== 0) {
-                const res = await createMovimientoActivoMantenimiento({ activoId: movActivo.id, requestData: payload, refreshAccessToken, logout });
+            const parent = { source: movActivo.source, estructuraId: movActivo.estructura_id };
+            if (isConnected && movActivo.estructura_id) {
+                const res = await createMovimientoArticuloMantenimiento({ parent, requestData: payload, refreshAccessToken, logout });
                 if (res.status) {
                     Alert.alert('Éxito', 'Movimiento creado correctamente');
                     setMovIsCreating(false);
@@ -1741,10 +2548,11 @@ export default function MantenimientoEquipoScreen() {
                 }
             } else {
                 const localId = `local-mov-${Date.now()}`;
-                const localItem: MovimientoActivoMantenimientoItem = {
+                const localItem: MovimientoArticuloMantenimientoItem = {
                     id: 0,
                     id_local: localId,
-                    activo_mantenimiento_id: movActivo.id || 0,
+                    articulo_plan_id: movActivo.source === 'plan' ? movActivo.estructura_id : null,
+                    articulo_asignado_id: movActivo.source === 'asignado' ? movActivo.estructura_id : null,
                     nombre_persona_recibe: payload.nombre_persona_recibe,
                     nombre_persona_entrega: payload.nombre_persona_entrega,
                     departamento: payload.departamento,
@@ -1762,9 +2570,9 @@ export default function MantenimientoEquipoScreen() {
                 await upsertMovAction({
                     type: 'create',
                     id: localId,
-                    activoId: movActivo.id || 0,
-                    activoLocalId: movActivo.id_local || '',
-                    reporteId: movActivo.reporte_id,
+                    parent,
+                    puestoId: activePuestoId,
+                    parentKey: movActivo.key,
                     requestData: payload,
                 });
                 Alert.alert('Guardado (offline)', 'El movimiento se sincronizará cuando vuelva la conexión.');
@@ -1775,14 +2583,9 @@ export default function MantenimientoEquipoScreen() {
 
         // update
         const isLocalMov = !!movEditing.id_local || movEditing.id === 0;
-        if (isConnected && !isLocalMov && movActivo.id && movActivo.id !== 0) {
-            const res = await updateMovimientoActivoMantenimiento({
-                activoId: movActivo.id,
-                id: movEditing.id,
-                requestData: payload,
-                refreshAccessToken,
-                logout,
-            });
+        const parent = { source: movActivo.source, estructuraId: movActivo.estructura_id };
+        if (isConnected && !isLocalMov && movActivo.estructura_id) {
+            const res = await updateMovimientoArticuloMantenimiento({ parent, id: movEditing.id, requestData: payload, refreshAccessToken, logout });
             if (res.status) {
                 Alert.alert('Éxito', 'Movimiento actualizado correctamente');
                 setMovIsCreating(false);
@@ -1818,9 +2621,9 @@ export default function MantenimientoEquipoScreen() {
                     await upsertMovAction({
                         type: 'create',
                         id: movEditing.id_local,
-                        activoId: movActivo.id || 0,
-                        activoLocalId: movActivo.id_local || '',
-                        reporteId: movActivo.reporte_id,
+                        parent,
+                        puestoId: activePuestoId,
+                        parentKey: movActivo.key,
                         requestData: payload,
                     });
                 }
@@ -1828,9 +2631,9 @@ export default function MantenimientoEquipoScreen() {
                 await upsertMovAction({
                     type: 'update',
                     id: movEditing.id,
-                    activoId: movActivo.id || 0,
-                    activoLocalId: movActivo.id_local || '',
-                    reporteId: movActivo.reporte_id,
+                    parent,
+                    puestoId: activePuestoId,
+                    parentKey: movActivo.key,
                     requestData: payload,
                 });
             }
@@ -1841,7 +2644,7 @@ export default function MantenimientoEquipoScreen() {
         }
     };
 
-    const handleMovDelete = async (m: MovimientoActivoMantenimientoItem) => {
+    const handleMovDelete = async (m: MovimientoArticuloMantenimientoItem) => {
         const current = await loadMarcaContext();
         if (!current?.id) return;
         if (!movActivo) return;
@@ -1861,14 +2664,9 @@ export default function MantenimientoEquipoScreen() {
                         return;
                     }
 
-                    if (isConnected && movActivo.id && movActivo.id !== 0) {
-                        const res = await deleteMovimientoActivoMantenimiento({
-                            activoId: movActivo.id,
-                            id: m.id,
-                            marcaId: current.id,
-                            refreshAccessToken,
-                            logout,
-                        });
+                    const parent = { source: movActivo.source, estructuraId: movActivo.estructura_id };
+                    if (isConnected && movActivo.estructura_id) {
+                        const res = await deleteMovimientoArticuloMantenimiento({ parent, id: m.id, marcaId: current.id, refreshAccessToken, logout });
                         if (res.status) {
                             Alert.alert('Éxito', 'Movimiento eliminado correctamente');
                             await openMovimientosModal(movActivo);
@@ -1881,10 +2679,10 @@ export default function MantenimientoEquipoScreen() {
                         await upsertMovAction({
                             type: 'delete',
                             id: m.id,
-                            activoId: movActivo.id || 0,
-                            activoLocalId: movActivo.id_local || '',
-                            reporteId: movActivo.reporte_id,
+                            parent,
                             marcaId: current.id,
+                            puestoId: activePuestoId,
+                            parentKey: movActivo.key,
                         });
                         Alert.alert('Eliminado (offline)', 'La eliminación se sincronizará cuando vuelva la conexión.');
                     }
@@ -1933,15 +2731,16 @@ export default function MantenimientoEquipoScreen() {
     const renderForm = () => {
         const showFechaSalidaEntrada = accion === 'Reparar en taller';
         const showKilometraje = esVehiculo;
+        const showReemplazarFields = accion === 'Reemplazar';
 
         return (
             <ThemedView style={styles.formCard}>
-                <ThemedText style={styles.formTitle}>Actualizar activo</ThemedText>
+                <ThemedText style={styles.formTitle}>Actualizar mantenimiento</ThemedText>
 
                 <ThemedText style={styles.label}>Artículo:</ThemedText>
                 <TextInput
                     style={[styles.input, styles.inputReadOnly]}
-                    value={selectedActivo?.articulo_nombre || ''}
+                    value={selectedReporte?.articulo_nombre || ''}
                     editable={false}
                     placeholderTextColor="#999"
                 />
@@ -1969,6 +2768,7 @@ export default function MantenimientoEquipoScreen() {
                     >
                         <Picker.Item label="Seleccionar..." value="" />
                         <Picker.Item label="Reemplazar" value="Reemplazar" />
+                        <Picker.Item label="Rellenar" value="Rellenar" />
                         <Picker.Item label="Reparar en puesto" value="Reparar en puesto" />
                         <Picker.Item label="Reparar en taller" value="Reparar en taller" />
                     </Picker>
@@ -1982,6 +2782,15 @@ export default function MantenimientoEquipoScreen() {
                     <Ionicons name="calendar-outline" size={18} color="#007AFF" />
                 </TouchableOpacity>
 
+                <ThemedText style={styles.label}>Número de boleta de proveduría:</ThemedText>
+                <TextInput
+                    style={styles.input}
+                    value={numeroBoletaProveeduria}
+                    onChangeText={setNumeroBoletaProveeduria}
+                    placeholder="Número de boleta de proveduría"
+                    placeholderTextColor="#999"
+                />
+
                 <ThemedText style={styles.label}>Tipo:</ThemedText>
                 <View style={styles.pickerContainer}>
                     <Picker
@@ -1992,6 +2801,331 @@ export default function MantenimientoEquipoScreen() {
                         <Picker.Item label="Seleccionar..." value="" />
                         <Picker.Item label="Preventivo" value="Preventivo" />
                         <Picker.Item label="Correctivo" value="Correctivo" />
+                    </Picker>
+                </View>
+
+                <ThemedView style={styles.checkboxContainer}>
+                    <TouchableOpacity
+                        style={[styles.checkbox, esArma ? styles.checkboxChecked : styles.checkboxUnchecked]}
+                        onPress={() => {
+                            if (esArma) {
+                                setEsArma(false);
+                                setArmaTipoArma('');
+                                setArmaMecanismo('');
+                                setArmaMarca('');
+                                setArmaModelo('');
+                                setArmaSerie('');
+                                setArmaCalibre('');
+                                setArmaCargadorAdicional(false);
+                                setArmaCargadorCantidad('');
+                                setArmaCapacidadBalas('');
+                                setArmaPreventivoChecks({});
+                                setArmaCorrectivoChecks({});
+                                setArmaFotoAntesName('');
+                                setArmaFotoDespuesName('');
+                                setArmaFotoAntesLocal(null);
+                                setArmaFotoDespuesLocal(null);
+                                setArmaDiagnostico('');
+                                setArmaArmeroNombre('');
+                                setArmaFirma('');
+                                setMantArmasForm('');
+                            } else {
+                                setEsArma(true);
+                            }
+                        }}
+                        activeOpacity={0.8}
+                    >
+                        {esArma && <Ionicons name="checkmark" size={16} color="#fff" />}
+                    </TouchableOpacity>
+                    <ThemedText style={styles.checkboxLabel}>Es arma</ThemedText>
+                </ThemedView>
+
+                {esArma && (
+                    <ThemedView style={styles.armasBox}>
+                        <ThemedText style={styles.armasTitle}>Características</ThemedText>
+
+                        <ThemedText style={styles.label}>Tipo de Arma:</ThemedText>
+                        <View style={styles.pickerContainer}>
+                            <Picker
+                                selectedValue={armaTipoArma}
+                                onValueChange={(value) => setArmaTipoArma(value)}
+                                style={styles.picker}
+                            >
+                                <Picker.Item label="Seleccionar..." value="" />
+                                <Picker.Item label="Letal" value="Letal" />
+                                <Picker.Item label="Menos Letal" value="Menos Letal" />
+                            </Picker>
+                        </View>
+
+                        <ThemedText style={styles.label}>Mecanismo:</ThemedText>
+                        <View style={styles.pickerContainer}>
+                            <Picker
+                                selectedValue={armaMecanismo}
+                                onValueChange={(value) => setArmaMecanismo(value)}
+                                style={styles.picker}
+                            >
+                                <Picker.Item label="Seleccionar..." value="" />
+                                <Picker.Item label="Pistola" value="Pistola" />
+                                <Picker.Item label="Revolver" value="Revolver" />
+                            </Picker>
+                        </View>
+
+                        <ThemedView style={styles.armasRow}>
+                            <ThemedText style={styles.armasFieldLabel}>Marca:</ThemedText>
+                            <TextInput style={styles.armasInlineInput} value={armaMarca} onChangeText={setArmaMarca} placeholder="Marca" placeholderTextColor="#999" />
+                        </ThemedView>
+                        <ThemedView style={styles.armasRow}>
+                            <ThemedText style={styles.armasFieldLabel}>Modelo:</ThemedText>
+                            <TextInput style={styles.armasInlineInput} value={armaModelo} onChangeText={setArmaModelo} placeholder="Modelo" placeholderTextColor="#999" />
+                        </ThemedView>
+                        <ThemedView style={styles.armasRow}>
+                            <ThemedText style={styles.armasFieldLabel}>Serie:</ThemedText>
+                            <TextInput style={styles.armasInlineInput} value={armaSerie} onChangeText={setArmaSerie} placeholder="Serie" placeholderTextColor="#999" />
+                        </ThemedView>
+                        <ThemedView style={styles.armasRow}>
+                            <ThemedText style={styles.armasFieldLabel}>Calibre:</ThemedText>
+                            <TextInput style={styles.armasInlineInput} value={armaCalibre} onChangeText={setArmaCalibre} placeholder="Calibre" placeholderTextColor="#999" />
+                        </ThemedView>
+                        <ThemedView style={styles.armasRow}>
+                            <ThemedText style={styles.armasFieldLabel}>Cargador Adicional:</ThemedText>
+                            <ThemedView style={styles.armasInlineRow}>
+                                <TouchableOpacity
+                                    style={[styles.armasMiniCheckbox, armaCargadorAdicional ? styles.armasMiniCheckboxChecked : styles.armasMiniCheckboxUnchecked]}
+                                    onPress={() => setArmaCargadorAdicional((v) => !v)}
+                                >
+                                    {armaCargadorAdicional ? <Ionicons name="checkmark" size={14} color="#fff" /> : null}
+                                </TouchableOpacity>
+                                <ThemedText style={styles.armasInlineMuted}>Cantidad:</ThemedText>
+                                <TextInput
+                                    style={[styles.armasInlineInput, { flex: 1, marginBottom: 0 }]}
+                                    value={armaCargadorCantidad}
+                                    onChangeText={setArmaCargadorCantidad}
+                                    placeholder="0"
+                                    keyboardType="numeric"
+                                    placeholderTextColor="#999"
+                                    editable={armaCargadorAdicional}
+                                />
+                            </ThemedView>
+                        </ThemedView>
+                        <ThemedView style={styles.armasRow}>
+                            <ThemedText style={styles.armasFieldLabel}>Capacidad Balas:</ThemedText>
+                            <TextInput
+                                style={styles.armasInlineInput}
+                                value={armaCapacidadBalas}
+                                onChangeText={setArmaCapacidadBalas}
+                                placeholder="Capacidad"
+                                keyboardType="numeric"
+                                placeholderTextColor="#999"
+                            />
+                        </ThemedView>
+
+                        <ThemedText style={styles.armasSectionTitle}>Foto Antes:</ThemedText>
+                        <ThemedView style={styles.armasMediaRow}>
+                            <TouchableOpacity
+                                style={styles.armasMediaButton}
+                                onPress={async () => {
+                                    const imgFile = await pickArmaImageAsFile('arma_foto_antes');
+                                    if (imgFile) {
+                                        setArmaFotoAntesLocal(imgFile);
+                                        setArmaFotoAntesName(imgFile.name);
+                                    }
+                                }}
+                            >
+                                <Ionicons name="camera" size={18} color="#fff" />
+                                <ThemedText style={styles.armasMediaButtonText}>{(armaFotoAntesLocal || armaFotoAntesName) ? 'Cambiar' : 'Subir'}</ThemedText>
+                            </TouchableOpacity>
+                            {armaFotoAntesLocal ? (
+                                <>
+                                    <Image
+                                        source={{ uri: `data:${armaFotoAntesLocal.mimeType || 'image/jpeg'};base64,${armaFotoAntesLocal.base64}` }}
+                                        style={styles.armasThumb}
+                                    />
+                                    <TouchableOpacity
+                                        style={styles.armasRemoveButton}
+                                        onPress={() => {
+                                            setArmaFotoAntesLocal(null);
+                                            setArmaFotoAntesName('');
+                                        }}
+                                    >
+                                        <Ionicons name="trash" size={18} color="#FF3B30" />
+                                    </TouchableOpacity>
+                                </>
+                            ) : (armaFotoAntesName && selectedActivo?.archivos?.length ? (() => {
+                                const remote = (selectedActivo.archivos || []).find((f) => f.original_name === armaFotoAntesName || f.name === armaFotoAntesName);
+                                if (!remote) return null;
+                                const uri = buildFileUrl(selectedActivo?.id, remote);
+                                if (!uri) return null;
+                                return (
+                                    <>
+                                        <Image source={{ uri }} style={styles.armasThumb} />
+                                        <TouchableOpacity
+                                            style={styles.armasRemoveButton}
+                                            onPress={() => {
+                                                // No borramos del servidor aquí; solo removemos del formulario y se reemplaza al guardar
+                                                setArmaFotoAntesName('');
+                                                setArmaFotoAntesLocal(null);
+                                            }}
+                                        >
+                                            <Ionicons name="trash" size={18} color="#FF3B30" />
+                                        </TouchableOpacity>
+                                    </>
+                                );
+                            })() : null)}
+                        </ThemedView>
+
+                        {tipo === 'Preventivo' ? (
+                            <>
+                                <ThemedText style={styles.armasSectionTitle}>Mantenimiento Preventivo</ThemedText>
+                                <ThemedView style={styles.armasChecklist}>
+                                    {ARMAS_PREVENTIVO_ITEMS.map((it) => {
+                                        const checked = !!armaPreventivoChecks[it.key];
+                                        const padLeft = (it.level ?? 0) * 18;
+                                        return (
+                                            <TouchableOpacity
+                                                key={it.key}
+                                                style={[styles.armasChecklistRow, { paddingLeft: padLeft }]}
+                                                onPress={() => setArmaPreventivoChecks((prev) => toggleChecklistItem(prev, it.key))}
+                                                activeOpacity={0.8}
+                                            >
+                                                <View style={[styles.armasMiniCheckbox, checked ? styles.armasMiniCheckboxChecked : styles.armasMiniCheckboxUnchecked]}>
+                                                    {checked ? <Ionicons name="checkmark" size={14} color="#fff" /> : null}
+                                                </View>
+                                                <ThemedText style={[styles.armasChecklistText, (it.level ?? 0) === 0 && { fontWeight: '800' }]}>{it.label}</ThemedText>
+                                            </TouchableOpacity>
+                                        );
+                                    })}
+                                </ThemedView>
+                            </>
+                        ) : tipo === 'Correctivo' ? (
+                            <>
+                                <ThemedText style={styles.armasSectionTitle}>Mantenimiento Correctivo</ThemedText>
+                                <ThemedView style={styles.armasChecklist}>
+                                    {ARMAS_CORRECTIVO_ITEMS.map((it) => {
+                                        const checked = !!armaCorrectivoChecks[it.key];
+                                        const padLeft = (it.level ?? 0) * 18;
+                                        return (
+                                            <TouchableOpacity
+                                                key={it.key}
+                                                style={[styles.armasChecklistRow, { paddingLeft: padLeft }]}
+                                                onPress={() => setArmaCorrectivoChecks((prev) => toggleChecklistItem(prev, it.key))}
+                                                activeOpacity={0.8}
+                                            >
+                                                <View style={[styles.armasMiniCheckbox, checked ? styles.armasMiniCheckboxChecked : styles.armasMiniCheckboxUnchecked]}>
+                                                    {checked ? <Ionicons name="checkmark" size={14} color="#fff" /> : null}
+                                                </View>
+                                                <ThemedText style={[styles.armasChecklistText, (it.level ?? 0) === 0 && { fontWeight: '800' }]}>{it.label}</ThemedText>
+                                            </TouchableOpacity>
+                                        );
+                                    })}
+                                </ThemedView>
+                            </>
+                        ) : (
+                            <ThemedText style={styles.armasHintMuted}>
+                                Selecciona “Preventivo” o “Correctivo” para mostrar el formulario.
+                            </ThemedText>
+                        )}
+
+                        <ThemedText style={styles.armasSectionTitle}>Diagnóstico:</ThemedText>
+                        <TextInput
+                            style={[styles.armasTextArea]}
+                            value={armaDiagnostico}
+                            onChangeText={setArmaDiagnostico}
+                            placeholder="Diagnóstico"
+                            placeholderTextColor="#999"
+                            multiline
+                        />
+
+                        <ThemedText style={styles.armasSectionTitle}>Foto Después:</ThemedText>
+                        <ThemedView style={styles.armasMediaRow}>
+                            <TouchableOpacity
+                                style={styles.armasMediaButton}
+                                onPress={async () => {
+                                    const imgFile = await pickArmaImageAsFile('arma_foto_despues');
+                                    if (imgFile) {
+                                        setArmaFotoDespuesLocal(imgFile);
+                                        setArmaFotoDespuesName(imgFile.name);
+                                    }
+                                }}
+                            >
+                                <Ionicons name="camera" size={18} color="#fff" />
+                                <ThemedText style={styles.armasMediaButtonText}>{(armaFotoDespuesLocal || armaFotoDespuesName) ? 'Cambiar' : 'Subir'}</ThemedText>
+                            </TouchableOpacity>
+                            {armaFotoDespuesLocal ? (
+                                <>
+                                    <Image
+                                        source={{ uri: `data:${armaFotoDespuesLocal.mimeType || 'image/jpeg'};base64,${armaFotoDespuesLocal.base64}` }}
+                                        style={styles.armasThumb}
+                                    />
+                                    <TouchableOpacity
+                                        style={styles.armasRemoveButton}
+                                        onPress={() => {
+                                            setArmaFotoDespuesLocal(null);
+                                            setArmaFotoDespuesName('');
+                                        }}
+                                    >
+                                        <Ionicons name="trash" size={18} color="#FF3B30" />
+                                    </TouchableOpacity>
+                                </>
+                            ) : (armaFotoDespuesName && selectedActivo?.archivos?.length ? (() => {
+                                const remote = (selectedActivo.archivos || []).find((f) => f.original_name === armaFotoDespuesName || f.name === armaFotoDespuesName);
+                                if (!remote) return null;
+                                const uri = buildFileUrl(selectedActivo?.id, remote);
+                                if (!uri) return null;
+                                return (
+                                    <>
+                                        <Image source={{ uri }} style={styles.armasThumb} />
+                                        <TouchableOpacity
+                                            style={styles.armasRemoveButton}
+                                            onPress={() => {
+                                                setArmaFotoDespuesName('');
+                                                setArmaFotoDespuesLocal(null);
+                                            }}
+                                        >
+                                            <Ionicons name="trash" size={18} color="#FF3B30" />
+                                        </TouchableOpacity>
+                                    </>
+                                );
+                            })() : null)}
+                        </ThemedView>
+
+                        <ThemedText style={styles.armasSectionTitle}>Armero</ThemedText>
+                        <ThemedText style={styles.armasFieldLabel}>Nombre Completo:</ThemedText>
+                        <TextInput
+                            style={styles.armasInlineInput}
+                            value={armaArmeroNombre}
+                            onChangeText={setArmaArmeroNombre}
+                            placeholder="Nombre completo"
+                            placeholderTextColor="#999"
+                        />
+
+                        <ThemedText style={styles.armasSectionTitle}>Firma:</ThemedText>
+                        <TouchableOpacity style={styles.armasSignatureBox} onPress={openArmaSignatureModal} activeOpacity={0.85}>
+                            {armaFirma ? (
+                                <Image source={{ uri: armaFirma }} style={styles.armasSignatureImage} resizeMode="contain" />
+                            ) : (
+                                <ThemedText style={styles.armasSignatureHint}>Toca aquí para firmar</ThemedText>
+                            )}
+                        </TouchableOpacity>
+                        {armaFirma ? (
+                            <TouchableOpacity style={styles.armasClearSignature} onPress={() => setArmaFirma('')}>
+                                <Ionicons name="trash" size={18} color="#FF3B30" />
+                                <ThemedText style={styles.armasClearSignatureText}>Eliminar firma</ThemedText>
+                            </TouchableOpacity>
+                        ) : null}
+                    </ThemedView>
+                )}
+
+                <ThemedText style={styles.label}>Tipo mantenimiento artículo:</ThemedText>
+                <View style={styles.pickerContainer}>
+                    <Picker
+                        selectedValue={tipoMantenimientoArticulo}
+                        onValueChange={(value) => setTipoMantenimientoArticulo(value)}
+                        style={styles.picker}
+                    >
+                        <Picker.Item label="Seleccionar..." value="" />
+                        {(selectedReporte?.tipos_mantenimiento || []).map((t) => (
+                            <Picker.Item key={t.id} label={t.nombre} value={t.nombre} />
+                        ))}
                     </Picker>
                 </View>
 
@@ -2021,6 +3155,37 @@ export default function MantenimientoEquipoScreen() {
                     placeholder="Serie/Placa"
                     placeholderTextColor="#999"
                 />
+
+                {showReemplazarFields && (
+                    <>
+                        <ThemedText style={styles.label}>Marca (Nuevo):</ThemedText>
+                        <TextInput
+                            style={styles.input}
+                            value={marcaNuevo}
+                            onChangeText={setMarcaNuevo}
+                            placeholder="Marca (Nuevo)"
+                            placeholderTextColor="#999"
+                        />
+
+                        <ThemedText style={styles.label}>Modelo (Nuevo):</ThemedText>
+                        <TextInput
+                            style={styles.input}
+                            value={modeloNuevo}
+                            onChangeText={setModeloNuevo}
+                            placeholder="Modelo (Nuevo)"
+                            placeholderTextColor="#999"
+                        />
+
+                        <ThemedText style={styles.label}>Serie/Placa (Nuevo):</ThemedText>
+                        <TextInput
+                            style={styles.input}
+                            value={seriePlacaNuevo}
+                            onChangeText={setSeriePlacaNuevo}
+                            placeholder="Serie/Placa (Nuevo)"
+                            placeholderTextColor="#999"
+                        />
+                    </>
+                )}
 
                 <ThemedText style={styles.label}>Categoría:</ThemedText>
                 <TextInput
@@ -2181,6 +3346,24 @@ export default function MantenimientoEquipoScreen() {
                     </TouchableOpacity>
                     <ThemedText style={styles.checkboxLabel}>Reincidencia treinta días</ThemedText>
                 </ThemedView>
+
+                {reincidenciaTreintaDias && (
+                    <>
+                        <ThemedText style={styles.label}>Tipo mantenimiento reincidencia:</ThemedText>
+                        <View style={styles.pickerContainer}>
+                            <Picker
+                                selectedValue={tipoMantenimientoReincidencia}
+                                onValueChange={(value) => setTipoMantenimientoReincidencia(value)}
+                                style={styles.picker}
+                            >
+                                <Picker.Item label="Seleccionar..." value="" />
+                                {(selectedReporte?.tipos_mantenimiento || []).map((t) => (
+                                    <Picker.Item key={t.id} label={t.nombre} value={t.nombre} />
+                                ))}
+                            </Picker>
+                        </View>
+                    </>
+                )}
 
                 {/* Archivos adjuntos */}
                 <ThemedView style={styles.formGroup}>
@@ -2385,7 +3568,7 @@ export default function MantenimientoEquipoScreen() {
 
     return (
         <ThemedView style={styles.container}>
-            <AppHeader onMenuPress={handleMenuPress} title="Mantenimiento de equipo" />
+            <AppHeader onMenuPress={handleMenuPress} title="Equipo del puesto" />
 
             <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
                 <ThemedView style={styles.content}>
@@ -2393,9 +3576,9 @@ export default function MantenimientoEquipoScreen() {
 
                     <ThemedView style={styles.titleContainer}>
                         <ThemedText type="title" style={styles.title}>
-                            <Ionicons name="construct" size={22} color="#000000" /> Mantenimiento de equipo
+                            <Ionicons name="construct" size={22} color="#000000" /> Equipo del puesto
                         </ThemedText>
-                        <ThemedText style={styles.subtitle}>Gestiona el mantenimiento de equipos</ThemedText>
+                        <ThemedText style={styles.subtitle}>Gestiona el equipo del puesto</ThemedText>
                     </ThemedView>
 
                     {!hasCurrentMarca ? (
@@ -2404,8 +3587,8 @@ export default function MantenimientoEquipoScreen() {
                         </ThemedView>
                     ) : null}
 
-                    {/* Filtros */}
-                    {!isUpdating && !showActivos && (
+                    {/* Filtros jerárquicos (Empresa → ... → Puesto) */}
+                    {!isUpdating && !showActivos && hasCurrentMarca && (
                         <ThemedView style={styles.filtersMain}>
                             <ThemedView style={styles.filterHeader}>
                                 <TouchableOpacity
@@ -2419,23 +3602,17 @@ export default function MantenimientoEquipoScreen() {
                                         color="#007AFF"
                                     />
                                 </TouchableOpacity>
+
                                 {isFiltersExpanded && (
-                                    <TouchableOpacity style={styles.resetFiltersButton} onPress={() => {
-                                        setFilterEmpresaId(null);
-                                        setFilterClienteId(marcaClienteId);
-                                        setFilterDivisionId(null);
-                                        setFilterContratoId(null);
-                                        setFilterCorpoId(marcaCorpoId);
-                                        setFilterPuestoId(marcaPuestoId);
-                                    }}>
+                                    <TouchableOpacity style={styles.resetFiltersButton} onPress={resetFiltersToCurrentMarca}>
                                         <Ionicons name="refresh" size={16} color="#FF3B30" />
                                         <ThemedText style={styles.resetFiltersText}>Reiniciar</ThemedText>
                                     </TouchableOpacity>
                                 )}
                             </ThemedView>
+
                             {isFiltersExpanded && (
                                 <ThemedView style={styles.filterContent}>
-                                    {/* Árbol jerárquico para filtros */}
                                     <ThemedView style={styles.filterGroup}>
                                         <ThemedText style={styles.filterLabel}>Empresa:</ThemedText>
                                         <View style={styles.pickerContainer}>
@@ -2443,6 +3620,11 @@ export default function MantenimientoEquipoScreen() {
                                                 selectedValue={filterEmpresaId || ''}
                                                 onValueChange={(value) => {
                                                     setFilterEmpresaId(value && value !== '' ? Number(value) : null);
+                                                    setFilterClienteId(null);
+                                                    setFilterDivisionId(null);
+                                                    setFilterContratoId(null);
+                                                    setFilterCorpoId(null);
+                                                    setFilterPuestoId(null);
                                                 }}
                                                 style={styles.picker}
                                             >
@@ -2462,6 +3644,10 @@ export default function MantenimientoEquipoScreen() {
                                                     selectedValue={filterClienteId || ''}
                                                     onValueChange={(value) => {
                                                         setFilterClienteId(value && value !== '' ? Number(value) : null);
+                                                        setFilterDivisionId(null);
+                                                        setFilterContratoId(null);
+                                                        setFilterCorpoId(null);
+                                                        setFilterPuestoId(null);
                                                     }}
                                                     style={styles.picker}
                                                 >
@@ -2482,6 +3668,9 @@ export default function MantenimientoEquipoScreen() {
                                                     selectedValue={filterDivisionId || ''}
                                                     onValueChange={(value) => {
                                                         setFilterDivisionId(value && value !== '' ? Number(value) : null);
+                                                        setFilterContratoId(null);
+                                                        setFilterCorpoId(null);
+                                                        setFilterPuestoId(null);
                                                     }}
                                                     style={styles.picker}
                                                 >
@@ -2502,6 +3691,8 @@ export default function MantenimientoEquipoScreen() {
                                                     selectedValue={filterContratoId || ''}
                                                     onValueChange={(value) => {
                                                         setFilterContratoId(value && value !== '' ? Number(value) : null);
+                                                        setFilterCorpoId(null);
+                                                        setFilterPuestoId(null);
                                                     }}
                                                     style={styles.picker}
                                                 >
@@ -2522,6 +3713,7 @@ export default function MantenimientoEquipoScreen() {
                                                     selectedValue={filterCorpoId || ''}
                                                     onValueChange={(value) => {
                                                         setFilterCorpoId(value && value !== '' ? Number(value) : null);
+                                                        setFilterPuestoId(null);
                                                     }}
                                                     style={styles.picker}
                                                 >
@@ -2540,7 +3732,13 @@ export default function MantenimientoEquipoScreen() {
                                             <View style={styles.pickerContainer}>
                                                 <Picker
                                                     selectedValue={filterPuestoId || ''}
-                                                    onValueChange={(value) => setFilterPuestoId(value && value !== '' ? Number(value) : null)}
+                                                    onValueChange={(value) => {
+                                                        const newPuestoId = value && value !== '' ? Number(value) : null;
+                                                        setFilterPuestoId(newPuestoId);
+                                                        // Resetear el ref para permitir nueva búsqueda cuando cambia el puesto
+                                                        // El useEffect se disparará automáticamente cuando activePuestoId cambie
+                                                        isFetchingReportesRef.current = false;
+                                                    }}
                                                     style={styles.picker}
                                                 >
                                                     <Picker.Item label="Seleccionar..." value="" />
@@ -2562,7 +3760,7 @@ export default function MantenimientoEquipoScreen() {
                         <>
                             <TouchableOpacity style={styles.backButton} onPress={handleVolverReportes}>
                                 <Ionicons name="arrow-back" size={20} color="#FFFFFF" />
-                                <ThemedText style={styles.backButtonText}>Volver a reportes</ThemedText>
+                                <ThemedText style={styles.backButtonText}>Volver a artículos</ThemedText>
                             </TouchableOpacity>
                             {isLoading ? (
                                 <ThemedView style={styles.loadingContainer}>
@@ -2571,7 +3769,7 @@ export default function MantenimientoEquipoScreen() {
                                 </ThemedView>
                             ) : activos.length === 0 ? (
                                 <ThemedView style={styles.emptyContainer}>
-                                    <ThemedText style={styles.emptyText}>No hay activos disponibles</ThemedText>
+                                    <ThemedText style={styles.emptyText}>No hay registros de mantenimiento</ThemedText>
                                 </ThemedView>
                             ) : (
                                 <ThemedView style={styles.listContainer}>
@@ -2588,7 +3786,7 @@ export default function MantenimientoEquipoScreen() {
                                 </ThemedView>
                             ) : reportes.length === 0 ? (
                                 <ThemedView style={styles.emptyContainer}>
-                                    <ThemedText style={styles.emptyText}>No hay reportes disponibles</ThemedText>
+                                    <ThemedText style={styles.emptyText}>No hay artículos disponibles para este puesto</ThemedText>
                                 </ThemedView>
                             ) : (
                                 <ThemedView style={styles.listContainer}>
@@ -2938,6 +4136,23 @@ export default function MantenimientoEquipoScreen() {
                                                             <ThemedText style={styles.listItemButtonText}>Eliminar</ThemedText>
                                                         </TouchableOpacity>
                                                     </ThemedView>
+
+                                                    <ThemedView style={styles.listItemButtons}>
+                                                        <TouchableOpacity
+                                                            style={[styles.listItemButton, styles.changesButton]}
+                                                            onPress={() => {
+                                                                if (m.id_local || m.id === 0) {
+                                                                    Alert.alert('Sin conexión', 'Este movimiento es local/offline. Los cambios solo se pueden consultar en el servidor.');
+                                                                    return;
+                                                                }
+                                                                setCambiosTitle(`Cambios - Movimiento #${m.id}`);
+                                                                fetchCambios('c_movimientos_articulo_mantenimiento', m.id);
+                                                            }}
+                                                        >
+                                                            <Ionicons name="list-outline" size={18} color="#FFFFFF" />
+                                                            <ThemedText style={styles.listItemButtonText}>Cambios</ThemedText>
+                                                        </TouchableOpacity>
+                                                    </ThemedView>
                                                 </ThemedView>
                                             );
                                         });
@@ -3049,6 +4264,150 @@ export default function MantenimientoEquipoScreen() {
                 </View>
             </Modal>
 
+            {/* Modal: ver cambios */}
+            <Modal
+                visible={isCambiosModalVisible}
+                animationType="fade"
+                transparent
+                presentationStyle="overFullScreen"
+                onRequestClose={closeCambiosModal}
+            >
+                <View style={styles.overlay}>
+                    <ThemedView style={styles.floatModalCardMovimientos}>
+                        <ThemedView style={styles.floatModalHeader}>
+                            <ThemedText style={styles.modalTitle}>{cambiosTitle}</ThemedText>
+                            <TouchableOpacity onPress={closeCambiosModal}>
+                                <Ionicons name="close" size={24} color="#333" />
+                            </TouchableOpacity>
+                        </ThemedView>
+
+                        <ScrollView style={{ maxHeight: Dimensions.get('window').height * 0.75 }} contentContainerStyle={{ padding: 16 }}>
+                            {(!cambiosItems || cambiosItems.length === 0) ? (
+                                <ThemedView style={styles.emptyContainer}>
+                                    <ThemedText style={styles.emptyText}>No hay cambios registrados</ThemedText>
+                                </ThemedView>
+                            ) : (
+                                cambiosItems.map((row: any) => {
+                                    let parsed: any[] = [];
+                                    try {
+                                        parsed = row?.cambios ? JSON.parse(row.cambios) : [];
+                                    } catch {
+                                        parsed = [];
+                                    }
+                                    const createdAtLabel = formatCambioCreatedAt(row?.created_at);
+                                    const isOpen = expandedCambioId === row.id;
+
+                                    return (
+                                        <ThemedView key={`chg-${row.id}`} style={styles.cambioCollapsableMain}>
+                                            <TouchableOpacity
+                                                style={styles.cambioCollapsableHeader}
+                                                onPress={() => setExpandedCambioId((prev) => (prev === row.id ? null : row.id))}
+                                                activeOpacity={0.8}
+                                            >
+                                                <ThemedText style={styles.cambioCollapsableTitle}>
+                                                    {createdAtLabel}
+                                                </ThemedText>
+                                                <Ionicons
+                                                    name={isOpen ? "chevron-up" : "chevron-down"}
+                                                    size={18}
+                                                    color="#007AFF"
+                                                />
+                                            </TouchableOpacity>
+
+                                            {isOpen && (
+                                                <ThemedView style={styles.cambioCollapsableContent}>
+                                                    <ThemedView style={styles.filterGroupSearch}>
+                                                        <ThemedText style={styles.filterLabel}>Cambio realizado por:</ThemedText>
+                                                        <ThemedText style={styles.changeDescription}>
+                                                            {row.empleado_nombre || 'Desconocido'}
+                                                            {row.empleado_cedula ? ` - Cédula: ${row.empleado_cedula}` : ''}
+                                                        </ThemedText>
+                                                    </ThemedView>
+
+                                                    {(Array.isArray(parsed) ? parsed : []).length > 0 && (
+                                                        <ThemedView style={styles.filterGroupSearch}>
+                                                            <ThemedText style={styles.filterLabel}>Cambios:</ThemedText>
+                                                            {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => (
+                                                                <ThemedText key={`c-${row.id}-${idx}`} style={styles.changeDescription}>
+                                                                    <ThemedText style={{ fontWeight: '800' }}>{String(c?.prop ?? '-')}: </ThemedText>
+                                                                    {String(c?.after ?? '')}
+                                                                </ThemedText>
+                                                            ))}
+                                                        </ThemedView>
+                                                    )}
+                                                </ThemedView>
+                                            )}
+                                        </ThemedView>
+                                    );
+                                })
+                            )}
+                        </ScrollView>
+                    </ThemedView>
+                </View>
+            </Modal>
+
+            {/* Modal flotante para dibujar firma (arma) */}
+            <Modal
+                visible={isArmaSignatureModalVisible}
+                animationType="fade"
+                transparent
+                presentationStyle="overFullScreen"
+                onRequestClose={closeArmaSignatureModal}
+            >
+                <View style={styles.overlay}>
+                    <ThemedView style={styles.floatModalCard}>
+                        <ThemedView style={styles.floatModalHeader}>
+                            <ThemedText style={styles.modalTitle}>Dibujar firma (Arma)</ThemedText>
+                            <TouchableOpacity onPress={closeArmaSignatureModal}>
+                                <Ionicons name="close" size={24} color="#333" />
+                            </TouchableOpacity>
+                        </ThemedView>
+
+                        <ThemedText style={styles.signatureModalHint}>Firma dentro del recuadro blanco.</ThemedText>
+
+                        <View style={styles.signaturePadBox}>
+                            <SignatureScreen
+                                ref={armaSignatureRef}
+                                onOK={handleArmaSignatureRead}
+                                onEmpty={() => {
+                                    setIsReadingArmaSignature(false);
+                                    Alert.alert('Error', 'No se detectó la firma. Intenta de nuevo.');
+                                }}
+                                descriptionText=""
+                                clearText=""
+                                confirmText=""
+                                webStyle={`
+                  .m-signature-pad--footer {display: none; margin: 0px;}
+                  .m-signature-pad {box-shadow: none; border: none;}
+                  body,html {width: 100%; height: 100%; background: #ffffff;}
+                `}
+                                key={armaSignatureKey}
+                            />
+                        </View>
+
+                        <ThemedView style={styles.modalActions}>
+                            <TouchableOpacity style={styles.modalClearButton} onPress={clearArmaSignatureInModal}>
+                                <Ionicons name="trash" size={20} color="#000000" />
+                                <ThemedText style={styles.modalClearButtonText}>Limpiar</ThemedText>
+                            </TouchableOpacity>
+
+                            <TouchableOpacity
+                                style={[styles.modalAcceptButton, isReadingArmaSignature && { opacity: 0.7 }]}
+                                onPress={acceptArmaSignature}
+                                disabled={isReadingArmaSignature}
+                            >
+                                {isReadingArmaSignature ? (
+                                    <ActivityIndicator size="small" color="#000000" />
+                                ) : (
+                                    <Ionicons name="checkmark" size={20} color="#000000" />
+                                )}
+                                <ThemedText style={styles.modalAcceptButtonText}>Aceptar</ThemedText>
+                            </TouchableOpacity>
+                        </ThemedView>
+                    </ThemedView>
+                </View>
+            </Modal>
+
             <AppFooter />
             <SlideMenu isVisible={isMenuVisible} onClose={handleMenuClose} onHomePress={handleHomePress} currentRoute="MantenimientoEquipo" />
             {QRScannerComponent}
@@ -3135,6 +4494,98 @@ const styles = StyleSheet.create({
         flex: 1,
     },
 
+    // Formulario de armas
+    armasBox: {
+        borderWidth: 1,
+        borderColor: '#E0E0E0',
+        borderRadius: 10,
+        padding: 12,
+        backgroundColor: '#F8FAFC',
+        marginBottom: 10,
+    },
+    armasTitle: { fontSize: 14, fontWeight: '800', color: '#0F172A', marginBottom: 10 },
+    armasSectionTitle: { marginTop: 10, marginBottom: 6, fontSize: 14, fontWeight: '800', color: '#0F172A' },
+    armasRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8, backgroundColor: '#F8FAFC' },
+    armasFieldLabel: { width: 140, fontSize: 13, fontWeight: '700', color: '#0F172A' },
+    armasInlineInput: {
+        flex: 1,
+        borderWidth: 1,
+        borderColor: '#E0E0E0',
+        borderRadius: 8,
+        paddingHorizontal: 10,
+        paddingVertical: 10,
+        backgroundColor: '#fff',
+        color: '#000',
+        marginBottom: 0,
+    },
+    armasInlineRow: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 },
+    armasInlineMuted: { color: '#64748B', fontWeight: '700' },
+    armasOptionsRow: { flex: 1, flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
+    armasOption: {
+        paddingVertical: 8,
+        paddingHorizontal: 12,
+        borderRadius: 999,
+        borderWidth: 1,
+        borderColor: '#CBD5E1',
+        backgroundColor: '#FFFFFF',
+    },
+    armasOptionSelected: { backgroundColor: '#007AFF', borderColor: '#007AFF' },
+    armasOptionText: { fontWeight: '800', color: '#0F172A' },
+    armasOptionTextSelected: { color: '#FFFFFF' },
+    armasChecklist: { gap: 8, marginBottom: 12, backgroundColor: '#F8FAFC' },
+    armasChecklistRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 6 },
+    armasChecklistText: { flex: 1, color: '#0F172A', fontWeight: '600' },
+    armasMiniCheckbox: { width: 20, height: 20, borderRadius: 4, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
+    armasMiniCheckboxChecked: { backgroundColor: '#007AFF', borderColor: '#007AFF' },
+    armasMiniCheckboxUnchecked: { backgroundColor: '#FFFFFF', borderColor: '#CBD5E1' },
+    armasHintMuted: { color: '#64748B', marginBottom: 12 },
+    armasTextArea: {
+        borderWidth: 1,
+        borderColor: '#E0E0E0',
+        borderRadius: 8,
+        paddingHorizontal: 10,
+        paddingVertical: 10,
+        backgroundColor: '#FFFFFF',
+        color: '#000',
+        minHeight: 90,
+        textAlignVertical: 'top',
+    },
+    armasMediaRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8, marginTop: 6, backgroundColor: '#F8FAFC' },
+    armasMediaButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        backgroundColor: '#007AFF',
+        paddingVertical: 10,
+        paddingHorizontal: 12,
+        borderRadius: 8,
+    },
+    armasMediaButtonText: { color: '#FFFFFF', fontWeight: '700' },
+    armasThumb: { width: 64, height: 64, borderRadius: 8, backgroundColor: '#E5E7EB' },
+    armasRemoveButton: {
+        width: 36,
+        height: 36,
+        borderRadius: 8,
+        backgroundColor: '#FFECEC',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    armasSignatureBox: {
+        height: 110,
+        borderRadius: 10,
+        borderWidth: 1,
+        borderColor: '#E0E0E0',
+        backgroundColor: '#FFFFFF',
+        alignItems: 'center',
+        justifyContent: 'center',
+        overflow: 'hidden',
+        marginTop: 6,
+    },
+    armasSignatureImage: { width: '100%', height: '100%' },
+    armasSignatureHint: { color: '#64748B', fontWeight: '700' },
+    armasClearSignature: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 },
+    armasClearSignatureText: { color: '#FF3B30', fontWeight: '700' },
+
     formActions: { marginTop: 16, flexDirection: 'row', gap: 10, justifyContent: 'space-between' },
     formActionButton: { flex: 1, flexDirection: 'row', gap: 10, alignItems: 'center', justifyContent: 'center', paddingVertical: 14, borderRadius: 12 },
     formActionCancel: { backgroundColor: '#EDEDED' },
@@ -3185,6 +4636,51 @@ const styles = StyleSheet.create({
     bitLine: { marginBottom: 6, color: '#000' },
     bitLabel: { fontWeight: '700', color: '#333' },
     bitValue: { color: '#000' },
+    estadoBueno: { color: '#16A34A', fontWeight: '800' },
+    estadoMalo: { color: '#DC2626', fontWeight: '800' },
+
+    cambioAccordionHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingVertical: 8,
+        gap: 12,
+    },
+    cambioAccordionTitle: { fontSize: 14, fontWeight: '800', color: '#000' },
+    cambioCollapsableMain: {
+        width: '100%',
+        marginBottom: 10,
+        backgroundColor: '#fff',
+        borderRadius: 6,
+        borderWidth: 1,
+        borderColor: '#E0E0E0',
+        overflow: 'hidden',
+    },
+    cambioCollapsableHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        backgroundColor: '#F8F9FA',
+    },
+    cambioCollapsableTitle: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#007AFF',
+        flex: 1,
+    },
+    cambioCollapsableContent: {
+        padding: 12,
+        gap: 8,
+        backgroundColor: '#F8F9FA',
+    },
+    changeDescription: {
+        fontSize: 14,
+        lineHeight: 20,
+        color: '#666',
+        marginBottom: 8,
+    },
 
     listItemButtons: { marginTop: 10, flexDirection: 'row', justifyContent: 'space-between', gap: 12 },
     listItemButton: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 12, borderRadius: 8, gap: 8 },
@@ -3192,6 +4688,7 @@ const styles = StyleSheet.create({
     editButton: { backgroundColor: '#007AFF', marginTop: 10 },
     editButtonActivo: { backgroundColor: '#007AFF' },
     editButtonMov: { backgroundColor: '#007AFF' },
+    changesButton: { backgroundColor: '#5856D6' },
     movementsButton: { backgroundColor: '#34C759' },
     deleteButton: { backgroundColor: '#FF3B30' },
     deleteButtonMov: { backgroundColor: '#FF3B30' },

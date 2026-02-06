@@ -46,21 +46,62 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             }
         }
 
-        // Actualizar los demás campos del vehículo
+        // Preparar datos de actualización
+        const updateData: any = {
+            tipo: tipo,
+            placa: placa,
+            nombre: nombre,
+            cedula: cedula,
+            hora_entrada: new Date(hora_entrada),
+            hora_salida: hora_salida ? new Date(hora_salida) : null,
+            razon_visita: razon_visita,
+            updated_at: toZonedTime(new Date(), "America/Costa_Rica"),
+            file_name: updatedFileName // Preservar el file_name actualizado si existe
+        };
+
+        // Registrar cambios (solo campos actualizados)
+        const eq = (a: any, b: any) => {
+            if (a === b) return true;
+            if (a == null && b == null) return true;
+            const da = a instanceof Date ? a : (typeof a === "string" && /^\d{4}-\d{2}-\d{2}T/.test(a) ? new Date(a) : null);
+            const db = b instanceof Date ? b : (typeof b === "string" && /^\d{4}-\d{2}-\d{2}T/.test(b) ? new Date(b) : null);
+            if (da && db) return da.getTime() === db.getTime();
+            return false;
+        };
+
+        const cambiosArr: Array<{ prop: string; before: any; after: any }> = [];
+        for (const [k, v] of Object.entries(updateData)) {
+            // No registramos archivos: esos vienen en `file` y se guardan aparte.
+            if (k === "file" || k === "file_name") continue;
+
+            const before = (vehicle as any)[k];
+            const after = v;
+            if (!eq(before, after)) {
+                cambiosArr.push({
+                    prop: k,
+                    before: before instanceof Date ? before.toISOString() : before,
+                    after: after instanceof Date ? after.toISOString() : after,
+                });
+            }
+        }
+
         await prisma.e_registro_vehiculos.update({
             where: { id },
-            data: {
-                tipo: tipo,
-                placa: placa,
-                nombre: nombre,
-                cedula: cedula,
-                hora_entrada: new Date(hora_entrada),
-                hora_salida: hora_salida ? new Date(hora_salida) : null,
-                razon_visita: razon_visita,
-                updated_at: toZonedTime(new Date(), "America/Costa_Rica"),
-                file_name: updatedFileName // Preservar el file_name actualizado si existe
-            }
+            data: updateData
         });
+
+        if (cambiosArr.length > 0) {
+            const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
+            await prisma.c_cambios_apps_modules.create({
+                data: {
+                    nombre_tabla: "e_registro_vehiculos",
+                    registro_id: id,
+                    cambios: JSON.stringify(cambiosArr),
+                    created_at: toZonedTime(new Date(), "America/Costa_Rica"),
+                    created_by: createdBy,
+                },
+            });
+        }
 
         return NextResponse.json({ status: true, message: "Vehículo actualizado correctamente" }, { status: 200 });
     }
@@ -93,6 +134,28 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
         const file_name = vehicle.file_name;
 
         await prisma.e_registro_vehiculos.delete({ where: { id } });
+
+        // Registrar cambio de eliminación
+        const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
+        await prisma.c_cambios_apps_modules.create({
+            data: {
+                nombre_tabla: "e_registro_vehiculos",
+                registro_id: id,
+                cambios: JSON.stringify([{
+                    prop: "__deleted__",
+                    before: {
+                        id: vehicle.id,
+                        placa: vehicle.placa,
+                        tipo: vehicle.tipo,
+                        nombre: vehicle.nombre,
+                        cedula: vehicle.cedula,
+                    },
+                    after: null,
+                }]),
+                created_at: toZonedTime(new Date(), "America/Costa_Rica"),
+                created_by: createdBy,
+            },
+        });
 
         if (file_name) {
             const path_file = path.join(process.cwd(), "public", "uploads", "vehicles", id_vehicle.toString(), file_name);

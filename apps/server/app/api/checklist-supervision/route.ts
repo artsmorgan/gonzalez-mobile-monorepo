@@ -270,7 +270,26 @@ export async function POST(req: NextRequest) {
               if (articulo.cantidad_requerida > articulo.cantidad_real) {
                 add_desc = true;
               }
-              if (articulo.estado != "Bueno") {
+
+              let was_good = false;
+              if (articulo.tipo == "Plan") {
+                const last_mantenimiento = await prisma.c_articulo_mantenimiento.findFirst({ where: { articulo_plan_id: articulo.id }, orderBy: { fecha_solucion: "desc" } });
+                if (last_mantenimiento) {
+                  if (last_mantenimiento.estado == "Bueno") {
+                    was_good = true;
+                  }
+                }
+              }
+              else {
+                const last_mantenimiento = await prisma.c_articulo_mantenimiento.findFirst({ where: { articulo_asignado_id: articulo.id }, orderBy: { fecha_solucion: "desc" } });
+                if (last_mantenimiento) {
+                  if (last_mantenimiento.estado == "Bueno") {
+                    was_good = true;
+                  }
+                }
+              }
+
+              if (articulo.estado != "Bueno" && was_good) {
                 add_desc = true;
               }
 
@@ -284,6 +303,9 @@ export async function POST(req: NextRequest) {
                 articulos_reporte.push({
                   id: articulo.id,
                   nombre: articulo.nombre,
+                  tipo: articulo.tipo,
+                  marca: articulo.marca,
+                  serie: articulo.serie,
                   cantidad_requerida: articulo.cantidad_requerida,
                   cantidad_real: articulo.cantidad_real,
                   estado: articulo.estado,
@@ -300,7 +322,7 @@ export async function POST(req: NextRequest) {
       if (send_notification) {
         const description = "El empleado " + empNombre + " ha registrado un checklist de supervisión en el puesto " + puestoNombre + " en la sucursal " + sucursalNombre + " el día " + fechaRegistro + " a las " + horaRegistro + articulos_desc;
         sendNotificationByRole(corpo_id, [created.created_by], "Checklist de supervisión registrado", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
-        createReport(cliente_id, corpo_id, puesto_id, division, articulos_reporte, created.created_by);
+        createReport(articulos_reporte);
       }
     }
 

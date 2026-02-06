@@ -850,7 +850,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
             )}
 
             {/* Estamos aquí */}
-            {role === 'ADMINISTRATIVO' || role === 'SUPERVISOR' && (
+            {true && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -872,7 +872,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                     isActiveRoute('MantenimientoEquipo') && styles.activeMenuItemText
                   ]}
                 >
-                  Mantenimiento de equipo
+                  Equipo del puesto
                 </ThemedText>
               </TouchableOpacity>
             )}

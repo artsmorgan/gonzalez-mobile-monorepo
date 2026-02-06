@@ -1,40 +1,41 @@
 import { prisma } from "./prismaClient";
 import { toZonedTime } from "date-fns-tz";
 
-export async function createReport(clienteId: number, corpoId: number, puestoId: number, division: number, articulos_reporte: any[], createdBy: number) {
+export async function createReport(articulos_reporte: any[]) {
+    for (const articulo of articulos_reporte) {
 
-    const division_data = await prisma.n_division.findUnique({
-        where: {
-            id: division
+        const art_id = parseInt(articulo.id);
+
+        let was_good = false;
+
+        if (articulo.tipo == "Plan") {
+            const last_mantenimiento = await prisma.c_articulo_mantenimiento.findFirst({ where: { articulo_plan_id: art_id }, orderBy: { fecha_solucion: "desc" } });
+            if (last_mantenimiento) {
+                if (last_mantenimiento.estado == "Bueno") {
+                    was_good = true;
+                }
+            }
         }
-    });
-
-    if (!division_data) {
-        throw new Error("División no encontrada");
-    }
-
-    const reporte = await prisma.c_reporte_articulo_mantenimiento.create({
-        data: {
-            cliente_id: clienteId,
-            corpo_id: corpoId,
-            puesto_id: puestoId,
-            division: division_data.nombre,
-            fecha_reporte: toZonedTime(new Date(), "America/Costa_Rica"),
-            created_by: createdBy,
-            solucionado: false,
+        else {
+            const last_mantenimiento = await prisma.c_articulo_mantenimiento.findFirst({ where: { articulo_asignado_id: art_id }, orderBy: { fecha_solucion: "desc" } });
+            if (last_mantenimiento) {
+                if (last_mantenimiento.estado == "Bueno") {
+                    was_good = true;
+                }
+            }
         }
-    });
 
-    if (reporte) {
-        for (const articulo of articulos_reporte) {
-            await prisma.c_activo_mantenimiento.create({
+        if (articulo.estado != "Bueno" && was_good) {
+            await prisma.c_articulo_mantenimiento.create({
                 data: {
-                    reporte_id: reporte.id,
-                    articulo_id: articulo.id,
+                    articulo_plan_id: articulo.tipo === "Plan" ? art_id : null,
+                    articulo_asignado_id: articulo.tipo === "Asignado" ? art_id : null,
                     estado: articulo.estado,
                     cantidad_necesaria: articulo.cantidad_requerida,
                     cantidad_real: articulo.cantidad_real,
-                    observaciones: articulo.observaciones
+                    observaciones: articulo.observaciones,
+                    marca: articulo.marca,
+                    serie_placa: articulo.serie,
                 }
             });
         }

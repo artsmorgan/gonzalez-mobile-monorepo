@@ -4,6 +4,7 @@ import { prisma } from "../../../../utils/prismaClient";
 import fs from "fs";
 import path from "path";
 import { v4 as uuidv4 } from "uuid";
+import { toZonedTime } from "date-fns-tz";
 
 export const runtime = "nodejs";
 
@@ -75,27 +76,67 @@ export async function PUT(
       return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
     }
 
+    const updateData: any = {};
+    if (empresa_id !== undefined) updateData.empresa_id = Number(empresa_id);
+    if (cliente_id !== undefined) updateData.cliente_id = Number(cliente_id);
+    if (corpo_id !== undefined) updateData.sucursal_id = Number(corpo_id);
+    if (placa !== undefined) updateData.placa = String(placa ?? "");
+    if (tipo !== undefined) updateData.tipo = String(tipo ?? "");
+    if (estado !== undefined) updateData.estado = String(estado ?? "");
+    if (kilometraje !== undefined) updateData.kilometraje = Number(kilometraje ?? 0);
+    if (prox_cambio_aceite !== undefined) updateData.prox_cambio_aceite = Number(prox_cambio_aceite ?? 0);
+    if (modelo !== undefined) updateData.modelo = String(modelo ?? "");
+    if (anno !== undefined) updateData.anno = Number(anno ?? 0);
+    if (descripcion !== undefined) updateData.descripcion = String(descripcion ?? "");
+    if (titulo_propiedad !== undefined) updateData.titulo_propiedad = Boolean(titulo_propiedad);
+    if (rtv !== undefined) updateData.rtv = Boolean(rtv);
+    if (marchamo !== undefined) updateData.marchamo = Boolean(marchamo);
+    if (firma_responsable !== undefined) updateData.firma_responsable = String(firma_responsable ?? "");
+
+    // Registrar cambios (solo campos actualizados)
+    const eq = (a: any, b: any) => {
+      if (a === b) return true;
+      if (a == null && b == null) return true;
+      const da = a instanceof Date ? a : (typeof a === "string" && /^\d{4}-\d{2}-\d{2}T/.test(a) ? new Date(a) : null);
+      const db = b instanceof Date ? b : (typeof b === "string" && /^\d{4}-\d{2}-\d{2}T/.test(b) ? new Date(b) : null);
+      if (da && db) return da.getTime() === db.getTime();
+      return false;
+    };
+
+    const cambiosArr: Array<{ prop: string; before: any; after: any }> = [];
+    for (const [k, v] of Object.entries(updateData)) {
+      // No registramos imágenes: esas vienen en `imagenes` y se guardan aparte.
+      if (k === "imagenes") continue;
+
+      const before = (existing as any)[k];
+      const after = v;
+      if (!eq(before, after)) {
+        cambiosArr.push({
+          prop: k,
+          before: before instanceof Date ? before.toISOString() : before,
+          after: after instanceof Date ? after.toISOString() : after,
+        });
+      }
+    }
+
     const updated = await prisma.c_vehiculos_corporativos.update({
       where: { id: vehiculoId },
-      data: {
-        empresa_id: empresa_id !== undefined ? Number(empresa_id) : existing.empresa_id,
-        cliente_id: cliente_id !== undefined ? Number(cliente_id) : existing.cliente_id,
-        sucursal_id: corpo_id !== undefined ? Number(corpo_id) : existing.sucursal_id,
-        placa: placa !== undefined ? String(placa ?? "") : existing.placa,
-        tipo: tipo !== undefined ? String(tipo ?? "") : existing.tipo,
-        estado: estado !== undefined ? String(estado ?? "") : (existing as any).estado,
-        kilometraje: kilometraje !== undefined ? Number(kilometraje ?? 0) : existing.kilometraje,
-        prox_cambio_aceite: prox_cambio_aceite !== undefined ? Number(prox_cambio_aceite ?? 0) : existing.prox_cambio_aceite,
-        modelo: modelo !== undefined ? String(modelo ?? "") : existing.modelo,
-        anno: anno !== undefined ? Number(anno ?? 0) : existing.anno,
-        descripcion: descripcion !== undefined ? String(descripcion ?? "") : existing.descripcion,
-        titulo_propiedad: titulo_propiedad !== undefined ? Boolean(titulo_propiedad) : existing.titulo_propiedad,
-        rtv: rtv !== undefined ? Boolean(rtv) : existing.rtv,
-        marchamo: marchamo !== undefined ? Boolean(marchamo) : existing.marchamo,
-        firma_responsable: firma_responsable !== undefined ? String(firma_responsable ?? "") : existing.firma_responsable,
-      },
+      data: updateData,
       include: { c_imagenes_vehiculos_corporativos: true },
     });
+
+    if (cambiosArr.length > 0) {
+      const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
+      await prisma.c_cambios_apps_modules.create({
+        data: {
+          nombre_tabla: "c_vehiculos_corporativos",
+          registro_id: vehiculoId,
+          cambios: JSON.stringify(cambiosArr),
+          created_at: toZonedTime(new Date(), "America/Costa_Rica"),
+          created_by: createdBy,
+        },
+      });
+    }
 
     // Imágenes: si el cliente manda `imagenes`, hacemos reemplazo total
     if (imagenes !== undefined) {
@@ -181,6 +222,28 @@ export async function DELETE(
     }
 
     await prisma.c_vehiculos_corporativos.delete({ where: { id: vehiculoId } });
+
+    // Registrar cambio de eliminación
+    const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
+    await prisma.c_cambios_apps_modules.create({
+      data: {
+        nombre_tabla: "c_vehiculos_corporativos",
+        registro_id: vehiculoId,
+        cambios: JSON.stringify([{
+          prop: "__deleted__",
+          before: {
+            id: existing.id,
+            placa: existing.placa,
+            tipo: existing.tipo,
+            modelo: existing.modelo,
+            anno: existing.anno,
+          },
+          after: null,
+        }]),
+        created_at: toZonedTime(new Date(), "America/Costa_Rica"),
+        created_by: createdBy,
+      },
+    });
 
     const dir = path.join(process.cwd(), "public", "uploads", "corporate-vehicles", `${vehiculoId}`);
     if (fs.existsSync(dir)) {

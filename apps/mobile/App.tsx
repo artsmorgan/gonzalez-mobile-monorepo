@@ -24,6 +24,11 @@ import { createBitacoraVehiculoDetenido, deleteBitacoraVehiculoDetenido, updateB
 import { createLlave, deleteLlave, updateLlave } from './hooks/llavesFunctions';
 import { createMovimientoLlave, deleteMovimientoLlave, updateMovimientoLlave } from './hooks/movimientosLlavesFunctions';
 import { createMovimientoActivoMantenimiento, deleteMovimientoActivoMantenimiento, updateMovimientoActivoMantenimiento } from './hooks/movimientosActivosMantenimientoFunctions';
+import {
+  createMovimientoArticuloMantenimiento,
+  deleteMovimientoArticuloMantenimiento,
+  updateMovimientoArticuloMantenimiento,
+} from './hooks/movimientosArticulosMantenimientoFunctions';
 import { createDocumentoEntregado, deleteDocumentoEntregado, updateDocumentoEntregado } from './hooks/documentosEntregadosFunctions';
 import { createApreciacionVulnerabilidad, deleteApreciacionVulnerabilidad, updateApreciacionVulnerabilidad } from './hooks/apreciacionVulnerabilidadFunctions';
 import { eventBus } from './hooks/eventBus';
@@ -360,8 +365,8 @@ function AppContent() {
           checkBitacoraVehiculoDetenidoActionsCache(),
           checkLlavesActionsCache(),
           checkMovimientosLlavesActionsCache(),
-          checkActivoMantenimientoActionsCache(),
-          checkMovimientosActivosMantenimientoActionsCache(),
+          checkArticuloMantenimientoActionsCache(),
+          checkMovimientosArticulosMantenimientoActionsCache(),
           checkDocumentosEntregadosActionsCache(),
           checkApreciacionVulnerabilidadActionsCache(),
           checkNotificationsActionsCache(),
@@ -1085,6 +1090,127 @@ function AppContent() {
       }
     }
   }
+
+  const checkArticuloMantenimientoActionsCache = async () => {
+    if (!employee) return;
+
+    const actionsStr = await AsyncStorage.getItem('articulo_mantenimiento_actions');
+    if (!actionsStr) return;
+
+    const actions = JSON.parse(actionsStr);
+    if (!actions || actions.length === 0) return;
+
+    console.log('Sincronizando acciones de mantenimientos de artículos:', actions.length);
+
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) return;
+
+    for (const action of actions) {
+      try {
+        if (action.type !== 'update') continue;
+
+        let token = await AsyncStorage.getItem('access_token');
+        if (!token) {
+          const refreshed = await refreshAccessToken();
+          if (!refreshed) continue;
+          token = await AsyncStorage.getItem('access_token');
+        }
+
+        const doRequest = async () =>
+          fetch(`${apiUrl}/api/articulo-mantenimiento/${action.id}`, {
+            method: 'PUT',
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'Content-Type': 'application/json',
+              'ngrok-skip-browser-warning': '69420',
+            },
+            body: JSON.stringify(action.requestData ?? {}),
+          });
+
+        let response = await doRequest();
+        if (response.status === 401) {
+          const refreshed = await refreshAccessToken();
+          if (!refreshed) {
+            if (logout) await logout();
+            continue;
+          }
+          token = await AsyncStorage.getItem('access_token');
+          response = await doRequest();
+        }
+
+        if (response.ok) {
+          const data = await response.json().catch(() => ({}));
+          if (data.status) {
+            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'update'));
+            await AsyncStorage.setItem('articulo_mantenimiento_actions', JSON.stringify(updatedActions));
+          }
+        }
+      } catch (error) {
+        console.error('Error procesando acción de mantenimiento de artículo:', error);
+      }
+    }
+  };
+
+  const checkMovimientosArticulosMantenimientoActionsCache = async () => {
+    if (!employee) return;
+
+    const actionsStr = await AsyncStorage.getItem('movimientos_articulos_mantenimiento_actions');
+    if (!actionsStr) return;
+
+    const actions = JSON.parse(actionsStr);
+    if (!actions || actions.length === 0) return;
+
+    console.log('Sincronizando acciones de movimientos de artículos de mantenimiento:', actions.length);
+
+    for (const action of actions) {
+      try {
+        const parent = action.parent;
+        if (!parent?.source || !parent?.estructuraId) continue;
+
+        if (action.type === 'create') {
+          const result = await createMovimientoArticuloMantenimiento({
+            parent,
+            requestData: action.requestData,
+            refreshAccessToken,
+            logout,
+          });
+          if (result.status) {
+            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'create'));
+            await AsyncStorage.setItem('movimientos_articulos_mantenimiento_actions', JSON.stringify(updatedActions));
+          }
+        } else if (action.type === 'update') {
+          const result = await updateMovimientoArticuloMantenimiento({
+            parent,
+            id: action.id,
+            requestData: action.requestData,
+            refreshAccessToken,
+            logout,
+          });
+          if (result.status) {
+            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'update'));
+            await AsyncStorage.setItem('movimientos_articulos_mantenimiento_actions', JSON.stringify(updatedActions));
+          }
+        } else if (action.type === 'delete') {
+          const marcaId = action.marcaId;
+          if (!marcaId) continue;
+
+          const result = await deleteMovimientoArticuloMantenimiento({
+            parent,
+            id: action.id,
+            marcaId,
+            refreshAccessToken,
+            logout,
+          });
+          if (result.status) {
+            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'delete'));
+            await AsyncStorage.setItem('movimientos_articulos_mantenimiento_actions', JSON.stringify(updatedActions));
+          }
+        }
+      } catch (error) {
+        console.error('Error procesando acción de movimientos de artículos de mantenimiento:', error);
+      }
+    }
+  };
 
   const checkActivoMantenimientoActionsCache = async () => {
     if (!employee) return;

@@ -1865,11 +1865,6 @@ export default function IncidentsScreen() {
                       <TouchableOpacity style={styles.aportesButton} onPress={() => openAportesModal(i)}>
                         <Ionicons name="chatbubble-ellipses" size={20} color="#FFFFFF" />
                       </TouchableOpacity>
-                      {i.owned && (
-                      <TouchableOpacity style={styles.editButton} onPress={() => startEditing(i)}>
-                        <ThemedText style={styles.editButtonText}>{getActionIcon('edit')}</ThemedText>
-                      </TouchableOpacity>
-                      )}
                       <TouchableOpacity style={styles.deleteButton} onPress={() => handleDelete(i)}>
                         <ThemedText style={styles.deleteButtonText}>{getActionIcon('delete')}</ThemedText>
                       </TouchableOpacity>
@@ -1974,11 +1969,6 @@ export default function IncidentsScreen() {
                         </ThemedText>
                         {can && (
                           <ThemedView style={{ flexDirection: 'row', gap: 10, backgroundColor: 'transparent' }}>
-                            {!isLocal && (
-                              <TouchableOpacity onPress={() => startEditingAporte(a)}>
-                                <Ionicons name="pencil" size={18} color="#007AFF" />
-                              </TouchableOpacity>
-                            )}
                             <TouchableOpacity onPress={() => deleteAporte(a)}>
                               <Ionicons name="trash" size={18} color="#FF3B30" />
                             </TouchableOpacity>

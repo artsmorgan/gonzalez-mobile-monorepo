@@ -77,6 +77,25 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
         await prisma.c_puesto_notas_bitacora_cambios.create({ data: { nota_id: id_nota, titulo, description, relevancia: relevanciaValue, created_at: updated_at, empleado_id: empleado.id, categoria: categoriaData.nombre } });
 
+        // Registro de cambios (nueva modalidad)
+        const cambiosArr: Array<{ prop: string; before: any; after: any }> = [];
+        if (nota.titulo !== titulo) cambiosArr.push({ prop: "titulo", before: nota.titulo, after: titulo });
+        if (nota.description !== description) cambiosArr.push({ prop: "description", before: nota.description, after: description });
+        if ((nota.categoria_id ?? null) !== (categoria_id ?? null)) cambiosArr.push({ prop: "categoria_id", before: nota.categoria_id ?? null, after: categoria_id ?? null });
+        if ((nota.relevancia ?? null) !== (relevanciaValue ?? null)) cambiosArr.push({ prop: "relevancia", before: nota.relevancia ?? null, after: relevanciaValue ?? null });
+
+        if (cambiosArr.length > 0) {
+            await prisma.c_cambios_apps_modules.create({
+                data: {
+                    nombre_tabla: "c_puesto_notas",
+                    registro_id: id_nota,
+                    cambios: JSON.stringify(cambiosArr),
+                    created_at: updated_at,
+                    created_by: empleado.id,
+                },
+            });
+        }
+
         return NextResponse.json({ status: true, message: "Nota actualizada con éxito" }, { status: 200 });
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
@@ -104,6 +123,26 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
         if (nota.puesto_id !== puesto.id) return NextResponse.json({ status: false, message: "Nota no pertenece al puesto" }, { status: 200 });
 
         await prisma.c_puesto_notas.delete({ where: { id: id_nota } });
+
+        // Registro de cambios (nueva modalidad) - delete (solo datos escritos)
+        const beforeLimited = {
+            id: nota.id,
+            titulo: nota.titulo,
+            description: nota.description,
+            categoria_id: nota.categoria_id ?? null,
+            relevancia: nota.relevancia ?? null,
+            puesto_id: nota.puesto_id,
+        };
+        const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
+        await prisma.c_cambios_apps_modules.create({
+            data: {
+                nombre_tabla: "c_puesto_notas",
+                registro_id: id_nota,
+                cambios: JSON.stringify([{ prop: "__deleted__", before: beforeLimited, after: null }]),
+                created_at: toZonedTime(new Date(), "America/Costa_Rica"),
+                created_by: createdBy,
+            },
+        });
         return NextResponse.json({ status: true, message: "Nota eliminada con éxito" }, { status: 200 });
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";

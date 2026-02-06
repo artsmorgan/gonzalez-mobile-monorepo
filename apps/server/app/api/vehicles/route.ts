@@ -96,14 +96,17 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
         }
 
+        const createdAt = toZonedTime(new Date(), "America/Costa_Rica");
+        const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
+
         const new_vehicle = await prisma.e_registro_vehiculos.create({
             data: {
                 cliente_id: marcaDia.cliente_id,
                 corpo_id: marcaDia.corpo_id,
                 puesto_id: marcaDia.puesto_id,
-                responsable_id: payload.id,
-                created_at: toZonedTime(new Date(), "America/Costa_Rica"),
-                updated_at: toZonedTime(new Date(), "America/Costa_Rica"),
+                responsable_id: createdBy,
+                created_at: createdAt,
+                updated_at: createdAt,
                 tipo: tipo,
                 placa: placa,
                 nombre: nombre,
@@ -112,6 +115,30 @@ export async function POST(req: NextRequest) {
                 hora_salida: hora_salida ? new Date(hora_salida) : null,
                 razon_visita: razon_visita,
             }
+        });
+
+        // Registrar cambio de creación
+        await prisma.c_cambios_apps_modules.create({
+            data: {
+                nombre_tabla: "e_registro_vehiculos",
+                registro_id: new_vehicle.id,
+                cambios: JSON.stringify([{
+                    prop: "__created__",
+                    before: null,
+                    after: {
+                        id: new_vehicle.id,
+                        tipo: new_vehicle.tipo,
+                        placa: new_vehicle.placa,
+                        nombre: new_vehicle.nombre,
+                        cedula: new_vehicle.cedula,
+                        hora_entrada: new_vehicle.hora_entrada.toISOString(),
+                        hora_salida: new_vehicle.hora_salida ? new_vehicle.hora_salida.toISOString() : null,
+                        razon_visita: new_vehicle.razon_visita,
+                    },
+                }]),
+                created_at: createdAt,
+                created_by: createdBy,
+            },
         });
 
         // Guardar imagen si existe

@@ -10,6 +10,7 @@ import {
   TextInput,
   TouchableOpacity,
   View,
+  Dimensions,
 } from 'react-native';
 import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -412,6 +413,12 @@ export default function BitacoraVehiculosDetenidosScreen() {
   const [error, setError] = useState<string | null>(null);
   const [bitacoras, setBitacoras] = useState<BitacoraVehiculoDetenidoItem[]>([]);
 
+  // Modal: ver cambios (auditoría)
+  const [isCambiosModalVisible, setIsCambiosModalVisible] = useState(false);
+  const [cambiosTitle, setCambiosTitle] = useState<string>('Cambios');
+  const [cambiosItems, setCambiosItems] = useState<any[]>([]);
+  const [expandedCambioId, setExpandedCambioId] = useState<number | null>(null);
+
   // Filtros (lista)
   const [isFiltersExpanded, setIsFiltersExpanded] = useState(false);
   const [filterTipo, setFilterTipo] = useState<'all' | TipoBitacora>('all');
@@ -424,6 +431,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
 
   const [tipo, setTipo] = useState<TipoBitacora>('Vehículo');
   const tipoRef = useRef<TipoBitacora>('Vehículo');
+  const isPreloadingVehiculoUsoRef = useRef(false);
 
   const [empresaNombre, setEmpresaNombre] = useState<string>('');
   const [clienteNombre, setClienteNombre] = useState<string>('');
@@ -656,6 +664,20 @@ export default function BitacoraVehiculosDetenidosScreen() {
             <ThemedText style={styles.listItemButtonText}>Editar</ThemedText>
           </TouchableOpacity>
           <TouchableOpacity
+            style={[styles.listItemButton, styles.changesButton]}
+            onPress={() => {
+              if (b.id_local || b.id === 0) {
+                Alert.alert('Sin conexión', 'Este registro es local/offline. Los cambios solo se pueden consultar en el servidor.');
+                return;
+              }
+              setCambiosTitle(`Cambios - Bitácora #${b.id}`);
+              fetchCambios('c_bitacora_vehiculo_detenido', b.id);
+            }}
+          >
+            <Ionicons name="list-outline" size={18} color="#FFFFFF" />
+            <ThemedText style={styles.listItemButtonText}>Cambios</ThemedText>
+          </TouchableOpacity>
+          <TouchableOpacity
             style={[styles.listItemButton, styles.deleteButton]}
             onPress={() => handleDelete(b)}
           >
@@ -671,6 +693,180 @@ export default function BitacoraVehiculosDetenidosScreen() {
     const state = await Network.getNetworkStateAsync();
     return !!(state.isConnected && state.isInternetReachable);
   };
+
+  const closeCambiosModal = () => {
+    setIsCambiosModalVisible(false);
+    setCambiosItems([]);
+    setExpandedCambioId(null);
+  };
+
+  const formatCambioCreatedAt = (value: any) => {
+    if (!value) return '';
+    try {
+      const d = new Date(String(value));
+      if (isNaN(d.getTime())) return String(value);
+      const day = d.getDate().toString().padStart(2, '0');
+      const month = (d.getMonth() + 1).toString().padStart(2, '0');
+      const year = d.getFullYear();
+      const hours = d.getHours().toString().padStart(2, '0');
+      const minutes = d.getMinutes().toString().padStart(2, '0');
+      return `${day}/${month}/${year} ${hours}:${minutes}`;
+    } catch {
+      return String(value);
+    }
+  };
+
+  const formatInformacionGeneralForDisplay = (infoGeneral: any): string => {
+    if (!infoGeneral) return '';
+    try {
+      const info = typeof infoGeneral === 'string' ? JSON.parse(infoGeneral) : infoGeneral;
+      if (!Array.isArray(info)) return String(infoGeneral);
+
+      const partes: string[] = [];
+      for (const item of info) {
+        if (item && typeof item === 'object' && item.key && item.label) {
+          // Excluir firmas (kind === 'signature')
+          if (item.kind !== 'signature' && item.value) {
+            partes.push(`${item.label}: ${item.value}`);
+          }
+        }
+      }
+      return partes.length > 0 ? partes.join(' | ') : 'Sin información';
+    } catch {
+      return String(infoGeneral);
+    }
+  };
+
+  const formatInformacionRevisionForDisplay = (infoRevision: any): string => {
+    if (!infoRevision) return '';
+    try {
+      const info = typeof infoRevision === 'string' ? JSON.parse(infoRevision) : infoRevision;
+      if (!Array.isArray(info)) return String(infoRevision);
+
+      const partes: string[] = [];
+      for (const item of info) {
+        if (item && typeof item === 'object') {
+          if (item.kind === 'heading') {
+            partes.push(`[${item.label}]`);
+          } else if (item.key && item.label) {
+            const value = item.value || '';
+            const obs = item.observation ? ` (Obs: ${item.observation})` : '';
+            partes.push(`${item.label}: ${value}${obs}`);
+          }
+        }
+      }
+      return partes.length > 0 ? partes.join(' | ') : 'Sin información';
+    } catch {
+      return String(infoRevision);
+    }
+  };
+
+  const formatMovimientosForDisplay = (movimientos: any): string => {
+    if (!movimientos) return '';
+    try {
+      const movs = typeof movimientos === 'string' ? JSON.parse(movimientos) : movimientos;
+      if (!Array.isArray(movs)) return String(movimientos);
+
+      const partes: string[] = [];
+      for (const mov of movs) {
+        if (mov && typeof mov === 'object') {
+          const movParts: string[] = [];
+          if (mov.movimiento) movParts.push(`Mov: ${mov.movimiento}`);
+          if (mov.fecha) movParts.push(`Fecha: ${mov.fecha}`);
+          if (mov.hora) movParts.push(`Hora: ${mov.hora}`);
+          if (mov.realizado_por) movParts.push(`Por: ${mov.realizado_por}`);
+          if (mov.autorizado_por) movParts.push(`Autorizado: ${mov.autorizado_por}`);
+          if (movParts.length > 0) {
+            partes.push(`{${movParts.join(', ')}}`);
+          }
+        }
+      }
+      return partes.length > 0 ? partes.join(' | ') : 'Sin movimientos';
+    } catch {
+      return String(movimientos);
+    }
+  };
+
+  const formatChangeValue = (prop: string, value: any): string => {
+    if (prop === 'informacion_general') {
+      return formatInformacionGeneralForDisplay(value);
+    }
+    if (prop === 'informacion_revision') {
+      return formatInformacionRevisionForDisplay(value);
+    }
+    if (prop === 'movimientos_vehiculos') {
+      return formatMovimientosForDisplay(value);
+    }
+    if (typeof value === 'object' && value !== null && !(value instanceof Date)) {
+      try {
+        if (Array.isArray(value)) {
+          return JSON.stringify(value, null, 2);
+        }
+        const keys = Object.keys(value);
+        if (keys.length > 0 && keys.length <= 5) {
+          return keys.map(k => `${k}: ${value[k]}`).join(', ');
+        }
+        return JSON.stringify(value, null, 2);
+      } catch {
+        return String(value);
+      }
+    }
+    return String(value ?? '');
+  };
+
+  const fetchCambios = useCallback(async (tabla: string, registroId: number) => {
+    const isConnected = await getConnectionStatus();
+    if (!isConnected) {
+      Alert.alert('Sin conexión', 'Esta función solo está disponible con conexión a internet.');
+      return;
+    }
+    try {
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) throw new Error('Server URL not configured');
+
+      let token = await AsyncStorage.getItem('access_token');
+      if (!token) {
+        const refreshed = await refreshAccessToken();
+        if (!refreshed) {
+          if (logout) await logout();
+          return;
+        }
+        token = await AsyncStorage.getItem('access_token');
+      }
+      if (!token) return;
+
+      const doRequest = async (tk: string) =>
+        fetch(`${apiUrl}/api/cambios-apps-modules?tabla=${encodeURIComponent(tabla)}&registro_id=${registroId}`, {
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${tk}`,
+            'Content-Type': 'application/json',
+            'ngrok-skip-browser-warning': '69420',
+          },
+        });
+
+      let resp = await doRequest(token);
+      if (resp.status === 401) {
+        const refreshed = await refreshAccessToken();
+        if (!refreshed) {
+          if (logout) await logout();
+          return;
+        }
+        const nextToken = await AsyncStorage.getItem('access_token');
+        if (!nextToken) return;
+        resp = await doRequest(nextToken);
+      }
+
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data.status) {
+        throw new Error(data.message || 'No se pudieron cargar los cambios');
+      }
+      setCambiosItems(Array.isArray(data.data) ? data.data : []);
+      setIsCambiosModalVisible(true);
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'No se pudieron cargar los cambios');
+    }
+  }, [refreshAccessToken, logout]);
 
   const loadMarcaContext = async () => {
     const currentMarcaStr = await AsyncStorage.getItem('current_marca');
@@ -748,6 +944,94 @@ export default function BitacoraVehiculosDetenidosScreen() {
     }
   }, [refreshAccessToken, logout]);
 
+  const fetchCorporateVehicleUses = useCallback(
+    async (vehiculoId: number, attempt = 0): Promise<any[] | null> => {
+      try {
+        const isConnected = await getConnectionStatus();
+        if (!isConnected) return null;
+        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        if (!apiUrl) return null;
+
+        let token = await AsyncStorage.getItem('access_token');
+        if (!token) {
+          const refreshed = await refreshAccessToken();
+          if (refreshed) token = await AsyncStorage.getItem('access_token');
+        }
+        if (!token) return null;
+
+        const response = await fetch(`${apiUrl}/api/corporate-vehicles/${vehiculoId}/uses`, {
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+            'ngrok-skip-browser-warning': '69420',
+          },
+        });
+        if (response.status === 401 && attempt < 1) {
+          const refreshed = await refreshAccessToken();
+          if (refreshed) return fetchCorporateVehicleUses(vehiculoId, attempt + 1);
+        }
+        if (!response.ok) return null;
+        const data = await response.json();
+        if (data?.status && Array.isArray(data?.data)) return data.data;
+        return null;
+      } catch (e) {
+        console.error('Error fetching vehicle uses:', e);
+        return null;
+      }
+    },
+    [refreshAccessToken]
+  );
+
+  const preloadVehiculoYUso = useCallback(
+    async (params: {
+      corpoId: number | null;
+      vehiculoId: number | null;
+      usoId: number | null;
+      vehicleMeta?: { placa?: string; tipo?: string; empresa_id?: number; cliente_id?: number; sucursal_id?: number; corpo_id?: number };
+    }) => {
+      const { corpoId, vehiculoId, usoId, vehicleMeta } = params;
+      isPreloadingVehiculoUsoRef.current = true;
+      try {
+        // 1) Cargar vehículos (para que el Picker tenga items)
+        if (corpoId) {
+          await fetchCorporateVehicles(Number(corpoId));
+        }
+
+        // 2) Seleccionar vehículo
+        if (vehiculoId && Number(vehiculoId) > 0) {
+          setSelectedCorporateVehicleId(Number(vehiculoId));
+        }
+
+        // 3) Cargar usos del vehículo seleccionado (para que el Picker de usos pueda listar/seleccionar)
+        if (vehiculoId && Number(vehiculoId) > 0) {
+          const usos = await fetchCorporateVehicleUses(Number(vehiculoId));
+
+          if (Array.isArray(usos)) {
+            setTempVehicle((prev: any) => ({
+              ...(prev && Number(prev?.id) === Number(vehiculoId) ? prev : {}),
+              ...(vehicleMeta || {}),
+              id: Number(vehiculoId),
+              usos,
+              c_usos_vehiculos_corporativos: usos,
+            }));
+          }
+        }
+
+        // 4) Seleccionar uso
+        if (usoId && Number(usoId) > 0) {
+          setSelectedCorporateUseId(Number(usoId));
+        }
+      } finally {
+        // liberar en el siguiente tick para no pelear con effects de filtrado
+        setTimeout(() => {
+          isPreloadingVehiculoUsoRef.current = false;
+        }, 0);
+      }
+    },
+    [fetchCorporateVehicles, fetchCorporateVehicleUses]
+  );
+
   // Obtener usos disponibles del vehículo seleccionado
   const selectedCorporateVehicle = useMemo(() => {
     if (!selectedCorporateVehicleId) return null;
@@ -770,87 +1054,34 @@ export default function BitacoraVehiculosDetenidosScreen() {
     }
     const usos = (selectedCorporateVehicle as any)?.usos || (selectedCorporateVehicle as any)?.c_usos_vehiculos_corporativos || [];
     const list = Array.isArray(usos) ? usos : [];
-    // Solo los que NO tienen bitácora asignada
-    const filtered = list.filter((u: any) => u?.bitacora_id == null);
+    const lockedUsoId = isPrefillMode
+      ? (prefill?.uso_id ? Number(prefill.uso_id) : null)
+      : (editing?.uso_id ? Number(editing.uso_id) : null);
+    // Solo los que NO tienen bitácora asignada, pero mantener el uso "actual" (prefill o edición) aunque tenga bitácora.
+    const filtered = list.filter((u: any) => u?.bitacora_id == null || (lockedUsoId && Number(u?.id) === Number(lockedUsoId)));
     setAvailableCorporateUses(filtered);
     // Limpiar uso seleccionado si no está en la nueva lista
     if (selectedCorporateUseId) {
       const stillAvailable = filtered.some((u: any) => Number(u.id) === Number(selectedCorporateUseId));
-      if (!stillAvailable) {
+      if (!stillAvailable && !isPreloadingVehiculoUsoRef.current) {
         setSelectedCorporateUseId(null);
       }
     }
-  }, [selectedCorporateVehicle, selectedCorporateUseId]);
+  }, [selectedCorporateVehicle, selectedCorporateUseId, isPrefillMode, prefill, editing]);
 
   // Cargar información del vehículo y uso en modo prefill cuando se actualizan los vehículos
   useEffect(() => {
     if (!isPrefillMode || !prefill) return;
 
-    // Buscar el vehículo en la lista cargada
-    let vehicle = corporateVehicles.find((v: any) => Number(v.id) === Number(prefill.vehiculo_id));
+    // Solo armar info para display (sin hacer fetch aquí; el fetch lo hace preloadVehiculoYUso)
+    const vehicle =
+      corporateVehicles.find((v: any) => Number(v.id) === Number(prefill.vehiculo_id)) ||
+      (tempVehicle && Number(tempVehicle.id) === Number(prefill.vehiculo_id) ? tempVehicle : null);
 
-    // Si no está en la lista, crear un vehículo temporal con los datos del prefill
-    if (!vehicle && prefill.vehiculo_id) {
-      const tempVeh: any = {
-        id: Number(prefill.vehiculo_id),
-        placa: String(prefill.vehiculo_placa || ''),
-        tipo: String(prefill.vehiculo_tipo || ''),
-        corpo_id: Number(prefill.sucursal_id || 0),
-        sucursal_id: Number(prefill.sucursal_id || 0),
-        empresa_id: Number(prefill.empresa_id || 0),
-        cliente_id: Number(prefill.cliente_id || 0),
-        usos: [],
-        c_usos_vehiculos_corporativos: [],
-      };
-      setTempVehicle(tempVeh);
-      vehicle = tempVeh;
-
-      // Si hay conexión, intentar cargar los usos del vehículo específico
-      (async () => {
-        const isConnected = await getConnectionStatus();
-        if (isConnected && prefill.vehiculo_id) {
-          try {
-            const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-            if (apiUrl) {
-              let token = await AsyncStorage.getItem('access_token');
-              if (!token) {
-                const refreshed = await refreshAccessToken();
-                if (refreshed) {
-                  token = await AsyncStorage.getItem('access_token');
-                }
-              }
-              if (token) {
-                const response = await fetch(`${apiUrl}/api/corporate-vehicles/${prefill.vehiculo_id}/uses`, {
-                  method: 'GET',
-                  headers: {
-                    'Authorization': `Bearer ${token}`,
-                    'Content-Type': 'application/json',
-                    'ngrok-skip-browser-warning': '69420',
-                  },
-                });
-                if (response.ok) {
-                  const data = await response.json();
-                  if (data.status && Array.isArray(data.data)) {
-                    tempVeh.usos = data.data;
-                    tempVeh.c_usos_vehiculos_corporativos = data.data;
-                    setTempVehicle({ ...tempVeh });
-                  }
-                }
-              }
-            }
-          } catch (e) {
-            console.error('Error loading vehicle uses:', e);
-          }
-        }
-      })();
-    }
-
-    if (vehicle) {
-      const usos = (vehicle as any)?.usos || (vehicle as any)?.c_usos_vehiculos_corporativos || [];
-      const uso = Array.isArray(usos) ? usos.find((u: any) => Number(u.id) === Number(prefill.uso_id)) : null;
-      setPrefillVehicleInfo({ vehiculo: vehicle, uso: uso || null });
-    }
-  }, [isPrefillMode, prefill, corporateVehicles, refreshAccessToken]);
+    const usos = (vehicle as any)?.usos || (vehicle as any)?.c_usos_vehiculos_corporativos || [];
+    const uso = Array.isArray(usos) ? usos.find((u: any) => Number(u.id) === Number(prefill.uso_id)) : null;
+    setPrefillVehicleInfo({ vehiculo: vehicle || undefined, uso: uso || undefined });
+  }, [isPrefillMode, prefill, corporateVehicles, tempVehicle]);
 
   const fetchBitacoras = async () => {
     try {
@@ -965,20 +1196,12 @@ export default function BitacoraVehiculosDetenidosScreen() {
         // Abre el formulario en modo creación con datos precargados
         setIsCreating(true);
         setEditing(null);
+        setTempVehicle(null);
 
         // Obtener datos del vehículo pasado como parámetro
         if (prefill.empresa_id) setMarcaEmpresaId(Number(prefill.empresa_id));
         if (prefill.cliente_id) setMarcaClienteId(Number(prefill.cliente_id));
         if (prefill.sucursal_id) setMarcaCorpoId(Number(prefill.sucursal_id));
-
-        setSelectedCorporateVehicleId(Number(prefill.vehiculo_id));
-        setSelectedCorporateUseId(Number(prefill.uso_id));
-
-        // Cargar información del vehículo y uso desde cache o API para mostrarla
-        const corpoId = Number(prefill.sucursal_id);
-        if (corpoId) {
-          await fetchCorporateVehicles(corpoId);
-        }
 
         const tipoCandidate = String(prefill.vehiculo_tipo || '').trim() as TipoBitacora;
         const tipoNext: TipoBitacora = TYPE_OPTIONS.includes(tipoCandidate) ? tipoCandidate : 'Vehículo';
@@ -994,8 +1217,26 @@ export default function BitacoraVehiculosDetenidosScreen() {
             numero_de_placa: String(prefill.vehiculo_placa),
           }));
         }
+
+        // Secuencia requerida: cargar vehículos -> seleccionar vehículo -> cargar usos -> seleccionar uso
+        const corpoId = prefill.sucursal_id ? Number(prefill.sucursal_id) : null;
+        const vehiculoId = prefill.vehiculo_id ? Number(prefill.vehiculo_id) : null;
+        const usoId = prefill.uso_id ? Number(prefill.uso_id) : null;
+        await preloadVehiculoYUso({
+          corpoId,
+          vehiculoId,
+          usoId,
+          vehicleMeta: {
+            placa: String(prefill.vehiculo_placa || ''),
+            tipo: String(prefill.vehiculo_tipo || ''),
+            empresa_id: prefill.empresa_id ? Number(prefill.empresa_id) : undefined,
+            cliente_id: prefill.cliente_id ? Number(prefill.cliente_id) : undefined,
+            sucursal_id: prefill.sucursal_id ? Number(prefill.sucursal_id) : undefined,
+            corpo_id: prefill.sucursal_id ? Number(prefill.sucursal_id) : undefined,
+          },
+        });
       })();
-    }, [prefill, fetchCorporateVehicles])
+    }, [prefill, preloadVehiculoYUso])
   );
 
   useEffect(() => {
@@ -1071,6 +1312,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
   const startEditing = async (item: BitacoraVehiculoDetenidoItem) => {
     setIsCreating(true);
     setEditing(item);
+    setTempVehicle(null);
     const tipoVal = item.tipo as TipoBitacora;
     tipoRef.current = tipoVal;
     setTipo(tipoVal);
@@ -1102,6 +1344,76 @@ export default function BitacoraVehiculosDetenidosScreen() {
     setObservaciones(item.observaciones || '');
     setFirmaResponsable(item.firma_responsable || '');
     await requestLocation();
+
+    // Secuencia requerida al editar (modo normal): cargar vehículos -> seleccionar vehículo -> cargar usos -> seleccionar uso.
+    if (!isPrefillMode) {
+      const vehiculoIdFromItem =
+        item.vehiculo_id !== undefined && item.vehiculo_id !== null ? Number(item.vehiculo_id) : null;
+      const usoIdFromItem = item.uso_id !== undefined && item.uso_id !== null ? Number(item.uso_id) : null;
+
+      // Resolver corpoId
+      const current = await loadMarcaContext();
+      const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id ?? item.sucursal_id;
+      const corpoId = corpoIdRaw !== undefined && corpoIdRaw !== null ? Number(corpoIdRaw) : null;
+
+      // Resolver vehiculoId: preferimos el del registro; fallback para registros viejos usando uso_id
+      let vehiculoId: number | null = vehiculoIdFromItem && vehiculoIdFromItem > 0 ? vehiculoIdFromItem : null;
+      if (!vehiculoId && usoIdFromItem && usoIdFromItem > 0) {
+        try {
+          const isConnected = await getConnectionStatus();
+          if (isConnected) {
+            const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+            if (apiUrl) {
+              let token = await AsyncStorage.getItem('access_token');
+              if (!token) {
+                const refreshed = await refreshAccessToken();
+                if (refreshed) token = await AsyncStorage.getItem('access_token');
+              }
+              if (token) {
+                let usoResponse = await fetch(`${apiUrl}/api/corporate-vehicles/uses/${usoIdFromItem}`, {
+                  method: 'GET',
+                  headers: {
+                    Authorization: `Bearer ${token}`,
+                    'Content-Type': 'application/json',
+                    'ngrok-skip-browser-warning': '69420',
+                  },
+                });
+                if (usoResponse.status === 401) {
+                  const refreshed = await refreshAccessToken();
+                  if (refreshed) {
+                    token = await AsyncStorage.getItem('access_token');
+                    if (token) {
+                      usoResponse = await fetch(`${apiUrl}/api/corporate-vehicles/uses/${usoIdFromItem}`, {
+                        method: 'GET',
+                        headers: {
+                          Authorization: `Bearer ${token}`,
+                          'Content-Type': 'application/json',
+                          'ngrok-skip-browser-warning': '69420',
+                        },
+                      });
+                    }
+                  }
+                }
+                if (usoResponse.ok) {
+                  const usoData = await usoResponse.json();
+                  if (usoData?.status && usoData?.data?.vehiculo_id) {
+                    vehiculoId = Number(usoData.data.vehiculo_id);
+                  }
+                }
+              }
+            }
+          }
+        } catch (e) {
+          console.error('Error resolving vehiculo_id from uso_id:', e);
+        }
+      }
+
+      await preloadVehiculoYUso({
+        corpoId,
+        vehiculoId,
+        usoId: usoIdFromItem,
+      });
+    }
   };
 
   const cancelCreating = () => {
@@ -1371,6 +1683,8 @@ export default function BitacoraVehiculosDetenidosScreen() {
           empresa_id: Number(marcaEmpresaId || 0),
           cliente_id: Number(marcaClienteId || 0),
           sucursal_id: Number(marcaCorpoId || 0),
+          vehiculo_id: requestData.vehiculo_id ?? null,
+          uso_id: requestData.uso_id ?? null,
           tipo: tipoRef.current,
           informacion_general: requestData.informacion_general,
           informacion_revision: requestData.informacion_revision,
@@ -2234,6 +2548,93 @@ export default function BitacoraVehiculosDetenidosScreen() {
         />
       )}
 
+      {/* Modal: ver cambios */}
+      <Modal
+        visible={isCambiosModalVisible}
+        animationType="fade"
+        transparent
+        presentationStyle="overFullScreen"
+        onRequestClose={closeCambiosModal}
+      >
+        <View style={styles.overlay}>
+          <ThemedView style={styles.floatModalCardMovimientos}>
+            <ThemedView style={styles.floatModalHeader}>
+              <ThemedText style={styles.modalTitle}>{cambiosTitle}</ThemedText>
+              <TouchableOpacity onPress={closeCambiosModal}>
+                <Ionicons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+            </ThemedView>
+
+            <ScrollView style={{ maxHeight: Dimensions.get('window').height * 0.75 }} contentContainerStyle={{ padding: 16 }}>
+              {(!cambiosItems || cambiosItems.length === 0) ? (
+                <ThemedView style={styles.emptyContainer}>
+                  <ThemedText style={styles.emptyText}>No hay cambios registrados</ThemedText>
+                </ThemedView>
+              ) : (
+                cambiosItems.map((row: any) => {
+                  let parsed: any[] = [];
+                  try {
+                    parsed = row?.cambios ? JSON.parse(row.cambios) : [];
+                  } catch {
+                    parsed = [];
+                  }
+                  const createdAtLabel = formatCambioCreatedAt(row?.created_at);
+                  const isOpen = expandedCambioId === row.id;
+
+                  return (
+                    <ThemedView key={`chg-${row.id}`} style={styles.cambioCollapsableMain}>
+                      <TouchableOpacity
+                        style={styles.cambioCollapsableHeader}
+                        onPress={() => setExpandedCambioId((prev) => (prev === row.id ? null : row.id))}
+                        activeOpacity={0.8}
+                      >
+                        <ThemedText style={styles.cambioCollapsableTitle}>
+                          {createdAtLabel}
+                        </ThemedText>
+                        <Ionicons
+                          name={isOpen ? "chevron-up" : "chevron-down"}
+                          size={18}
+                          color="#007AFF"
+                        />
+                      </TouchableOpacity>
+
+                      {isOpen && (
+                        <ThemedView style={styles.cambioCollapsableContent}>
+                          <ThemedView style={styles.filterGroupSearch}>
+                            <ThemedText style={styles.filterLabel}>Cambio realizado por:</ThemedText>
+                            <ThemedText style={styles.changeDescription}>
+                              {row.empleado_nombre || 'Desconocido'}
+                              {row.empleado_cedula ? ` - Cédula: ${row.empleado_cedula}` : ''}
+                            </ThemedText>
+                          </ThemedView>
+
+                          {(Array.isArray(parsed) ? parsed : []).length > 0 && (
+                            <ThemedView style={styles.filterGroupSearch}>
+                              <ThemedText style={styles.filterLabel}>Cambios:</ThemedText>
+                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => {
+                                const propName = String(c?.prop ?? '-');
+                                const value = formatChangeValue(propName, c?.after);
+
+                                return (
+                                  <ThemedText key={`c-${row.id}-${idx}`} style={styles.changeDescription}>
+                                    <ThemedText style={{ fontWeight: '800' }}>{propName}: </ThemedText>
+                                    {value}
+                                  </ThemedText>
+                                );
+                              })}
+                            </ThemedView>
+                          )}
+                        </ThemedView>
+                      )}
+                    </ThemedView>
+                  );
+                })
+              )}
+            </ScrollView>
+          </ThemedView>
+        </View>
+      </Modal>
+
       <AppFooter />
       <SlideMenu isVisible={isMenuVisible} onClose={handleMenuClose} onHomePress={handleHomePress} currentRoute="BitacoraVehiculosDetenidos" />
       {QRScannerComponent}
@@ -2650,6 +3051,16 @@ const styles = StyleSheet.create({
   signatureModalTitle: { fontSize: 16, fontWeight: '800', color: '#000' },
   signatureModalBody: { flex: 1, padding: 12, gap: 12 },
   signatureTargetHint: { color: '#666', fontWeight: '700' },
+  changesButton: { backgroundColor: '#5856D6', flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 12, borderRadius: 8, gap: 8 },
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 },
+  floatModalCardMovimientos: { backgroundColor: '#FFFFFF', borderRadius: 12, width: '100%', maxWidth: 500, maxHeight: '80%', borderWidth: 1, borderColor: '#E0E0E0', overflow: 'hidden' },
+  floatModalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#E0E0E0' },
+  modalTitle: { fontSize: 16, fontWeight: '800', color: '#000' },
+  cambioCollapsableMain: { width: '100%', marginBottom: 10, backgroundColor: '#fff', borderRadius: 6, borderWidth: 1, borderColor: '#E0E0E0', overflow: 'hidden' },
+  cambioCollapsableHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, backgroundColor: '#F8F9FA' },
+  cambioCollapsableTitle: { fontSize: 14, fontWeight: '600', color: '#007AFF', flex: 1 },
+  cambioCollapsableContent: { padding: 12, gap: 8, backgroundColor: '#F8F9FA' },
+  changeDescription: { fontSize: 14, lineHeight: 20, color: '#666', marginBottom: 8 },
   signatureCanvasSquare: {
     width: '100%',
     maxWidth: 360,

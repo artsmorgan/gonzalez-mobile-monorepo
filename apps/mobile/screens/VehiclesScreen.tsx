@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, ActivityIndicator, Modal, View, Platform, Image } from 'react-native';
+import { StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, ActivityIndicator, Modal, View, Platform, Image, Dimensions } from 'react-native';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import { useAuth } from '@/contexts/AuthContext';
@@ -101,6 +101,12 @@ export default function VehiclesScreen() {
   const [vehicleImageBase64, setVehicleImageBase64] = useState<string | null>(null);
   const [isEditingImage, setIsEditingImage] = useState(false);
   const [editingVehicleServerImage, setEditingVehicleServerImage] = useState<string | null>(null);
+
+  // Modal: ver cambios (auditoría)
+  const [isCambiosModalVisible, setIsCambiosModalVisible] = useState(false);
+  const [cambiosTitle, setCambiosTitle] = useState<string>('Cambios');
+  const [cambiosItems, setCambiosItems] = useState<any[]>([]);
+  const [expandedCambioId, setExpandedCambioId] = useState<number | null>(null);
 
   // Form refs for text inputs
   const tipoRef = useRef<'Particular' | 'Institucional'>('Particular');
@@ -343,10 +349,107 @@ export default function VehiclesScreen() {
     }
   };
 
+  const closeCambiosModal = () => {
+    setIsCambiosModalVisible(false);
+    setCambiosItems([]);
+    setExpandedCambioId(null);
+  };
+
+  const formatCambioCreatedAt = (value: any) => {
+    if (!value) return '';
+    try {
+      const d = new Date(String(value));
+      if (isNaN(d.getTime())) return String(value);
+      const day = d.getDate().toString().padStart(2, '0');
+      const month = (d.getMonth() + 1).toString().padStart(2, '0');
+      const year = d.getFullYear();
+      const hours = d.getHours().toString().padStart(2, '0');
+      const minutes = d.getMinutes().toString().padStart(2, '0');
+      return `${day}/${month}/${year} ${hours}:${minutes}`;
+    } catch {
+      return String(value);
+    }
+  };
+
+  const formatChangeValue = (prop: string, value: any): string => {
+    // VehiclesScreen no tiene campos dinámicos complejos, pero manejamos objetos JSON por si acaso
+    if (typeof value === 'object' && value !== null && !(value instanceof Date)) {
+      try {
+        // Si es un objeto simple, intentar mostrar de manera legible
+        if (Array.isArray(value)) {
+          return JSON.stringify(value, null, 2);
+        }
+        // Si es un objeto con propiedades conocidas, mostrar de manera estructurada
+        const keys = Object.keys(value);
+        if (keys.length > 0 && keys.length <= 5) {
+          return keys.map(k => `${k}: ${value[k]}`).join(', ');
+        }
+        return JSON.stringify(value, null, 2);
+      } catch {
+        return String(value);
+      }
+    }
+    return String(value ?? '');
+  };
+
   const getConnectionStatus = async (): Promise<boolean> => {
     const networkState = await Network.getNetworkStateAsync();
     return networkState.isConnected && networkState.isInternetReachable ? true : false;
   };
+
+  const fetchCambios = useCallback(async (tabla: string, registroId: number) => {
+    const isConnected = await getConnectionStatus();
+    if (!isConnected) {
+      Alert.alert('Sin conexión', 'Esta función solo está disponible con conexión a internet.');
+      return;
+    }
+    try {
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) throw new Error('Server URL not configured');
+
+      let token = await AsyncStorage.getItem('access_token');
+      if (!token) {
+        const refreshed = await refreshAccessToken();
+        if (!refreshed) {
+          if (logout) await logout();
+          return;
+        }
+        token = await AsyncStorage.getItem('access_token');
+      }
+      if (!token) return;
+
+      const doRequest = async (tk: string) =>
+        fetch(`${apiUrl}/api/cambios-apps-modules?tabla=${encodeURIComponent(tabla)}&registro_id=${registroId}`, {
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${tk}`,
+            'Content-Type': 'application/json',
+            'ngrok-skip-browser-warning': '69420',
+          },
+        });
+
+      let resp = await doRequest(token);
+      if (resp.status === 401) {
+        const refreshed = await refreshAccessToken();
+        if (!refreshed) {
+          if (logout) await logout();
+          return;
+        }
+        const nextToken = await AsyncStorage.getItem('access_token');
+        if (!nextToken) return;
+        resp = await doRequest(nextToken);
+      }
+
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data.status) {
+        throw new Error(data.message || 'No se pudieron cargar los cambios');
+      }
+      setCambiosItems(Array.isArray(data.data) ? data.data : []);
+      setIsCambiosModalVisible(true);
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'No se pudieron cargar los cambios');
+    }
+  }, [refreshAccessToken, logout]);
 
   const openCamera = async () => {
     if (!permission) {
@@ -1485,6 +1588,14 @@ export default function VehiclesScreen() {
                     vehicle={vehicle}
                     onEdit={() => startEditing(vehicle)}
                     onDelete={() => deleteVehicle(vehicle.id, vehicle.id_local)}
+                    onViewChanges={() => {
+                      if (vehicle.id_local || vehicle.id === 0) {
+                        Alert.alert('Sin conexión', 'Este vehículo es local/offline. Los cambios solo se pueden consultar en el servidor.');
+                        return;
+                      }
+                      setCambiosTitle(`Cambios - Vehículo #${vehicle.id}`);
+                      fetchCambios('e_registro_vehiculos', vehicle.id);
+                    }}
                     getActionIcon={getActionIcon}
                     convertDate={convertDate}
                     getConnectionStatus={getConnectionStatus}
@@ -1525,6 +1636,93 @@ export default function VehiclesScreen() {
         </ThemedView>
       </Modal>
 
+      {/* Modal: ver cambios */}
+      <Modal
+        visible={isCambiosModalVisible}
+        animationType="fade"
+        transparent
+        presentationStyle="overFullScreen"
+        onRequestClose={closeCambiosModal}
+      >
+        <View style={styles.overlay}>
+          <ThemedView style={styles.floatModalCardMovimientos}>
+            <ThemedView style={styles.floatModalHeader}>
+              <ThemedText style={styles.modalTitle}>{cambiosTitle}</ThemedText>
+              <TouchableOpacity onPress={closeCambiosModal}>
+                <Ionicons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+            </ThemedView>
+
+            <ScrollView style={{ maxHeight: Dimensions.get('window').height * 0.75 }} contentContainerStyle={{ padding: 16 }}>
+              {(!cambiosItems || cambiosItems.length === 0) ? (
+                <ThemedView style={styles.emptyContainer}>
+                  <ThemedText style={styles.emptyText}>No hay cambios registrados</ThemedText>
+                </ThemedView>
+              ) : (
+                cambiosItems.map((row: any) => {
+                  let parsed: any[] = [];
+                  try {
+                    parsed = row?.cambios ? JSON.parse(row.cambios) : [];
+                  } catch {
+                    parsed = [];
+                  }
+                  const createdAtLabel = formatCambioCreatedAt(row?.created_at);
+                  const isOpen = expandedCambioId === row.id;
+
+                  return (
+                    <ThemedView key={`chg-${row.id}`} style={styles.cambioCollapsableMain}>
+                      <TouchableOpacity
+                        style={styles.cambioCollapsableHeader}
+                        onPress={() => setExpandedCambioId((prev) => (prev === row.id ? null : row.id))}
+                        activeOpacity={0.8}
+                      >
+                        <ThemedText style={styles.cambioCollapsableTitle}>
+                          {createdAtLabel}
+                        </ThemedText>
+                        <Ionicons
+                          name={isOpen ? "chevron-up" : "chevron-down"}
+                          size={18}
+                          color="#007AFF"
+                        />
+                      </TouchableOpacity>
+
+                      {isOpen && (
+                        <ThemedView style={styles.cambioCollapsableContent}>
+                          <ThemedView style={styles.filterGroupSearch}>
+                            <ThemedText style={styles.filterLabel}>Cambio realizado por:</ThemedText>
+                            <ThemedText style={styles.changeDescription}>
+                              {row.empleado_nombre || 'Desconocido'}
+                              {row.empleado_cedula ? ` - Cédula: ${row.empleado_cedula}` : ''}
+                            </ThemedText>
+                          </ThemedView>
+
+                          {(Array.isArray(parsed) ? parsed : []).length > 0 && (
+                            <ThemedView style={styles.filterGroupSearch}>
+                              <ThemedText style={styles.filterLabel}>Cambios:</ThemedText>
+                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => {
+                                const propName = String(c?.prop ?? '-');
+                                const value = formatChangeValue(propName, c?.after);
+
+                                return (
+                                  <ThemedText key={`c-${row.id}-${idx}`} style={styles.changeDescription}>
+                                    <ThemedText style={{ fontWeight: '800' }}>{propName}: </ThemedText>
+                                    {value}
+                                  </ThemedText>
+                                );
+                              })}
+                            </ThemedView>
+                          )}
+                        </ThemedView>
+                      )}
+                    </ThemedView>
+                  );
+                })
+              )}
+            </ScrollView>
+          </ThemedView>
+        </View>
+      </Modal>
+
       <AppFooter />
       <SlideMenu
         isVisible={isMenuVisible}
@@ -1541,6 +1739,7 @@ interface VehicleItemComponentProps {
   vehicle: Vehicle;
   onEdit: () => void;
   onDelete: () => void;
+  onViewChanges?: () => void;
   getActionIcon: (action: string) => React.ReactElement;
   convertDate: (dateString: string) => string;
   getConnectionStatus: () => Promise<boolean>;
@@ -1550,6 +1749,7 @@ const VehicleItemComponent: React.FC<VehicleItemComponentProps> = ({
   vehicle,
   onEdit,
   onDelete,
+  onViewChanges,
   getActionIcon,
   convertDate,
   getConnectionStatus,
@@ -1729,6 +1929,11 @@ const VehicleItemComponent: React.FC<VehicleItemComponentProps> = ({
           <TouchableOpacity style={styles.editButton} onPress={onEdit}>
             <ThemedText style={styles.editButtonText}>{getActionIcon('edit')}</ThemedText>
           </TouchableOpacity>
+          {onViewChanges && (
+            <TouchableOpacity style={styles.changesButton} onPress={onViewChanges}>
+              <Ionicons name="list-outline" size={18} color="#FFFFFF" />
+            </TouchableOpacity>
+          )}
           <TouchableOpacity style={styles.deleteButton} onPress={onDelete}>
             <ThemedText style={styles.deleteButtonText}>{getActionIcon('delete')}</ThemedText>
           </TouchableOpacity>
@@ -2214,6 +2419,81 @@ const styles = StyleSheet.create({
   imageLoadingText: {
     fontSize: 14,
     color: '#666',
+  },
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  floatModalCardMovimientos: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    width: '100%',
+    maxWidth: 500,
+    maxHeight: '80%',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    overflow: 'hidden',
+  },
+  floatModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+    backgroundColor: '#fff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#333',
+  },
+  cambioCollapsableMain: {
+    width: '100%',
+    marginBottom: 10,
+    backgroundColor: '#fff',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    overflow: 'hidden',
+  },
+  cambioCollapsableHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: '#F8F9FA',
+  },
+  cambioCollapsableTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#007AFF',
+    flex: 1,
+  },
+  cambioCollapsableContent: {
+    padding: 12,
+    gap: 8,
+    backgroundColor: '#F8F9FA',
+  },
+  changeDescription: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: '#666',
+    marginBottom: 8,
+  },
+  changesButton: {
+    backgroundColor: '#5856D6',
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 12,
+    borderRadius: 8,
+    gap: 8,
   },
 });
 

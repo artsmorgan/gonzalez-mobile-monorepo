@@ -153,7 +153,7 @@ export async function GET(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
         }
 
-        const articulos_return: { id: number, nombre: string, cantidad: number }[] = [];
+        const articulos_return: { id: number, tipo: string, nombre: string, marca: string, serie: string, cantidad: number }[] = [];
 
         if (puesto.comboArticulosCP_id) {
             const combo_articulo_cp = await prisma.e_estructura_combo_articulo_cp.findUnique({ where: { id: puesto.comboArticulosCP_id } });
@@ -166,7 +166,10 @@ export async function GET(req: NextRequest) {
                     }
                     articulos_return.push({
                         id: articulo.id,
-                        nombre: art_bd ? art_bd.nombre : "Desconocido",
+                        nombre: art_bd ? art_bd.nombre : `Artículo inidentificable`,
+                        tipo: "Plan",
+                        marca: "",
+                        serie: "",
                         cantidad: articulo.cantidad,
                     });
                 }
@@ -182,9 +185,72 @@ export async function GET(req: NextRequest) {
             }
             articulos_return.push({
                 id: articulo.id,
-                nombre: art_bd ? art_bd.nombre : "Desconocido",
+                nombre: art_bd ? art_bd.nombre : `Artículo inidentificable`,
+                tipo: "Plan",
+                marca: "",
+                serie: "",
                 cantidad: articulo.cantidad,
             });
+        }
+
+        const articulos_puesto_entrega = await prisma.e_estructura_articulo_corpo_puesto_entrega.findMany({ where: { puesto_id: marcaAnterior.puesto_id } });
+        for (const articulo of articulos_puesto_entrega) {
+            let art_bd = null;
+            if (articulo.nomencladorArticuloCP_id) {
+                art_bd = await prisma.n_articulo_corpo_puesto.findUnique({ where: { id: articulo.nomencladorArticuloCP_id } });
+            }
+            articulos_return.push({
+                id: articulo.id,
+                nombre: art_bd ? art_bd.nombre : `Artículo inidentificable`,
+                tipo: "Asignado",
+                marca: articulo.marca,
+                serie: articulo.serie,
+                cantidad: 1,
+            });
+        }
+
+        // Adjuntar último mantenimiento a cada artículo del puesto
+        const planIds = articulos_return.filter((a) => a.tipo === "Plan").map((a) => a.id);
+        const asignadoIds = articulos_return.filter((a) => a.tipo === "Asignado").map((a) => a.id);
+
+        if (planIds.length > 0 || asignadoIds.length > 0) {
+            const or: any[] = [];
+            if (planIds.length) or.push({ articulo_plan_id: { in: planIds } });
+            if (asignadoIds.length) or.push({ articulo_asignado_id: { in: asignadoIds } });
+
+            const mantenimientos = await prisma.c_articulo_mantenimiento.findMany({
+                where: { OR: or },
+                orderBy: { id: "desc" },
+                select: {
+                    id: true,
+                    articulo_plan_id: true,
+                    articulo_asignado_id: true,
+                    estado: true,
+                    cantidad_necesaria: true,
+                    cantidad_real: true,
+                    observaciones: true,
+                    fecha_solucion: true,
+                    mant_armas_form: true,
+                },
+            });
+
+            const latestByPlanId = new Map<number, any>();
+            const latestByAsignadoId = new Map<number, any>();
+            for (const m of mantenimientos) {
+                if (m.articulo_plan_id && !latestByPlanId.has(m.articulo_plan_id)) latestByPlanId.set(m.articulo_plan_id, m);
+                if (m.articulo_asignado_id && !latestByAsignadoId.has(m.articulo_asignado_id)) latestByAsignadoId.set(m.articulo_asignado_id, m);
+            }
+
+            for (const a of articulos_return as any[]) {
+                a.ultimo_mantenimiento =
+                    a.tipo === "Plan"
+                        ? latestByPlanId.get(a.id) ?? null
+                        : a.tipo === "Asignado"
+                            ? latestByAsignadoId.get(a.id) ?? null
+                            : null;
+            }
+        } else {
+            for (const a of articulos_return as any[]) a.ultimo_mantenimiento = null;
         }
 
         const info_return = {
@@ -261,7 +327,7 @@ export async function POST(req: NextRequest) {
 
                 if (marcaFechaHoraInicio < marcaFechaHoraFin) { // Si hora_inicio es menor a hora_fin, entonces la fecha de fin es el día siguiente
                     const newDateFinString = marca.fecha.toISOString().split("T")[0].split("-");
-                    newDateFinString[2] = (Number(newDateFinString[2]) + 1).toString();
+                    newDateFinString[2] = (Number(newDateFinString[2]) + 1).toString().padStart(2, '0');
                     marcaFechaHoraFin = new Date(`${newDateFinString[0]}-${newDateFinString[1]}-${newDateFinString[2]}T${timeFinString}`);
                 }
 
@@ -336,7 +402,26 @@ export async function POST(req: NextRequest) {
                     if (articulo.cantidad_requerida > articulo.cantidad_real) {
                         add_desc = true;
                     }
-                    if (articulo.estado != "Bueno") {
+
+                    let was_good = false;
+                    if (articulo.tipo == "Plan") {
+                        const last_mantenimiento = await prisma.c_articulo_mantenimiento.findFirst({ where: { articulo_plan_id: articulo.id }, orderBy: { fecha_solucion: "desc" } });
+                        if (last_mantenimiento) {
+                            if (last_mantenimiento.estado == "Bueno") {
+                                was_good = true;
+                            }
+                        }
+                    }
+                    else {
+                        const last_mantenimiento = await prisma.c_articulo_mantenimiento.findFirst({ where: { articulo_asignado_id: articulo.id }, orderBy: { fecha_solucion: "desc" } });
+                        if (last_mantenimiento) {
+                            if (last_mantenimiento.estado == "Bueno") {
+                                was_good = true;
+                            }
+                        }
+                    }
+
+                    if (articulo.estado != "Bueno" && was_good) {
                         add_desc = true;
                     }
 
@@ -350,6 +435,9 @@ export async function POST(req: NextRequest) {
                         articulos_reporte.push({
                             id: articulo.id,
                             nombre: articulo.nombre,
+                            tipo: articulo.tipo,
+                            marca: articulo.marca,
+                            serie: articulo.serie,
                             cantidad_requerida: articulo.cantidad_requerida,
                             cantidad_real: articulo.cantidad_real,
                             estado: articulo.estado,
@@ -362,7 +450,7 @@ export async function POST(req: NextRequest) {
             if (send_notification) {
                 const description = `El usuario ${employee} ha registrado una entrega de puesto${location} (Ocupado anteriormente por ${oficial_entrega}) el día ${fecha_entrada_entrega.split("T")[0]} a las ${hora_entrada_entrega.split("T")[1].split(".")[0]}${articulos_desc}`;
                 sendNotificationByRole(nuevoRegistro.corpo_id, [], "Registro de entrega de puesto creado", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
-                createReport(nuevoRegistro.cliente_id, nuevoRegistro.corpo_id, nuevoRegistro.puesto_id, parseInt(division), articulos_reporte, nuevoRegistro.created_by);
+                createReport(articulos_reporte);
             }
         }
 

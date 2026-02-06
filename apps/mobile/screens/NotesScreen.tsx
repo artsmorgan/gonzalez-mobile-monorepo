@@ -97,20 +97,16 @@ interface EditingNote {
   relevancia: 'Baja' | 'Media' | 'Alta';
 }
 
-interface Change {
-  titulo: string;
-  description: string;
+type CambiosAppsModulesRow = {
+  id: number;
+  nombre_tabla: string;
+  registro_id: number;
+  cambios: string;
   created_at: string;
-  empleado: string;
-  categoria: string | null;
-  relevancia: string | null;
-}
-
-interface ChangesResponse {
-  status: boolean;
-  changes?: Change[];
-  message?: string;
-}
+  created_by: number;
+  empleado_nombre: string | null;
+  empleado_cedula: string | null;
+};
 
 interface Puesto {
   id: number;
@@ -173,9 +169,10 @@ export default function NotesScreen() {
 
   // Changes modal state
   const [isChangesModalVisible, setIsChangesModalVisible] = useState(false);
-  const [changes, setChanges] = useState<Change[]>([]);
-  const [isLoadingChanges, setIsLoadingChanges] = useState(false);
+  const [cambiosItems, setCambiosItems] = useState<CambiosAppsModulesRow[]>([]);
+  const [isLoadingCambios, setIsLoadingCambios] = useState(false);
   const [selectedNoteId, setSelectedNoteId] = useState<number | null>(null);
+  const [expandedCambioId, setExpandedCambioId] = useState<number | null>(null);
 
   // Divisions from employee roles
   const [divisions, setDivisions] = useState<string[]>([]);
@@ -235,7 +232,9 @@ export default function NotesScreen() {
   // Función para verificar conectividad
   const getConnectionStatus = async () => {
     const networkState = await Network.getNetworkStateAsync();
-    return networkState.isConnected && networkState.isInternetReachable;
+    if (!networkState.isConnected) return false;
+    if (networkState.isInternetReachable === false) return false;
+    return true;
   };
 
   const fetchCategories = async () => {
@@ -735,6 +734,7 @@ export default function NotesScreen() {
                   requestData: requestBody,
                   noteId: noteId,
                   puestoId: currentMarca?.puesto?.id || 0,
+                  marcaId: currentMarca?.id || 0,
                   refreshAccessToken,
                   logout,
                 });
@@ -1068,15 +1068,31 @@ export default function NotesScreen() {
     return `${date.getDate()}/${date.getMonth() + 1}/${date.getFullYear()}`;
   };
 
-  const fetchChanges = async (noteId: number) => {
+  const formatCambioCreatedAt = (value: any) => {
+    if (!value) return '';
     try {
-      setIsLoadingChanges(true);
-      setChanges([]);
+      const d = new Date(String(value));
+      if (isNaN(d.getTime())) return String(value);
+      const day = d.getDate().toString().padStart(2, '0');
+      const month = (d.getMonth() + 1).toString().padStart(2, '0');
+      const year = d.getFullYear();
+      const hours = d.getHours().toString().padStart(2, '0');
+      const minutes = d.getMinutes().toString().padStart(2, '0');
+      return `${day}/${month}/${year} ${hours}:${minutes}`;
+    } catch {
+      return String(value);
+    }
+  };
+
+  const fetchCambiosNota = async (noteId: number) => {
+    try {
+      setIsLoadingCambios(true);
+      setCambiosItems([]);
 
       const isConnected = await getConnectionStatus();
       if (!isConnected) {
-        Alert.alert('Error', 'No hay conexión a internet');
-        setIsLoadingChanges(false);
+        Alert.alert('Sin conexión', 'Esta función solo está disponible con conexión a internet.');
+        setIsLoadingCambios(false);
         return;
       }
 
@@ -1103,20 +1119,26 @@ export default function NotesScreen() {
         }
         token = await AsyncStorage.getItem('access_token');
       }
+      if (!token) throw new Error('Sesión expirada');
 
-      const response = await fetch(`${apiUrl}/api/puestos/${currentMarcaData.puesto.id}/notas/${noteId}/changes`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': '69420',
-        },
-      });
+      const doRequest = async (tk: string) =>
+        fetch(`${apiUrl}/api/cambios-apps-modules?tabla=${encodeURIComponent('c_puesto_notas')}&registro_id=${noteId}`, {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${tk}`,
+            'Content-Type': 'application/json',
+            'ngrok-skip-browser-warning': '69420',
+          },
+        });
+
+      let response = await doRequest(token);
 
       if (response.status === 401) {
         const refreshed = await refreshAccessToken();
         if (refreshed) {
-          return fetchChanges(noteId);
+          token = await AsyncStorage.getItem('access_token');
+          if (!token) return;
+          response = await doRequest(token);
         } else {
           Alert.alert('10', 'Sesión expirada. Por favor inicie sesión nuevamente.');
           await logout();
@@ -1133,35 +1155,34 @@ export default function NotesScreen() {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
 
-      const data: ChangesResponse = await response.json();
-
-      if (data.status && data.changes) {
-        setChanges(data.changes);
+      const data = await response.json().catch(() => ({}));
+      if (data?.status && Array.isArray(data?.data)) {
+        setCambiosItems(data.data);
       } else {
-        setChanges([]);
-        if (data.message) {
-          Alert.alert('Información', data.message);
-        }
+        setCambiosItems([]);
+        if (data?.message) Alert.alert('Información', data.message);
       }
     } catch (err) {
       console.error('Error fetching changes:', err);
       Alert.alert('Error', 'No se pudieron cargar los cambios de la nota');
-      setChanges([]);
+      setCambiosItems([]);
     } finally {
-      setIsLoadingChanges(false);
+      setIsLoadingCambios(false);
     }
   };
 
   const openChangesModal = (noteId: number) => {
     setSelectedNoteId(noteId);
     setIsChangesModalVisible(true);
-    fetchChanges(noteId);
+    setExpandedCambioId(null);
+    fetchCambiosNota(noteId);
   };
 
   const closeChangesModal = () => {
     setIsChangesModalVisible(false);
     setSelectedNoteId(null);
-    setChanges([]);
+    setCambiosItems([]);
+    setExpandedCambioId(null);
   };
 
   const renderNoteItem = (note: Note) => {
@@ -1681,52 +1702,69 @@ export default function NotesScreen() {
               </TouchableOpacity>
             </ThemedView>
 
-            {isLoadingChanges ? (
+            {isLoadingCambios ? (
               <ThemedView style={styles.loadingContainer}>
                 <ActivityIndicator size="large" color="#007AFF" />
                 <ThemedText style={styles.loadingText}>Cargando cambios...</ThemedText>
               </ThemedView>
-            ) : changes.length === 0 ? (
+            ) : cambiosItems.length === 0 ? (
               <ThemedView style={styles.emptyContainer}>
                 <ThemedText style={styles.emptyText}>No hay cambios registrados para esta nota</ThemedText>
               </ThemedView>
             ) : (
               <ScrollView style={styles.changesList}>
-                {changes.map((change, index) => (
-                  <ThemedView key={index} style={styles.changeItem}>
-                    {/* Título */}
-                    <ThemedView style={styles.changeHeader}>
-                      <ThemedText style={styles.changeTitle}>{change.titulo}</ThemedText>
-                    </ThemedView>
+                {cambiosItems.map((row) => {
+                  let parsed: any[] = [];
+                  try {
+                    parsed = row?.cambios ? JSON.parse(row.cambios) : [];
+                  } catch {
+                    parsed = [];
+                  }
+                  const isOpen = expandedCambioId === row.id;
 
-                    {/* Categoría */}
-                    {change.categoria && (
-                      <ThemedView style={styles.changeCategoryContainer}>
-                        <ThemedView style={styles.changeCategoryBadge}>
-                          <ThemedText style={styles.changeCategoryText}>{change.categoria}</ThemedText>
+                  return (
+                    <ThemedView key={`chg-${row.id}`} style={styles.cambioCollapsableMain}>
+                      <TouchableOpacity
+                        style={styles.cambioCollapsableHeader}
+                        onPress={() => setExpandedCambioId((prev) => (prev === row.id ? null : row.id))}
+                        activeOpacity={0.8}
+                      >
+                        <ThemedText style={styles.cambioCollapsableTitle}>
+                          {formatCambioCreatedAt(row.created_at)}
+                        </ThemedText>
+                        <Ionicons
+                          name={isOpen ? "chevron-up" : "chevron-down"}
+                          size={18}
+                          color="#007AFF"
+                        />
+                      </TouchableOpacity>
+
+                      {isOpen && (
+                        <ThemedView style={styles.cambioCollapsableContent}>
+                          <ThemedView style={styles.filterGroupSearch}>
+                            <ThemedText style={styles.filterLabel}>Cambio realizado por:</ThemedText>
+                            <ThemedText style={styles.changeDescription}>
+                              {row.empleado_nombre || 'Desconocido'}
+                              {row.empleado_cedula ? ` (${row.empleado_cedula})` : ''}
+                            </ThemedText>
+                          </ThemedView>
+
+                          {(Array.isArray(parsed) ? parsed : []).length > 0 && (
+                            <ThemedView style={styles.filterGroupSearch}>
+                              <ThemedText style={styles.filterLabel}>Cambios:</ThemedText>
+                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => (
+                                <ThemedText key={`c-${row.id}-${idx}`} style={styles.changeDescription}>
+                                  <ThemedText style={{ fontWeight: '800' }}>{String(c?.prop ?? '-')}: </ThemedText>
+                                  {String(c?.after ?? '')}
+                                </ThemedText>
+                              ))}
+                            </ThemedView>
+                          )}
                         </ThemedView>
-                      </ThemedView>
-                    )}
-
-                    {/* Relevancia */}
-                    {change.relevancia && (
-                      <ThemedView style={styles.changeCategoryContainer}>
-                        <ThemedView style={styles.changeRelevanciaBadge}>
-                          <ThemedText style={styles.changeRelevanciaText}>Relevancia: {change.relevancia}</ThemedText>
-                        </ThemedView>
-                      </ThemedView>
-                    )}
-
-                    {/* Descripción */}
-                    <ThemedText style={styles.changeDescription}>{change.description}</ThemedText>
-
-                    {/* Información del empleado y fecha con fondo celeste */}
-                    <ThemedView style={styles.changeInfoContainer}>
-                      <ThemedText style={styles.changeEmployee}>Realizado por: {change.empleado}</ThemedText>
-                      <ThemedText style={styles.changeDate}>Realizado en: {formatDate(change.created_at)}</ThemedText>
+                      )}
                     </ThemedView>
-                  </ThemedView>
-                ))}
+                  );
+                })}
               </ScrollView>
             )}
           </ThemedView>
@@ -2223,12 +2261,26 @@ const styles = StyleSheet.create({
   },
   changesList: {
     maxHeight: 400,
+    margin: 10,
   },
   changeItem: {
     padding: 16,
     backgroundColor: '#fff',
     borderBottomWidth: 1,
     borderBottomColor: '#E0E0E0',
+  },
+  cambioAccordionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    paddingVertical: 4,
+  },
+  cambioAccordionTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#111827',
+    flex: 1,
   },
   changeHeader: {
     marginBottom: 8,
@@ -2298,6 +2350,34 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 12,
     fontWeight: '600',
+  },
+  cambioCollapsableMain: {
+    width: '100%',
+    marginBottom: 10,
+    backgroundColor: '#fff',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    overflow: 'hidden',
+  },
+  cambioCollapsableHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: '#F8F9FA',
+  },
+  cambioCollapsableTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#007AFF',
+    flex: 1,
+  },
+  cambioCollapsableContent: {
+    padding: 12,
+    gap: 8,
+    backgroundColor: '#F8F9FA',
   },
   changeInfoContainer: {
     backgroundColor: '#E3F2FD',

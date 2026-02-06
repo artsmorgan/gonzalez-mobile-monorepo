@@ -13,6 +13,7 @@ interface UpdateNoteParams {
     requestData: any;
     noteId: number;
     puestoId: number;
+    marcaId?: number;
     refreshAccessToken?: () => Promise<boolean>;
     logout?: () => Promise<{ status: boolean; message: string }>;
 }
@@ -98,17 +99,35 @@ export async function updateNote({
     requestData,
     noteId,
     puestoId,
+    marcaId: marcaIdParam,
     refreshAccessToken,
     logout
 }: UpdateNoteParams) {
     try {
-        const currentMarcaData = await AsyncStorage.getItem('current_marca_data');
-        if (!currentMarcaData) {
-            throw new Error('Current marca data not found');
+        // Prefer explicit marcaId (caller already knows it). Fallback to AsyncStorage.
+        let marcaId: number | null = (marcaIdParam !== undefined && marcaIdParam !== null) ? Number(marcaIdParam) : null;
+
+        if (!marcaId) {
+            const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+            if (currentMarcaStr) {
+                try {
+                    const obj = JSON.parse(currentMarcaStr);
+                    const id = obj?.id;
+                    if (id !== undefined && id !== null) marcaId = Number(id);
+                } catch { /* ignore */ }
+            }
         }
 
-        const currentMarcaDataObject = JSON.parse(currentMarcaData);
-        const marcaId = currentMarcaDataObject.id;
+        if (!marcaId) {
+            const currentMarcaData = await AsyncStorage.getItem('current_marca');
+            if (currentMarcaData) {
+                try {
+                    const currentMarcaDataObject = JSON.parse(currentMarcaData);
+                    const id = currentMarcaDataObject?.id;
+                    if (id !== undefined && id !== null) marcaId = Number(id);
+                } catch { /* ignore */ }
+            }
+        }
 
         if (!marcaId) {
             throw new Error('Marca ID not found');
@@ -154,7 +173,7 @@ export async function updateNote({
             if (refreshAccessToken) {
                 const refreshed = await refreshAccessToken();
                 if (refreshed) {
-                    return updateNote({ requestData, noteId, puestoId, refreshAccessToken, logout });
+                    return updateNote({ requestData, noteId, puestoId, marcaId, refreshAccessToken, logout });
                 } else if (logout) {
                     await logout();
                     return { status: false, message: 'Sesión expirada' };
