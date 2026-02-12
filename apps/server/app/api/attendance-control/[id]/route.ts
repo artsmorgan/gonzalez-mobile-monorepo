@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessToken } from "../../../../utils/verifyToken";
 import { prisma } from "../../../../utils/prismaClient";
+import { toZonedTime } from "date-fns-tz";
 
 function parseDDMMYYYYToDate(value: unknown): Date | null {
     if (!value) return null;
@@ -55,6 +56,13 @@ export async function PUT(
             return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
         }
 
+        const existing = await prisma.c_control_asistencia.findUnique({
+            where: { id: idInt }
+        });
+        if (!existing) {
+            return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
+        }
+
         const fechaDate = fecha !== undefined ? parseDDMMYYYYToDate(fecha) : undefined;
         if (fecha !== undefined && !fechaDate) {
             return NextResponse.json({ status: false, message: "Fecha inválida (formato esperado dd/mm/yyyy)" }, { status: 400 });
@@ -96,10 +104,48 @@ export async function PUT(
             }
         });
 
+        // Registrar cambios (solo campos actualizados, excluyendo firmas)
+        const eq = (a: any, b: any) => {
+            if (a === b) return true;
+            if (a == null && b == null) return true;
+            const da = a instanceof Date ? a : (typeof a === "string" && /^\d{4}-\d{2}-\d{2}T/.test(a) ? new Date(a) : null);
+            const db = b instanceof Date ? b : (typeof b === "string" && /^\d{4}-\d{2}-\d{2}T/.test(b) ? new Date(b) : null);
+            if (da && db) return da.getTime() === db.getTime();
+            return false;
+        };
+
+        const cambiosArr: Array<{ prop: string; before: any; after: any }> = [];
+        for (const [k, v] of Object.entries(updateData)) {
+            if (k === "firma_responsable") continue; // Excluir firmas
+
+            const before = (existing as any)[k];
+            const after = v;
+            if (!eq(before, after)) {
+                cambiosArr.push({
+                    prop: k,
+                    before: before instanceof Date ? before.toISOString() : before,
+                    after: after instanceof Date ? after.toISOString() : after,
+                });
+            }
+        }
+
         const updated_record = await prisma.c_control_asistencia.update({
             where: { id: idInt },
             data: updateData
         });
+
+        if (cambiosArr.length > 0) {
+            const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
+            await prisma.c_cambios_apps_modules.create({
+                data: {
+                    nombre_tabla: "c_control_asistencia",
+                    registro_id: idInt,
+                    cambios: JSON.stringify(cambiosArr),
+                    created_at: toZonedTime(new Date(), "America/Costa_Rica"),
+                    created_by: createdBy,
+                },
+            });
+        }
 
         return NextResponse.json({
             status: true,
@@ -130,6 +176,44 @@ export async function DELETE(
         if (!idInt) {
             return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
         }
+
+        const existing = await prisma.c_control_asistencia.findUnique({
+            where: { id: idInt }
+        });
+        if (!existing) {
+            return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
+        }
+
+        // Registrar cambio de eliminación antes de eliminar
+        const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
+        const createdAt = toZonedTime(new Date(), "America/Costa_Rica");
+        await prisma.c_cambios_apps_modules.create({
+            data: {
+                nombre_tabla: "c_control_asistencia",
+                registro_id: idInt,
+                cambios: JSON.stringify([{
+                    prop: "__deleted__",
+                    before: {
+                        id: existing.id,
+                        empresa_id: existing.empresa_id,
+                        cliente_id: existing.cliente_id,
+                        division_id: existing.division_id,
+                        contrato_id: existing.contrato_id,
+                        corpo_id: existing.corpo_id,
+                        nombre_cliente: (existing as any).nombre_cliente,
+                        fecha: (existing as any).fecha ? (existing as any).fecha.toISOString() : null,
+                        turno: (existing as any).turno,
+                        area_piso: (existing as any).area_piso,
+                        total_presentes: (existing as any).total_presentes,
+                        fijos: (existing as any).fijos,
+                        colaboradores: (existing as any).colaboradores,
+                    },
+                    after: null,
+                }]),
+                created_at: createdAt,
+                created_by: createdBy,
+            },
+        });
 
         await prisma.c_control_asistencia.delete({
             where: { id: idInt }

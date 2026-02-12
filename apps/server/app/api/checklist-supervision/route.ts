@@ -326,6 +326,34 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // Registrar cambio de creación
+    const createdBy = parseInt(String((payload as any)?.id ?? 0)) || 0;
+    await prisma.c_cambios_apps_modules.create({
+      data: {
+        nombre_tabla: "c_checklist_supervision",
+        registro_id: created.id,
+        cambios: JSON.stringify([{
+          prop: "__created__",
+          before: null,
+          after: {
+            id: created.id,
+            cliente_id: created.cliente_id,
+            division_id: created.division_id,
+            corpo_id: created.corpo_id,
+            puesto_id: created.puesto_id,
+            fecha: created.fecha.toISOString(),
+            ejecutivo_cuenta: created.ejecutivo_cuenta,
+            evaluacion: created.evaluacion,
+            articulos_puesto: (created as any).articulos_puesto || null,
+            firma_supervisor: created.firma_supervisor,
+            firma_responsable: created.firma_responsable,
+          },
+        }]),
+        created_at: createdAt,
+        created_by: createdBy,
+      },
+    });
+
     return NextResponse.json({ status: true, message: "Checklist creado correctamente", id: created.id }, { status: 200 });
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";

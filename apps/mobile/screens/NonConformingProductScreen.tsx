@@ -31,12 +31,14 @@ import AppFooter from '@/components/AppFooter';
 import SlideMenu from '@/components/SlideMenu';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
+import { formatDateDMY } from '@/utils/formatDate';
 import { useAuth } from '@/contexts/AuthContext';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../App';
 import { eventBus } from '@/hooks/eventBus';
 import getHoraAccion from '@/hooks/getHoraAccion';
+import authedFetch from '@/hooks/authedFetch';
 import { useQRScanner } from '@/hooks/useQRScanner';
 import { createNonConformingProduct, deleteNonConformingProduct, listNonConformingProductByCorpo, updateNonConformingProduct } from '@/hooks/evaluationFunctions';
 
@@ -123,6 +125,12 @@ const dateToLocalString = (d: Date): string => {
   return `${y}-${m}-${day}`;
 };
 
+const formatDateForDisplay = (d: Date): string => {
+  const ymd = dateToLocalString(d);
+  const [y, m, day] = ymd.split('-');
+  return `${day}-${m}-${y}`;
+};
+
 const getBase64Only = (value: string | null | undefined): string => {
   if (!value) return '';
   const s = String(value);
@@ -182,6 +190,12 @@ export default function NonConformingProductScreen() {
   // Collapsable por tarjeta (similar a MutuosAcuerdosScreen)
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
+  // Modal: ver cambios (auditoría)
+  const [isCambiosModalVisible, setIsCambiosModalVisible] = useState(false);
+  const [cambiosTitle, setCambiosTitle] = useState<string>('Cambios');
+  const [cambiosItems, setCambiosItems] = useState<any[]>([]);
+  const [expandedCambioId, setExpandedCambioId] = useState<number | null>(null);
+
   // crear/editar
   const [isCreating, setIsCreating] = useState(false);
   const [editing, setEditing] = useState<{ id: number | string; id_local?: string } | null>(null);
@@ -236,6 +250,73 @@ export default function NonConformingProductScreen() {
     }
   };
 
+  const closeCambiosModal = () => {
+    setIsCambiosModalVisible(false);
+    setCambiosItems([]);
+    setExpandedCambioId(null);
+  };
+
+  const formatCambioCreatedAt = (value: any) => {
+    if (!value) return '-';
+    try {
+      const date = new Date(value);
+      return date.toLocaleString('es-CR', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true,
+      });
+    } catch {
+      return String(value);
+    }
+  };
+
+  const formatChangeValue = (prop: string, value: any): string => {
+    if (value === null || value === undefined) return 'N/A';
+    if (typeof value === 'boolean') return value ? 'Sí' : 'No';
+    if (typeof value === 'object') {
+      return JSON.stringify(value, null, 2);
+    }
+    return String(value);
+  };
+
+  const fetchCambios = useCallback(async (tabla: string, registroId: number) => {
+    const isConnected = await getConnectionStatus();
+    if (!isConnected) {
+      Alert.alert('Sin conexión', 'Esta función solo está disponible con conexión a internet.');
+      return;
+    }
+    try {
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) throw new Error('Server URL not configured');
+
+      const resp = await authedFetch({
+        url: `${apiUrl}/api/cambios-apps-modules?tabla=${encodeURIComponent(tabla)}&registro_id=${registroId}`,
+        init: {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        },
+        refreshAccessToken,
+        logout,
+      });
+      if (!resp) return;
+
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data.status) {
+        throw new Error(data.message || 'No se pudieron cargar los cambios');
+      }
+      setCambiosItems(Array.isArray(data.data) ? data.data : []);
+      setIsCambiosModalVisible(true);
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'No se pudieron cargar los cambios');
+    }
+  }, [refreshAccessToken, logout]);
+
   const loadMarcaContext = async () => {
     const currentMarcaStr = await AsyncStorage.getItem('current_marca');
     if (!currentMarcaStr) {
@@ -287,39 +368,21 @@ export default function NonConformingProductScreen() {
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) return;
 
-      let token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (logout) await logout();
-          throw new Error('Sesión expirada');
-        }
-        token = await AsyncStorage.getItem('access_token');
-      }
-
-      const response = await fetch(`${apiUrl}/api/main-structure`, {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': '69420',
+      const response = await authedFetch({
+        url: `${apiUrl}/api/main-structure`,
+        init: {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
         },
+        refreshAccessToken,
+        logout,
       });
 
-      if (response.status === 401) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) return fetchMainStructure();
-        await logout();
-        return;
-      }
-
-      if (response.status === 403) {
-        if (logout) await logout();
-        throw new Error('Acceso denegado');
-      }
-
+      if (!response) return;
       if (!response.ok) return;
-      const data = await response.json();
+      const data = await response.json().catch(() => ({}));
       const incoming = data?.structure;
       if (data?.status && Array.isArray(incoming)) {
         setStructure(incoming);
@@ -1113,7 +1176,7 @@ export default function NonConformingProductScreen() {
 
         <ThemedText style={styles.label}>Fecha identificación *</ThemedText>
         <TouchableOpacity style={styles.dateButton} onPress={() => setShowFechaIdentPicker(true)} activeOpacity={0.85}>
-          <ThemedText style={styles.dateButtonText}>{dateToLocalString(fechaIdentificacion)}</ThemedText>
+          <ThemedText style={styles.dateButtonText}>{formatDateForDisplay(fechaIdentificacion)}</ThemedText>
           <Ionicons name="calendar-outline" size={18} color="#007AFF" />
         </TouchableOpacity>
         {showFechaIdentPicker && (
@@ -1166,7 +1229,7 @@ export default function NonConformingProductScreen() {
 
         <ThemedText style={styles.label}>Fecha solución *</ThemedText>
         <TouchableOpacity style={styles.dateButton} onPress={() => setShowFechaSolPicker(true)} activeOpacity={0.85}>
-          <ThemedText style={styles.dateButtonText}>{dateToLocalString(fechaSolucion)}</ThemedText>
+          <ThemedText style={styles.dateButtonText}>{formatDateForDisplay(fechaSolucion)}</ThemedText>
           <Ionicons name="calendar-outline" size={18} color="#007AFF" />
         </TouchableOpacity>
         {showFechaSolPicker && (
@@ -1281,7 +1344,7 @@ export default function NonConformingProductScreen() {
 
               <ThemedText style={styles.cardLine}>
                 <ThemedText style={styles.cardLabel}>Fecha identificación: </ThemedText>
-                <ThemedText style={styles.cardValue}>{r.fecha_identificacion.split('T')[0] || '—'}</ThemedText>
+                <ThemedText style={styles.cardValue}>{formatDateDMY(r.fecha_identificacion, '—')}</ThemedText>
               </ThemedText>
               <ThemedText style={styles.cardLine}>
                 <ThemedText style={styles.cardLabel}>Responsable: </ThemedText>
@@ -1388,6 +1451,19 @@ export default function NonConformingProductScreen() {
                   <Ionicons name="pencil" size={18} color="#FFFFFF" />
                   <ThemedText style={styles.actionBtnText}>Editar</ThemedText>
                 </TouchableOpacity>
+                {!(r.id_local || String(r.id).startsWith('local-') || r.id === 0) && (
+                  <TouchableOpacity
+                    style={[styles.actionBtn, styles.changesButton]}
+                    onPress={() => {
+                      setCambiosTitle(`Cambios - PNC #${r.id}`);
+                      fetchCambios('c_producto_no_conforme', Number(r.id));
+                    }}
+                    activeOpacity={0.85}
+                  >
+                    <Ionicons name="list-outline" size={18} color="#FFFFFF" />
+                    <ThemedText style={styles.actionBtnText}>Cambios</ThemedText>
+                  </TouchableOpacity>
+                )}
                 <TouchableOpacity style={[styles.actionBtn, styles.deleteBtn]} onPress={() => handleDelete(r)} activeOpacity={0.85}>
                   <Ionicons name="trash" size={18} color="#FFFFFF" />
                   <ThemedText style={styles.actionBtnText}>Eliminar</ThemedText>
@@ -1421,7 +1497,7 @@ export default function NonConformingProductScreen() {
             </ThemedView>
           ) : null}
 
-          {!isCreating && hasCurrentMarca ? (
+          {!isCreating && hasCurrentMarca && !isLoading ? (
             <TouchableOpacity style={styles.createButton} onPress={startCreate} activeOpacity={0.85}>
               <ThemedText style={styles.createButtonText}>
                 <Ionicons name="add" size={20} color="#FFFFFF" /> Nuevo registro
@@ -1465,6 +1541,88 @@ export default function NonConformingProductScreen() {
             </ThemedView>
           </ThemedView>
         </ThemedView>
+      </Modal>
+
+      {/* Modal: ver cambios */}
+      <Modal
+        visible={isCambiosModalVisible}
+        animationType="fade"
+        transparent
+        presentationStyle="overFullScreen"
+        onRequestClose={closeCambiosModal}
+      >
+        <View style={styles.overlay}>
+          <ThemedView style={styles.floatModalCardMovimientos}>
+            <ThemedView style={styles.floatModalHeader}>
+              <ThemedText style={styles.modalTitle}>{cambiosTitle}</ThemedText>
+              <TouchableOpacity onPress={closeCambiosModal}>
+                <Ionicons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+            </ThemedView>
+
+            <ScrollView style={{ maxHeight: Dimensions.get('window').height * 0.75 }} contentContainerStyle={{ padding: 16 }}>
+              {(!cambiosItems || cambiosItems.length === 0) ? (
+                <ThemedView style={styles.emptyContainer}>
+                  <ThemedText style={styles.emptyText}>No hay cambios registrados</ThemedText>
+                </ThemedView>
+              ) : (
+                cambiosItems.map((row: any) => {
+                  let parsed: any[] = [];
+                  try {
+                    parsed = row?.cambios ? JSON.parse(row.cambios) : [];
+                  } catch {
+                    parsed = [];
+                  }
+                  const createdAtLabel = formatCambioCreatedAt(row?.created_at);
+                  const isOpen = expandedCambioId === row.id;
+
+                  return (
+                    <ThemedView key={`chg-${row.id}`} style={styles.cambioCollapsableMain}>
+                      <TouchableOpacity
+                        style={styles.cambioCollapsableHeader}
+                        onPress={() => setExpandedCambioId((prev) => (prev === row.id ? null : row.id))}
+                        activeOpacity={0.8}
+                      >
+                        <ThemedText style={styles.cambioCollapsableTitle}>
+                          {createdAtLabel}
+                        </ThemedText>
+                        <Ionicons
+                          name={isOpen ? "chevron-up" : "chevron-down"}
+                          size={18}
+                          color="#007AFF"
+                        />
+                      </TouchableOpacity>
+
+                      {isOpen && (
+                        <ThemedView style={styles.cambioCollapsableContent}>
+                          <ThemedView style={styles.filterGroupSearch}>
+                            <ThemedText style={styles.filterLabel}>Cambio realizado por:</ThemedText>
+                            <ThemedText style={styles.changeDescription}>
+                              {row.empleado_nombre || 'Desconocido'}
+                              {row.empleado_cedula ? ` - Cédula: ${row.empleado_cedula}` : ''}
+                            </ThemedText>
+                          </ThemedView>
+
+                          {(Array.isArray(parsed) ? parsed : []).length > 0 && (
+                            <ThemedView style={styles.filterGroupSearch}>
+                              <ThemedText style={styles.filterLabel}>Cambios:</ThemedText>
+                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => (
+                                <ThemedText key={`c-${row.id}-${idx}`} style={styles.changeDescription}>
+                                  <ThemedText style={{ fontWeight: '800' }}>{String(c?.prop ?? '-')}: </ThemedText>
+                                  {formatChangeValue(c?.prop, c?.after)}
+                                </ThemedText>
+                              ))}
+                            </ThemedView>
+                          )}
+                        </ThemedView>
+                      )}
+                    </ThemedView>
+                  );
+                })
+              )}
+            </ScrollView>
+          </ThemedView>
+        </View>
       </Modal>
 
       {QRScannerComponent}
@@ -1686,8 +1844,20 @@ const styles = StyleSheet.create({
   actionsRow: { flexDirection: 'row', gap: 12, marginTop: 14 },
   actionBtn: { flex: 1, flexDirection: 'row', gap: 8, alignItems: 'center', justifyContent: 'center', paddingVertical: 12, borderRadius: 10 },
   editBtn: { backgroundColor: '#007AFF' },
+  changesButton: { backgroundColor: '#5856D6', flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 12, borderRadius: 10, gap: 8 },
   deleteBtn: { backgroundColor: '#FF3B30' },
   actionBtnText: { color: '#FFFFFF', fontWeight: '800' },
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 },
+  floatModalCardMovimientos: { backgroundColor: '#FFFFFF', borderRadius: 12, width: '100%', maxWidth: 500, maxHeight: '80%', borderWidth: 1, borderColor: '#E0E0E0', overflow: 'hidden' },
+  floatModalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#E0E0E0' },
+  modalTitle: { fontSize: 16, fontWeight: '800', color: '#000' },
+  cambioCollapsableMain: { width: '100%', marginBottom: 10, backgroundColor: '#fff', borderRadius: 6, borderWidth: 1, borderColor: '#E0E0E0', overflow: 'hidden' },
+  cambioCollapsableHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, backgroundColor: '#F8F9FA' },
+  cambioCollapsableTitle: { fontSize: 14, fontWeight: '600', color: '#007AFF', flex: 1 },
+  cambioCollapsableContent: { padding: 12, gap: 8, backgroundColor: '#F8F9FA' },
+  changeDescription: { fontSize: 14, lineHeight: 20, color: '#666', marginBottom: 8 },
+  filterGroupSearch: { marginBottom: 12 },
+  filterLabel: { fontSize: 14, fontWeight: '600', color: '#333', marginBottom: 4 },
 
   // Media (audio/video) similar a JobManualsScreen
   mediaBlock: {

@@ -23,6 +23,8 @@ import getHoraAccion from '@/hooks/getHoraAccion';
 import { eventBus } from '@/hooks/eventBus';
 import { useQRScanner } from '@/hooks/useQRScanner';
 import { createActivity } from '@/hooks/activitiesFunctions';
+import authedFetch from '@/hooks/authedFetch';
+import getValidAccessTokenOrLogout from '@/hooks/getValidAccessTokenOrLogout';
 
 type ActivitiesScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Activities'>;
 
@@ -97,7 +99,13 @@ const ActivityItemComponent: React.FC<ActivityItemProps> = ({
 
     try {
       const imageUrl = `${apiUrl}/api/activities/${activity.id}/get-image?t=${Date.now()}`;
-      const response = await fetch(imageUrl);
+      const response = await authedFetch({
+        url: imageUrl,
+        init: { method: 'GET' },
+        refreshAccessToken,
+        logout,
+      });
+      if (!response) return;
 
       if (response.ok) {
         const blob = await response.blob();
@@ -437,7 +445,13 @@ const InventoryItemComponent: React.FC<InventoryItemProps> = ({
 
     try {
       const imageUrl = `${apiUrl}/api/activities/equipo/${inventory.revision_equipo.id}/get-image?t=${Date.now()}`;
-      const response = await fetch(imageUrl);
+      const response = await authedFetch({
+        url: imageUrl,
+        init: { method: 'GET' },
+        refreshAccessToken,
+        logout,
+      });
+      if (!response) return;
 
       if (response.ok) {
         const blob = await response.blob();
@@ -743,6 +757,8 @@ export default function ActivitiesScreen() {
   const [activities, setActivities] = useState<Actividad[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Importante: "sin internet" NO cuenta como error (solo es un estado informativo)
+  const [offlineMessage, setOfflineMessage] = useState<string | null>(null);
   const [hasCurrentMarca, setHasCurrentMarca] = useState<boolean>(false);
 
   // Bitacora modal state
@@ -856,10 +872,22 @@ export default function ActivitiesScreen() {
     return networkState.isConnected && networkState.isInternetReachable ? true : false;
   };
 
+  const isProbablyNetworkError = (err: any) => {
+    const msg = String(err?.message ?? err ?? '').toLowerCase();
+    return (
+      msg.includes('network request failed') ||
+      msg.includes('failed to fetch') ||
+      msg.includes('networkerror') ||
+      msg.includes('timeout') ||
+      msg.includes('timed out')
+    );
+  };
+
   const fetchActivities = async () => {
     try {
       setIsLoading(true);
       setError(null);
+      setOfflineMessage(null);
 
       // Verificar si existe current_marca
       const currentMarca = await AsyncStorage.getItem('current_marca');
@@ -882,41 +910,18 @@ export default function ActivitiesScreen() {
           throw new Error('Server URL not configured');
         }
 
-        let token = await AsyncStorage.getItem('access_token');
-        if (!token) {
-          const refreshed = await refreshAccessToken();
-          if (!refreshed) {
-            if (logout) await logout();
-            throw new Error('Sesión expirada');
-            return;
-          }
-          token = await AsyncStorage.getItem('access_token');
-        }
-
-        const response = await fetch(`${apiUrl}/api/activities/marca/${marcaId}`, {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-            'ngrok-skip-browser-warning': '69420',
+        const response = await authedFetch({
+          url: `${apiUrl}/api/activities/marca/${marcaId}`,
+          init: {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+            },
           },
+          refreshAccessToken,
+          logout,
         });
-
-        if (response.status === 401) {
-          const refreshed = await refreshAccessToken();
-          if (refreshed) {
-            return fetchActivities();
-          } else {
-            Alert.alert('5', 'Sesión expirada. Por favor inicie sesión nuevamente.');
-            await logout();
-            return;
-          }
-        }
-
-        if (response.status === 403) {
-          if (logout) await logout();
-          throw new Error('Acceso denegado');
-        }
+        if (!response) return;
 
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`);
@@ -929,8 +934,8 @@ export default function ActivitiesScreen() {
           // Cache the activities
           await AsyncStorage.setItem('activities_cache', JSON.stringify(data.actividades));
         } else {
+          // Error real del servidor / lógica (sí cuenta como error)
           setError(data.message || 'Error al cargar las actividades');
-          Alert.alert('Error', data.message || 'Error al cargar las actividades');
         }
       } else {
         // Offline: load from cache
@@ -938,24 +943,29 @@ export default function ActivitiesScreen() {
         if (cachedActivities) {
           const parsedActivities = JSON.parse(cachedActivities);
           setActivities(parsedActivities);
-          Alert.alert('Modo Offline', 'Mostrando actividades guardadas. Los cambios se sincronizarán cuando recuperes la conexión.');
+          setOfflineMessage('Modo Offline: mostrando actividades guardadas. Los cambios se sincronizarán cuando recuperes la conexión.');
         } else {
-          setError('No hay actividades guardadas');
-          Alert.alert('Sin conexión', 'No hay actividades guardadas para mostrar sin conexión.');
+          // Sin internet NO es error
+          setActivities([]);
+          setOfflineMessage('Sin conexión: no hay actividades guardadas para mostrar.');
         }
       }
     } catch (err) {
       console.error('Error fetching activities:', err);
-      setError('Error al cargar las actividades');
 
       // Try to load from cache if online fetch fails
       const cachedActivities = await AsyncStorage.getItem('activities_cache');
       if (cachedActivities) {
         const parsedActivities = JSON.parse(cachedActivities);
         setActivities(parsedActivities);
-        Alert.alert('Modo Offline', 'Mostrando actividades guardadas debido a un error de conexión.');
+        setOfflineMessage('Modo Offline: mostrando actividades guardadas debido a un error de conexión.');
       } else {
-        Alert.alert('Error', 'No se pudieron cargar las actividades');
+        if (isProbablyNetworkError(err)) {
+          setActivities([]);
+          setOfflineMessage('Sin conexión: no hay actividades guardadas para mostrar.');
+        } else {
+          setError('Error al cargar las actividades');
+        }
       }
     } finally {
       setIsLoading(false);
@@ -1040,39 +1050,18 @@ export default function ActivitiesScreen() {
           throw new Error('Server URL not configured');
         }
 
-        let token = await AsyncStorage.getItem('access_token');
-        if (!token) {
-          const refreshed = await refreshAccessToken();
-          if (!refreshed) {
-            if (logout) await logout();
-            throw new Error('Sesión expirada');
-          }
-          token = await AsyncStorage.getItem('access_token');
-        }
-
-        const response = await fetch(`${apiUrl}/api/puestos/corpo/${corpoId}`, {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-            'ngrok-skip-browser-warning': '69420',
+        const response = await authedFetch({
+          url: `${apiUrl}/api/puestos/corpo/${corpoId}`,
+          init: {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+            },
           },
+          refreshAccessToken,
+          logout,
         });
-
-        if (response.status === 401) {
-          const refreshed = await refreshAccessToken();
-          if (refreshed) {
-            return loadPuestosCatalog(corpoId, isConnected);
-          } else {
-            await logout();
-            throw new Error('Sesión expirada');
-          }
-        }
-
-        if (response.status === 403) {
-          if (logout) await logout();
-          throw new Error('Acceso denegado');
-        }
+        if (!response) return;
 
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`);
@@ -1125,39 +1114,18 @@ export default function ActivitiesScreen() {
           throw new Error('Server URL not configured');
         }
 
-        let token = await AsyncStorage.getItem('access_token');
-        if (!token) {
-          const refreshed = await refreshAccessToken();
-          if (!refreshed) {
-            if (logout) await logout();
-            throw new Error('Sesión expirada');
-          }
-          token = await AsyncStorage.getItem('access_token');
-        }
-
-        const response = await fetch(`${apiUrl}/api/articulos`, {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-            'ngrok-skip-browser-warning': '69420',
+        const response = await authedFetch({
+          url: `${apiUrl}/api/articulos`,
+          init: {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+            },
           },
+          refreshAccessToken,
+          logout,
         });
-
-        if (response.status === 401) {
-          const refreshed = await refreshAccessToken();
-          if (refreshed) {
-            return loadArticulosCatalog(isConnected);
-          } else {
-            await logout();
-            throw new Error('Sesión expirada');
-          }
-        }
-
-        if (response.status === 403) {
-          if (logout) await logout();
-          throw new Error('Acceso denegado');
-        }
+        if (!response) return;
 
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`);
@@ -1353,7 +1321,7 @@ export default function ActivitiesScreen() {
 
     if (config.endType === 'date' && config.endDate) {
       const endDateObj = new Date(config.endDate);
-      const endDateStr = endDateObj.toLocaleDateString('es-ES');
+      const endDateStr = formatDateForDisplay(endDateObj);
       title += ` (termina el ${endDateStr})`;
     } else if (config.endType === 'never') {
       title += ' (sin fecha de finalización)';
@@ -1383,7 +1351,7 @@ export default function ActivitiesScreen() {
     const year = date.getFullYear();
     const month = String(date.getMonth() + 1).padStart(2, '0');
     const day = String(date.getDate()).padStart(2, '0');
-    return `${day}/${month}/${year}`;
+    return `${day}-${month}-${year}`;
   };
 
   const formatDateForApi = (date: Date) => {
@@ -1664,39 +1632,18 @@ export default function ActivitiesScreen() {
         throw new Error('Server URL not configured');
       }
 
-      let token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (logout) await logout();
-          throw new Error('Sesión expirada');
-        }
-        token = await AsyncStorage.getItem('access_token');
-      }
-
-      const response = await fetch(`${apiUrl}/api/empleados/${employeeId}`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': '69420',
+      const response = await authedFetch({
+        url: `${apiUrl}/api/empleados/${employeeId}`,
+        init: {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
         },
+        refreshAccessToken,
+        logout,
       });
-
-      if (response.status === 401) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) {
-          return fetchSignatureEmployee(employeeId);
-        } else {
-          await logout();
-          throw new Error('Sesión expirada');
-        }
-      }
-
-      if (response.status === 403) {
-        if (logout) await logout();
-        throw new Error('Acceso denegado');
-      }
+      if (!response) return null;
 
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
@@ -1759,19 +1706,8 @@ export default function ActivitiesScreen() {
       if (!horaAccion) {
         throw new Error('No se pudo obtener la hora actual');
       }
-
-      const token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          throw new Error('No authentication token found');
-        }
-      }
-
-      const storedToken = await AsyncStorage.getItem('access_token');
-      if (!storedToken) {
-        throw new Error('No authentication token found');
-      }
+      const storedToken = await getValidAccessTokenOrLogout({ refreshAccessToken, logout });
+      if (!storedToken) return;
 
       const decodedToken = jwtDecode(storedToken);
       const sessionId = JSON.parse(JSON.stringify(decodedToken)).sessionId;
@@ -2342,6 +2278,18 @@ export default function ActivitiesScreen() {
   return (
     <ThemedView style={styles.container}>
       <AppHeader onMenuPress={handleMenuPress} title="Actividades" />
+      {!!error && (
+        <ThemedView style={styles.errorBanner}>
+          <Ionicons name="alert-circle-outline" size={18} color="#B00020" />
+          <ThemedText style={styles.errorBannerText}>{error}</ThemedText>
+        </ThemedView>
+      )}
+      {!!offlineMessage && !error && (
+        <ThemedView style={styles.offlineBanner}>
+          <Ionicons name="cloud-offline-outline" size={18} color="#8A6D00" />
+          <ThemedText style={styles.offlineBannerText}>{offlineMessage}</ThemedText>
+        </ThemedView>
+      )}
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
@@ -2835,7 +2783,7 @@ export default function ActivitiesScreen() {
                         onPress={() => setShowEndDatePicker(true)}
                       >
                         <ThemedText style={styles.dateButtonText}>
-                          {endDate || 'Seleccionar fecha'}
+                          {endDate ? formatDateForDisplay(new Date(`${endDate}T00:00:00`)) : 'Seleccionar fecha'}
                         </ThemedText>
                         <Ionicons name="calendar" size={20} color="#007AFF" />
                       </TouchableOpacity>
@@ -3114,6 +3062,44 @@ const styles = StyleSheet.create({
     marginTop: 16,
     fontSize: 16,
     opacity: 0.7,
+  },
+  errorBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 20,
+    marginTop: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#F5C2C7',
+    backgroundColor: '#F8D7DA',
+  },
+  errorBannerText: {
+    flex: 1,
+    color: '#B00020',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  offlineBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 20,
+    marginTop: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#FFEBAA',
+    backgroundColor: '#FFF3CD',
+  },
+  offlineBannerText: {
+    flex: 1,
+    color: '#8A6D00',
+    fontSize: 14,
+    fontWeight: '600',
   },
   noMarcaContainer: {
     flex: 1,

@@ -10,6 +10,7 @@ import {
   TextInput,
   TouchableOpacity,
   View,
+  Dimensions,
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Picker } from '@react-native-picker/picker';
@@ -22,6 +23,7 @@ import { jwtDecode } from 'jwt-decode';
 
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
+import { formatDateDMY } from '@/utils/formatDate';
 import AppHeader from '@/components/AppHeader';
 import AppFooter from '@/components/AppFooter';
 import SlideMenu from '@/components/SlideMenu';
@@ -35,6 +37,7 @@ import { eventBus } from '@/hooks/eventBus';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import { useQRScanner } from '@/hooks/useQRScanner';
 import { createAgendaMinuta, deleteAgendaMinuta, listAgendaMinutaByCorpo, updateAgendaMinuta } from '@/hooks/evaluationFunctions';
+import authedFetch from '@/hooks/authedFetch';
 
 type PhysicalMinuteAgendaScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'PhysicalMinuteAgenda'>;
 
@@ -94,11 +97,47 @@ const getConnectionStatus = async (): Promise<boolean> => {
   return networkState.isConnected && networkState.isInternetReachable ? true : false;
 };
 
+const formatParticipantesForDisplay = (participantesJson: string): string => {
+  try {
+    const participantes: any[] = JSON.parse(participantesJson || '[]');
+    if (!Array.isArray(participantes) || participantes.length === 0) return 'No hay participantes.';
+    return participantes.map((p, idx) => {
+      const nombre = p?.nombre || '-';
+      const cedula = p?.cedula || '-';
+      const tieneFirma = p?.firma ? 'Sí' : 'No';
+      return `${idx + 1}. ${nombre} (Cédula: ${cedula}, Firma: ${tieneFirma})`;
+    }).join('\n');
+  } catch (e) {
+    console.error('Error formatting participantes for display:', e);
+    return 'Error al formatear participantes.';
+  }
+};
+
+const formatAcuerdosForDisplay = (acuerdosJson: string): string => {
+  try {
+    const acuerdos: any[] = JSON.parse(acuerdosJson || '[]');
+    if (!Array.isArray(acuerdos) || acuerdos.length === 0) return 'No hay acuerdos.';
+    return acuerdos.map((a, idx) => {
+      const texto = a?.texto || '-';
+      return `${idx + 1}. ${texto}`;
+    }).join('\n');
+  } catch (e) {
+    console.error('Error formatting acuerdos for display:', e);
+    return 'Error al formatear acuerdos.';
+  }
+};
+
 const formatDateISO = (date: Date): string => {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
+};
+
+const formatDateDisplay = (date: Date): string => {
+  const iso = formatDateISO(date);
+  const [y, m, d] = iso.split('-');
+  return `${d}-${m}-${y}`;
 };
 
 const formatTimeHHmm = (date: Date): string => {
@@ -220,6 +259,12 @@ export default function PhysicalMinuteAgendaScreen() {
   const [expandedAcuerdosById, setExpandedAcuerdosById] = useState<Record<string, boolean>>({});
   const [expandedFirmaById, setExpandedFirmaById] = useState<Record<string, boolean>>({});
 
+  // Modal: ver cambios (auditoría)
+  const [isCambiosModalVisible, setIsCambiosModalVisible] = useState(false);
+  const [cambiosTitle, setCambiosTitle] = useState<string>('Cambios');
+  const [cambiosItems, setCambiosItems] = useState<any[]>([]);
+  const [expandedCambioId, setExpandedCambioId] = useState<number | null>(null);
+
   const signatureWebStyle = `
     body, html {
       margin: 0;
@@ -316,37 +361,18 @@ export default function PhysicalMinuteAgendaScreen() {
 
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) throw new Error('Server URL not configured');
-
-      let token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (logout) await logout();
-          throw new Error('Sesión expirada');
-        }
-        token = await AsyncStorage.getItem('access_token');
-      }
-
-      const response = await fetch(`${apiUrl}/api/main-structure`, {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': '69420',
+      const response = await authedFetch({
+        url: `${apiUrl}/api/main-structure`,
+        init: {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
         },
+        refreshAccessToken,
+        logout,
       });
-
-      if (response.status === 401) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) return fetchMainStructure();
-        await logout();
-        return;
-      }
-
-      if (response.status === 403) {
-        if (logout) await logout();
-        throw new Error('Acceso denegado');
-      }
+      if (!response) return;
 
       if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
       const data = await response.json();
@@ -503,6 +529,95 @@ export default function PhysicalMinuteAgendaScreen() {
       label: `${p.codigo ? `${p.codigo} - ` : ''}${p.nombre}`,
     }));
   }, [puestoNodes]);
+
+  const closeCambiosModal = () => {
+    setIsCambiosModalVisible(false);
+    setCambiosItems([]);
+    setExpandedCambioId(null);
+  };
+
+  const formatCambioCreatedAt = (value: any) => {
+    if (!value) return '-';
+    try {
+      const date = new Date(value);
+      return date.toLocaleString('es-CR', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true,
+      });
+    } catch {
+      return String(value);
+    }
+  };
+
+  const formatChangeValue = (prop: string, value: any): string => {
+    if (value === null || value === undefined) return 'N/A';
+    if (typeof value === 'boolean') return value ? 'Sí' : 'No';
+    if (typeof value === 'object') {
+      if (prop === 'participantes') {
+        return formatParticipantesForDisplay(JSON.stringify(value));
+      }
+      if (prop === 'acuerdos') {
+        return formatAcuerdosForDisplay(JSON.stringify(value));
+      }
+      return JSON.stringify(value, null, 2);
+    }
+    if (typeof value === 'string') {
+      // Si parece ser JSON, intentar parsearlo
+      if (value.trim().startsWith('{') || value.trim().startsWith('[')) {
+        try {
+          const parsed = JSON.parse(value);
+          if (prop === 'participantes') {
+            return formatParticipantesForDisplay(value);
+          }
+          if (prop === 'acuerdos') {
+            return formatAcuerdosForDisplay(value);
+          }
+          return JSON.stringify(parsed, null, 2);
+        } catch {
+          // No es JSON válido, retornar como string
+        }
+      }
+    }
+    return String(value);
+  };
+
+  const fetchCambios = useCallback(async (tabla: string, registroId: number) => {
+    const isConnected = await getConnectionStatus();
+    if (!isConnected) {
+      Alert.alert('Sin conexión', 'Esta función solo está disponible con conexión a internet.');
+      return;
+    }
+    try {
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) throw new Error('Server URL not configured');
+      const resp = await authedFetch({
+        url: `${apiUrl}/api/cambios-apps-modules?tabla=${encodeURIComponent(tabla)}&registro_id=${registroId}`,
+        init: {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        },
+        refreshAccessToken,
+        logout,
+      });
+      if (!resp) return;
+
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data.status) {
+        throw new Error(data.message || 'No se pudieron cargar los cambios');
+      }
+      setCambiosItems(Array.isArray(data.data) ? data.data : []);
+      setIsCambiosModalVisible(true);
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'No se pudieron cargar los cambios');
+    }
+  }, [refreshAccessToken, logout]);
 
   const resetForm = () => {
     setSelectedEmpresaId(null);
@@ -704,18 +819,6 @@ export default function PhysicalMinuteAgendaScreen() {
           throw new Error('Server URL not configured');
         }
 
-        let token = await AsyncStorage.getItem('access_token');
-        if (!token) {
-          const refreshed = await refreshAccessToken();
-          if (!refreshed) {
-            setError('No se pudo autenticar');
-            setIsLoading(false);
-            if (logout) await logout();
-            return;
-          }
-          token = await AsyncStorage.getItem('access_token');
-        }
-
         // Construir parámetros de filtro (jerarquía completa)
         const params = new URLSearchParams();
         if (filterEmpresaId) params.append('empresa_id', String(filterEmpresaId));
@@ -725,29 +828,18 @@ export default function PhysicalMinuteAgendaScreen() {
         if (filterCorpoId) params.append('corpo_id', String(filterCorpoId));
         if (filterPuestoId) params.append('puesto_id', String(filterPuestoId));
 
-        const response = await fetch(`${apiUrl}/api/agenda-minuta?${params.toString()}`, {
-          method: 'GET',
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-            'ngrok-skip-browser-warning': '69420',
+        const response = await authedFetch({
+          url: `${apiUrl}/api/agenda-minuta?${params.toString()}`,
+          init: {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+            },
           },
+          refreshAccessToken,
+          logout,
         });
-
-        if (response.status === 401) {
-          const refreshed = await refreshAccessToken();
-          if (refreshed) {
-            return fetchRecords();
-          } else {
-            if (logout) await logout();
-            return;
-          }
-        }
-
-        if (response.status === 403) {
-          if (logout) await logout();
-          throw new Error('Acceso denegado');
-        }
+        if (!response) return;
 
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`);
@@ -1097,7 +1189,7 @@ export default function PhysicalMinuteAgendaScreen() {
           const itemKey = String(r.id || r.id_local || '');
           const participantesArr = safeJsonParse<any[]>(r.participantes, []);
           const { items: acuerdosArr, meta: acuerdosMeta } = parseAcuerdosPayload(r.acuerdos);
-          const fechaTxt = r.fecha ? String(r.fecha).split('T')[0] : '—';
+          const fechaTxt = formatDateDMY(r.fecha, '—');
           const isParticipantesOpen = !!expandedParticipantesById[itemKey];
           const isAcuerdosOpen = !!expandedAcuerdosById[itemKey];
           const isFirmaOpen = !!expandedFirmaById[itemKey];
@@ -1204,6 +1296,19 @@ export default function PhysicalMinuteAgendaScreen() {
                     <Ionicons name="pencil" size={18} color="#FFFFFF" />
                     <ThemedText style={styles.buttonText}>Editar</ThemedText>
                   </TouchableOpacity>
+                  {!(r.id_local || r.id === 0 || typeof r.id === 'string') && (
+                    <TouchableOpacity
+                      style={[styles.listItemButton, styles.changesButton]}
+                      onPress={() => {
+                        setCambiosTitle(`Cambios - Agenda #${r.id}`);
+                        fetchCambios('c_agenda_minuta', Number(r.id));
+                      }}
+                      activeOpacity={0.85}
+                    >
+                      <Ionicons name="list-outline" size={18} color="#FFFFFF" />
+                      <ThemedText style={styles.buttonText}>Cambios</ThemedText>
+                    </TouchableOpacity>
+                  )}
                   <TouchableOpacity style={[styles.listItemButton, styles.deleteButton]} onPress={() => deleteHandler(r)} activeOpacity={0.85}>
                     <Ionicons name="trash" size={18} color="#FFFFFF" />
                     <ThemedText style={styles.buttonText}>Eliminar</ThemedText>
@@ -1328,7 +1433,7 @@ export default function PhysicalMinuteAgendaScreen() {
 
             <ThemedText style={styles.label}>Fecha</ThemedText>
             <TouchableOpacity style={styles.dateButton} onPress={() => setShowDatePicker(true)} activeOpacity={0.85}>
-              <ThemedText style={styles.dateButtonText}>{formatDateISO(fecha)}</ThemedText>
+              <ThemedText style={styles.dateButtonText}>{formatDateDisplay(fecha)}</ThemedText>
               <Ionicons name="calendar" size={18} color="#007AFF" />
             </TouchableOpacity>
             {showDatePicker && (
@@ -1526,6 +1631,88 @@ export default function PhysicalMinuteAgendaScreen() {
       <AppHeader title="Agenda minuta" onMenuPress={() => setIsMenuVisible(true)} />
       <SlideMenu isVisible={isMenuVisible} onClose={() => setIsMenuVisible(false)} currentRoute="PhysicalMinuteAgenda" onHomePress={() => navigation.navigate('Home')} />
 
+      {/* Modal: ver cambios */}
+      <Modal
+        visible={isCambiosModalVisible}
+        animationType="fade"
+        transparent
+        presentationStyle="overFullScreen"
+        onRequestClose={closeCambiosModal}
+      >
+        <View style={styles.overlay}>
+          <ThemedView style={styles.floatModalCardMovimientos}>
+            <ThemedView style={styles.floatModalHeader}>
+              <ThemedText style={styles.modalTitle}>{cambiosTitle}</ThemedText>
+              <TouchableOpacity onPress={closeCambiosModal}>
+                <Ionicons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+            </ThemedView>
+
+            <ScrollView style={{ maxHeight: Dimensions.get('window').height * 0.75 }} contentContainerStyle={{ padding: 16 }}>
+              {(!cambiosItems || cambiosItems.length === 0) ? (
+                <ThemedView style={styles.emptyContainer}>
+                  <ThemedText style={styles.emptyText}>No hay cambios registrados</ThemedText>
+                </ThemedView>
+              ) : (
+                cambiosItems.map((row: any) => {
+                  let parsed: any[] = [];
+                  try {
+                    parsed = row?.cambios ? JSON.parse(row.cambios) : [];
+                  } catch {
+                    parsed = [];
+                  }
+                  const createdAtLabel = formatCambioCreatedAt(row?.created_at);
+                  const isOpen = expandedCambioId === row.id;
+
+                  return (
+                    <ThemedView key={`chg-${row.id}`} style={styles.cambioCollapsableMain}>
+                      <TouchableOpacity
+                        style={styles.cambioCollapsableHeader}
+                        onPress={() => setExpandedCambioId((prev) => (prev === row.id ? null : row.id))}
+                        activeOpacity={0.8}
+                      >
+                        <ThemedText style={styles.cambioCollapsableTitle}>
+                          {createdAtLabel}
+                        </ThemedText>
+                        <Ionicons
+                          name={isOpen ? "chevron-up" : "chevron-down"}
+                          size={18}
+                          color="#007AFF"
+                        />
+                      </TouchableOpacity>
+
+                      {isOpen && (
+                        <ThemedView style={styles.cambioCollapsableContent}>
+                          <ThemedView style={styles.filterGroupSearch}>
+                            <ThemedText style={styles.filterLabel}>Cambio realizado por:</ThemedText>
+                            <ThemedText style={styles.changeDescription}>
+                              {row.empleado_nombre || 'Desconocido'}
+                              {row.empleado_cedula ? ` - Cédula: ${row.empleado_cedula}` : ''}
+                            </ThemedText>
+                          </ThemedView>
+
+                          {(Array.isArray(parsed) ? parsed : []).length > 0 && (
+                            <ThemedView style={styles.filterGroupSearch}>
+                              <ThemedText style={styles.filterLabel}>Cambios:</ThemedText>
+                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => (
+                                <ThemedText key={`c-${row.id}-${idx}`} style={styles.changeDescription}>
+                                  <ThemedText style={{ fontWeight: '800' }}>{String(c?.prop ?? '-')}: </ThemedText>
+                                  {formatChangeValue(c?.prop, c?.after)}
+                                </ThemedText>
+                              ))}
+                            </ThemedView>
+                          )}
+                        </ThemedView>
+                      )}
+                    </ThemedView>
+                  );
+                })
+              )}
+            </ScrollView>
+          </ThemedView>
+        </View>
+      </Modal>
+
       {!hasCurrentMarca ? (
         <ThemedView style={styles.noMarcaContainer}>
           <ThemedText style={styles.noMarcaText}>Debe seleccionar una marca para continuar.</ThemedText>
@@ -1543,160 +1730,164 @@ export default function PhysicalMinuteAgendaScreen() {
             </ThemedView>
 
             {/* Filtros */}
-            <ThemedView style={styles.filtersMain}>
-              <ThemedView style={styles.filterHeader}>
-                <TouchableOpacity
-                  style={styles.filterToggleButton}
-                  onPress={() => setIsFiltersExpanded(!isFiltersExpanded)}
-                >
-                  <ThemedText style={styles.filterToggleText}>Filtros</ThemedText>
-                  <Ionicons
-                    name={isFiltersExpanded ? 'chevron-up' : 'chevron-down'}
-                    size={20}
-                    color="#007AFF"
-                  />
-                </TouchableOpacity>
-                {isFiltersExpanded && (
-                  <TouchableOpacity style={styles.resetFiltersButton} onPress={() => {
-                    setFilterEmpresaId(null);
-                    setFilterClienteId(marcaClienteId);
-                    setFilterDivisionId(null);
-                    setFilterContratoId(null);
-                    setFilterCorpoId(marcaCorpoId);
-                    setFilterPuestoId(marcaPuestoId);
-                  }}>
-                    <Ionicons name="refresh" size={16} color="#FF3B30" />
-                    <ThemedText style={styles.resetFiltersText}>Reiniciar</ThemedText>
+            {!isLoading && (
+              <ThemedView style={styles.filtersMain}>
+                <ThemedView style={styles.filterHeader}>
+                  <TouchableOpacity
+                    style={styles.filterToggleButton}
+                    onPress={() => setIsFiltersExpanded(!isFiltersExpanded)}
+                  >
+                    <ThemedText style={styles.filterToggleText}>Filtros</ThemedText>
+                    <Ionicons
+                      name={isFiltersExpanded ? 'chevron-up' : 'chevron-down'}
+                      size={20}
+                      color="#007AFF"
+                    />
                   </TouchableOpacity>
-                )}
-              </ThemedView>
-              {isFiltersExpanded && (
-                <ThemedView style={styles.filterContent}>
-                  {/* Árbol jerárquico para filtros */}
-                  <ThemedView style={styles.filterGroup}>
-                    <ThemedText style={styles.filterLabel}>Empresa:</ThemedText>
-                    <View style={styles.pickerWrapper}>
-                      <Picker
-                        selectedValue={filterEmpresaId || ''}
-                        onValueChange={(value) => {
-                          setFilterEmpresaId(value && value !== '' ? Number(value) : null);
-                        }}
-                        style={styles.picker}
-                      >
-                        <Picker.Item label="Seleccionar..." value="" />
-                        {filterEmpresas.map((e: any) => (
-                          <Picker.Item key={e.id} label={e.nombre} value={e.id} />
-                        ))}
-                      </Picker>
-                    </View>
-                  </ThemedView>
-
-                  {filterEmpresaId && (
-                    <ThemedView style={styles.filterGroup}>
-                      <ThemedText style={styles.filterLabel}>Cliente:</ThemedText>
-                      <View style={styles.pickerWrapper}>
-                        <Picker
-                          selectedValue={filterClienteId || ''}
-                          onValueChange={(value) => {
-                            setFilterClienteId(value && value !== '' ? Number(value) : null);
-                          }}
-                          style={styles.picker}
-                        >
-                          <Picker.Item label="Seleccionar..." value="" />
-                          {filterClientes.map((c: any) => (
-                            <Picker.Item key={c.id} label={c.nombre} value={c.id} />
-                          ))}
-                        </Picker>
-                      </View>
-                    </ThemedView>
-                  )}
-
-                  {filterClienteId && (
-                    <ThemedView style={styles.filterGroup}>
-                      <ThemedText style={styles.filterLabel}>División:</ThemedText>
-                      <View style={styles.pickerWrapper}>
-                        <Picker
-                          selectedValue={filterDivisionId || ''}
-                          onValueChange={(value) => {
-                            setFilterDivisionId(value && value !== '' ? Number(value) : null);
-                          }}
-                          style={styles.picker}
-                        >
-                          <Picker.Item label="Seleccionar..." value="" />
-                          {filterDivisiones.map((d: any) => (
-                            <Picker.Item key={d.id} label={d.nombre} value={d.id} />
-                          ))}
-                        </Picker>
-                      </View>
-                    </ThemedView>
-                  )}
-
-                  {filterDivisionId && (
-                    <ThemedView style={styles.filterGroup}>
-                      <ThemedText style={styles.filterLabel}>Contrato:</ThemedText>
-                      <View style={styles.pickerWrapper}>
-                        <Picker
-                          selectedValue={filterContratoId || ''}
-                          onValueChange={(value) => {
-                            setFilterContratoId(value && value !== '' ? Number(value) : null);
-                          }}
-                          style={styles.picker}
-                        >
-                          <Picker.Item label="Seleccionar..." value="" />
-                          {filterContratos.map((c: any) => (
-                            <Picker.Item key={c.id} label={c.nombre} value={c.id} />
-                          ))}
-                        </Picker>
-                      </View>
-                    </ThemedView>
-                  )}
-
-                  {filterContratoId && (
-                    <ThemedView style={styles.filterGroup}>
-                      <ThemedText style={styles.filterLabel}>Sucursal:</ThemedText>
-                      <View style={styles.pickerWrapper}>
-                        <Picker
-                          selectedValue={filterCorpoId || ''}
-                          onValueChange={(value) => {
-                            setFilterCorpoId(value && value !== '' ? Number(value) : null);
-                          }}
-                          style={styles.picker}
-                        >
-                          <Picker.Item label="Seleccionar..." value="" />
-                          {filterSucursales.map((s: any) => (
-                            <Picker.Item key={s.id} label={s.nombre} value={s.id} />
-                          ))}
-                        </Picker>
-                      </View>
-                    </ThemedView>
-                  )}
-
-                  {filterCorpoId && (
-                    <ThemedView style={styles.filterGroup}>
-                      <ThemedText style={styles.filterLabel}>Puesto:</ThemedText>
-                      <View style={styles.pickerWrapper}>
-                        <Picker
-                          selectedValue={filterPuestoId || ''}
-                          onValueChange={(value) => setFilterPuestoId(value && value !== '' ? Number(value) : null)}
-                          style={styles.picker}
-                        >
-                          <Picker.Item label="Seleccionar..." value="" />
-                          {filterPuestos.map((p: any) => (
-                            <Picker.Item key={p.id} label={p.nombre} value={p.id} />
-                          ))}
-                        </Picker>
-                      </View>
-                    </ThemedView>
+                  {isFiltersExpanded && (
+                    <TouchableOpacity style={styles.resetFiltersButton} onPress={() => {
+                      setFilterEmpresaId(null);
+                      setFilterClienteId(marcaClienteId);
+                      setFilterDivisionId(null);
+                      setFilterContratoId(null);
+                      setFilterCorpoId(marcaCorpoId);
+                      setFilterPuestoId(marcaPuestoId);
+                    }}>
+                      <Ionicons name="refresh" size={16} color="#FF3B30" />
+                      <ThemedText style={styles.resetFiltersText}>Reiniciar</ThemedText>
+                    </TouchableOpacity>
                   )}
                 </ThemedView>
-              )}
-            </ThemedView>
+                {isFiltersExpanded && (
+                  <ThemedView style={styles.filterContent}>
+                    {/* Árbol jerárquico para filtros */}
+                    <ThemedView style={styles.filterGroup}>
+                      <ThemedText style={styles.filterLabel}>Empresa:</ThemedText>
+                      <View style={styles.pickerWrapper}>
+                        <Picker
+                          selectedValue={filterEmpresaId || ''}
+                          onValueChange={(value) => {
+                            setFilterEmpresaId(value && value !== '' ? Number(value) : null);
+                          }}
+                          style={styles.picker}
+                        >
+                          <Picker.Item label="Seleccionar..." value="" />
+                          {filterEmpresas.map((e: any) => (
+                            <Picker.Item key={e.id} label={e.nombre} value={e.id} />
+                          ))}
+                        </Picker>
+                      </View>
+                    </ThemedView>
 
-            <TouchableOpacity style={styles.createButton} onPress={startCreate} activeOpacity={0.85}>
-              <ThemedText style={styles.createButtonText}>
-                <Ionicons name="add" size={18} color="#FFFFFF" />
-              </ThemedText>
-            </TouchableOpacity>
+                    {filterEmpresaId && (
+                      <ThemedView style={styles.filterGroup}>
+                        <ThemedText style={styles.filterLabel}>Cliente:</ThemedText>
+                        <View style={styles.pickerWrapper}>
+                          <Picker
+                            selectedValue={filterClienteId || ''}
+                            onValueChange={(value) => {
+                              setFilterClienteId(value && value !== '' ? Number(value) : null);
+                            }}
+                            style={styles.picker}
+                          >
+                            <Picker.Item label="Seleccionar..." value="" />
+                            {filterClientes.map((c: any) => (
+                              <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                            ))}
+                          </Picker>
+                        </View>
+                      </ThemedView>
+                    )}
+
+                    {filterClienteId && (
+                      <ThemedView style={styles.filterGroup}>
+                        <ThemedText style={styles.filterLabel}>División:</ThemedText>
+                        <View style={styles.pickerWrapper}>
+                          <Picker
+                            selectedValue={filterDivisionId || ''}
+                            onValueChange={(value) => {
+                              setFilterDivisionId(value && value !== '' ? Number(value) : null);
+                            }}
+                            style={styles.picker}
+                          >
+                            <Picker.Item label="Seleccionar..." value="" />
+                            {filterDivisiones.map((d: any) => (
+                              <Picker.Item key={d.id} label={d.nombre} value={d.id} />
+                            ))}
+                          </Picker>
+                        </View>
+                      </ThemedView>
+                    )}
+
+                    {filterDivisionId && (
+                      <ThemedView style={styles.filterGroup}>
+                        <ThemedText style={styles.filterLabel}>Contrato:</ThemedText>
+                        <View style={styles.pickerWrapper}>
+                          <Picker
+                            selectedValue={filterContratoId || ''}
+                            onValueChange={(value) => {
+                              setFilterContratoId(value && value !== '' ? Number(value) : null);
+                            }}
+                            style={styles.picker}
+                          >
+                            <Picker.Item label="Seleccionar..." value="" />
+                            {filterContratos.map((c: any) => (
+                              <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                            ))}
+                          </Picker>
+                        </View>
+                      </ThemedView>
+                    )}
+
+                    {filterContratoId && (
+                      <ThemedView style={styles.filterGroup}>
+                        <ThemedText style={styles.filterLabel}>Sucursal:</ThemedText>
+                        <View style={styles.pickerWrapper}>
+                          <Picker
+                            selectedValue={filterCorpoId || ''}
+                            onValueChange={(value) => {
+                              setFilterCorpoId(value && value !== '' ? Number(value) : null);
+                            }}
+                            style={styles.picker}
+                          >
+                            <Picker.Item label="Seleccionar..." value="" />
+                            {filterSucursales.map((s: any) => (
+                              <Picker.Item key={s.id} label={s.nombre} value={s.id} />
+                            ))}
+                          </Picker>
+                        </View>
+                      </ThemedView>
+                    )}
+
+                    {filterCorpoId && (
+                      <ThemedView style={styles.filterGroup}>
+                        <ThemedText style={styles.filterLabel}>Puesto:</ThemedText>
+                        <View style={styles.pickerWrapper}>
+                          <Picker
+                            selectedValue={filterPuestoId || ''}
+                            onValueChange={(value) => setFilterPuestoId(value && value !== '' ? Number(value) : null)}
+                            style={styles.picker}
+                          >
+                            <Picker.Item label="Seleccionar..." value="" />
+                            {filterPuestos.map((p: any) => (
+                              <Picker.Item key={p.id} label={p.nombre} value={p.id} />
+                            ))}
+                          </Picker>
+                        </View>
+                      </ThemedView>
+                    )}
+                  </ThemedView>
+                )}
+              </ThemedView>
+            )}
+
+            {!isLoading && (
+              <TouchableOpacity style={styles.createButton} onPress={startCreate} activeOpacity={0.85}>
+                <ThemedText style={styles.createButtonText}>
+                  <Ionicons name="add" size={18} color="#FFFFFF" />
+                </ThemedText>
+              </TouchableOpacity>
+            )}
 
             {renderList()}
           </ThemedView>
@@ -1935,10 +2126,21 @@ const styles = StyleSheet.create({
   actionButtons: { flexDirection: 'row', justifyContent: 'space-between', gap: 12, marginTop: 10 },
   listItemButton: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 12, borderRadius: 10 },
   editButton: { backgroundColor: '#007AFF' },
+  changesButton: { backgroundColor: '#5856D6', flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 12, borderRadius: 10 },
   deleteButton: { backgroundColor: '#FF3B30' },
   saveButton: { backgroundColor: '#007AFF' },
   cancelButton: { backgroundColor: '#8E8E93' },
   buttonText: { color: '#FFFFFF', fontSize: 14, fontWeight: '800' },
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 },
+  floatModalCardMovimientos: { backgroundColor: '#FFFFFF', borderRadius: 12, width: '100%', maxWidth: 500, maxHeight: '80%', borderWidth: 1, borderColor: '#E0E0E0', overflow: 'hidden' },
+  floatModalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#E0E0E0' },
+  modalTitle: { fontSize: 16, fontWeight: '800', color: '#000' },
+  cambioCollapsableMain: { width: '100%', marginBottom: 10, backgroundColor: '#fff', borderRadius: 6, borderWidth: 1, borderColor: '#E0E0E0', overflow: 'hidden' },
+  cambioCollapsableHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, backgroundColor: '#F8F9FA' },
+  cambioCollapsableTitle: { fontSize: 14, fontWeight: '600', color: '#007AFF', flex: 1 },
+  cambioCollapsableContent: { padding: 12, gap: 8, backgroundColor: '#F8F9FA' },
+  changeDescription: { fontSize: 14, lineHeight: 20, color: '#666', marginBottom: 8 },
+  filterGroupSearch: { marginBottom: 12 },
 
   // loading/empty/error
   loadingContainer: { padding: 20, alignItems: 'center' },

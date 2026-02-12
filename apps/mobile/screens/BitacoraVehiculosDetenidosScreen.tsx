@@ -18,6 +18,7 @@ import type { RouteProp } from '@react-navigation/native';
 import { Picker } from '@react-native-picker/picker';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
+import { formatDateDMY } from '@/utils/formatDate';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Network from 'expo-network';
 import * as Location from 'expo-location';
@@ -35,6 +36,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { eventBus } from '@/hooks/eventBus';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import { useQRScanner } from '@/hooks/useQRScanner';
+import authedFetch from '@/hooks/authedFetch';
 import {
   BitacoraVehiculoDetenidoItem,
   createBitacoraVehiculoDetenido,
@@ -92,6 +94,29 @@ const dateToLocalString = (d: Date): string => {
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
+};
+
+const formatYMDToDMY = (value?: string): string => {
+  const v = String(value || '').trim();
+  if (!v) return '';
+  const onlyDate = v.split('T')[0];
+  const ymd = onlyDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (ymd) return `${ymd[3]}-${ymd[2]}-${ymd[1]}`;
+  const dmy = onlyDate.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+  if (dmy) return `${dmy[1]}-${dmy[2]}-${dmy[3]}`;
+  return onlyDate;
+};
+
+const parseDateStringToDate = (value?: string): Date => {
+  const v = String(value || '').trim();
+  if (!v) return new Date();
+  const onlyDate = v.split('T')[0];
+  const ymd = onlyDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (ymd) return new Date(`${onlyDate}T00:00:00`);
+  const dmy = onlyDate.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+  if (dmy) return new Date(`${dmy[3]}-${dmy[2]}-${dmy[1]}T00:00:00`);
+  const parsed = new Date(v);
+  return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
 };
 
 const timeToHHmm = (d: Date): string => {
@@ -571,7 +596,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
     const placa = String(map.numero_placa ?? map.numero_de_placa ?? '');
     const marcaStr = String(map.marca ?? '');
     const colorStr = String(map.color ?? '');
-    const fecha = b.created_at ? String(b.created_at).split('T')[0] : '';
+    const fecha = formatDateDMY(b.created_at, '');
     const firmaInfo = decodeFirmaHash(b.firma_responsable);
 
     // mostramos algunos campos informativos extra solo en el collapse
@@ -823,39 +848,18 @@ export default function BitacoraVehiculosDetenidosScreen() {
     try {
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) throw new Error('Server URL not configured');
-
-      let token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (logout) await logout();
-          return;
-        }
-        token = await AsyncStorage.getItem('access_token');
-      }
-      if (!token) return;
-
-      const doRequest = async (tk: string) =>
-        fetch(`${apiUrl}/api/cambios-apps-modules?tabla=${encodeURIComponent(tabla)}&registro_id=${registroId}`, {
+      const resp = await authedFetch({
+        url: `${apiUrl}/api/cambios-apps-modules?tabla=${encodeURIComponent(tabla)}&registro_id=${registroId}`,
+        init: {
           method: 'GET',
           headers: {
-            Authorization: `Bearer ${tk}`,
             'Content-Type': 'application/json',
-            'ngrok-skip-browser-warning': '69420',
           },
-        });
-
-      let resp = await doRequest(token);
-      if (resp.status === 401) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (logout) await logout();
-          return;
-        }
-        const nextToken = await AsyncStorage.getItem('access_token');
-        if (!nextToken) return;
-        resp = await doRequest(nextToken);
-      }
+        },
+        refreshAccessToken,
+        logout,
+      });
+      if (!resp) return;
 
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok || !data.status) {
@@ -952,27 +956,20 @@ export default function BitacoraVehiculosDetenidosScreen() {
         const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
         if (!apiUrl) return null;
 
-        let token = await AsyncStorage.getItem('access_token');
-        if (!token) {
-          const refreshed = await refreshAccessToken();
-          if (refreshed) token = await AsyncStorage.getItem('access_token');
-        }
-        if (!token) return null;
-
-        const response = await fetch(`${apiUrl}/api/corporate-vehicles/${vehiculoId}/uses`, {
-          method: 'GET',
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-            'ngrok-skip-browser-warning': '69420',
+        const response = await authedFetch({
+          url: `${apiUrl}/api/corporate-vehicles/${vehiculoId}/uses`,
+          init: {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+            },
           },
+          refreshAccessToken,
+          logout,
         });
-        if (response.status === 401 && attempt < 1) {
-          const refreshed = await refreshAccessToken();
-          if (refreshed) return fetchCorporateVehicleUses(vehiculoId, attempt + 1);
-        }
+        if (!response) return null;
         if (!response.ok) return null;
-        const data = await response.json();
+        const data = await response.json().catch(() => ({}));
         if (data?.status && Array.isArray(data?.data)) return data.data;
         return null;
       } catch (e) {
@@ -980,7 +977,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
         return null;
       }
     },
-    [refreshAccessToken]
+    [refreshAccessToken, logout]
   );
 
   const preloadVehiculoYUso = useCallback(
@@ -1364,41 +1361,22 @@ export default function BitacoraVehiculosDetenidosScreen() {
           if (isConnected) {
             const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
             if (apiUrl) {
-              let token = await AsyncStorage.getItem('access_token');
-              if (!token) {
-                const refreshed = await refreshAccessToken();
-                if (refreshed) token = await AsyncStorage.getItem('access_token');
-              }
-              if (token) {
-                let usoResponse = await fetch(`${apiUrl}/api/corporate-vehicles/uses/${usoIdFromItem}`, {
+              const usoResponse = await authedFetch({
+                url: `${apiUrl}/api/corporate-vehicles/uses/${usoIdFromItem}`,
+                init: {
                   method: 'GET',
                   headers: {
-                    Authorization: `Bearer ${token}`,
                     'Content-Type': 'application/json',
-                    'ngrok-skip-browser-warning': '69420',
                   },
-                });
-                if (usoResponse.status === 401) {
-                  const refreshed = await refreshAccessToken();
-                  if (refreshed) {
-                    token = await AsyncStorage.getItem('access_token');
-                    if (token) {
-                      usoResponse = await fetch(`${apiUrl}/api/corporate-vehicles/uses/${usoIdFromItem}`, {
-                        method: 'GET',
-                        headers: {
-                          Authorization: `Bearer ${token}`,
-                          'Content-Type': 'application/json',
-                          'ngrok-skip-browser-warning': '69420',
-                        },
-                      });
-                    }
-                  }
-                }
-                if (usoResponse.ok) {
-                  const usoData = await usoResponse.json();
-                  if (usoData?.status && usoData?.data?.vehiculo_id) {
-                    vehiculoId = Number(usoData.data.vehiculo_id);
-                  }
+                },
+                refreshAccessToken,
+                logout,
+              });
+              if (!usoResponse) return;
+              if (usoResponse.ok) {
+                const usoData = await usoResponse.json().catch(() => ({}));
+                if (usoData?.status && usoData?.data?.vehiculo_id) {
+                  vehiculoId = Number(usoData.data.vehiculo_id);
                 }
               }
             }
@@ -1825,7 +1803,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
 
   const openDatePicker = (key: string, currentValue?: string) => {
     setDatePickerKey(key);
-    setDatePickerValue(currentValue ? new Date(currentValue) : new Date());
+    setDatePickerValue(parseDateStringToDate(currentValue));
     setShowDatePicker(true);
   };
 
@@ -1967,7 +1945,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
                       onPress={() => setShowFilterFechaPicker(true)}
                     >
                       <ThemedText style={styles.dateButtonText}>
-                        {filterFecha || 'Seleccionar fecha'}
+                        {filterFecha ? formatYMDToDMY(filterFecha) : 'Seleccionar fecha'}
                       </ThemedText>
                       <Ionicons name="calendar-outline" size={18} color="#007AFF" />
                     </TouchableOpacity>
@@ -2177,7 +2155,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
                     <ThemedView key={f.key} style={styles.row}>
                       <ThemedText style={styles.label}>{f.label}{f.required ? ' *' : ''}</ThemedText>
                       <TouchableOpacity style={styles.dateButton} onPress={() => openDatePicker(f.key, value)}>
-                        <ThemedText style={styles.dateButtonText}>{value || 'Seleccionar fecha'}</ThemedText>
+                        <ThemedText style={styles.dateButtonText}>{value ? formatYMDToDMY(String(value)) : 'Seleccionar fecha'}</ThemedText>
                         <Ionicons name="calendar-outline" size={18} color="#007AFF" />
                       </TouchableOpacity>
                     </ThemedView>
@@ -2341,7 +2319,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
                           setShowDatePicker(true);
                         }}
                       >
-                        <ThemedText style={styles.dateButtonText}>Fecha: {m.fecha || 'Seleccionar'}</ThemedText>
+                        <ThemedText style={styles.dateButtonText}>Fecha: {m.fecha ? formatYMDToDMY(m.fecha) : 'Seleccionar'}</ThemedText>
                         <Ionicons name="calendar-outline" size={18} color="#007AFF" />
                       </TouchableOpacity>
                       <TouchableOpacity
@@ -2538,7 +2516,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
 
       {showFilterFechaPicker && (
         <DateTimePicker
-          value={filterFecha ? new Date(filterFecha) : new Date()}
+          value={filterFecha ? parseDateStringToDate(filterFecha) : new Date()}
           mode="date"
           display={Platform.OS === 'ios' ? 'spinner' : 'default'}
           onChange={(event, date) => {

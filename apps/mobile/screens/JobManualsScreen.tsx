@@ -20,6 +20,8 @@ import { eventBus } from '../hooks/eventBus';
 import { createJobManual, listJobManualsByMarca, deleteJobManual, signJobManual, putJobManualQuizResult } from '../hooks/jobManualsFunctions';
 import getHoraAccion from '../hooks/getHoraAccion';
 import { useQRScanner } from '../hooks/useQRScanner';
+import authedFetch from '../hooks/authedFetch';
+import getValidAccessTokenOrLogout from '../hooks/getValidAccessTokenOrLogout';
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { jwtDecode } from 'jwt-decode';
@@ -273,36 +275,18 @@ export default function JobManualsScreen() {
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) throw new Error('Server URL not configured');
 
-      let token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (logout) await logout();
-          throw new Error('Sesión expirada');
-        }
-        token = await AsyncStorage.getItem('access_token');
-      }
-
-      const response = await fetch(`${apiUrl}/api/main-structure`, {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': '69420',
+      const response = await authedFetch({
+        url: `${apiUrl}/api/main-structure`,
+        init: {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
         },
+        refreshAccessToken,
+        logout,
       });
-
-      if (response.status === 401) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) return fetchMainStructure();
-        await logout();
-        return;
-      }
-
-      if (response.status === 403) {
-        if (logout) await logout();
-        throw new Error('Acceso denegado');
-      }
+      if (!response) return;
 
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
@@ -1088,20 +1072,8 @@ export default function JobManualsScreen() {
         throw new Error('Server URL not configured');
       }
 
-      let token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (logout) await logout();
-          throw new Error('Sesión expirada');
-        }
-        token = await AsyncStorage.getItem('access_token');
-      }
-
-      if (!token) {
-        Alert.alert('Error', 'No se pudo obtener el token de sesión');
-        return;
-      }
+      const token = await getValidAccessTokenOrLogout({ refreshAccessToken, logout });
+      if (!token) return;
 
       const decodedToken: any = jwtDecode(token);
       const sessionId = decodedToken.sessionId;
@@ -1130,14 +1102,18 @@ export default function JobManualsScreen() {
       let empleadoDetalle = undefined;
       const isConnected = await getConnectionStatus();
       if (isConnected) {
-        const response = await fetch(`${apiUrl}/api/empleados/${decodedEmpleadoId}`, {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-            'ngrok-skip-browser-warning': '69420',
+        const response = await authedFetch({
+          url: `${apiUrl}/api/empleados/${decodedEmpleadoId}`,
+          init: {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+            },
           },
+          refreshAccessToken,
+          logout,
         });
+        if (!response) return;
 
         if (response.ok) {
           const empleadoData = await response.json();
@@ -1192,25 +1168,18 @@ export default function JobManualsScreen() {
           if (!apiUrl) {
             throw new Error('Server URL not configured');
           }
-
-          let token = await AsyncStorage.getItem('access_token');
-          if (!token) {
-            const refreshed = await refreshAccessToken();
-            if (!refreshed) {
-              if (logout) await logout();
-              throw new Error('Sesión expirada');
-            }
-            token = await AsyncStorage.getItem('access_token');
-          }
-
-          const response = await fetch(`${apiUrl}/api/empleados/${empleadoId}`, {
-            method: 'GET',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json',
-              'ngrok-skip-browser-warning': '69420',
+          const response = await authedFetch({
+            url: `${apiUrl}/api/empleados/${empleadoId}`,
+            init: {
+              method: 'GET',
+              headers: {
+                'Content-Type': 'application/json',
+              },
             },
+            refreshAccessToken,
+            logout,
           });
+          if (!response) return;
 
           if (response.ok) {
             const empleadoData = await response.json();

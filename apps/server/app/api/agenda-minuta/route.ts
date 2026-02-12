@@ -257,6 +257,36 @@ export async function POST(req: NextRequest) {
       sendNotificationByRole(record.corpo_id, [parseInt(String(record.created_by), 10)], "Agenda minuta registrada", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
     }
 
+    // Registrar cambio de creación
+    const createdBy = parseInt(String(payload.id ?? 0), 10) || 0;
+    await prisma.c_cambios_apps_modules.create({
+      data: {
+        nombre_tabla: "c_agenda_minuta",
+        registro_id: record.id,
+        cambios: JSON.stringify([{
+          prop: "__created__",
+          before: null,
+          after: {
+            id: record.id,
+            cliente_id: record.cliente_id,
+            corpo_id: record.corpo_id,
+            puesto_id: record.puesto_id,
+            numero: record.numero,
+            titulo: record.titulo,
+            fecha: record.fecha.toISOString(),
+            hora_inicio: record.hora_inicio.toISOString(),
+            hora_fin: record.hora_fin.toISOString(),
+            autor: record.autor,
+            participantes: record.participantes,
+            acuerdos: record.acuerdos,
+            observaciones: record.observaciones,
+          },
+        }]),
+        created_at: createdAt,
+        created_by: createdBy,
+      },
+    });
+
     return NextResponse.json(
       {
         status: true,

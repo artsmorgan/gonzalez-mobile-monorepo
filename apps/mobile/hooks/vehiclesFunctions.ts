@@ -1,5 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Constants from "expo-constants";
+import authedFetch from "./authedFetch";
 
 interface CreateVehicleParams {
     requestData: any;
@@ -38,46 +39,25 @@ export async function createVehicle({
             throw new Error('Marca ID not found');
         }
 
-        let token = await AsyncStorage.getItem('access_token');
-        if (!token) {
-            if (refreshAccessToken) {
-                const refreshed = await refreshAccessToken();
-                if (!refreshed) {
-                    if (logout) await logout();
-                    throw new Error('Sesión expirada');
-                }
-                token = await AsyncStorage.getItem('access_token');
-            } else {
-                if (logout) await logout();
-                throw new Error('Sesión expirada');
-            }
+        if (!refreshAccessToken || !logout) {
+            throw new Error('Auth handlers not provided');
         }
 
-        const response = await fetch(`${apiUrl}/api/vehicles`, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json',
-                'ngrok-skip-browser-warning': '69420',
+        const response = await authedFetch({
+            url: `${apiUrl}/api/vehicles`,
+            init: {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(requestData),
             },
-            body: JSON.stringify(requestData),
+            refreshAccessToken,
+            logout,
         });
 
-        if (response.status === 401) {
-            if (refreshAccessToken) {
-                const refreshed = await refreshAccessToken();
-                if (refreshed) {
-                    return createVehicle({ requestData, marcaId, refreshAccessToken, logout });
-                } else if (logout) {
-                    await logout();
-                    return { status: false, message: 'Sesión expirada' };
-                }
-            }
-        }
-
-        if (response.status === 403) {
-            if (logout) await logout();
-            throw new Error('Acceso denegado');
+        if (!response) {
+            return { status: false, message: 'Sesión expirada' };
         }
 
         if (!response.ok) {
@@ -109,46 +89,25 @@ export async function updateVehicle({
             throw new Error('Marca ID not found');
         }
 
-        let token = await AsyncStorage.getItem('access_token');
-        if (!token) {
-            if (refreshAccessToken) {
-                const refreshed = await refreshAccessToken();
-                if (!refreshed) {
-                    if (logout) await logout();
-                    throw new Error('Sesión expirada');
-                }
-                token = await AsyncStorage.getItem('access_token');
-            } else {
-                if (logout) await logout();
-                throw new Error('Sesión expirada');
-            }
+        if (!refreshAccessToken || !logout) {
+            throw new Error('Auth handlers not provided');
         }
 
-        const response = await fetch(`${apiUrl}/api/vehicles/${vehicleId}`, {
-            method: 'PUT',
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json',
-                'ngrok-skip-browser-warning': '69420',
+        const response = await authedFetch({
+            url: `${apiUrl}/api/vehicles/${vehicleId}`,
+            init: {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(requestData),
             },
-            body: JSON.stringify(requestData),
+            refreshAccessToken,
+            logout,
         });
 
-        if (response.status === 401) {
-            if (refreshAccessToken) {
-                const refreshed = await refreshAccessToken();
-                if (refreshed) {
-                    return updateVehicle({ requestData, vehicleId, marcaId, refreshAccessToken, logout });
-                } else if (logout) {
-                    await logout();
-                    return { status: false, message: 'Sesión expirada' };
-                }
-            }
-        }
-
-        if (response.status === 403) {
-            if (logout) await logout();
-            throw new Error('Acceso denegado');
+        if (!response) {
+            return { status: false, message: 'Sesión expirada' };
         }
 
         if (!response.ok) {
@@ -174,45 +133,24 @@ export async function deleteVehicle({
             throw new Error('Server URL not configured');
         }
 
-        let token = await AsyncStorage.getItem('access_token');
-        if (!token) {
-            if (refreshAccessToken) {
-                const refreshed = await refreshAccessToken();
-                if (!refreshed) {
-                    if (logout) await logout();
-                    throw new Error('Sesión expirada');
-                }
-                token = await AsyncStorage.getItem('access_token');
-            } else {
-                if (logout) await logout();
-                throw new Error('Sesión expirada');
-            }
+        if (!refreshAccessToken || !logout) {
+            throw new Error('Auth handlers not provided');
         }
 
-        const response = await fetch(`${apiUrl}/api/vehicles/${vehicleId}`, {
-            method: 'DELETE',
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json',
-                'ngrok-skip-browser-warning': '69420',
+        const response = await authedFetch({
+            url: `${apiUrl}/api/vehicles/${vehicleId}`,
+            init: {
+                method: 'DELETE',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
             },
+            refreshAccessToken,
+            logout,
         });
 
-        if (response.status === 401) {
-            if (refreshAccessToken) {
-                const refreshed = await refreshAccessToken();
-                if (refreshed) {
-                    return deleteVehicle({ vehicleId, refreshAccessToken, logout });
-                } else if (logout) {
-                    await logout();
-                    return { status: false, message: 'Sesión expirada' };
-                }
-            }
-        }
-
-        if (response.status === 403) {
-            if (logout) await logout();
-            throw new Error('Acceso denegado');
+        if (!response) {
+            return { status: false, message: 'Sesión expirada' };
         }
 
         if (!response.ok) {

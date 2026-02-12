@@ -4,6 +4,7 @@ import { verifyAccessToken } from "../../../../../utils/verifyToken";
 import { prisma } from "../../../../../utils/prismaClient";
 import { getUserMarca } from "../../../../../utils/getUserMarca";
 import { sendNotificationByRole } from "../../../../../utils/sendNotification";
+import { toZonedTime } from "date-fns-tz";
 
 function parseDateOnly(value: any): Date | null {
   if (!value) return null;
@@ -160,6 +161,34 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
       const description = "Se ha registrado un movimiento de la llave " + llave.lugar_abre + " (" + llave.cantidad_copias + " copias) de la sucursal " + sucursalNombre + " el día " + fechaRegistro + " a las " + horaRegistro + "(Del empleado " + nombre_persona_entrega + " a " + nombre_persona_recibe + ")";
       sendNotificationByRole(llave.corpo_id, [], "Movimiento de llave registrado", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
     }
+
+    // Registrar cambio de creación
+    const createdBy = parseInt(String((payload as any)?.id ?? 0)) || 0;
+    const createdAt = toZonedTime(new Date(), "America/Costa_Rica") as Date;
+    await prisma.c_cambios_apps_modules.create({
+      data: {
+        nombre_tabla: "e_movimiento_llave",
+        registro_id: created.id,
+        cambios: JSON.stringify([{
+          prop: "__created__",
+          before: null,
+          after: {
+            id: created.id,
+            llave_id: created.llave_id,
+            nombre_persona_recibe: created.nombre_persona_recibe,
+            nombre_persona_entrega: created.nombre_persona_entrega,
+            departamento: created.departamento,
+            telefono: created.telefono,
+            entrega: created.entrega,
+            recibe: created.recibe,
+            fecha: created.fecha.toISOString(),
+            hora: created.hora.toISOString(),
+          },
+        }]),
+        created_at: createdAt,
+        created_by: createdBy,
+      },
+    });
 
     return NextResponse.json(
       { status: true, message: "Movimiento creado correctamente", id: created.id },

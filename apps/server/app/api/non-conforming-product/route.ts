@@ -187,6 +187,35 @@ export async function POST(req: NextRequest) {
       include: { e_archivos_producto_no_conforme: true },
     });
 
+    // Registrar cambio de creación
+    const createdBy = parseInt(String(payload?.id ?? 0), 10) || 0;
+    await prisma.c_cambios_apps_modules.create({
+      data: {
+        nombre_tabla: "c_producto_no_conforme",
+        registro_id: newRecord.id,
+        cambios: JSON.stringify([{
+          prop: "__created__",
+          before: null,
+          after: {
+            id: newRecord.id,
+            cliente_id: newRecord.cliente_id,
+            corpo_id: newRecord.corpo_id,
+            fecha_identificacion: newRecord.fecha_identificacion.toISOString(),
+            responsable_cuenta: newRecord.responsable_cuenta,
+            tipo_servicio_no_conforme: newRecord.tipo_servicio_no_conforme,
+            persona_identifico_pnc: newRecord.persona_identifico_pnc,
+            descripcion: newRecord.descripcion,
+            persona_origino_pnc: newRecord.persona_origino_pnc,
+            accion_implementada: newRecord.accion_implementada,
+            fecha_solucion: newRecord.fecha_solucion.toISOString(),
+            responsable_aprobar: newRecord.responsable_aprobar,
+          },
+        }]),
+        created_at: createdAt,
+        created_by: createdBy,
+      },
+    });
+
     return NextResponse.json(
       {
         status: true,

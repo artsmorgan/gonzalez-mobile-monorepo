@@ -104,6 +104,7 @@ import saveManualSignature from './hooks/saveManualSignature';
 import saveMarca from './hooks/saveMarca';
 import saveAbsentReason from './hooks/saveAbsentReason';
 import getHoraAccion from './hooks/getHoraAccion';
+import authedFetch from './hooks/authedFetch';
 import updateServerTime, { setDisconnectedTime } from './hooks/updateServerTime';
 import JobManualsScreen from './screens/JobManualsScreen';
 import { createJobManual, deleteJobManual, signJobManual, putJobManualQuizResult } from './hooks/jobManualsFunctions';
@@ -324,6 +325,13 @@ function AppContent() {
 
   const FORCE_OFFLINE = false;
 
+  const authedFetchCb = useCallback(
+    async (args: { url: string; init: RequestInit }): Promise<Response | null> => {
+      return authedFetch({ ...args, refreshAccessToken, logout });
+    },
+    [refreshAccessToken, logout]
+  );
+
   // 🆕 useEffect para escuchar el estado de conexión en tiempo real
   useEffect(() => {
     // Verificar conexión inicial
@@ -356,6 +364,7 @@ function AppContent() {
       else {
         console.log('Conectado');
         console.log('Funciones que se ejecutarán cuando se recupera la conexión');
+        updateServerTime();
         await Promise.all([
           checkManualSignatureCache(),
           checkMarcaCache(),
@@ -1109,33 +1118,20 @@ function AppContent() {
       try {
         if (action.type !== 'update') continue;
 
-        let token = await AsyncStorage.getItem('access_token');
-        if (!token) {
-          const refreshed = await refreshAccessToken();
-          if (!refreshed) continue;
-          token = await AsyncStorage.getItem('access_token');
-        }
-
-        const doRequest = async () =>
-          fetch(`${apiUrl}/api/articulo-mantenimiento/${action.id}`, {
+        const response = await authedFetchCb({
+          url: `${apiUrl}/api/articulo-mantenimiento/${action.id}`,
+          init: {
             method: 'PUT',
             headers: {
-              Authorization: `Bearer ${token}`,
               'Content-Type': 'application/json',
-              'ngrok-skip-browser-warning': '69420',
             },
             body: JSON.stringify(action.requestData ?? {}),
-          });
+          },
+        });
 
-        let response = await doRequest();
-        if (response.status === 401) {
-          const refreshed = await refreshAccessToken();
-          if (!refreshed) {
-            if (logout) await logout();
-            continue;
-          }
-          token = await AsyncStorage.getItem('access_token');
-          response = await doRequest();
+        if (!response) {
+          // Logout ya fue ejecutado (o tokens inválidos). Detener sincronización.
+          return;
         }
 
         if (response.ok) {
@@ -1229,64 +1225,24 @@ function AppContent() {
     for (const action of actions) {
       try {
         if (action.type === 'update') {
-          let token = await AsyncStorage.getItem('access_token');
-          if (!token) {
-            const refreshed = await refreshAccessToken();
-            if (!refreshed) continue;
-            token = await AsyncStorage.getItem('access_token');
-          }
-
-          const response = await fetch(`${apiUrl}/api/activo-mantenimiento/${action.id}`, {
-            method: 'PUT',
-            headers: {
-              Authorization: `Bearer ${token}`,
-              'Content-Type': 'application/json',
-              'ngrok-skip-browser-warning': '69420',
+          const response = await authedFetchCb({
+            url: `${apiUrl}/api/activo-mantenimiento/${action.id}`,
+            init: {
+              method: 'PUT',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify(action.requestData),
             },
-            body: JSON.stringify(action.requestData),
           });
 
-          if (response.status === 401) {
-            const refreshed = await refreshAccessToken();
-            if (refreshed) {
-              token = await AsyncStorage.getItem('access_token');
-              const retryResponse = await fetch(`${apiUrl}/api/activo-mantenimiento/${action.id}`, {
-                method: 'PUT',
-                headers: {
-                  Authorization: `Bearer ${token}`,
-                  'Content-Type': 'application/json',
-                  'ngrok-skip-browser-warning': '69420',
-                },
-                body: JSON.stringify(action.requestData),
-              });
-              if (retryResponse.ok) {
-                const data = await retryResponse.json();
-                if (data.status) {
-                  const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'update'));
-                  await AsyncStorage.setItem('activo_mantenimiento_actions', JSON.stringify(updatedActions));
-
-                  // Actualizar cache si existe
-                  const reporteId = action.reporteId;
-                  if (reporteId) {
-                    const cacheStr = await AsyncStorage.getItem(`activos_mantenimiento_${reporteId}_cache`);
-                    if (cacheStr) {
-                      const cache = JSON.parse(cacheStr);
-                      const updatedCache = cache.map((a: any) =>
-                        a.id === action.id ? { ...a, ...action.requestData, id_local: '' } : a
-                      );
-                      await AsyncStorage.setItem(`activos_mantenimiento_${reporteId}_cache`, JSON.stringify(updatedCache));
-                    }
-                  }
-                }
-              }
-            } else {
-              if (logout) await logout();
-            }
-            continue;
+          if (!response) {
+            // Logout ya fue ejecutado. Detener sincronización.
+            return;
           }
 
           if (response.ok) {
-            const data = await response.json();
+            const data = await response.json().catch(() => ({}));
             if (data.status) {
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'update'));
               await AsyncStorage.setItem('activo_mantenimiento_actions', JSON.stringify(updatedActions));
@@ -5063,21 +5019,18 @@ function AppContent() {
   const check_conection_time = async () => {
     console.log('Checking connection time...');
     if (isConnected) {
-      Promise.all([
-        updateServerTime(),
-        get_notifications()
-      ]);
+      await get_notifications();
     }
     else {
-      setDisconnectedTime();
+      try {
+        await setDisconnectedTime();
+      } catch (error) {
+        console.error('Error setting disconnected time:', error);
+      }
     }
   }
 
   const get_notifications = async () => {
-    const refreshToken = await AsyncStorage.getItem('refresh_token');
-    if (!refreshToken) {
-      return;
-    }
     const current_marca = await AsyncStorage.getItem('current_marca');
     if (!current_marca) {
       return;
@@ -5100,39 +5053,19 @@ function AppContent() {
       throw new Error('Server URL not configured');
     }
 
-    let token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-      const refreshed = await refreshAccessToken();
-      if (!refreshed) {
-        if (logout) await logout();
-        throw new Error('Sesión expirada');
-      }
-      token = await AsyncStorage.getItem('access_token');
-    }
-
-    const response = await fetch(`${apiUrl}/api/notification?m=${current_marca_obj.id}`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetchCb({
+      url: `${apiUrl}/api/notification?m=${current_marca_obj.id}`,
+      init: {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       },
     });
 
-    if (response.status === 401) {
-      const refreshed = await refreshAccessToken();
-      if (refreshed) {
-        return get_notifications();
-      } else {
-        Alert.alert('1', 'Sesión expirada. Por favor inicie sesión nuevamente.');
-        await logout();
-        return;
-      }
-    }
-
-    if (response.status === 403) {
-      if (logout) await logout();
-      throw new Error('Acceso denegado');
+    if (!response) {
+      // Logout ya fue ejecutado.
+      return;
     }
 
     if (!response.ok) {

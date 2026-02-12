@@ -4,6 +4,7 @@ import SlideMenu from '@/components/SlideMenu';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import { useAuth } from '@/contexts/AuthContext';
+import authedFetch from '@/hooks/authedFetch';
 import Constants from 'expo-constants';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useState, useRef } from 'react';
@@ -169,35 +170,20 @@ export default function LunchTimeScreen() {
         throw new Error('Server URL not configured');
       }
 
-      let token = await AsyncStorage.getItem('access_token');
-
-      // Try to refresh token if we don't have one
-      if (!token) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          throw new Error('No valid authentication token');
-        }
-        token = await AsyncStorage.getItem('access_token');
-      }
-
-      const response = await fetch(`${apiUrl}/api/lunch-time/${employee.id}`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': '69420'
+      const response = await authedFetch({
+        url: `${apiUrl}/api/lunch-time/${employee.id}`,
+        init: {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
         },
+        refreshAccessToken,
+        logout,
       });
 
-      if (response.status === 401 || response.status === 403) {
-        // Token might be expired, try to refresh
-        const refreshed = await refreshAccessToken();
-        if (refreshed) {
-          // Retry the request with the new token
-          return fetchLunchTimeData();
-        } else {
-          throw new Error('Sesión expirada');
-        }
+      if (!response) {
+        throw new Error('Sesión expirada');
       }
 
       if (!response.ok) {
@@ -659,27 +645,18 @@ export default function LunchTimeScreen() {
         throw new Error('Server URL not configured');
       }
 
-      let token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          throw new Error('No valid authentication token');
-        }
-        token = await AsyncStorage.getItem('access_token');
-      }
-
       const inicio = esManual ? manualStart : startTime;
       const fin = esManual ? manualEnd : new Date();
       const pausasList = esManual ? manualPausasList : pausas;
 
-      const response = await fetch(`${apiUrl}/api/lunch-time`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': '69420'
-        },
-        body: JSON.stringify({
+      const response = await authedFetch({
+        url: `${apiUrl}/api/lunch-time`,
+        init: {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
           empleadoId: employee?.id,
           inicio: inicio?.toISOString(),
           fin: fin?.toISOString(),
@@ -689,16 +666,14 @@ export default function LunchTimeScreen() {
             razon: p.razon
           })) || []),
           es_manual: esManual
-        })
+          }),
+        },
+        refreshAccessToken,
+        logout,
       });
 
-      if (response.status === 401 || response.status === 403) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) {
-          return sendLunchTimeRecord(esManual, manualStart, manualEnd, manualPausasList);
-        } else {
-          throw new Error('Sesión expirada');
-        }
+      if (!response) {
+        throw new Error('Sesión expirada');
       }
 
       if (!response.ok) {
@@ -721,23 +696,14 @@ export default function LunchTimeScreen() {
         throw new Error('Server URL not configured');
       }
 
-      let token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          throw new Error('No valid authentication token');
-        }
-        token = await AsyncStorage.getItem('access_token');
-      }
-
-      const response = await fetch(`${apiUrl}/api/lunch-time`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': '69420'
-        },
-        body: JSON.stringify({
+      const response = await authedFetch({
+        url: `${apiUrl}/api/lunch-time`,
+        init: {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
           empleadoId: employee?.id,
           inicio: start.toISOString(),
           fin: end.toISOString(),
@@ -747,16 +713,14 @@ export default function LunchTimeScreen() {
             razon: p.razon
           }))),
           es_manual: esManual
-        })
+          }),
+        },
+        refreshAccessToken,
+        logout,
       });
 
-      if (response.status === 401 || response.status === 403) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) {
-          return sendLunchTimeRecordWithEndTime(esManual, start, end, pausasList);
-        } else {
-          throw new Error('Sesión expirada');
-        }
+      if (!response) {
+        throw new Error('Sesión expirada');
       }
 
       if (!response.ok) {

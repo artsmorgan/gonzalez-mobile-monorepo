@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessToken } from "../../../../utils/verifyToken";
 import { prisma } from "../../../../utils/prismaClient";
+import { toZonedTime } from "date-fns-tz";
 import fs from "fs";
 import path from "path";
 import { v4 as uuidv4 } from "uuid";
@@ -83,29 +84,68 @@ export async function PUT(
             );
         }
 
+        const updateData: any = {
+            sociedad: sociedad !== undefined ? String(sociedad ?? "") : existingRecord.sociedad,
+            nombre_realiza_queja: nombre_realiza_queja !== undefined ? String(nombre_realiza_queja ?? "") : existingRecord.nombre_realiza_queja,
+            cliente: cliente !== undefined ? String(cliente ?? "") : existingRecord.cliente,
+            empresa_presenta_queja: empresa_presenta_queja !== undefined ? String(empresa_presenta_queja ?? "") : existingRecord.empresa_presenta_queja,
+            persona_presenta_queja: persona_presenta_queja !== undefined ? String(persona_presenta_queja ?? "") : existingRecord.persona_presenta_queja,
+            medio_recepcion_queja: medio_recepcion_queja !== undefined ? String(medio_recepcion_queja ?? "") : existingRecord.medio_recepcion_queja,
+            tipo_queja: tipo_queja !== undefined ? String(tipo_queja ?? "") : existingRecord.tipo_queja,
+            ubicacion: ubicacion !== undefined ? String(ubicacion ?? "") : existingRecord.ubicacion,
+            nivel_queja: nivel_queja !== undefined ? String(nivel_queja ?? "") : existingRecord.nivel_queja,
+            fecha_queja: fecha_queja !== undefined ? String(fecha_queja ?? "") : existingRecord.fecha_queja,
+            motivo_queja: motivo_queja !== undefined ? String(motivo_queja ?? "") : existingRecord.motivo_queja,
+            descripcion_queja: descripcion_queja !== undefined ? String(descripcion_queja ?? "") : existingRecord.descripcion_queja,
+            fecha_inicio: fecha_inicio !== undefined ? String(fecha_inicio ?? "") : existingRecord.fecha_inicio,
+            fecha_revision: fecha_revision !== undefined ? String(fecha_revision ?? "") : existingRecord.fecha_revision,
+            resolucion_queja: resolucion_queja !== undefined ? String(resolucion_queja ?? "") : existingRecord.resolucion_queja,
+            estado: estado !== undefined ? String(estado ?? "") : existingRecord.estado,
+            accion_correctiva_preventiva: accion_correctiva_preventiva !== undefined ? String(accion_correctiva_preventiva ?? "") : existingRecord.accion_correctiva_preventiva,
+            firma_responsable: firma_responsable !== undefined ? String(firma_responsable ?? existingRecord.firma_responsable) : existingRecord.firma_responsable,
+        };
+
+        // Registrar cambios (solo campos actualizados, excluyendo firmas)
+        const eq = (a: any, b: any) => {
+            if (a === b) return true;
+            if (a == null && b == null) return true;
+            return false;
+        };
+
+        const cambiosArr: Array<{ prop: string; before: any; after: any }> = [];
+        for (const [k, v] of Object.entries(updateData)) {
+            // Excluir firmas
+            if (k === "firma_responsable") continue;
+
+            const before = (existingRecord as any)[k];
+            const after = v;
+            if (!eq(before, after)) {
+                cambiosArr.push({
+                    prop: k,
+                    before: before,
+                    after: after,
+                });
+            }
+        }
+
         const updatedRecord = await prisma.c_maestro_quejas.update({
             where: { id: complaintId },
-            data: {
-                sociedad: sociedad !== undefined ? String(sociedad ?? "") : existingRecord.sociedad,
-                nombre_realiza_queja: nombre_realiza_queja !== undefined ? String(nombre_realiza_queja ?? "") : existingRecord.nombre_realiza_queja,
-                cliente: cliente !== undefined ? String(cliente ?? "") : existingRecord.cliente,
-                empresa_presenta_queja: empresa_presenta_queja !== undefined ? String(empresa_presenta_queja ?? "") : existingRecord.empresa_presenta_queja,
-                persona_presenta_queja: persona_presenta_queja !== undefined ? String(persona_presenta_queja ?? "") : existingRecord.persona_presenta_queja,
-                medio_recepcion_queja: medio_recepcion_queja !== undefined ? String(medio_recepcion_queja ?? "") : existingRecord.medio_recepcion_queja,
-                tipo_queja: tipo_queja !== undefined ? String(tipo_queja ?? "") : existingRecord.tipo_queja,
-                ubicacion: ubicacion !== undefined ? String(ubicacion ?? "") : existingRecord.ubicacion,
-                nivel_queja: nivel_queja !== undefined ? String(nivel_queja ?? "") : existingRecord.nivel_queja,
-                fecha_queja: fecha_queja !== undefined ? String(fecha_queja ?? "") : existingRecord.fecha_queja,
-                motivo_queja: motivo_queja !== undefined ? String(motivo_queja ?? "") : existingRecord.motivo_queja,
-                descripcion_queja: descripcion_queja !== undefined ? String(descripcion_queja ?? "") : existingRecord.descripcion_queja,
-                fecha_inicio: fecha_inicio !== undefined ? String(fecha_inicio ?? "") : existingRecord.fecha_inicio,
-                fecha_revision: fecha_revision !== undefined ? String(fecha_revision ?? "") : existingRecord.fecha_revision,
-                resolucion_queja: resolucion_queja !== undefined ? String(resolucion_queja ?? "") : existingRecord.resolucion_queja,
-                estado: estado !== undefined ? String(estado ?? "") : existingRecord.estado,
-                accion_correctiva_preventiva: accion_correctiva_preventiva !== undefined ? String(accion_correctiva_preventiva ?? "") : existingRecord.accion_correctiva_preventiva,
-                firma_responsable: firma_responsable !== undefined ? String(firma_responsable ?? existingRecord.firma_responsable) : existingRecord.firma_responsable,
-            }
+            data: updateData,
         });
+
+        // Registrar cambios si hay alguno
+        if (cambiosArr.length > 0) {
+            const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
+            await prisma.c_cambios_apps_modules.create({
+                data: {
+                    nombre_tabla: "c_maestro_quejas",
+                    registro_id: complaintId,
+                    cambios: JSON.stringify(cambiosArr),
+                    created_at: toZonedTime(new Date(), "America/Costa_Rica"),
+                    created_by: createdBy,
+                },
+            });
+        }
 
         let filesParsed: ComplaintFileInput[] = [];
         if (archivos) {
@@ -214,6 +254,46 @@ export async function DELETE(
                 { status: 404 }
             );
         }
+
+        // Registrar cambio de eliminación antes de eliminar
+        const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
+        const createdAt = toZonedTime(new Date(), "America/Costa_Rica");
+        await prisma.c_cambios_apps_modules.create({
+            data: {
+                nombre_tabla: "c_maestro_quejas",
+                registro_id: complaintId,
+                cambios: JSON.stringify([{
+                    prop: "__deleted__",
+                    before: {
+                        id: existingRecord.id,
+                        empresa_id: existingRecord.empresa_id,
+                        cliente_id: existingRecord.cliente_id,
+                        corpo_id: existingRecord.corpo_id,
+                        puesto_id: existingRecord.puesto_id,
+                        sociedad: existingRecord.sociedad,
+                        nombre_realiza_queja: existingRecord.nombre_realiza_queja,
+                        cliente: existingRecord.cliente,
+                        empresa_presenta_queja: existingRecord.empresa_presenta_queja,
+                        persona_presenta_queja: existingRecord.persona_presenta_queja,
+                        medio_recepcion_queja: existingRecord.medio_recepcion_queja,
+                        tipo_queja: existingRecord.tipo_queja,
+                        ubicacion: existingRecord.ubicacion,
+                        nivel_queja: existingRecord.nivel_queja,
+                        fecha_queja: existingRecord.fecha_queja,
+                        motivo_queja: existingRecord.motivo_queja,
+                        descripcion_queja: existingRecord.descripcion_queja,
+                        fecha_inicio: existingRecord.fecha_inicio,
+                        fecha_revision: existingRecord.fecha_revision,
+                        resolucion_queja: existingRecord.resolucion_queja,
+                        estado: existingRecord.estado,
+                        accion_correctiva_preventiva: existingRecord.accion_correctiva_preventiva,
+                    },
+                    after: null,
+                }]),
+                created_at: createdAt,
+                created_by: createdBy,
+            },
+        });
 
         await prisma.c_maestro_quejas.delete({
             where: { id: complaintId }

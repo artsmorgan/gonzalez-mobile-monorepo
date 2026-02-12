@@ -109,28 +109,104 @@ export async function GET(req: NextRequest) {
 
         if (fechaHoraInicio < fechaHoraFin) { // Si hora_inicio es menor a hora_fin, entonces la fecha de fin es el día siguiente
             const newDateFinString = marcaAnterior.fecha.toISOString().split("T")[0].split("-");
-            newDateFinString[2] = (Number(newDateFinString[2]) + 1).toString();
+            newDateFinString[2] = (Number(newDateFinString[2]) + 1).toString().padStart(2, '0');
             fechaHoraFin = new Date(`${newDateFinString[0]}-${newDateFinString[1]}-${newDateFinString[2]}T${timeFinString}`);
         }
 
         const notas_return: { id: number, titulo: string, description: string, categoria: string | null, empleado: string, updated_at: Date }[] = [];
 
-        const all_notas = await prisma.c_puesto_notas.findMany({ where: { puesto_id: marcaAnterior.puesto_id, relevancia: "Alta" } });
+        // Obtener notas del puesto solicitado y filtrar por relevancia alta
+        const all_notas = await prisma.c_puesto_notas.findMany({
+            where: { puesto_id: marcaAnterior.puesto_id, relevancia: "Alta" }
+        });
 
-        const notas_cambios = await prisma.c_puesto_notas_bitacora_cambios.findMany({ where: { nota_id: { in: all_notas.map(nota => nota.id) }, created_at: { lte: fechaHoraFin, gte: fechaHoraInicio } } });
+        if (all_notas.length > 0) {
+            const notaIds = all_notas.map((nota) => nota.id);
 
-        for (const cambio of notas_cambios) {
-            const nota = await prisma.c_puesto_notas.findUnique({ where: { id: cambio.nota_id } });
-            if (nota) {
-                const empleado = await prisma.c_empleado.findUnique({ where: { id: cambio.empleado_id } });
-                notas_return.push({
-                    id: nota.id,
-                    titulo: cambio.titulo,
-                    description: cambio.description,
-                    categoria: cambio.categoria,
-                    empleado: empleado ? empleado.nombre + " " + empleado.primer_apellido + " " + empleado.segundo_apellido : "Desconocido",
-                    updated_at: cambio.created_at,
-                });
+            // La bitácora de cambios de notas ahora se obtiene desde c_cambios_apps_modules
+            // usando el registro_id de la nota y la tabla a la que pertenece.
+            const cambiosNotas = await prisma.c_cambios_apps_modules.findMany({
+                where: {
+                    nombre_tabla: "c_puesto_notas",
+                    registro_id: { in: notaIds },
+                    created_at: { lte: fechaHoraFin, gte: fechaHoraInicio },
+                },
+                orderBy: { created_at: "desc" },
+            });
+
+            // Quedarse con el último cambio por nota dentro del lapso
+            const latestCambioByNotaId = new Map<number, typeof cambiosNotas[number]>();
+            for (const cambio of cambiosNotas) {
+                if (!latestCambioByNotaId.has(cambio.registro_id)) {
+                    latestCambioByNotaId.set(cambio.registro_id, cambio);
+                }
+            }
+
+            const changedNotaIds = Array.from(latestCambioByNotaId.keys());
+            if (changedNotaIds.length > 0) {
+                const notasMap = new Map<number, typeof all_notas[number]>(
+                    all_notas.map((nota) => [nota.id, nota])
+                );
+
+                const empleadoIds = Array.from(
+                    new Set(
+                        Array.from(latestCambioByNotaId.values())
+                            .map((cambio) => cambio.created_by)
+                            .filter((id) => id > 0)
+                    )
+                );
+
+                const empleados = empleadoIds.length > 0
+                    ? await prisma.c_empleado.findMany({
+                        where: { id: { in: empleadoIds } },
+                        select: {
+                            id: true,
+                            nombre: true,
+                            primer_apellido: true,
+                            segundo_apellido: true,
+                        },
+                    })
+                    : [];
+                const empleadosMap = new Map<number, typeof empleados[number]>(
+                    empleados.map((empleado) => [empleado.id, empleado])
+                );
+
+                const categoriaIds = Array.from(
+                    new Set(
+                        changedNotaIds
+                            .map((id) => notasMap.get(id)?.categoria_id)
+                            .filter((id): id is number => id !== null && id !== undefined)
+                    )
+                );
+                const categorias = categoriaIds.length > 0
+                    ? await prisma.n_novedades_categoria.findMany({
+                        where: { id: { in: categoriaIds } },
+                        select: { id: true, nombre: true },
+                    })
+                    : [];
+                const categoriasMap = new Map<number, string>(
+                    categorias.map((categoria) => [categoria.id, categoria.nombre])
+                );
+
+                for (const notaId of changedNotaIds) {
+                    const nota = notasMap.get(notaId);
+                    const cambio = latestCambioByNotaId.get(notaId);
+                    if (!nota || !cambio) continue;
+
+                    const empleado = empleadosMap.get(cambio.created_by);
+                    notas_return.push({
+                        id: nota.id,
+                        titulo: nota.titulo,
+                        description: nota.description,
+                        categoria: nota.categoria_id ? (categoriasMap.get(nota.categoria_id) || null) : null,
+                        empleado: empleado
+                            ? `${empleado.nombre} ${empleado.primer_apellido} ${empleado.segundo_apellido || ""}`.trim()
+                            : "Desconocido",
+                        updated_at: cambio.created_at,
+                    });
+                }
+
+                notas_return.sort((a, b) => b.updated_at.getTime() - a.updated_at.getTime());
             }
         }
 
@@ -269,6 +345,7 @@ export async function GET(req: NextRequest) {
     }
     catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        console.log("Error in GET /api/entrega-puestos:", errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }

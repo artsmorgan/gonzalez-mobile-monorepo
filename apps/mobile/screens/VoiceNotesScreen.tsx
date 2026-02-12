@@ -30,6 +30,8 @@ import getHoraAccion from '@/hooks/getHoraAccion';
 import * as Network from 'expo-network';
 import { createVoiceNote as createVoiceNoteAPI, deleteVoiceNote as deleteVoiceNoteAPI } from '@/hooks/voiceNotesFunctions';
 import { eventBus } from '@/hooks/eventBus';
+import authedFetch from '@/hooks/authedFetch';
+import getValidAccessTokenOrLogout from '@/hooks/getValidAccessTokenOrLogout';
 
 type VoiceNotesScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'VoiceNotes'>;
 
@@ -295,41 +297,18 @@ export default function VoiceNotesScreen() {
         if (!apiUrl) {
           throw new Error('Server URL not configured');
         }
-
-        let token = await AsyncStorage.getItem('access_token');
-        if (!token) {
-          const refreshed = await refreshAccessToken();
-          if (!refreshed) {
-            if (logout) await logout();
-            throw new Error('Sesión expirada');
-          }
-          token = await AsyncStorage.getItem('access_token');
-        }
-
-        // Fetch voice notes
-        const response = await fetch(`${apiUrl}/api/voice-notes?m=${marca.id}`, {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-            'ngrok-skip-browser-warning': '69420',
+        const response = await authedFetch({
+          url: `${apiUrl}/api/voice-notes?m=${marca.id}`,
+          init: {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+            },
           },
+          refreshAccessToken,
+          logout,
         });
-
-        if (response.status === 401) {
-          const refreshed = await refreshAccessToken();
-          if (refreshed) {
-            return fetchData();
-          } else {
-            await logout();
-            return;
-          }
-        }
-
-        if (response.status === 403) {
-          if (logout) await logout();
-          throw new Error('Acceso denegado');
-        }
+        if (!response) return;
 
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`);
@@ -459,20 +438,8 @@ export default function VoiceNotesScreen() {
         return;
       }
 
-      let token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (logout) await logout();
-          throw new Error('Sesión expirada');
-        }
-        token = await AsyncStorage.getItem('access_token');
-      }
-
-      if (!token) {
-        Alert.alert('Error', 'No se pudo obtener el token de sesión');
-        return;
-      }
+      const token = await getValidAccessTokenOrLogout({ refreshAccessToken, logout });
+      if (!token) return;
 
       const decoded: any = jwtDecode(token);
       const sessionId = decoded.sessionId || 'unknown';
@@ -496,14 +463,18 @@ export default function VoiceNotesScreen() {
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (apiUrl) {
         try {
-          const empleadoResponse = await fetch(`${apiUrl}/api/empleados/${decodedEmpleadoId}`, {
-            method: 'GET',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json',
-              'ngrok-skip-browser-warning': '69420',
+          const empleadoResponse = await authedFetch({
+            url: `${apiUrl}/api/empleados/${decodedEmpleadoId}`,
+            init: {
+              method: 'GET',
+              headers: {
+                'Content-Type': 'application/json',
+              },
             },
+            refreshAccessToken,
+            logout,
           });
+          if (!empleadoResponse) return;
 
           if (empleadoResponse.ok) {
             const empleadoData = await empleadoResponse.json();
@@ -556,26 +527,20 @@ export default function VoiceNotesScreen() {
       // Fetch employee details
       let empleadoDetalle = undefined;
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-      let token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (logout) await logout();
-          throw new Error('Sesión expirada');
-        }
-        token = await AsyncStorage.getItem('access_token');
-      }
-
-      if (apiUrl && token) {
+      if (apiUrl) {
         try {
-          const empleadoResponse = await fetch(`${apiUrl}/api/empleados/${empleadoId}`, {
-            method: 'GET',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json',
-              'ngrok-skip-browser-warning': '69420',
+          const empleadoResponse = await authedFetch({
+            url: `${apiUrl}/api/empleados/${empleadoId}`,
+            init: {
+              method: 'GET',
+              headers: {
+                'Content-Type': 'application/json',
+              },
             },
+            refreshAccessToken,
+            logout,
           });
+          if (!empleadoResponse) return;
 
           if (empleadoResponse.ok) {
             const empleadoData = await empleadoResponse.json();
@@ -1092,7 +1057,7 @@ export default function VoiceNotesScreen() {
     const day = date.getDate().toString().padStart(2, '0');
     const month = (date.getMonth() + 1).toString().padStart(2, '0');
     const year = date.getFullYear();
-    return `${day}/${month}/${year}`;
+    return `${day}-${month}-${year}`;
   };
 
   const resetAllFilters = () => {

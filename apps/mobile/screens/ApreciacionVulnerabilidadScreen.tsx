@@ -10,6 +10,7 @@ import {
   TextInput,
   TouchableOpacity,
   View,
+  Dimensions,
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -30,6 +31,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { eventBus } from '../hooks/eventBus';
 import getHoraAccion from '../hooks/getHoraAccion';
 import { useQRScanner } from '../hooks/useQRScanner';
+import authedFetch from '../hooks/authedFetch';
 import {
   ApreciacionVulnerabilidadItem,
   createApreciacionVulnerabilidad,
@@ -39,6 +41,7 @@ import {
   MainStructureEmpresa,
   updateApreciacionVulnerabilidad,
 } from '../hooks/apreciacionVulnerabilidadFunctions';
+import Constants from 'expo-constants';
 
 type VulnUI = ApreciacionVulnerabilidadItem & { id_local?: string };
 
@@ -162,6 +165,26 @@ export default function ApreciacionVulnerabilidadScreen() {
 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Importante: "sin internet" NO cuenta como error (solo es un estado informativo)
+  const [offlineMessage, setOfflineMessage] = useState<string | null>(null);
+
+  const isProbablyNetworkError = (err: any) => {
+    const msg = String(err?.message ?? err ?? '').toLowerCase();
+    return (
+      msg.includes('network request failed') ||
+      msg.includes('failed to fetch') ||
+      msg.includes('networkerror') ||
+      msg.includes('timeout') ||
+      msg.includes('timed out')
+    );
+  };
+
+  const formatDateDMY = (date: Date) => {
+    const day = String(date.getDate()).padStart(2, '0');
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const year = String(date.getFullYear());
+    return `${day}-${month}-${year}`;
+  };
 
   const [items, setItems] = useState<VulnUI[]>([]);
   const [structure, setStructure] = useState<MainStructureEmpresa[]>([]);
@@ -215,6 +238,12 @@ export default function ApreciacionVulnerabilidadScreen() {
   const signatureRef = useRef<any>(null);
   const [signatureKey, setSignatureKey] = useState(0);
   const [isReadingSignature, setIsReadingSignature] = useState(false);
+
+  // Modal: ver cambios (auditoría)
+  const [isCambiosModalVisible, setIsCambiosModalVisible] = useState(false);
+  const [cambiosTitle, setCambiosTitle] = useState<string>('Cambios');
+  const [cambiosItems, setCambiosItems] = useState<any[]>([]);
+  const [expandedCambioId, setExpandedCambioId] = useState<number | null>(null);
 
   const PICKER_NONE = 0;
 
@@ -293,7 +322,7 @@ export default function ApreciacionVulnerabilidadScreen() {
   const clearSignatureInModal = () => {
     try {
       signatureRef.current?.clearSignature?.();
-    } catch {}
+    } catch { }
     setIsReadingSignature(false);
     setSignatureKey((k) => k + 1);
   };
@@ -366,6 +395,7 @@ export default function ApreciacionVulnerabilidadScreen() {
     try {
       setIsLoading(true);
       setError(null);
+      setOfflineMessage(null);
       const isConnected = await getConnectionStatus();
       if (isConnected) {
         const res = await listApreciacionVulnerabilidad({ refreshAccessToken, logout });
@@ -381,9 +411,14 @@ export default function ApreciacionVulnerabilidadScreen() {
       } else {
         const cacheStr = await AsyncStorage.getItem('apreciacion_vulnerabilidad_cache');
         if (cacheStr) setItems(JSON.parse(cacheStr));
+        setOfflineMessage('Modo Offline: mostrando datos guardados.');
       }
     } catch (e: any) {
-      setError(e.message || 'Error al cargar registros');
+      if (isProbablyNetworkError(e)) {
+        setOfflineMessage('Modo Offline: error de conexión. Mostrando datos guardados si existen.');
+      } else {
+        setError(e.message || 'Error al cargar registros');
+      }
       const cacheStr = await AsyncStorage.getItem('apreciacion_vulnerabilidad_cache');
       if (cacheStr) setItems(JSON.parse(cacheStr));
     } finally {
@@ -752,9 +787,9 @@ export default function ApreciacionVulnerabilidadScreen() {
         s.key !== sectionKey
           ? s
           : {
-              ...s,
-              items: s.items.map((it) => (it.id === itemId ? { ...it, answer } : it)),
-            }
+            ...s,
+            items: s.items.map((it) => (it.id === itemId ? { ...it, answer } : it)),
+          }
       )
     );
   };
@@ -867,6 +902,127 @@ export default function ApreciacionVulnerabilidadScreen() {
       return '';
     }
   };
+
+  const closeCambiosModal = () => {
+    setIsCambiosModalVisible(false);
+    setCambiosItems([]);
+    setExpandedCambioId(null);
+  };
+
+  const formatCambioCreatedAt = (value: any) => {
+    if (!value) return '-';
+    try {
+      const date = new Date(value);
+      return date.toLocaleString('es-CR', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true,
+      });
+    } catch {
+      return String(value);
+    }
+  };
+
+  const formatBoletaForDisplay = (boletaJson: string): string => {
+    try {
+      const sections: BoletaSection[] = JSON.parse(boletaJson || '[]');
+      if (!Array.isArray(sections) || sections.length === 0) return 'No hay datos de boleta.';
+
+      let formatted = '';
+      sections.forEach((section) => {
+        formatted += `\n--- ${section.title} ---\n`;
+        (section.items || []).forEach((item) => {
+          const answer = item.answer === 'si' ? 'Sí' : item.answer === 'no' ? 'No' : 'Sin responder';
+          formatted += `  - ${item.label}: ${answer}\n`;
+        });
+      });
+      return formatted.trim();
+    } catch (e) {
+      console.error('Error formatting boleta for display:', e);
+      return 'Error al formatear boleta.';
+    }
+  };
+
+  const formatMetricasForDisplay = (metricasJson: string): string => {
+    try {
+      const metricas: string[] = JSON.parse(metricasJson || '[]');
+      if (!Array.isArray(metricas) || metricas.length === 0) return 'No hay métricas.';
+      return metricas.map((m, idx) => `${idx + 1}. ${m}`).join('\n');
+    } catch (e) {
+      console.error('Error formatting metricas for display:', e);
+      return 'Error al formatear métricas.';
+    }
+  };
+
+  const formatChangeValue = (prop: string, value: any): string => {
+    if (value === null || value === undefined) return 'N/A';
+    if (typeof value === 'boolean') return value ? 'Sí' : 'No';
+    if (typeof value === 'object') {
+      if (prop === 'boleta') {
+        return formatBoletaForDisplay(JSON.stringify(value));
+      }
+      if (prop === 'metricas_vulnerablidad') {
+        return formatMetricasForDisplay(JSON.stringify(value));
+      }
+      return JSON.stringify(value, null, 2);
+    }
+    if (typeof value === 'string') {
+      // Si parece ser JSON, intentar parsearlo
+      if (value.trim().startsWith('{') || value.trim().startsWith('[')) {
+        try {
+          const parsed = JSON.parse(value);
+          if (prop === 'boleta') {
+            return formatBoletaForDisplay(value);
+          }
+          if (prop === 'metricas_vulnerablidad') {
+            return formatMetricasForDisplay(value);
+          }
+          return JSON.stringify(parsed, null, 2);
+        } catch {
+          // No es JSON válido, retornar como string
+        }
+      }
+    }
+    return String(value);
+  };
+
+  const fetchCambios = useCallback(async (tabla: string, registroId: number) => {
+    const isConnected = await getConnectionStatus();
+    if (!isConnected) {
+      Alert.alert('Sin conexión', 'Esta función solo está disponible con conexión a internet.');
+      return;
+    }
+    try {
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) throw new Error('Server URL not configured');
+
+      const resp = await authedFetch({
+        url: `${apiUrl}/api/cambios-apps-modules?tabla=${encodeURIComponent(tabla)}&registro_id=${registroId}`,
+        init: {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        },
+        refreshAccessToken,
+        logout,
+      });
+      if (!resp) return;
+
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data.status) {
+        throw new Error(data.message || 'No se pudieron cargar los cambios');
+      }
+      setCambiosItems(Array.isArray(data.data) ? data.data : []);
+      setIsCambiosModalVisible(true);
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'No se pudieron cargar los cambios');
+    }
+  }, [refreshAccessToken, logout]);
 
   const renderItem = (it: VulnUI, index: number) => {
     const key = it.id !== 0 ? `v-${it.id}` : it.id_local ? `v-${it.id_local}` : `v-${index}`;
@@ -993,6 +1149,18 @@ export default function ApreciacionVulnerabilidadScreen() {
             <Ionicons name="pencil" size={18} color="#FFFFFF" />
             <ThemedText style={styles.rowButtonText}>Editar</ThemedText>
           </TouchableOpacity>
+          {!(it.id_local || it.id === 0) && (
+            <TouchableOpacity
+              style={[styles.rowButton, styles.changesButton]}
+              onPress={() => {
+                setCambiosTitle(`Cambios - Apreciación #${it.id}`);
+                fetchCambios('c_boleta_apreciacion_vulnerabilidad', it.id);
+              }}
+            >
+              <Ionicons name="list-outline" size={18} color="#FFFFFF" />
+              <ThemedText style={styles.rowButtonText}>Cambios</ThemedText>
+            </TouchableOpacity>
+          )}
           <TouchableOpacity style={[styles.rowButton, styles.deleteButton]} onPress={() => handleDelete(it)}>
             <Ionicons name="trash" size={18} color="#FFFFFF" />
             <ThemedText style={styles.rowButtonText}>Eliminar</ThemedText>
@@ -1009,6 +1177,7 @@ export default function ApreciacionVulnerabilidadScreen() {
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
         <ThemedView style={styles.content}>
           {error ? <ThemedText style={styles.errorText}>{error}</ThemedText> : null}
+          {offlineMessage && !error ? <ThemedText style={styles.offlineText}>{offlineMessage}</ThemedText> : null}
 
           <ThemedView style={styles.titleContainer}>
             <ThemedText type="title" style={styles.title}>
@@ -1017,7 +1186,7 @@ export default function ApreciacionVulnerabilidadScreen() {
             <ThemedText style={styles.subtitle}>Boleta de apreciación de vulnerabilidad</ThemedText>
           </ThemedView>
 
-          {!isCreating && (
+          {!isCreating && !isLoading && (
             <ThemedView style={styles.filtersMain}>
               <ThemedView style={styles.filterHeader}>
                 <TouchableOpacity style={styles.filterToggleButton} onPress={() => setIsFiltersExpanded(!isFiltersExpanded)}>
@@ -1056,25 +1225,25 @@ export default function ApreciacionVulnerabilidadScreen() {
 
                   <ThemedText style={styles.label}>Empresa</ThemedText>
                   {!isStructureLoading ? (
-                  <ThemedView style={styles.pickerWrapper}>
-                    <Picker
-                      selectedValue={filterEmpresaId ?? PICKER_NONE}
-                      onValueChange={(val) => {
-                        const id = Number(val) || 0;
-                        setFilterEmpresaId(id === PICKER_NONE ? null : id);
-                        setFilterClienteId(null);
-                        setFilterDivisionId(null);
-                        setFilterContratoId(null);
-                        setFilterCorpoId(null);
-                        setFilterPuestoId(null);
-                      }}
-                    >
-                      <Picker.Item label="Seleccionar empresa" value={PICKER_NONE} />
-                      {empresas.map((o) => (
-                        <Picker.Item key={String(o.id)} label={o.label} value={o.id} />
-                      ))}
-                    </Picker>
-                  </ThemedView>
+                    <ThemedView style={styles.pickerWrapper}>
+                      <Picker
+                        selectedValue={filterEmpresaId ?? PICKER_NONE}
+                        onValueChange={(val) => {
+                          const id = Number(val) || 0;
+                          setFilterEmpresaId(id === PICKER_NONE ? null : id);
+                          setFilterClienteId(null);
+                          setFilterDivisionId(null);
+                          setFilterContratoId(null);
+                          setFilterCorpoId(null);
+                          setFilterPuestoId(null);
+                        }}
+                      >
+                        <Picker.Item label="Seleccionar empresa" value={PICKER_NONE} />
+                        {empresas.map((o) => (
+                          <Picker.Item key={String(o.id)} label={o.label} value={o.id} />
+                        ))}
+                      </Picker>
+                    </ThemedView>
                   ) : null}
                   {filterEmpresaId && filterClientes.length === 0 ? (
                     <ThemedText style={styles.warningText}>La empresa seleccionada no tiene clientes.</ThemedText>
@@ -1082,25 +1251,25 @@ export default function ApreciacionVulnerabilidadScreen() {
 
                   <ThemedText style={styles.label}>Cliente</ThemedText>
                   {!isStructureLoading ? (
-                  <ThemedView style={styles.pickerWrapper}>
-                    <Picker
-                      enabled={!!filterEmpresaId}
-                      selectedValue={filterClienteId ?? PICKER_NONE}
-                      onValueChange={(val) => {
-                        const id = Number(val) || 0;
-                        setFilterClienteId(id === PICKER_NONE ? null : id);
-                        setFilterDivisionId(null);
-                        setFilterContratoId(null);
-                        setFilterCorpoId(null);
-                        setFilterPuestoId(null);
-                      }}
-                    >
-                      <Picker.Item label="Seleccionar cliente" value={PICKER_NONE} />
-                      {filterClientes.map((o) => (
-                        <Picker.Item key={String(o.id)} label={o.label} value={o.id} />
-                      ))}
-                    </Picker>
-                  </ThemedView>
+                    <ThemedView style={styles.pickerWrapper}>
+                      <Picker
+                        enabled={!!filterEmpresaId}
+                        selectedValue={filterClienteId ?? PICKER_NONE}
+                        onValueChange={(val) => {
+                          const id = Number(val) || 0;
+                          setFilterClienteId(id === PICKER_NONE ? null : id);
+                          setFilterDivisionId(null);
+                          setFilterContratoId(null);
+                          setFilterCorpoId(null);
+                          setFilterPuestoId(null);
+                        }}
+                      >
+                        <Picker.Item label="Seleccionar cliente" value={PICKER_NONE} />
+                        {filterClientes.map((o) => (
+                          <Picker.Item key={String(o.id)} label={o.label} value={o.id} />
+                        ))}
+                      </Picker>
+                    </ThemedView>
                   ) : null}
                   {filterClienteId && filterDivisiones.length === 0 ? (
                     <ThemedText style={styles.warningText}>El cliente seleccionado no tiene divisiones/contratos.</ThemedText>
@@ -1108,24 +1277,24 @@ export default function ApreciacionVulnerabilidadScreen() {
 
                   <ThemedText style={styles.label}>División</ThemedText>
                   {!isStructureLoading ? (
-                  <ThemedView style={styles.pickerWrapper}>
-                    <Picker
-                      enabled={!!filterClienteId}
-                      selectedValue={filterDivisionId ?? PICKER_NONE}
-                      onValueChange={(val) => {
-                        const id = Number(val) || 0;
-                        setFilterDivisionId(id === PICKER_NONE ? null : id);
-                        setFilterContratoId(null);
-                        setFilterCorpoId(null);
-                        setFilterPuestoId(null);
-                      }}
-                    >
-                      <Picker.Item label="Seleccionar división" value={PICKER_NONE} />
-                      {filterDivisiones.map((o) => (
-                        <Picker.Item key={String(o.id)} label={o.label} value={o.id} />
-                      ))}
-                    </Picker>
-                  </ThemedView>
+                    <ThemedView style={styles.pickerWrapper}>
+                      <Picker
+                        enabled={!!filterClienteId}
+                        selectedValue={filterDivisionId ?? PICKER_NONE}
+                        onValueChange={(val) => {
+                          const id = Number(val) || 0;
+                          setFilterDivisionId(id === PICKER_NONE ? null : id);
+                          setFilterContratoId(null);
+                          setFilterCorpoId(null);
+                          setFilterPuestoId(null);
+                        }}
+                      >
+                        <Picker.Item label="Seleccionar división" value={PICKER_NONE} />
+                        {filterDivisiones.map((o) => (
+                          <Picker.Item key={String(o.id)} label={o.label} value={o.id} />
+                        ))}
+                      </Picker>
+                    </ThemedView>
                   ) : null}
                   {filterDivisionId && filterContratos.length === 0 ? (
                     <ThemedText style={styles.warningText}>La división seleccionada no tiene contratos.</ThemedText>
@@ -1133,23 +1302,23 @@ export default function ApreciacionVulnerabilidadScreen() {
 
                   <ThemedText style={styles.label}>Contrato</ThemedText>
                   {!isStructureLoading ? (
-                  <ThemedView style={styles.pickerWrapper}>
-                    <Picker
-                      enabled={!!filterDivisionId}
-                      selectedValue={filterContratoId ?? PICKER_NONE}
-                      onValueChange={(val) => {
-                        const id = Number(val) || 0;
-                        setFilterContratoId(id === PICKER_NONE ? null : id);
-                        setFilterCorpoId(null);
-                        setFilterPuestoId(null);
-                      }}
-                    >
-                      <Picker.Item label="Seleccionar contrato" value={PICKER_NONE} />
-                      {filterContratos.map((o) => (
-                        <Picker.Item key={String(o.id)} label={o.label} value={o.id} />
-                      ))}
-                    </Picker>
-                  </ThemedView>
+                    <ThemedView style={styles.pickerWrapper}>
+                      <Picker
+                        enabled={!!filterDivisionId}
+                        selectedValue={filterContratoId ?? PICKER_NONE}
+                        onValueChange={(val) => {
+                          const id = Number(val) || 0;
+                          setFilterContratoId(id === PICKER_NONE ? null : id);
+                          setFilterCorpoId(null);
+                          setFilterPuestoId(null);
+                        }}
+                      >
+                        <Picker.Item label="Seleccionar contrato" value={PICKER_NONE} />
+                        {filterContratos.map((o) => (
+                          <Picker.Item key={String(o.id)} label={o.label} value={o.id} />
+                        ))}
+                      </Picker>
+                    </ThemedView>
                   ) : null}
                   {filterContratoId && filterCorpos.length === 0 ? (
                     <ThemedText style={styles.warningText}>El contrato seleccionado no tiene sucursales (corpos).</ThemedText>
@@ -1157,22 +1326,22 @@ export default function ApreciacionVulnerabilidadScreen() {
 
                   <ThemedText style={styles.label}>Sucursal (Corpo)</ThemedText>
                   {!isStructureLoading ? (
-                  <ThemedView style={styles.pickerWrapper}>
-                    <Picker
-                      enabled={!!filterContratoId}
-                      selectedValue={filterCorpoId ?? PICKER_NONE}
-                      onValueChange={(val) => {
-                        const id = Number(val) || 0;
-                        setFilterCorpoId(id === PICKER_NONE ? null : id);
-                        setFilterPuestoId(null);
-                      }}
-                    >
-                      <Picker.Item label="Seleccionar sucursal (corpo)" value={PICKER_NONE} />
-                      {filterCorpos.map((o) => (
-                        <Picker.Item key={String(o.id)} label={o.label} value={o.id} />
-                      ))}
-                    </Picker>
-                  </ThemedView>
+                    <ThemedView style={styles.pickerWrapper}>
+                      <Picker
+                        enabled={!!filterContratoId}
+                        selectedValue={filterCorpoId ?? PICKER_NONE}
+                        onValueChange={(val) => {
+                          const id = Number(val) || 0;
+                          setFilterCorpoId(id === PICKER_NONE ? null : id);
+                          setFilterPuestoId(null);
+                        }}
+                      >
+                        <Picker.Item label="Seleccionar sucursal (corpo)" value={PICKER_NONE} />
+                        {filterCorpos.map((o) => (
+                          <Picker.Item key={String(o.id)} label={o.label} value={o.id} />
+                        ))}
+                      </Picker>
+                    </ThemedView>
                   ) : null}
                   {filterCorpoId && filterPuestos.length === 0 ? (
                     <ThemedText style={styles.warningText}>La sucursal seleccionada no tiene puestos.</ThemedText>
@@ -1180,28 +1349,28 @@ export default function ApreciacionVulnerabilidadScreen() {
 
                   <ThemedText style={styles.label}>Puesto</ThemedText>
                   {!isStructureLoading ? (
-                  <ThemedView style={styles.pickerWrapper}>
-                    <Picker
-                      enabled={!!filterCorpoId}
-                      selectedValue={filterPuestoId ?? PICKER_NONE}
-                      onValueChange={(val) => {
-                        const id = Number(val) || 0;
-                        setFilterPuestoId(id === PICKER_NONE ? null : id);
-                      }}
-                    >
-                      <Picker.Item label="Seleccionar puesto" value={PICKER_NONE} />
-                      {filterPuestos.map((o) => (
-                        <Picker.Item key={String(o.id)} label={o.label} value={o.id} />
-                      ))}
-                    </Picker>
-                  </ThemedView>
+                    <ThemedView style={styles.pickerWrapper}>
+                      <Picker
+                        enabled={!!filterCorpoId}
+                        selectedValue={filterPuestoId ?? PICKER_NONE}
+                        onValueChange={(val) => {
+                          const id = Number(val) || 0;
+                          setFilterPuestoId(id === PICKER_NONE ? null : id);
+                        }}
+                      >
+                        <Picker.Item label="Seleccionar puesto" value={PICKER_NONE} />
+                        {filterPuestos.map((o) => (
+                          <Picker.Item key={String(o.id)} label={o.label} value={o.id} />
+                        ))}
+                      </Picker>
+                    </ThemedView>
                   ) : null}
                 </ThemedView>
               )}
             </ThemedView>
           )}
 
-          {!isCreating && (
+          {!isCreating && !isLoading && !error && (
             <TouchableOpacity style={styles.createButton} onPress={startCreating}>
               <ThemedText style={styles.createButtonText}>
                 <Ionicons name="add" size={20} color="#FFFFFF" /> Nuevo registro
@@ -1215,7 +1384,7 @@ export default function ApreciacionVulnerabilidadScreen() {
 
               <ThemedText style={styles.label}>Fecha *</ThemedText>
               <TouchableOpacity style={styles.dateButton} onPress={() => setShowFechaPicker(true)}>
-                <ThemedText style={styles.dateButtonText}>{fecha.toISOString().split('T')[0]}</ThemedText>
+                <ThemedText style={styles.dateButtonText}>{formatDateDMY(fecha)}</ThemedText>
                 <Ionicons name="calendar-outline" size={18} color="#007AFF" />
               </TouchableOpacity>
 
@@ -1230,135 +1399,135 @@ export default function ApreciacionVulnerabilidadScreen() {
 
               <ThemedText style={styles.label}>Empresa</ThemedText>
               {!isStructureLoading ? (
-              <ThemedView style={styles.pickerWrapper}>
-                <Picker
-                  selectedValue={empresaId ?? PICKER_NONE}
-                  onValueChange={(val) => {
-                    const id = Number(val) || 0;
-                    setEmpresaId(id === PICKER_NONE ? null : id);
-                    setClienteId(null);
-                    setDivisionId(null);
-                    setContratoId(null);
-                    setCorpoId(null);
-                    setPuestoId(null);
-                  }}
-                >
-                  <Picker.Item label="Seleccionar empresa" value={PICKER_NONE} />
-                  {empresas.map((o) => (
-                    <Picker.Item key={String(o.id)} label={o.label} value={o.id} />
-                  ))}
-                </Picker>
-              </ThemedView>
+                <ThemedView style={styles.pickerWrapper}>
+                  <Picker
+                    selectedValue={empresaId ?? PICKER_NONE}
+                    onValueChange={(val) => {
+                      const id = Number(val) || 0;
+                      setEmpresaId(id === PICKER_NONE ? null : id);
+                      setClienteId(null);
+                      setDivisionId(null);
+                      setContratoId(null);
+                      setCorpoId(null);
+                      setPuestoId(null);
+                    }}
+                  >
+                    <Picker.Item label="Seleccionar empresa" value={PICKER_NONE} />
+                    {empresas.map((o) => (
+                      <Picker.Item key={String(o.id)} label={o.label} value={o.id} />
+                    ))}
+                  </Picker>
+                </ThemedView>
               ) : null}
               {empresaId && clientes.length === 0 ? <ThemedText style={styles.warningText}>La empresa seleccionada no tiene clientes.</ThemedText> : null}
 
               <ThemedText style={styles.label}>Cliente</ThemedText>
               {!isStructureLoading ? (
-              <ThemedView style={styles.pickerWrapper}>
-                <Picker
-                  enabled={!!empresaId}
-                  selectedValue={clienteId ?? PICKER_NONE}
-                  onValueChange={(val) => {
-                    const id = Number(val) || 0;
-                    setClienteId(id === PICKER_NONE ? null : id);
-                    setDivisionId(null);
-                    setContratoId(null);
-                    setCorpoId(null);
-                    setPuestoId(null);
-                  }}
-                >
-                  <Picker.Item label="Seleccionar cliente" value={PICKER_NONE} />
-                  {clientes.map((o) => (
-                    <Picker.Item key={String(o.id)} label={o.label} value={o.id} />
-                  ))}
-                </Picker>
-              </ThemedView>
+                <ThemedView style={styles.pickerWrapper}>
+                  <Picker
+                    enabled={!!empresaId}
+                    selectedValue={clienteId ?? PICKER_NONE}
+                    onValueChange={(val) => {
+                      const id = Number(val) || 0;
+                      setClienteId(id === PICKER_NONE ? null : id);
+                      setDivisionId(null);
+                      setContratoId(null);
+                      setCorpoId(null);
+                      setPuestoId(null);
+                    }}
+                  >
+                    <Picker.Item label="Seleccionar cliente" value={PICKER_NONE} />
+                    {clientes.map((o) => (
+                      <Picker.Item key={String(o.id)} label={o.label} value={o.id} />
+                    ))}
+                  </Picker>
+                </ThemedView>
               ) : null}
               {clienteId && divisiones.length === 0 ? <ThemedText style={styles.warningText}>El cliente seleccionado no tiene divisiones/contratos.</ThemedText> : null}
 
               <ThemedText style={styles.label}>División</ThemedText>
               {!isStructureLoading ? (
-              <ThemedView style={styles.pickerWrapper}>
-                <Picker
-                  enabled={!!clienteId}
-                  selectedValue={divisionId ?? PICKER_NONE}
-                  onValueChange={(val) => {
-                    const id = Number(val) || 0;
-                    setDivisionId(id === PICKER_NONE ? null : id);
-                    setContratoId(null);
-                    setCorpoId(null);
-                    setPuestoId(null);
-                  }}
-                >
-                  <Picker.Item label="Seleccionar división" value={PICKER_NONE} />
-                  {divisiones.map((o) => (
-                    <Picker.Item key={String(o.id)} label={o.label} value={o.id} />
-                  ))}
-                </Picker>
-              </ThemedView>
+                <ThemedView style={styles.pickerWrapper}>
+                  <Picker
+                    enabled={!!clienteId}
+                    selectedValue={divisionId ?? PICKER_NONE}
+                    onValueChange={(val) => {
+                      const id = Number(val) || 0;
+                      setDivisionId(id === PICKER_NONE ? null : id);
+                      setContratoId(null);
+                      setCorpoId(null);
+                      setPuestoId(null);
+                    }}
+                  >
+                    <Picker.Item label="Seleccionar división" value={PICKER_NONE} />
+                    {divisiones.map((o) => (
+                      <Picker.Item key={String(o.id)} label={o.label} value={o.id} />
+                    ))}
+                  </Picker>
+                </ThemedView>
               ) : null}
               {divisionId && contratos.length === 0 ? <ThemedText style={styles.warningText}>La división seleccionada no tiene contratos.</ThemedText> : null}
 
               <ThemedText style={styles.label}>Contrato</ThemedText>
               {!isStructureLoading ? (
-              <ThemedView style={styles.pickerWrapper}>
-                <Picker
-                  enabled={!!divisionId}
-                  selectedValue={contratoId ?? PICKER_NONE}
-                  onValueChange={(val) => {
-                    const id = Number(val) || 0;
-                    setContratoId(id === PICKER_NONE ? null : id);
-                    setCorpoId(null);
-                    setPuestoId(null);
-                  }}
-                >
-                  <Picker.Item label="Seleccionar contrato" value={PICKER_NONE} />
-                  {contratos.map((o) => (
-                    <Picker.Item key={String(o.id)} label={o.label} value={o.id} />
-                  ))}
-                </Picker>
-              </ThemedView>
+                <ThemedView style={styles.pickerWrapper}>
+                  <Picker
+                    enabled={!!divisionId}
+                    selectedValue={contratoId ?? PICKER_NONE}
+                    onValueChange={(val) => {
+                      const id = Number(val) || 0;
+                      setContratoId(id === PICKER_NONE ? null : id);
+                      setCorpoId(null);
+                      setPuestoId(null);
+                    }}
+                  >
+                    <Picker.Item label="Seleccionar contrato" value={PICKER_NONE} />
+                    {contratos.map((o) => (
+                      <Picker.Item key={String(o.id)} label={o.label} value={o.id} />
+                    ))}
+                  </Picker>
+                </ThemedView>
               ) : null}
               {contratoId && corpos.length === 0 ? <ThemedText style={styles.warningText}>El contrato seleccionado no tiene sucursales (corpos).</ThemedText> : null}
 
               <ThemedText style={styles.label}>Sucursal (Corpo)</ThemedText>
               {!isStructureLoading ? (
-              <ThemedView style={styles.pickerWrapper}>
-                <Picker
-                  enabled={!!contratoId}
-                  selectedValue={corpoId ?? PICKER_NONE}
-                  onValueChange={(val) => {
-                    const id = Number(val) || 0;
-                    setCorpoId(id === PICKER_NONE ? null : id);
-                    setPuestoId(null);
-                  }}
-                >
-                  <Picker.Item label="Seleccionar sucursal (corpo)" value={PICKER_NONE} />
-                  {corpos.map((o) => (
-                    <Picker.Item key={String(o.id)} label={o.label} value={o.id} />
-                  ))}
-                </Picker>
-              </ThemedView>
+                <ThemedView style={styles.pickerWrapper}>
+                  <Picker
+                    enabled={!!contratoId}
+                    selectedValue={corpoId ?? PICKER_NONE}
+                    onValueChange={(val) => {
+                      const id = Number(val) || 0;
+                      setCorpoId(id === PICKER_NONE ? null : id);
+                      setPuestoId(null);
+                    }}
+                  >
+                    <Picker.Item label="Seleccionar sucursal (corpo)" value={PICKER_NONE} />
+                    {corpos.map((o) => (
+                      <Picker.Item key={String(o.id)} label={o.label} value={o.id} />
+                    ))}
+                  </Picker>
+                </ThemedView>
               ) : null}
               {corpoId && puestos.length === 0 ? <ThemedText style={styles.warningText}>La sucursal seleccionada no tiene puestos.</ThemedText> : null}
 
               <ThemedText style={styles.label}>Puesto</ThemedText>
               {!isStructureLoading ? (
-              <ThemedView style={styles.pickerWrapper}>
-                <Picker
-                  enabled={!!corpoId}
-                  selectedValue={puestoId ?? PICKER_NONE}
-                  onValueChange={(val) => {
-                    const id = Number(val) || 0;
-                    setPuestoId(id === PICKER_NONE ? null : id);
-                  }}
-                >
-                  <Picker.Item label="Seleccionar puesto" value={PICKER_NONE} />
-                  {puestos.map((o) => (
-                    <Picker.Item key={String(o.id)} label={o.label} value={o.id} />
-                  ))}
-                </Picker>
-              </ThemedView>
+                <ThemedView style={styles.pickerWrapper}>
+                  <Picker
+                    enabled={!!corpoId}
+                    selectedValue={puestoId ?? PICKER_NONE}
+                    onValueChange={(val) => {
+                      const id = Number(val) || 0;
+                      setPuestoId(id === PICKER_NONE ? null : id);
+                    }}
+                  >
+                    <Picker.Item label="Seleccionar puesto" value={PICKER_NONE} />
+                    {puestos.map((o) => (
+                      <Picker.Item key={String(o.id)} label={o.label} value={o.id} />
+                    ))}
+                  </Picker>
+                </ThemedView>
               ) : null}
 
               <ThemedText style={styles.label}>Enlace *</ThemedText>
@@ -1622,6 +1791,88 @@ export default function ApreciacionVulnerabilidadScreen() {
         </View>
       </Modal>
 
+      {/* Modal: ver cambios */}
+      <Modal
+        visible={isCambiosModalVisible}
+        animationType="fade"
+        transparent
+        presentationStyle="overFullScreen"
+        onRequestClose={closeCambiosModal}
+      >
+        <View style={styles.overlay}>
+          <ThemedView style={styles.floatModalCardMovimientos}>
+            <ThemedView style={styles.floatModalHeader}>
+              <ThemedText style={styles.modalTitle}>{cambiosTitle}</ThemedText>
+              <TouchableOpacity onPress={closeCambiosModal}>
+                <Ionicons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+            </ThemedView>
+
+            <ScrollView style={{ maxHeight: Dimensions.get('window').height * 0.75 }} contentContainerStyle={{ padding: 16 }}>
+              {(!cambiosItems || cambiosItems.length === 0) ? (
+                <ThemedView style={styles.emptyContainer}>
+                  <ThemedText style={styles.emptyText}>No hay cambios registrados</ThemedText>
+                </ThemedView>
+              ) : (
+                cambiosItems.map((row: any) => {
+                  let parsed: any[] = [];
+                  try {
+                    parsed = row?.cambios ? JSON.parse(row.cambios) : [];
+                  } catch {
+                    parsed = [];
+                  }
+                  const createdAtLabel = formatCambioCreatedAt(row?.created_at);
+                  const isOpen = expandedCambioId === row.id;
+
+                  return (
+                    <ThemedView key={`chg-${row.id}`} style={styles.cambioCollapsableMain}>
+                      <TouchableOpacity
+                        style={styles.cambioCollapsableHeader}
+                        onPress={() => setExpandedCambioId((prev) => (prev === row.id ? null : row.id))}
+                        activeOpacity={0.8}
+                      >
+                        <ThemedText style={styles.cambioCollapsableTitle}>
+                          {createdAtLabel}
+                        </ThemedText>
+                        <Ionicons
+                          name={isOpen ? "chevron-up" : "chevron-down"}
+                          size={18}
+                          color="#007AFF"
+                        />
+                      </TouchableOpacity>
+
+                      {isOpen && (
+                        <ThemedView style={styles.cambioCollapsableContent}>
+                          <ThemedView style={styles.filterGroupSearch}>
+                            <ThemedText style={styles.filterLabel}>Cambio realizado por:</ThemedText>
+                            <ThemedText style={styles.changeDescription}>
+                              {row.empleado_nombre || 'Desconocido'}
+                              {row.empleado_cedula ? ` - Cédula: ${row.empleado_cedula}` : ''}
+                            </ThemedText>
+                          </ThemedView>
+
+                          {(Array.isArray(parsed) ? parsed : []).length > 0 && (
+                            <ThemedView style={styles.filterGroupSearch}>
+                              <ThemedText style={styles.filterLabel}>Cambios:</ThemedText>
+                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => (
+                                <ThemedText key={`c-${row.id}-${idx}`} style={styles.changeDescription}>
+                                  <ThemedText style={{ fontWeight: '800' }}>{String(c?.prop ?? '-')}: </ThemedText>
+                                  {formatChangeValue(c?.prop, c?.after)}
+                                </ThemedText>
+                              ))}
+                            </ThemedView>
+                          )}
+                        </ThemedView>
+                      )}
+                    </ThemedView>
+                  );
+                })
+              )}
+            </ScrollView>
+          </ThemedView>
+        </View>
+      </Modal>
+
       <AppFooter />
       <SlideMenu isVisible={isMenuVisible} onClose={handleMenuClose} onHomePress={handleHomePress} currentRoute="ApreciacionVulnerabilidad" />
       {QRScannerComponent}
@@ -1638,6 +1889,7 @@ const styles = StyleSheet.create({
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 },
   loadingText: { marginTop: 16, fontSize: 16, opacity: 0.7 },
   errorText: { color: '#FF3B30', textAlign: 'center', marginBottom: 12 },
+  offlineText: { color: '#8A6D00', textAlign: 'center', marginBottom: 12 },
 
   titleContainer: {
     alignItems: 'center',
@@ -1786,15 +2038,23 @@ const styles = StyleSheet.create({
   rowButtons: { marginTop: 10, flexDirection: 'row', justifyContent: 'space-between', gap: 12 },
   rowButton: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 12, borderRadius: 8, gap: 8 },
   editButton: { backgroundColor: '#007AFF' },
+  changesButton: { backgroundColor: '#5856D6', flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 12, borderRadius: 8, gap: 8 },
   deleteButton: { backgroundColor: '#FF3B30' },
   rowButtonText: { color: '#FFFFFF', fontSize: 14, fontWeight: '600' },
+  floatModalCardMovimientos: { backgroundColor: '#FFFFFF', borderRadius: 12, width: '100%', maxWidth: 500, maxHeight: '80%', borderWidth: 1, borderColor: '#E0E0E0', overflow: 'hidden' },
+  cambioCollapsableMain: { width: '100%', marginBottom: 10, backgroundColor: '#fff', borderRadius: 6, borderWidth: 1, borderColor: '#E0E0E0', overflow: 'hidden' },
+  cambioCollapsableHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, backgroundColor: '#F8F9FA' },
+  cambioCollapsableTitle: { fontSize: 14, fontWeight: '600', color: '#007AFF', flex: 1 },
+  cambioCollapsableContent: { padding: 12, gap: 8, backgroundColor: '#F8F9FA' },
+  changeDescription: { fontSize: 14, lineHeight: 20, color: '#666', marginBottom: 8 },
+  filterGroupSearch: { marginBottom: 12 },
 
   // boleta
   boletaSection: { marginTop: 12, padding: 12, borderRadius: 10, backgroundColor: '#F8F9FA', borderWidth: 1, borderColor: '#E0E0E0' },
   boletaSectionTitle: { fontSize: 15, fontWeight: '900', color: '#000', backgroundColor: '#F8F9FA', marginBottom: 8 },
-  boletaRow: { marginBottom: 10 , backgroundColor: '#F8F9FA'},
-  boletaLabel: { color: '#000', marginBottom: 6, fontWeight: '700' , backgroundColor: '#F8F9FA'},
-  boletaRowRight: { flexDirection: 'row', gap: 8, alignItems: 'center' , backgroundColor: '#F8F9FA'},
+  boletaRow: { marginBottom: 10, backgroundColor: '#F8F9FA' },
+  boletaLabel: { color: '#000', marginBottom: 6, fontWeight: '700', backgroundColor: '#F8F9FA' },
+  boletaRowRight: { flexDirection: 'row', gap: 8, alignItems: 'center', backgroundColor: '#F8F9FA' },
   radioOption: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1807,7 +2067,7 @@ const styles = StyleSheet.create({
   radioOptionTextSelected: { color: '#007AFF' },
   trashTiny: { width: 34, height: 34, borderRadius: 8, backgroundColor: '#FF3B30', alignItems: 'center', justifyContent: 'center' },
   trashTinyPlaceholder: { width: 34, height: 34 },
-  addOptionRow: { marginTop: 8, flexDirection: 'row', gap: 10, alignItems: 'center' , backgroundColor: '#F8F9FA'},
+  addOptionRow: { marginTop: 8, flexDirection: 'row', gap: 10, alignItems: 'center', backgroundColor: '#F8F9FA' },
   addTiny: { width: 44, height: 44, borderRadius: 10, backgroundColor: '#007AFF', alignItems: 'center', justifyContent: 'center' },
 
   // metricas

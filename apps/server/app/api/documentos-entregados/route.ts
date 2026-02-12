@@ -4,6 +4,7 @@ import { verifyAccessToken } from "../../../utils/verifyToken";
 import { prisma } from "../../../utils/prismaClient";
 import { getUserMarca } from "../../../utils/getUserMarca";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
+import { toZonedTime } from "date-fns-tz";
 
 function parseDateOnly(value: any): Date | null {
   if (!value) return null;
@@ -148,6 +149,32 @@ export async function POST(req: NextRequest) {
       const descriptionNotificacion = "El empleado " + empleadoNombre + " ha registrado un documento entregado para la sucursal del cliente " + clienteNombre + " con la fecha " + fechaDate.toISOString().split("T")[0];
       sendNotificationByRole(marcaDia.corpo_id, [parseInt(String(payload?.id ?? "0"), 10)], "Documento entregado registrado", descriptionNotificacion, ["ADMINISTRATIVO", "SUPERVISOR"]);
     }
+
+    // Registrar cambio de creación
+    const createdBy = parseInt(String(payload?.id ?? 0), 10) || 0;
+    const createdAt = toZonedTime(new Date(), "America/Costa_Rica");
+    await prisma.c_cambios_apps_modules.create({
+      data: {
+        nombre_tabla: "e_control_documento_entregado_cliente",
+        registro_id: created.id,
+        cambios: JSON.stringify([{
+          prop: "__created__",
+          before: null,
+          after: {
+            id: created.id,
+            cliente_id: created.cliente_id,
+            corpo_id: created.corpo_id,
+            fecha: created.fecha.toISOString(),
+            nombre_oficial_entrega: created.nombre_oficial_entrega,
+            nombre_oficial_recibe: created.nombre_oficial_recibe,
+            tipo_documento: created.tipo_documento,
+            descripcion: created.descripcion,
+          },
+        }]),
+        created_at: createdAt,
+        created_by: createdBy,
+      },
+    });
 
     return NextResponse.json(
       { status: true, message: "Documento entregado creado correctamente", id: created.id },

@@ -1,5 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Constants from "expo-constants";
+import authedFetch from "./authedFetch";
 
 interface SaveLunchTimeParams {
     requestData: any;
@@ -15,54 +16,33 @@ export default async function saveLunchTime({
     logout
 }: SaveLunchTimeParams) {
     try {
+        if (!refreshAccessToken || !logout) {
+            throw new Error('Auth handlers not provided');
+        }
+
         const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
         if (!apiUrl) {
             throw new Error('Server URL not configured');
         }
 
-        let token = await AsyncStorage.getItem('access_token');
-        if (!token) {
-            if (refreshAccessToken) {
-                const refreshed = await refreshAccessToken();
-                if (!refreshed) {
-                    if (logout) await logout();
-                    throw new Error('Sesión expirada');
-                }
-                token = await AsyncStorage.getItem('access_token');
-            } else {
-                if (logout) await logout();
-                throw new Error('Sesión expirada');
-            }
-        }
-
         if (requestData.empleadoId == 0 && employeeId) {
             requestData.empleadoId = employeeId;
         }
-        const response = await fetch(`${apiUrl}/api/lunch-time`, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json',
-                'ngrok-skip-browser-warning': '69420',
+        const response = await authedFetch({
+            url: `${apiUrl}/api/lunch-time`,
+            init: {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(requestData),
             },
-            body: JSON.stringify(requestData),
+            refreshAccessToken,
+            logout,
         });
 
-        if (response.status === 401) {
-            if (refreshAccessToken) {
-                const refreshed = await refreshAccessToken();
-                if (refreshed) {
-                    return saveLunchTime({ requestData, employeeId, refreshAccessToken, logout });
-                } else if (logout) {
-                    // If refresh fails, logout the user
-                    await logout();
-                }
-            }
-        }
-
-        if (response.status === 403) {
-            if (logout) await logout();
-            throw new Error('Acceso denegado');
+        if (!response) {
+            return { status: false, message: 'Sesión expirada' };
         }
 
         if (!response.ok) {
@@ -70,8 +50,6 @@ export default async function saveLunchTime({
         }
 
         const data = await response.json();
-
-        console.log(data);
 
         return data;
     } catch (error) {

@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessToken } from "../../../../../../utils/verifyToken";
 import { prisma } from "../../../../../../utils/prismaClient";
 import { getUserMarca } from "../../../../../../utils/getUserMarca";
+import { toZonedTime } from "date-fns-tz";
 
 function parseDateOnly(value: any): Date | null {
   if (!value) return null;
@@ -87,22 +88,64 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       return NextResponse.json({ status: false, message: "Fecha u hora inválida" }, { status: 200 });
     }
 
+    // Registrar cambios (solo campos actualizados, excluyendo firmas)
+    const eq = (a: any, b: any) => {
+      if (a === b) return true;
+      if (a == null && b == null) return true;
+      const da = a instanceof Date ? a : (typeof a === "string" && /^\d{4}-\d{2}-\d{2}T/.test(a) ? new Date(a) : null);
+      const db = b instanceof Date ? b : (typeof b === "string" && /^\d{4}-\d{2}-\d{2}T/.test(b) ? new Date(b) : null);
+      if (da && db) return da.getTime() === db.getTime();
+      return false;
+    };
+
+    const cambiosArr: Array<{ prop: string; before: any; after: any }> = [];
+    const updateData: any = {
+      nombre_persona_recibe: typeof nombre_persona_recibe === "string" ? nombre_persona_recibe : own.mov!.nombre_persona_recibe,
+      nombre_persona_entrega: typeof nombre_persona_entrega === "string" ? nombre_persona_entrega : own.mov!.nombre_persona_entrega,
+      departamento: typeof departamento === "string" ? departamento : own.mov!.departamento,
+      telefono: typeof telefono === "string" ? telefono : own.mov!.telefono,
+      entrega: typeof entrega === "string" ? entrega : own.mov!.entrega,
+      recibe: typeof recibe === "string" ? recibe : own.mov!.recibe,
+      fecha: fechaDate ?? own.mov!.fecha,
+      hora: horaDate ?? own.mov!.hora,
+      firma_entrega: typeof firma_entrega === "string" ? firma_entrega : own.mov!.firma_entrega,
+      firma_recibe: typeof firma_recibe === "string" ? firma_recibe : own.mov!.firma_recibe,
+      firma_responsable: typeof firma_responsable === "string" ? firma_responsable : own.mov!.firma_responsable,
+    };
+
+    // Comparar cambios (excluir firmas)
+    for (const [k, v] of Object.entries(updateData)) {
+      if (k === "firma_entrega" || k === "firma_recibe" || k === "firma_responsable") continue; // Excluir firmas
+      const before = (own.mov as any)[k];
+      const after = v;
+      if (!eq(before, after)) {
+        cambiosArr.push({
+          prop: k,
+          before: before instanceof Date ? before.toISOString() : before,
+          after: after instanceof Date ? after.toISOString() : after,
+        });
+      }
+    }
+
     await prisma.e_movimiento_llave.update({
       where: { id: movId },
-      data: {
-        nombre_persona_recibe: typeof nombre_persona_recibe === "string" ? nombre_persona_recibe : own.mov!.nombre_persona_recibe,
-        nombre_persona_entrega: typeof nombre_persona_entrega === "string" ? nombre_persona_entrega : own.mov!.nombre_persona_entrega,
-        departamento: typeof departamento === "string" ? departamento : own.mov!.departamento,
-        telefono: typeof telefono === "string" ? telefono : own.mov!.telefono,
-        entrega: typeof entrega === "string" ? entrega : own.mov!.entrega,
-        recibe: typeof recibe === "string" ? recibe : own.mov!.recibe,
-        fecha: fechaDate ?? own.mov!.fecha,
-        hora: horaDate ?? own.mov!.hora,
-        firma_entrega: typeof firma_entrega === "string" ? firma_entrega : own.mov!.firma_entrega,
-        firma_recibe: typeof firma_recibe === "string" ? firma_recibe : own.mov!.firma_recibe,
-        firma_responsable: typeof firma_responsable === "string" ? firma_responsable : own.mov!.firma_responsable,
-      },
+      data: updateData,
     });
+
+    // Registrar cambios si hay alguno
+    if (cambiosArr.length > 0) {
+      const createdBy = parseInt(String((payload as any)?.id ?? 0)) || 0;
+      const createdAt = toZonedTime(new Date(), "America/Costa_Rica") as Date;
+      await prisma.c_cambios_apps_modules.create({
+        data: {
+          nombre_tabla: "e_movimiento_llave",
+          registro_id: movId,
+          cambios: JSON.stringify(cambiosArr),
+          created_at: createdAt,
+          created_by: createdBy,
+        },
+      });
+    }
 
     return NextResponse.json({ status: true, message: "Movimiento actualizado correctamente" }, { status: 200 });
   } catch (error: unknown) {
@@ -127,6 +170,34 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
 
     const own = await validateOwnership(llaveId, movId, parseInt(marcaIdStr));
     if (!own.ok) return NextResponse.json({ status: false, message: own.message }, { status: 200 });
+
+    // Registrar cambio de eliminación antes de eliminar
+    const createdBy = parseInt(String((payload as any)?.id ?? 0)) || 0;
+    const createdAt = toZonedTime(new Date(), "America/Costa_Rica") as Date;
+    await prisma.c_cambios_apps_modules.create({
+      data: {
+        nombre_tabla: "e_movimiento_llave",
+        registro_id: movId,
+        cambios: JSON.stringify([{
+          prop: "__deleted__",
+          before: {
+            id: own.mov!.id,
+            llave_id: own.mov!.llave_id,
+            nombre_persona_recibe: own.mov!.nombre_persona_recibe,
+            nombre_persona_entrega: own.mov!.nombre_persona_entrega,
+            departamento: own.mov!.departamento,
+            telefono: own.mov!.telefono,
+            entrega: own.mov!.entrega,
+            recibe: own.mov!.recibe,
+            fecha: own.mov!.fecha.toISOString(),
+            hora: own.mov!.hora.toISOString(),
+          },
+          after: null,
+        }]),
+        created_at: createdAt,
+        created_by: createdBy,
+      },
+    });
 
     await prisma.e_movimiento_llave.delete({ where: { id: movId } });
     return NextResponse.json({ status: true, message: "Movimiento eliminado correctamente" }, { status: 200 });

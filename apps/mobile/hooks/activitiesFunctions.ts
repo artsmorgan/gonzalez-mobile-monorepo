@@ -1,5 +1,6 @@
 import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import authedFetch from './authedFetch';
 
 interface UpdateActivityParams {
   requestData: {
@@ -45,41 +46,21 @@ export const createActivity = async ({
       throw new Error('Server URL not configured');
     }
 
-    let token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-      const refreshed = await refreshAccessToken();
-      if (!refreshed) {
-        if (logout) await logout();
-        throw new Error('Sesión expirada');
-      }
-      token = await AsyncStorage.getItem('access_token');
-    }
-
-    const response = await fetch(`${apiUrl}/api/activities`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/activities`,
+      init: {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestData),
       },
-      body: JSON.stringify(requestData),
+      refreshAccessToken,
+      logout,
     });
 
-    if (response.status === 401) {
-      // 👉 intenta refresh
-      const refreshed = await refreshAccessToken();
-      if (refreshed) {
-        return createActivity({ requestData, refreshAccessToken, logout });
-      } else {
-        await logout();
-        throw new Error('Sesión expirada');
-      }
-    }
-
-    if (response.status === 403) {
-      // 👉 logout directo
-      await logout();
-      throw new Error('Acceso denegado');
+    if (!response) {
+      throw new Error('Sesión expirada');
     }
 
     if (!response.ok) {
@@ -109,39 +90,21 @@ export const updateActivity = async ({
       throw new Error('Server URL not configured');
     }
 
-    let token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-      const refreshed = await refreshAccessToken();
-      if (!refreshed) {
-        if (logout) await logout();
-        throw new Error('Sesión expirada');
-      }
-      token = await AsyncStorage.getItem('access_token');
-    }
-
-    const response = await fetch(`${apiUrl}/api/activities/${activityId}`, {
-      method: 'PUT',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/activities/${activityId}`,
+      init: {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestData),
       },
-      body: JSON.stringify(requestData),
+      refreshAccessToken,
+      logout,
     });
 
-    if (response.status === 401) {
-      const refreshed = await refreshAccessToken();
-      if (refreshed) {
-        return updateActivity({ requestData, activityId, refreshAccessToken, logout });
-      } else {
-        await logout();
-        throw new Error('Sesión expirada');
-      }
-    }
-
-    if (response.status === 403) {
-      await logout();
-      throw new Error('Acceso denegado');
+    if (!response) {
+      throw new Error('Sesión expirada');
     }
 
     if (!response.ok) {
@@ -171,39 +134,21 @@ export const updateRevisionEquipo = async ({
       throw new Error('Server URL not configured');
     }
 
-    let token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-      const refreshed = await refreshAccessToken();
-      if (!refreshed) {
-        if (logout) await logout();
-        throw new Error('Sesión expirada');
-      }
-      token = await AsyncStorage.getItem('access_token');
-    }
-
-    const response = await fetch(`${apiUrl}/api/activities/equipo/${revisionEquipoId}`, {
-      method: 'PUT',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/activities/equipo/${revisionEquipoId}`,
+      init: {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestData),
       },
-      body: JSON.stringify(requestData),
+      refreshAccessToken,
+      logout,
     });
 
-    if (response.status === 401) {
-      const refreshed = await refreshAccessToken();
-      if (refreshed) {
-        return updateRevisionEquipo({ requestData, revisionEquipoId, refreshAccessToken, logout });
-      } else {
-        await logout();
-        throw new Error('Sesión expirada');
-      }
-    }
-
-    if (response.status === 403) {
-      await logout();
-      throw new Error('Acceso denegado');
+    if (!response) {
+      throw new Error('Sesión expirada');
     }
 
     if (!response.ok) {

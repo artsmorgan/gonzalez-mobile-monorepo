@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
+import authedFetch from './authedFetch';
 
 interface CreateStaffEvaluationParams {
   requestData: any;
@@ -30,44 +31,21 @@ export const createStaffEvaluation = async ({
       throw new Error('Server URL not configured');
     }
 
-    let token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-      if (refreshAccessToken) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (logout) await logout();
-          throw new Error('Sesión expirada');
-        }
-        token = await AsyncStorage.getItem('access_token');
-      } else {
-        if (logout) await logout();
-        throw new Error('Sesión expirada');
-      }
-    }
-
-    const response = await fetch(`${apiUrl}/api/evaluation`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/evaluation`,
+      init: {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestData),
       },
-      body: JSON.stringify(requestData),
+      refreshAccessToken,
+      logout,
     });
 
-    if (response.status === 401) {
-      const refreshed = await refreshAccessToken();
-      if (refreshed) {
-        return createStaffEvaluation({ requestData, refreshAccessToken, logout });
-      } else {
-        await logout();
-        throw new Error('Sesión expirada');
-      }
-    }
-
-    if (response.status === 403) {
-      if (logout) await logout();
-      throw new Error('Acceso denegado');
+    if (!response) {
+      throw new Error('Sesión expirada');
     }
 
     if (!response.ok) {
@@ -96,43 +74,20 @@ export const deleteStaffEvaluation = async ({
       throw new Error('Server URL not configured');
     }
 
-    let token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-      if (refreshAccessToken) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (logout) await logout();
-          throw new Error('Sesión expirada');
-        }
-        token = await AsyncStorage.getItem('access_token');
-      } else {
-        if (logout) await logout();
-        throw new Error('Sesión expirada');
-      }
-    }
-
-    const response = await fetch(`${apiUrl}/api/evaluation/${id}`, {
-      method: 'DELETE',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/evaluation/${id}`,
+      init: {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       },
+      refreshAccessToken,
+      logout,
     });
 
-    if (response.status === 401) {
-      const refreshed = await refreshAccessToken();
-      if (refreshed) {
-        return deleteStaffEvaluation({ id, refreshAccessToken, logout });
-      } else {
-        await logout();
-        throw new Error('Sesión expirada');
-      }
-    }
-
-    if (response.status === 403) {
-      if (logout) await logout();
-      throw new Error('Acceso denegado');
+    if (!response) {
+      throw new Error('Sesión expirada');
     }
 
     const data: ApiResponse = await response.json();

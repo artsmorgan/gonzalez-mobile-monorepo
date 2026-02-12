@@ -19,6 +19,7 @@ import * as Network from 'expo-network';
 import getHoraAccion from '../hooks/getHoraAccion';
 import { eventBus } from '@/hooks/eventBus';
 import updateServerTime, { setDisconnectedTime } from '@/hooks/updateServerTime';
+import authedFetch from '@/hooks/authedFetch';
 
 type LunchTimeScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'LunchTime'>;
 
@@ -393,23 +394,18 @@ export default function LunchTimeScreen() {
         if (!apiUrl) {
           throw new Error('Server URL not configured');
         }
-        let token = await AsyncStorage.getItem('access_token');
-        if (!token) {
-          const refreshed = await refreshAccessToken();
-          if (!refreshed) {
-            if (logout) await logout();
-            throw new Error('Sesión expirada');
-          }
-          token = await AsyncStorage.getItem('access_token');
-        }
-        const response = await fetch(`${apiUrl}/api/lunch-time/${current_marca_obj.id}`, {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-            'ngrok-skip-browser-warning': '69420',
+        const response = await authedFetch({
+          url: `${apiUrl}/api/lunch-time/${current_marca_obj.id}`,
+          init: {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+            },
           },
+          refreshAccessToken,
+          logout,
         });
+        if (!response) return;
 
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`);

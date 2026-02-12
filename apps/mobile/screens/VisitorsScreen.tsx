@@ -18,6 +18,7 @@ import { createVisitor as createVisitorAPI, updateVisitor as updateVisitorAPI, d
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import { eventBus } from '@/hooks/eventBus';
+import authedFetch from '@/hooks/authedFetch';
 
 type VisitorsScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Visitors'>;
 
@@ -271,39 +272,18 @@ export default function VisitorsScreen() {
     try {
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) throw new Error('Server URL not configured');
-
-      let token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (logout) await logout();
-          return;
-        }
-        token = await AsyncStorage.getItem('access_token');
-      }
-      if (!token) return;
-
-      const doRequest = async (tk: string) =>
-        fetch(`${apiUrl}/api/cambios-apps-modules?tabla=${encodeURIComponent(tabla)}&registro_id=${registroId}`, {
+      const resp = await authedFetch({
+        url: `${apiUrl}/api/cambios-apps-modules?tabla=${encodeURIComponent(tabla)}&registro_id=${registroId}`,
+        init: {
           method: 'GET',
           headers: {
-            Authorization: `Bearer ${tk}`,
             'Content-Type': 'application/json',
-            'ngrok-skip-browser-warning': '69420',
           },
-        });
-
-      let resp = await doRequest(token);
-      if (resp.status === 401) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (logout) await logout();
-          return;
-        }
-        const nextToken = await AsyncStorage.getItem('access_token');
-        if (!nextToken) return;
-        resp = await doRequest(nextToken);
-      }
+        },
+        refreshAccessToken,
+        logout,
+      });
+      if (!resp) return;
 
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok || !data.status) {
@@ -328,39 +308,18 @@ export default function VisitorsScreen() {
           throw new Error('Server URL not configured');
         }
 
-        let token = await AsyncStorage.getItem('access_token');
-        if (!token) {
-          const refreshed = await refreshAccessToken();
-          if (!refreshed) {
-            if (logout) await logout();
-            throw new Error('Sesión expirada');
-          }
-          token = await AsyncStorage.getItem('access_token');
-        }
-
-        const response = await fetch(`${apiUrl}/api/visitors/categories`, {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-            'ngrok-skip-browser-warning': '69420',
+        const response = await authedFetch({
+          url: `${apiUrl}/api/visitors/categories`,
+          init: {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+            },
           },
+          refreshAccessToken,
+          logout,
         });
-
-        if (response.status === 401) {
-          const refreshed = await refreshAccessToken();
-          if (refreshed) {
-            return fetchTipoActivos();
-          } else {
-            await logout();
-            return;
-          }
-        }
-
-        if (response.status === 403) {
-          if (logout) await logout();
-          throw new Error('Acceso denegado');
-        }
+        if (!response) return;
 
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`);
@@ -425,40 +384,18 @@ export default function VisitorsScreen() {
           throw new Error('Server URL not configured');
         }
 
-        let token = await AsyncStorage.getItem('access_token');
-        if (!token) {
-          const refreshed = await refreshAccessToken();
-          if (!refreshed) {
-            if (logout) await logout();
-            throw new Error('Sesión expirada');
-          }
-          token = await AsyncStorage.getItem('access_token');
-        }
-
-        const response = await fetch(`${apiUrl}/api/visitors?m=${marcaId}`, {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-            'ngrok-skip-browser-warning': '69420',
+        const response = await authedFetch({
+          url: `${apiUrl}/api/visitors?m=${marcaId}`,
+          init: {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+            },
           },
+          refreshAccessToken,
+          logout,
         });
-
-        if (response.status === 401) {
-          const refreshed = await refreshAccessToken();
-          if (refreshed) {
-            return fetchVisitors();
-          } else {
-            Alert.alert('16', 'Sesión expirada. Por favor inicie sesión nuevamente.');
-            await logout();
-            return;
-          }
-        }
-
-        if (response.status === 403) {
-          if (logout) await logout();
-          throw new Error('Acceso denegado');
-        }
+        if (!response) return;
 
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`);

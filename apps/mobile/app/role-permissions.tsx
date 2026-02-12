@@ -6,10 +6,10 @@ import AppHeader from '@/components/AppHeader';
 import AppFooter from '@/components/AppFooter';
 import SlideMenu from '@/components/SlideMenu';
 import { useAuth } from '@/contexts/AuthContext';
+import authedFetch from '@/hooks/authedFetch';
 import Constants from 'expo-constants';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 
 interface Action {
   nombre: string;
@@ -56,45 +56,28 @@ export default function RolePermissionsScreen() {
                 Alert.alert('Error', 'URL del servidor no configurada');
                 return;
             }
-            let token = await AsyncStorage.getItem('access_token');
-            
-            // Try to refresh token if we don't have one
-            if (!token) {
-                const refreshed = await refreshAccessToken();
-                if (!refreshed) {
-                    Alert.alert('Error', 'No hay token de autenticación válido');
-                    return;
-                }
-                token = await AsyncStorage.getItem('access_token');
-            }
 
-            const response = await fetch(`${apiUrl}/api/reglas/roles`, {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${token}`,
-                    'Content-Type': 'application/json',
-                    'ngrok-skip-browser-warning': '69420'
+            const response = await authedFetch({
+                url: `${apiUrl}/api/reglas/roles`,
+                init: {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        action: action,
+                        isActive: isActive,
+                        roleName: moduleName,
+                        moduleName: roleName
+                    })
                 },
-                body: JSON.stringify({
-                    action: action,
-                    isActive: isActive,
-                    roleName: moduleName,
-                    moduleName: roleName
-                })
+                refreshAccessToken,
+                logout,
             });
 
-            if (response.status === 401 || response.status === 403) {
-                // Token might be expired, try to refresh
-                const refreshed = await refreshAccessToken();
-                if (refreshed) {
-                    // Retry the request with the new token
-                    return updateAction(action, isActive, roleName, moduleName);
-                } else {
-                    // If refresh fails, logout the user
-                    await logout();
-                    Alert.alert('3', 'Sesión expirada. Por favor inicie sesión nuevamente.');
-                    return;
-                }
+            if (!response) {
+                Alert.alert('Sesión expirada', 'Por favor inicie sesión nuevamente.');
+                return;
             }
 
             if (!response.ok) {
@@ -124,34 +107,20 @@ export default function RolePermissionsScreen() {
         throw new Error('Server URL not configured');
       }
 
-      let token = await AsyncStorage.getItem('access_token');
-      
-      if (!token) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          throw new Error('No valid authentication token');
-        }
-        token = await AsyncStorage.getItem('access_token');
-      }
-
-      const response = await fetch(`${apiUrl}/api/roles/reglas?roleName=${roleName}`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': '69420'
+      const response = await authedFetch({
+        url: `${apiUrl}/api/roles/reglas?roleName=${roleName}`,
+        init: {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
         },
+        refreshAccessToken,
+        logout,
       });
 
-      if (response.status === 401 || response.status === 403) { 
-        const refreshed = await refreshAccessToken();
-        if (refreshed) {
-          return fetchRolePermissions();
-        } else {
-          // If refresh fails, logout the user
-          await logout();
-          throw new Error('Session expired. Please login again.');
-        }
+      if (!response) {
+        return;
       }
 
       if (!response.ok) {

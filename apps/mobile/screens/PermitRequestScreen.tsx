@@ -7,11 +7,15 @@ import {
   Alert,
   ActivityIndicator,
   Platform,
+  Dimensions,
+  Modal,
+  View,
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Picker } from '@react-native-picker/picker';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
+import { formatDateDMY } from '@/utils/formatDate';
 import { useAuth } from '@/contexts/AuthContext';
 import AppHeader from '@/components/AppHeader';
 import AppFooter from '@/components/AppFooter';
@@ -34,6 +38,7 @@ import {
 } from '@/hooks/evaluationFunctions';
 import { eventBus } from '@/hooks/eventBus';
 import getHoraAccion from '@/hooks/getHoraAccion';
+import authedFetch from '@/hooks/authedFetch';
 
 type PermitRequestScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'PermitRequest'>;
 
@@ -109,6 +114,12 @@ export default function PermitRequestScreen() {
   const [error, setError] = useState<string | null>(null);
   const [hasCurrentMarca, setHasCurrentMarca] = useState<boolean>(false);
 
+  // Modal: ver cambios (auditoría)
+  const [isCambiosModalVisible, setIsCambiosModalVisible] = useState(false);
+  const [cambiosTitle, setCambiosTitle] = useState<string>('Cambios');
+  const [cambiosItems, setCambiosItems] = useState<any[]>([]);
+  const [expandedCambioId, setExpandedCambioId] = useState<number | null>(null);
+
   // Editing state
   const [editingRecord, setEditingRecord] = useState<EditingPermitRequest | null>(null);
   const [isCreating, setIsCreating] = useState(false);
@@ -147,15 +158,106 @@ export default function PermitRequestScreen() {
     return networkState.isConnected && networkState.isInternetReachable ? true : false;
   };
 
+  const closeCambiosModal = () => {
+    setIsCambiosModalVisible(false);
+    setCambiosItems([]);
+    setExpandedCambioId(null);
+  };
+
+  const formatCambioCreatedAt = (value: any) => {
+    if (!value) return '-';
+    try {
+      const date = new Date(value);
+      return date.toLocaleString('es-CR', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true,
+      });
+    } catch {
+      return String(value);
+    }
+  };
+
+  const formatChangeValue = (value: any): string => {
+    if (value === null || value === undefined) return 'N/A';
+    if (typeof value === 'boolean') return value ? 'Sí' : 'No';
+    if (typeof value === 'object') {
+      return JSON.stringify(value, null, 2);
+    }
+    if (typeof value === 'string') {
+      if (value.trim().startsWith('{') || value.trim().startsWith('[')) {
+        try {
+          const parsed = JSON.parse(value);
+          if (Array.isArray(parsed)) {
+            return parsed.map((item, idx) => {
+              if (typeof item === 'object' && item !== null) {
+                return `Item ${idx + 1}: ${JSON.stringify(item, null, 2)}`;
+              }
+              return String(item);
+            }).join('\n');
+          }
+          if (typeof parsed === 'object') {
+            return JSON.stringify(parsed, null, 2);
+          }
+        } catch {
+          // Not valid JSON, return as string
+        }
+      }
+      return value;
+    }
+    return String(value);
+  };
+
+  const fetchCambios = useCallback(async (tabla: string, registroId: number) => {
+    const isConnected = await getConnectionStatus();
+    if (!isConnected) {
+      Alert.alert('Sin conexión', 'Esta función solo está disponible con conexión a internet.');
+      return;
+    }
+    try {
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) throw new Error('Server URL not configured');
+
+      const resp = await authedFetch({
+        url: `${apiUrl}/api/cambios-apps-modules?tabla=${encodeURIComponent(tabla)}&registro_id=${registroId}`,
+        init: {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json' },
+        },
+        refreshAccessToken,
+        logout,
+      });
+      if (!resp) return;
+
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data.status) {
+        throw new Error(data.message || 'No se pudieron cargar los cambios');
+      }
+      setCambiosItems(Array.isArray(data.data) ? data.data : []);
+      setIsCambiosModalVisible(true);
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'No se pudieron cargar los cambios');
+    }
+  }, [refreshAccessToken, logout]);
+
   const generateRandomId = (): string => {
     return `local-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
   };
 
   const formatDate = (date: Date): string => {
-    const day = date.getDate().toString().padStart(2, '0');
-    const month = (date.getMonth() + 1).toString().padStart(2, '0');
     const year = date.getFullYear();
-    return `${day}/${month}/${year}`;
+    const month = (date.getMonth() + 1).toString().padStart(2, '0');
+    const day = date.getDate().toString().padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  const formatDateForDisplay = (date: Date): string => {
+    const [year, month, day] = formatDate(date).split('-');
+    return `${day}-${month}-${year}`;
   };
 
   const parseDateStringToDate = (value: string): Date | null => {
@@ -197,40 +299,18 @@ export default function PermitRequestScreen() {
 
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) return undefined;
-
-      let token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (logout) await logout();
-          throw new Error('Sesión expirada');
-        }
-        token = await AsyncStorage.getItem('access_token');
-      }
-
-      const resp = await fetch(`${apiUrl}/api/empleados/${empleadoId}`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': '69420',
+      const resp = await authedFetch({
+        url: `${apiUrl}/api/empleados/${empleadoId}`,
+        init: {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json' },
         },
+        refreshAccessToken,
+        logout,
       });
-
-      if (resp.status === 401) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) return fetchEmpleadoDetalleIfPossible(empleadoId);
-        await logout();
-        return undefined;
-      }
-
-      if (resp.status === 403) {
-        if (logout) await logout();
-        throw new Error('Acceso denegado');
-      }
-
+      if (!resp) return undefined;
       if (!resp.ok) return undefined;
-      const data = await resp.json();
+      const data = await resp.json().catch(() => ({}));
       return {
         nombre: data.nombre,
         primer_apellido: data.primer_apellido,
@@ -379,44 +459,25 @@ export default function PermitRequestScreen() {
         if (isConnected) {
           const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
           if (apiUrl) {
-            let token = await AsyncStorage.getItem('access_token');
-            if (!token) {
-              const refreshed = await refreshAccessToken();
-              if (!refreshed) {
-                if (logout) await logout();
-                throw new Error('Sesión expirada');
-              }
-              token = await AsyncStorage.getItem('access_token');
-            }
-
-            if (token) {
-              const resp = await fetch(`${apiUrl}/api/empleados/corpo/${corpoId}`, {
+            const resp = await authedFetch({
+              url: `${apiUrl}/api/empleados/corpo/${corpoId}`,
+              init: {
                 method: 'GET',
                 headers: {
-                  'Authorization': `Bearer ${token}`,
                   'Content-Type': 'application/json',
-                  'ngrok-skip-browser-warning': '69420',
                 },
-              });
+              },
+              refreshAccessToken,
+              logout,
+            });
 
-              if (resp.status === 401) {
-                const refreshed = await refreshAccessToken();
-                if (refreshed) return fetchPermits();
-                await logout();
-                return;
-              }
+            if (!resp) return;
 
-              if (resp.status === 403) {
-                if (logout) await logout();
-                throw new Error('Acceso denegado');
-              }
-
-              if (resp.ok) {
-                const json = await resp.json();
-                const empleados: CorpoEmpleado[] = Array.isArray(json.empleados) ? json.empleados : [];
-                setEmpleadosCorpo(empleados);
-                await AsyncStorage.setItem(cacheKey, JSON.stringify(empleados));
-              }
+            if (resp.ok) {
+              const json = await resp.json().catch(() => ({}));
+              const empleados: CorpoEmpleado[] = Array.isArray(json.empleados) ? json.empleados : [];
+              setEmpleadosCorpo(empleados);
+              await AsyncStorage.setItem(cacheKey, JSON.stringify(empleados));
             }
           }
         } else {
@@ -954,7 +1015,7 @@ export default function PermitRequestScreen() {
                   Divisón: {record.division ? `${record.division}` : ''}
                 </ThemedText>
                 <ThemedText style={styles.listItemSubtitle}>
-                  Fecha: {record.fecha_solicitud ? record.fecha_solicitud.split('T')[0] : 'N/A'}
+                  Fecha: {formatDateDMY(record.fecha_solicitud)}
                 </ThemedText>
               </ThemedView>
             </ThemedView>
@@ -968,6 +1029,18 @@ export default function PermitRequestScreen() {
                   {getActionIcon('edit')}
                   <ThemedText style={styles.listItemButtonText}>Editar</ThemedText>
                 </TouchableOpacity>
+                {!(record.id_local || String(record.id).startsWith('local-') || String(record.id) === '0') && (
+                  <TouchableOpacity
+                    style={[styles.listItemButton, styles.changesButton]}
+                    onPress={() => {
+                      setCambiosTitle(`Cambios - Solicitud #${record.id}`);
+                      fetchCambios('c_solicitud_permiso', Number(record.id));
+                    }}
+                  >
+                    <Ionicons name="list-outline" size={20} color="#FFFFFF" />
+                    <ThemedText style={styles.listItemButtonText}>Cambios</ThemedText>
+                  </TouchableOpacity>
+                )}
                 <TouchableOpacity
                   style={[styles.listItemButton, styles.deleteButton]}
                   onPress={() => deletePermitHandler(record)}
@@ -1115,7 +1188,7 @@ export default function PermitRequestScreen() {
                   onPress={() => setShowDatePicker(true)}
                 >
                   <ThemedText style={styles.dateButtonText}>
-                    {formatDate(fechaSolicitud)}
+                    {formatDateForDisplay(fechaSolicitud)}
                   </ThemedText>
                   <Ionicons name="calendar" size={20} color="#007AFF" />
                 </TouchableOpacity>
@@ -1394,15 +1467,99 @@ export default function PermitRequestScreen() {
             </ThemedView>
           ) : (
             <ThemedView style={styles.listSection}>
-              <TouchableOpacity style={styles.createButton} onPress={startCreating}>
-                <Ionicons name="add" size={24} color="#FFFFFF" />
-                <ThemedText style={styles.createButtonText}>Nueva Solicitud</ThemedText>
-              </TouchableOpacity>
+              {!isLoading && (
+                <TouchableOpacity style={styles.createButton} onPress={startCreating}>
+                  <Ionicons name="add" size={24} color="#FFFFFF" />
+                  <ThemedText style={styles.createButtonText}>Nueva Solicitud</ThemedText>
+                </TouchableOpacity>
+              )}
               {renderPermitList()}
             </ThemedView>
           )}
         </ThemedView>
       </ScrollView>
+
+      {/* Modal: ver cambios */}
+      <Modal
+        visible={isCambiosModalVisible}
+        animationType="fade"
+        transparent
+        presentationStyle="overFullScreen"
+        onRequestClose={closeCambiosModal}
+      >
+        <View style={styles.overlay}>
+          <ThemedView style={styles.floatModalCardMovimientos}>
+            <ThemedView style={styles.floatModalHeader}>
+              <ThemedText style={styles.modalTitle}>{cambiosTitle}</ThemedText>
+              <TouchableOpacity onPress={closeCambiosModal}>
+                <Ionicons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+            </ThemedView>
+
+            <ScrollView style={{ maxHeight: Dimensions.get('window').height * 0.75 }} contentContainerStyle={{ padding: 16 }}>
+              {(!cambiosItems || cambiosItems.length === 0) ? (
+                <ThemedView style={styles.emptyContainer}>
+                  <ThemedText style={styles.emptyText}>No hay cambios registrados</ThemedText>
+                </ThemedView>
+              ) : (
+                cambiosItems.map((row: any) => {
+                  let parsed: any[] = [];
+                  try {
+                    parsed = row?.cambios ? JSON.parse(row.cambios) : [];
+                  } catch {
+                    parsed = [];
+                  }
+                  const createdAtLabel = formatCambioCreatedAt(row?.created_at);
+                  const isOpen = expandedCambioId === row.id;
+
+                  return (
+                    <ThemedView key={`chg-${row.id}`} style={styles.cambioCollapsableMain}>
+                      <TouchableOpacity
+                        style={styles.cambioCollapsableHeader}
+                        onPress={() => setExpandedCambioId((prev) => (prev === row.id ? null : row.id))}
+                        activeOpacity={0.8}
+                      >
+                        <ThemedText style={styles.cambioCollapsableTitle}>
+                          {createdAtLabel}
+                        </ThemedText>
+                        <Ionicons
+                          name={isOpen ? "chevron-up" : "chevron-down"}
+                          size={18}
+                          color="#007AFF"
+                        />
+                      </TouchableOpacity>
+
+                      {isOpen && (
+                        <ThemedView style={styles.cambioCollapsableContent}>
+                          <ThemedView style={styles.filterGroupSearch}>
+                            <ThemedText style={styles.filterLabel}>Cambio realizado por:</ThemedText>
+                            <ThemedText style={styles.changeDescription}>
+                              {row.empleado_nombre || 'Desconocido'}
+                              {row.empleado_cedula ? ` - Cédula: ${row.empleado_cedula}` : ''}
+                            </ThemedText>
+                          </ThemedView>
+
+                          {(Array.isArray(parsed) ? parsed : []).length > 0 && (
+                            <ThemedView style={styles.filterGroupSearch}>
+                              <ThemedText style={styles.filterLabel}>Cambios:</ThemedText>
+                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => (
+                                <ThemedText key={`c-${row.id}-${idx}`} style={styles.changeDescription}>
+                                  <ThemedText style={{ fontWeight: '800' }}>{String(c?.prop ?? '-')}: </ThemedText>
+                                  {formatChangeValue(c?.after)}
+                                </ThemedText>
+                              ))}
+                            </ThemedView>
+                          )}
+                        </ThemedView>
+                      )}
+                    </ThemedView>
+                  );
+                })
+              )}
+            </ScrollView>
+          </ThemedView>
+        </View>
+      </Modal>
 
       <AppFooter />
       <SlideMenu
@@ -1707,6 +1864,7 @@ const styles = StyleSheet.create({
   editButton: {
     backgroundColor: '#007AFF',
   },
+  changesButton: { backgroundColor: '#5856D6', flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 12, borderRadius: 8, gap: 8 },
   deleteButton: {
     backgroundColor: '#FF3B30',
   },
@@ -1751,5 +1909,16 @@ const styles = StyleSheet.create({
     color: '#666',
     textAlign: 'center',
   },
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 },
+  floatModalCardMovimientos: { backgroundColor: '#FFFFFF', borderRadius: 12, width: '100%', maxWidth: 500, maxHeight: '80%', borderWidth: 1, borderColor: '#E0E0E0', overflow: 'hidden' },
+  floatModalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#E0E0E0' },
+  modalTitle: { fontSize: 16, fontWeight: '800', color: '#000' },
+  cambioCollapsableMain: { width: '100%', marginBottom: 10, backgroundColor: '#fff', borderRadius: 6, borderWidth: 1, borderColor: '#E0E0E0', overflow: 'hidden' },
+  cambioCollapsableHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, backgroundColor: '#F8F9FA' },
+  cambioCollapsableTitle: { fontSize: 14, fontWeight: '600', color: '#007AFF', flex: 1 },
+  cambioCollapsableContent: { padding: 12, gap: 8, backgroundColor: '#F8F9FA' },
+  changeDescription: { fontSize: 14, lineHeight: 20, color: '#666', marginBottom: 8 },
+  filterGroupSearch: { marginBottom: 12 },
+  filterLabel: { fontSize: 14, fontWeight: '600', color: '#333', marginBottom: 4 },
 });
 

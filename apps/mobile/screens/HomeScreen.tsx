@@ -49,36 +49,14 @@ export default function HomeScreen() {
   }, [isAuthenticated, isLoading, navigation]);
 
   const getCurrentUserStatus = async () => {
-    /*const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-    if (!apiUrl) {
-      throw new Error('Server URL not configured');
-    }
-    const token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-      throw new Error('No authentication token found');
-    }
-    const response = await fetch(`${apiUrl}/api/auth/${employee?.id}/current-company`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
-      },
-    });
-    if(!response.ok) {
-      throw new Error('Error al obtener el estado del usuario');
-    }
-    const responseData = await response.json();
-    console.log(responseData);*/
-
     const current_marca = await AsyncStorage.getItem('current_marca');
-    if(!current_marca) {
+    if (!current_marca) {
       setCurrentCompany(null);
       return;
     }
     const current_marca_data = JSON.parse(current_marca);
 
-    switch(current_marca_data.empresa.id) {
+    switch (current_marca_data.empresa.id) {
       case 9:
         setCurrentCompany('gonzalez');
         break;
@@ -174,7 +152,7 @@ export default function HomeScreen() {
   const handleVoiceNotesPress = () => {
     navigation.navigate('VoiceNotes');
   };
-  
+
   const getActionIcon = (action: string, isActive: boolean) => {
     switch (action.toLowerCase()) {
       case 'profile': return <Ionicons name="person" size={30} color='#000000' />;
@@ -227,29 +205,29 @@ export default function HomeScreen() {
     "enero", "febrero", "marzo", "abril", "mayo", "junio",
     "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"
   ];
-  
+
   const formatDate = (dateString: string) => {
     try {
       // Convierte el string a número
       const timestamp = Number(dateString);
-  
+
       // Si no es un número válido, lanza error
       if (isNaN(timestamp)) throw new Error("Invalid timestamp");
-  
+
       // Crea el objeto Date
       const date = new Date(timestamp);
-  
+
       // Obtiene hora y minutos en horario local
       let hours = date.getHours();
       const minutes = date.getMinutes();
-  
+
       // AM / PM
       const ampm = hours >= 12 ? "pm" : "am";
       hours = hours % 12 || 12;
-  
+
       // Formato final
       const formatted = `${hours}:${minutes.toString().padStart(2, "0")} ${ampm}`;
-  
+
       return `${date.getDate()} de ${monthNames[date.getMonth()]} de ${date.getFullYear()}, ${formatted}`;
     } catch (error) {
       return dateString;
@@ -264,59 +242,59 @@ export default function HomeScreen() {
         <ThemedView style={styles.container}>
           {/* Welcome message at the top */}
           <ThemedView style={styles.welcomeContainer}>
-          <ThemedText type="title" style={styles.welcomeText}>
-            Bienvenido a la aplicación de Gonzalez
-          </ThemedText>
-          {employee && (
-            <ThemedText style={styles.userText}>
-              ¡Hola, {employee.name}!
+            <ThemedText type="title" style={styles.welcomeText}>
+              Bienvenido a la aplicación de Gonzalez
             </ThemedText>
+            {employee && (
+              <ThemedText style={styles.userText}>
+                ¡Hola, {employee.name}!
+              </ThemedText>
+            )}
+          </ThemedView>
+
+          {/* Logo */}
+          {currentCompany && COMPANY_LOGOS[currentCompany] && (
+            <ThemedView style={styles.logoContainer}>
+              <Image
+                source={COMPANY_LOGOS[currentCompany]}
+                style={styles.logo}
+                resizeMode="contain"
+              />
+            </ThemedView>
           )}
-        </ThemedView>
 
-        {/* Logo */}
-        {currentCompany && COMPANY_LOGOS[currentCompany] && (
-        <ThemedView style={styles.logoContainer}>
-          <Image 
-            source={COMPANY_LOGOS[currentCompany]} 
-            style={styles.logo}
-            resizeMode="contain"
-          />
-        </ThemedView>
-        )}
+          {/* Quick access buttons */}
+          <ThemedView style={styles.quickAccessContainer}>
+            <ThemedText type="subtitle" style={styles.sectionTitle}>
+              Accesos Directos
+            </ThemedText>
 
-        {/* Quick access buttons */}
-        <ThemedView style={styles.quickAccessContainer}>
-          <ThemedText type="subtitle" style={styles.sectionTitle}>
-            Accesos Directos
-          </ThemedText>
+            <View style={styles.buttonsRow}>
+              <TouchableOpacity
+                style={styles.quickAccessButton}
+                onPress={handleMarcarIngresoSalidaPress}
+              >
+                {getActionIcon('marcar-ingreso-salida', true)}
+                <ThemedText style={styles.buttonText}>Marca</ThemedText>
+              </TouchableOpacity>
 
-          <View style={styles.buttonsRow}>
-            <TouchableOpacity 
-              style={styles.quickAccessButton} 
-              onPress={handleMarcarIngresoSalidaPress}
-            >
-              {getActionIcon('marcar-ingreso-salida', true)}
-              <ThemedText style={styles.buttonText}>Marca</ThemedText>
-            </TouchableOpacity>
+            </View>
 
-          </View>
 
-  
-          <View style={styles.buttonsRow}>
-            <TouchableOpacity 
-              style={[styles.quickAccessButton, styles.scanButton]} 
-              onPress={handleScanQRPress}
-            >
-              {getActionIcon('scan-qr', true)}
-              <ThemedText style={styles.buttonText}>Escanear Firma</ThemedText>
-            </TouchableOpacity>
-          </View>
-        </ThemedView>
+            <View style={styles.buttonsRow}>
+              <TouchableOpacity
+                style={[styles.quickAccessButton, styles.scanButton]}
+                onPress={handleScanQRPress}
+              >
+                {getActionIcon('scan-qr', true)}
+                <ThemedText style={styles.buttonText}>Escanear Firma</ThemedText>
+              </TouchableOpacity>
+            </View>
+          </ThemedView>
         </ThemedView>
       </ScrollView>
-      <SlideMenu 
-        isVisible={isMenuVisible} 
+      <SlideMenu
+        isVisible={isMenuVisible}
         onClose={handleMenuClose}
         onHomePress={handleHomePress}
       />

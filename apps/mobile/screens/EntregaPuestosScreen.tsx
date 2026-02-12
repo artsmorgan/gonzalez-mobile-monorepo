@@ -19,6 +19,7 @@ import SignatureScreen from "react-native-signature-canvas";
 import { useQRScanner } from '@/hooks/useQRScanner';
 import { jwtDecode } from 'jwt-decode';
 import getHoraAccion from '@/hooks/getHoraAccion';
+import authedFetch from '@/hooks/authedFetch';
 
 type EntregaPuestosScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'EntregaPuestos'>;
 
@@ -193,7 +194,7 @@ export default function EntregaPuestosScreen() {
     const year = d.getFullYear();
     const month = String(d.getMonth() + 1).padStart(2, '0');
     const day = String(d.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
+    return `${day}-${month}-${year}`;
   };
 
   const formatTime = (time: string | Date): string => {
@@ -248,43 +249,18 @@ export default function EntregaPuestosScreen() {
       if (!apiUrl) {
         throw new Error('Server URL not configured');
       }
-
-      let token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          setError('No se pudo autenticar');
-          setIsLoading(false);
-          if (logout) await logout();
-          throw new Error('Sesión expirada');
-          return;
-        }
-        token = await AsyncStorage.getItem('access_token');
-      }
-
-      const response = await fetch(`${apiUrl}/api/entrega-puestos?m=${currentMarcaData.id}`, {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': '69420',
+      const response = await authedFetch({
+        url: `${apiUrl}/api/entrega-puestos?m=${currentMarcaData.id}`,
+        init: {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
         },
+        refreshAccessToken,
+        logout,
       });
-
-      if (response.status === 401) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) {
-          return loadData();
-        } else {
-          await logout();
-          return;
-        }
-      }
-
-      if (response.status === 403) {
-        if (logout) await logout();
-        throw new Error('Acceso denegado');
-      }
+      if (!response) return;
 
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
@@ -499,41 +475,19 @@ export default function EntregaPuestosScreen() {
                 if (!apiUrl) {
                   throw new Error('Server URL not configured');
                 }
-
-                let token = await AsyncStorage.getItem('access_token');
-                if (!token) {
-                  const refreshed = await refreshAccessToken();
-                  if (!refreshed) {
-                    if (logout) await logout();
-                    throw new Error('Sesión expirada');
-                  }
-                  token = await AsyncStorage.getItem('access_token');
-                }
-
-                const response = await fetch(`${apiUrl}/api/entrega-puestos`, {
-                  method: 'POST',
-                  headers: {
-                    Authorization: `Bearer ${token}`,
-                    'Content-Type': 'application/json',
-                    'ngrok-skip-browser-warning': '69420',
+                const response = await authedFetch({
+                  url: `${apiUrl}/api/entrega-puestos`,
+                  init: {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(requestData),
                   },
-                  body: JSON.stringify(requestData),
+                  refreshAccessToken,
+                  logout,
                 });
-
-                if (response.status === 401) {
-                  const refreshed = await refreshAccessToken();
-                  if (refreshed) {
-                    return handleSave();
-                  } else {
-                    await logout();
-                    return;
-                  }
-                }
-
-                if (response.status === 403) {
-                  if (logout) await logout();
-                  throw new Error('Acceso denegado');
-                }
+                if (!response) return;
 
                 if (!response.ok) {
                   const errorData = await response.json();
@@ -647,6 +601,63 @@ export default function EntregaPuestosScreen() {
   const horaEntradaRecibe = formatTime(currentMarca.hora_inicio);
   const horaSalidaRecibe = formatTime(currentMarca.hora_fin);
 
+  const getTurnoLabel = (tipoTurno?: string): string => {
+    switch ((tipoTurno || '').toUpperCase()) {
+      case 'D':
+        return 'Diurno';
+      case 'N':
+        return 'Nocturno';
+      case 'M':
+        return 'Mixto';
+      default:
+        return tipoTurno || 'No definido';
+    }
+  };
+
+  const formatDateTimeValue = (fecha: string, hora: string): string => {
+    if (!fecha && !hora) return 'No definido';
+    if (!fecha) return hora;
+    if (!hora) return fecha;
+    return `${fecha} ${hora.split('T')[1]}`;
+  };
+
+  const dataLecturaEntrega = [
+    { label: 'Cliente', value: currentMarca.cliente.nombre },
+    { label: 'Sucursal', value: currentMarca.corpo.nombre },
+    { label: 'Puesto', value: currentMarca.puesto.nombre },
+    { label: 'Oficial', value: info.previous_employee.nombre },
+    { label: 'Entrada', value: formatDateTimeValue(fechaEntradaEntrega, horaEntradaEntrega) },
+    { label: 'Salida', value: formatDateTimeValue(fechaSalidaEntrega, horaSalidaEntrega) },
+    { label: 'Turno', value: getTurnoLabel(info.previous_marca.tipo_turno) },
+  ];
+
+  const dataLecturaRecibe = [
+    { label: 'Cliente', value: currentMarca.cliente.nombre },
+    { label: 'Sucursal', value: currentMarca.corpo.nombre },
+    { label: 'Puesto', value: currentMarca.puesto.nombre },
+    { label: 'Oficial', value: employee?.name || 'Desconocido' },
+    { label: 'Entrada', value: formatDateTimeValue(fechaEntradaRecibe, horaEntradaRecibe) },
+    { label: 'Salida', value: formatDateTimeValue(fechaSalidaRecibe, horaSalidaRecibe) },
+    { label: 'Turno', value: getTurnoLabel(currentMarca.tipo_turno) },
+  ];
+
+  const renderLecturaCard = (title: string, iconName: 'arrow-up-circle-outline' | 'arrow-down-circle-outline', data: Array<{ label: string; value: string }>) => (
+    <ThemedView style={styles.readingCard}>
+      <ThemedView style={styles.readingCardHeader}>
+        <Ionicons name={iconName} size={18} color="#007AFF" />
+        <ThemedText style={styles.readingCardTitle}>{title}</ThemedText>
+      </ThemedView>
+      <ThemedView style={styles.readingCardDetails}>
+        {data.map((item) => (
+          <ThemedView key={`${title}-${item.label}`} style={styles.readingCardRow}>
+            <ThemedText style={styles.readingCardLabel}>{item.label}</ThemedText>
+            <ThemedText style={styles.readingCardValue}>{item.value || 'No definido'}</ThemedText>
+          </ThemedView>
+        ))}
+      </ThemedView>
+    </ThemedView>
+  );
+
   return (
     <ThemedView style={styles.container}>
       <AppHeader onMenuPress={() => setIsMenuVisible(true)} title="Entrega de Puestos" />
@@ -668,74 +679,18 @@ export default function EntregaPuestosScreen() {
 
             {/* Sección de datos informativos */}
             <ThemedView style={styles.infoSection}>
-              <ThemedText style={styles.sectionTitle}>Datos de Entrega</ThemedText>
-              <ThemedView style={styles.infoRow}>
-                <ThemedText style={styles.infoLabel}>Cliente:</ThemedText>
-                <ThemedText style={styles.infoValue}>{currentMarca.cliente.nombre}</ThemedText>
-              </ThemedView>
-              <ThemedView style={styles.infoRow}>
-                <ThemedText style={styles.infoLabel}>Sucursal:</ThemedText>
-                <ThemedText style={styles.infoValue}>{currentMarca.corpo.nombre}</ThemedText>
-              </ThemedView>
-              <ThemedView style={styles.infoRow}>
-                <ThemedText style={styles.infoLabel}>Puesto:</ThemedText>
-                <ThemedText style={styles.infoValue}>{currentMarca.puesto.nombre}</ThemedText>
-              </ThemedView>
-              <ThemedView style={styles.infoRow}>
-                <ThemedText style={styles.infoLabel}>Oficial Entrega:</ThemedText>
-                <ThemedText style={styles.infoValue}>{info.previous_employee.nombre}</ThemedText>
-              </ThemedView>
-              <ThemedView style={styles.infoRow}>
-                <ThemedText style={styles.infoLabel}>Fecha Entrada Entrega:</ThemedText>
-                <ThemedText style={styles.infoValue}>{fechaEntradaEntrega}</ThemedText>
-              </ThemedView>
-              <ThemedView style={styles.infoRow}>
-                <ThemedText style={styles.infoLabel}>Fecha Salida Entrega:</ThemedText>
-                <ThemedText style={styles.infoValue}>{fechaSalidaEntrega}</ThemedText>
-              </ThemedView>
-              <ThemedView style={styles.infoRow}>
-                <ThemedText style={styles.infoLabel}>Hora Entrada Entrega:</ThemedText>
-                <ThemedText style={styles.infoValue}>{horaEntradaEntrega.split("T")[1].split(".")[0]}</ThemedText>
-              </ThemedView>
-              <ThemedView style={styles.infoRow}>
-                <ThemedText style={styles.infoLabel}>Hora Salida Entrega:</ThemedText>
-                <ThemedText style={styles.infoValue}>{horaSalidaEntrega.split("T")[1].split(".")[0]}</ThemedText>
-              </ThemedView>
-              <ThemedView style={styles.infoRow}>
-                <ThemedText style={styles.infoLabel}>Turno Entrega:</ThemedText>
-                <ThemedText style={styles.infoValue}>{info.previous_marca.tipo_turno}</ThemedText>
-              </ThemedView>
-              <ThemedView style={styles.infoRow}>
-                <ThemedText style={styles.infoLabel}>Oficial Recibe:</ThemedText>
-                <ThemedText style={styles.infoValue}>{employee?.name || 'Desconocido'}</ThemedText>
-              </ThemedView>
-              <ThemedView style={styles.infoRow}>
-                <ThemedText style={styles.infoLabel}>Fecha Entrada Recibe:</ThemedText>
-                <ThemedText style={styles.infoValue}>{fechaEntradaRecibe}</ThemedText>
-              </ThemedView>
-              <ThemedView style={styles.infoRow}>
-                <ThemedText style={styles.infoLabel}>Fecha Salida Recibe:</ThemedText>
-                <ThemedText style={styles.infoValue}>{fechaSalidaRecibe}</ThemedText>
-              </ThemedView>
-              <ThemedView style={styles.infoRow}>
-                <ThemedText style={styles.infoLabel}>Hora Entrada Recibe:</ThemedText>
-                <ThemedText style={styles.infoValue}>{horaEntradaRecibe.split("T")[1].split(".")[0]}</ThemedText>
-              </ThemedView>
-              <ThemedView style={styles.infoRow}>
-                <ThemedText style={styles.infoLabel}>Hora Salida Recibe:</ThemedText>
-                <ThemedText style={styles.infoValue}>{horaSalidaRecibe.split("T")[1].split(".")[0]}</ThemedText>
-              </ThemedView>
-              <ThemedView style={styles.infoRow}>
-                <ThemedText style={styles.infoLabel}>Turno Recibe:</ThemedText>
-                <ThemedText style={styles.infoValue}>{currentMarca.tipo_turno}</ThemedText>
+              <ThemedText style={styles.sectionTitle}>Datos de Lectura</ThemedText>
+              <ThemedView style={styles.readingCardsContainer}>
+                {renderLecturaCard('Entrega', 'arrow-up-circle-outline', dataLecturaEntrega)}
+                {renderLecturaCard('Recibe', 'arrow-down-circle-outline', dataLecturaRecibe)}
               </ThemedView>
             </ThemedView>
 
             {/* Sección de incidentes */}
-            {info.incidentes.length > 0 && (
-              <ThemedView style={styles.infoSection}>
-                <ThemedText style={styles.sectionTitle}>Incidentes</ThemedText>
-                {info.incidentes.map((incidente) => (
+            <ThemedView style={styles.infoSection}>
+              <ThemedText style={styles.sectionTitle}>Incidentes</ThemedText>
+              {info.incidentes.length > 0 ? (
+                info.incidentes.map((incidente) => (
                   <ThemedView key={incidente.id} style={styles.bitacoraCard}>
                     <ThemedText style={styles.bitTitle}>ID: {incidente.id}</ThemedText>
                     <ThemedText style={styles.bitLine}>
@@ -759,15 +714,17 @@ export default function EntregaPuestosScreen() {
                       <ThemedText style={styles.bitValue}>{incidente.responsable}</ThemedText>
                     </ThemedText>
                   </ThemedView>
-                ))}
-              </ThemedView>
-            )}
+                ))
+              ) : (
+                <ThemedText style={styles.emptySectionText}>No hay incidentes para mostrar.</ThemedText>
+              )}
+            </ThemedView>
 
             {/* Sección de notas */}
-            {info.notas.length > 0 && (
-              <ThemedView style={styles.infoSection}>
-                <ThemedText style={styles.sectionTitle}>Notas</ThemedText>
-                {info.notas.map((nota) => (
+            <ThemedView style={styles.infoSection}>
+              <ThemedText style={styles.sectionTitle}>Novedades</ThemedText>
+              {info.notas.length > 0 ? (
+                info.notas.map((nota) => (
                   <ThemedView key={nota.id} style={styles.bitacoraCard}>
                     <ThemedText style={styles.bitTitle}>{nota.titulo}</ThemedText>
                     <ThemedText style={styles.bitLine}>
@@ -788,14 +745,16 @@ export default function EntregaPuestosScreen() {
                       <ThemedText style={styles.bitValue}>{new Date(nota.updated_at).toLocaleString()}</ThemedText>
                     </ThemedText>
                   </ThemedView>
-                ))}
-              </ThemedView>
-            )}
+                ))
+              ) : (
+                <ThemedText style={styles.emptySectionText}>No hay novedades para mostrar.</ThemedText>
+              )}
+            </ThemedView>
 
             {/* Sección de artículos */}
-            {articulos.length > 0 && (
-              <ThemedView style={styles.infoSection}>
-                <ThemedText style={styles.sectionTitle}>Artículos</ThemedText>
+            <ThemedView style={styles.infoSection}>
+              <ThemedText style={styles.sectionTitle}>Artículos</ThemedText>
+              {articulos.length > 0 ? (
                 <View style={styles.tableWrapper}>
                   {/* Columna fija: Artículo */}
                   <View style={styles.tableFixedColumn}>
@@ -827,9 +786,6 @@ export default function EntregaPuestosScreen() {
                       {/* Encabezados de la tabla */}
                       <View style={styles.tableHeader}>
                         <View style={styles.tableHeaderCell}>
-                          <ThemedText style={styles.tableHeaderText}>Tipo</ThemedText>
-                        </View>
-                        <View style={styles.tableHeaderCell}>
                           <ThemedText style={styles.tableHeaderText}>Estado</ThemedText>
                         </View>
                         <View style={styles.tableHeaderCell}>
@@ -845,11 +801,6 @@ export default function EntregaPuestosScreen() {
                       {/* Filas de datos */}
                       {articulos.map((articulo, index) => (
                         <View key={articulo.id} style={styles.tableRow}>
-                          <View style={styles.tableCell}>
-                            <ThemedText style={styles.tableCellText}>
-                              {articulo.tipo || '-'}
-                            </ThemedText>
-                          </View>
                           <View style={styles.tableCell}>
                             <View style={styles.pickerContainerTable}>
                               <Picker
@@ -897,8 +848,10 @@ export default function EntregaPuestosScreen() {
                     </View>
                   </ScrollView>
                 </View>
-              </ThemedView>
-            )}
+              ) : (
+                <ThemedText style={styles.emptySectionText}>No hay artículos para mostrar.</ThemedText>
+              )}
+            </ThemedView>
 
             {/* Observaciones */}
             <ThemedText style={styles.label}>Observaciones</ThemedText>
@@ -1072,18 +1025,57 @@ const styles = StyleSheet.create({
     borderBottomColor: '#E0E0E0',
   },
   sectionTitle: { marginTop: 14, fontSize: 15, fontWeight: '800', color: '#007AFF', marginBottom: 10 },
-  infoRow: {
+  readingCardsContainer: {
+    marginTop: 8,
+    gap: 12,
+  },
+  readingCard: {
+    width: '100%',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    backgroundColor: '#FFFFFF',
+    padding: 12,
+  },
+  readingCardHeader: {
     flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
     marginBottom: 8,
   },
-  infoLabel: {
-    fontWeight: '700',
-    width: 150,
-    color: '#333',
+  readingCardTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#000000',
   },
-  infoValue: {
-    flex: 1,
-    color: '#000',
+  readingCardDetails: {
+    marginTop: 6,
+    gap: 6,
+  },
+  readingCardRow: {
+    flexDirection: 'column',
+    justifyContent: 'flex-start',
+    alignItems: 'flex-start',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+    paddingBottom: 4,
+  },
+  readingCardLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#777777',
+  },
+  readingCardValue: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: '#333333',
+    textAlign: 'left',
+  },
+  emptySectionText: {
+    fontSize: 13,
+    color: '#666666',
+    marginTop: 4,
+    marginBottom: 4,
   },
 
   // Cards (igual que LlavesScreen)

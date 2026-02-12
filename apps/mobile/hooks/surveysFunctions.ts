@@ -1,5 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Constants from "expo-constants";
+import authedFetch from "./authedFetch";
 
 interface CreateSurveyParams {
     requestData: any;
@@ -24,46 +25,25 @@ export async function createSurvey({
             throw new Error('Marca ID not found');
         }
 
-        let token = await AsyncStorage.getItem('access_token');
-        if (!token) {
-            if (refreshAccessToken) {
-                const refreshed = await refreshAccessToken();
-                if (!refreshed) {
-                    if (logout) await logout();
-                    throw new Error('Sesión expirada');
-                }
-                token = await AsyncStorage.getItem('access_token');
-            } else {
-                if (logout) await logout();
-                throw new Error('Sesión expirada');
-            }
+        if (!refreshAccessToken || !logout) {
+            throw new Error('Auth handlers not provided');
         }
 
-        const response = await fetch(`${apiUrl}/api/encuesta-nps`, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json',
-                'ngrok-skip-browser-warning': '69420',
+        const response = await authedFetch({
+            url: `${apiUrl}/api/encuesta-nps`,
+            init: {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(requestData),
             },
-            body: JSON.stringify(requestData),
+            refreshAccessToken,
+            logout,
         });
 
-        if (response.status === 401) {
-            if (refreshAccessToken) {
-                const refreshed = await refreshAccessToken();
-                if (refreshed) {
-                    return createSurvey({ requestData, marcaId, refreshAccessToken, logout });
-                } else if (logout) {
-                    await logout();
-                    return { status: false, message: 'Sesión expirada' };
-                }
-            }
-        }
-
-        if (response.status === 403) {
-            if (logout) await logout();
-            throw new Error('Acceso denegado');
+        if (!response) {
+            return { status: false, message: 'Sesión expirada' };
         }
 
         if (!response.ok) {

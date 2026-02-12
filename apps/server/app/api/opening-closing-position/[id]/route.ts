@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessToken } from "../../../../utils/verifyToken";
 import { prisma } from "../../../../utils/prismaClient";
+import { toZonedTime } from "date-fns-tz";
 import fs from "fs";
 import path from "path";
 import { v4 as uuidv4 } from "uuid";
@@ -121,27 +122,81 @@ export async function PUT(
             }
         }
 
-        const updated_record = await prisma.c_apertura_cierre_puesto.update({
-            where: { id },
-            data: {
-                cliente_id: cliente_id !== undefined ? parseInt(String(cliente_id), 10) : undefined,
-                corpo_id: corpo_id !== undefined ? parseInt(String(corpo_id), 10) : undefined,
-                puesto_id: puesto_id !== undefined ? parseInt(String(puesto_id), 10) : undefined,
-                division_id: division_id !== undefined ? parseInt(String(division_id), 10) : undefined,
-                fecha: fecha !== undefined ? new Date(String(fecha)) : undefined,
-                tipo: tipo !== undefined ? String(tipo) : undefined,
-                nombre_representante_cliente: nombre_representante_cliente !== undefined ? String(nombre_representante_cliente) : undefined,
-                nombre_representante_empresa_entrante: nombre_representante_empresa_entrante !== undefined ? String(nombre_representante_empresa_entrante) : undefined,
-                nombre_representante_empresa_saliente: nombre_representante_empresa_saliente !== undefined ? String(nombre_representante_empresa_saliente) : undefined,
-                actividades: actividades !== undefined ? String(actividades) : undefined,
-                inventario: inventario !== undefined ? String(inventario) : undefined,
-                otras_observaciones: otras_observaciones !== undefined ? (otras_observaciones ? String(otras_observaciones) : null) : undefined,
-                firma_representante_cliente: firma_representante_cliente !== undefined ? String(firma_representante_cliente) : undefined,
-                firma_representante_empresa_entrante: firma_representante_empresa_entrante !== undefined ? String(firma_representante_empresa_entrante) : undefined,
-                firma_representante_empresa_saliente: firma_representante_empresa_saliente !== undefined ? String(firma_representante_empresa_saliente) : undefined,
-                firma_responsable: firma_responsable !== undefined ? String(firma_responsable) : undefined,
+        const existing = await prisma.c_apertura_cierre_puesto.findUnique({
+            where: { id }
+        });
+        if (!existing) {
+            return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
+        }
+
+        const updateData: any = {
+            cliente_id: cliente_id !== undefined ? parseInt(String(cliente_id), 10) : undefined,
+            corpo_id: corpo_id !== undefined ? parseInt(String(corpo_id), 10) : undefined,
+            puesto_id: puesto_id !== undefined ? parseInt(String(puesto_id), 10) : undefined,
+            division_id: division_id !== undefined ? parseInt(String(division_id), 10) : undefined,
+            fecha: fecha !== undefined ? new Date(String(fecha)) : undefined,
+            tipo: tipo !== undefined ? String(tipo) : undefined,
+            nombre_representante_cliente: nombre_representante_cliente !== undefined ? String(nombre_representante_cliente) : undefined,
+            nombre_representante_empresa_entrante: nombre_representante_empresa_entrante !== undefined ? String(nombre_representante_empresa_entrante) : undefined,
+            nombre_representante_empresa_saliente: nombre_representante_empresa_saliente !== undefined ? String(nombre_representante_empresa_saliente) : undefined,
+            actividades: actividades !== undefined ? String(actividades) : undefined,
+            inventario: inventario !== undefined ? String(inventario) : undefined,
+            otras_observaciones: otras_observaciones !== undefined ? (otras_observaciones ? String(otras_observaciones) : null) : undefined,
+            firma_representante_cliente: firma_representante_cliente !== undefined ? String(firma_representante_cliente) : undefined,
+            firma_representante_empresa_entrante: firma_representante_empresa_entrante !== undefined ? String(firma_representante_empresa_entrante) : undefined,
+            firma_representante_empresa_saliente: firma_representante_empresa_saliente !== undefined ? String(firma_representante_empresa_saliente) : undefined,
+            firma_responsable: firma_responsable !== undefined ? String(firma_responsable) : undefined,
+        };
+
+        // Eliminar campos undefined
+        Object.keys(updateData).forEach(key => {
+            if (updateData[key] === undefined) {
+                delete updateData[key];
             }
         });
+
+        // Registrar cambios (solo campos actualizados, excluyendo firmas)
+        const eq = (a: any, b: any) => {
+            if (a === b) return true;
+            if (a == null && b == null) return true;
+            const da = a instanceof Date ? a : (typeof a === "string" && /^\d{4}-\d{2}-\d{2}T/.test(a) ? new Date(a) : null);
+            const db = b instanceof Date ? b : (typeof b === "string" && /^\d{4}-\d{2}-\d{2}T/.test(b) ? new Date(b) : null);
+            if (da && db) return da.getTime() === db.getTime();
+            return false;
+        };
+
+        const cambiosArr: Array<{ prop: string; before: any; after: any }> = [];
+        for (const [k, v] of Object.entries(updateData)) {
+            if (k.startsWith("firma_")) continue; // Excluir firmas
+
+            const before = (existing as any)[k];
+            const after = v;
+            if (!eq(before, after)) {
+                cambiosArr.push({
+                    prop: k,
+                    before: before instanceof Date ? before.toISOString() : before,
+                    after: after instanceof Date ? after.toISOString() : after,
+                });
+            }
+        }
+
+        const updated_record = await prisma.c_apertura_cierre_puesto.update({
+            where: { id },
+            data: updateData
+        });
+
+        if (cambiosArr.length > 0) {
+            const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
+            await prisma.c_cambios_apps_modules.create({
+                data: {
+                    nombre_tabla: "c_apertura_cierre_puesto",
+                    registro_id: id,
+                    cambios: JSON.stringify(cambiosArr),
+                    created_at: toZonedTime(new Date(), "America/Costa_Rica"),
+                    created_by: createdBy,
+                },
+            });
+        }
 
         const fullRecord = await prisma.c_apertura_cierre_puesto.findUnique({
             where: { id },
@@ -199,6 +254,44 @@ export async function DELETE(
         if (!id) {
             return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
         }
+
+        const existing = await prisma.c_apertura_cierre_puesto.findUnique({
+            where: { id }
+        });
+        if (!existing) {
+            return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
+        }
+
+        // Registrar cambio de eliminación antes de eliminar
+        const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
+        const createdAt = toZonedTime(new Date(), "America/Costa_Rica");
+        await prisma.c_cambios_apps_modules.create({
+            data: {
+                nombre_tabla: "c_apertura_cierre_puesto",
+                registro_id: id,
+                cambios: JSON.stringify([{
+                    prop: "__deleted__",
+                    before: {
+                        id: existing.id,
+                        cliente_id: existing.cliente_id,
+                        corpo_id: existing.corpo_id,
+                        puesto_id: existing.puesto_id,
+                        division_id: existing.division_id,
+                        fecha: existing.fecha.toISOString(),
+                        tipo: existing.tipo,
+                        nombre_representante_cliente: existing.nombre_representante_cliente,
+                        nombre_representante_empresa_entrante: existing.nombre_representante_empresa_entrante,
+                        nombre_representante_empresa_saliente: existing.nombre_representante_empresa_saliente,
+                        actividades: existing.actividades,
+                        inventario: existing.inventario,
+                        otras_observaciones: existing.otras_observaciones,
+                    },
+                    after: null,
+                }]),
+                created_at: createdAt,
+                created_by: createdBy,
+            },
+        });
 
         // Borrar carpeta física de imágenes (si existe)
         const dir = path.join(process.cwd(), "public", "uploads", "opening-closing-position", `${id}`);

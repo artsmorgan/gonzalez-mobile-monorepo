@@ -76,19 +76,49 @@ export async function POST(
       // bitacora_id: ignorado por solicitud
     } = body || {};
 
+    const createdAt = toZonedTime(new Date(), "America/Costa_Rica");
+    const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
+
     const created = await prisma.c_usos_vehiculos_corporativos.create({
       data: {
         vehiculo_id: vehiculoId,
         nombre_conductor: String(nombre_conductor ?? ""),
-        fecha: fecha ? new Date(fecha) : toZonedTime(new Date(), "America/Costa_Rica"),
-        hora_inicio: hora_inicio ? new Date(hora_inicio) : toZonedTime(new Date(), "America/Costa_Rica"),
-        hora_fin: hora_fin ? new Date(hora_fin) : toZonedTime(new Date(), "America/Costa_Rica"),
+        fecha: fecha ? new Date(fecha) : createdAt,
+        hora_inicio: hora_inicio ? new Date(hora_inicio) : createdAt,
+        hora_fin: hora_fin ? new Date(hora_fin) : createdAt,
         combustible_inicio: Number(combustible_inicio ?? 0),
         combustible_fin: Number(combustible_fin ?? 0),
         km_inicio: Number(km_inicio ?? 0),
         km_fin: Number(km_fin ?? 0),
         motivo: String(motivo ?? ""),
         firma_responsable: String(firma_responsable ?? ""),
+      },
+    });
+
+    // Registrar cambio de creación
+    await prisma.c_cambios_apps_modules.create({
+      data: {
+        nombre_tabla: "c_usos_vehiculos_corporativos",
+        registro_id: created.id,
+        cambios: JSON.stringify([{
+          prop: "__created__",
+          before: null,
+          after: {
+            id: created.id,
+            vehiculo_id: created.vehiculo_id,
+            nombre_conductor: created.nombre_conductor,
+            fecha: created.fecha.toISOString(),
+            hora_inicio: created.hora_inicio.toISOString(),
+            hora_fin: created.hora_fin.toISOString(),
+            combustible_inicio: created.combustible_inicio,
+            combustible_fin: created.combustible_fin,
+            km_inicio: created.km_inicio,
+            km_fin: created.km_fin,
+            motivo: created.motivo,
+          },
+        }]),
+        created_at: createdAt,
+        created_by: createdBy,
       },
     });
 
