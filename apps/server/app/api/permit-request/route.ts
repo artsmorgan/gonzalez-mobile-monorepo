@@ -125,6 +125,9 @@ export async function POST(req: NextRequest) {
         }
 
         // Autocompletar campos desde la marca
+        const createdAt = toZonedTime(new Date(), "America/Costa_Rica");
+        const createdByNum = createdBy ? parseInt(createdBy, 10) : 0;
+
         const new_record = await prisma.c_solicitud_permiso.create({
             data: {
                 empresa_id: empresaId,
@@ -146,9 +149,42 @@ export async function POST(req: NextRequest) {
                 firma_encargado_monitoreo: firmaEncargadoStr,
                 permiso_coordinado_por: permisoCoordinadoPorStr,
                 firma_responsables: firmaResponsablesStr,
-                created_at: toZonedTime(new Date(), "America/Costa_Rica"),
+                created_at: createdAt,
                 created_by: createdBy
             }
+        });
+
+        // Registrar cambio de creación
+        await prisma.c_cambios_apps_modules.create({
+            data: {
+                nombre_tabla: "c_solicitud_permiso",
+                registro_id: new_record.id,
+                cambios: JSON.stringify([{
+                    prop: "__created__",
+                    before: null,
+                    after: {
+                        id: new_record.id,
+                        empresa_id: new_record.empresa_id,
+                        cliente_id: new_record.cliente_id,
+                        contrato_id: new_record.contrato_id,
+                        corpo_id: new_record.corpo_id,
+                        puesto_id: new_record.puesto_id,
+                        plaza_id: new_record.plaza_id,
+                        division: (new_record as any).division,
+                        persona_solicita: new_record.persona_solicita,
+                        codigo: new_record.codigo,
+                        contrato: new_record.contrato,
+                        horario: new_record.horario,
+                        fecha_solicitud: new_record.fecha_solicitud ? new_record.fecha_solicitud.toISOString() : null,
+                        motivo_permiso: new_record.motivo_permiso,
+                        permiso_sustituido_por: new_record.permiso_sustituido_por,
+                        codigo_sustituto: new_record.codigo_sustituto,
+                        permiso_coordinado_por: new_record.permiso_coordinado_por,
+                    },
+                }]),
+                created_at: createdAt,
+                created_by: createdByNum,
+            },
         });
 
         const fecha_string = fechaSolicitudDate.toISOString().split('T')[0];

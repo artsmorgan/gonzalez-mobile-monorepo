@@ -150,6 +150,33 @@ export async function POST(req: NextRequest) {
       sendNotificationByRole(created.corpo_id, [parseInt(String(payload?.id ?? "0"), 10)], "Apreciación de vulnerabilidad registrada", descriptionNotificacion, ["ADMINISTRATIVO", "SUPERVISOR"]);
     }
 
+    // Registrar cambio de creación
+    const createdBy = parseInt(String(payload?.id ?? 0), 10) || 0;
+    await prisma.c_cambios_apps_modules.create({
+      data: {
+        nombre_tabla: "c_boleta_apreciacion_vulnerabilidad",
+        registro_id: created.id,
+        cambios: JSON.stringify([{
+          prop: "__created__",
+          before: null,
+          after: {
+            id: created.id,
+            cliente_id: created.cliente_id,
+            corpo_id: created.corpo_id,
+            puesto_id: created.puesto_id,
+            fecha: created.fecha.toISOString(),
+            enlace: created.enlace,
+            nombre_solicitante: created.nombre_solicitante,
+            boleta: created.boleta,
+            metricas_vulnerablidad: created.metricas_vulnerablidad,
+            observaciones: created.observaciones,
+          },
+        }]),
+        created_at: toZonedTime(new Date(), "America/Costa_Rica"),
+        created_by: createdBy,
+      },
+    });
+
     return NextResponse.json(
       { status: true, message: "Registro creado correctamente", id: created.id },
       { status: 200 }

@@ -1,5 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Constants from "expo-constants";
+import authedFetch from "./authedFetch";
 
 interface saveMarcaParams {
     data_params: {
@@ -19,6 +20,10 @@ export default async function saveMarca({
     logout
 }: saveMarcaParams) {
     try {
+        if (!refreshAccessToken || !logout) {
+            throw new Error('Auth handlers not provided');
+        }
+
         const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
         if (!apiUrl) {
             throw new Error('Server URL not configured');
@@ -28,45 +33,21 @@ export default async function saveMarca({
             throw new Error('Marca ID not found');
         }
 
-        let token = await AsyncStorage.getItem('access_token');
-        if (!token) {
-            if (refreshAccessToken) {
-                const refreshed = await refreshAccessToken();
-                if (!refreshed) {
-                    if (logout) await logout();
-                    throw new Error('Sesión expirada');
-                }
-                token = await AsyncStorage.getItem('access_token');
-            } else {
-                if (logout) await logout();
-                throw new Error('Sesión expirada');
-            }
-        }
-
-        const response = await fetch(`${apiUrl}/api/attendance/${marcaId}`, {
-            method: 'PUT',
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json',
-                'ngrok-skip-browser-warning': '69420',
+        const response = await authedFetch({
+            url: `${apiUrl}/api/attendance/${marcaId}`,
+            init: {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ type: data_params.type, reason: data_params.reason, horaAccion: data_params.horaAccion }),
             },
-            body: JSON.stringify({ type: data_params.type, reason: data_params.reason, horaAccion: data_params.horaAccion }),
+            refreshAccessToken,
+            logout,
         });
 
-        if (response.status === 401) {
-            if (refreshAccessToken) {
-                const refreshed = await refreshAccessToken();
-                if (refreshed) {
-                    return saveMarca({ data_params, marcaId, refreshAccessToken, logout });
-                } else if (logout) {
-                    await logout();
-                }
-            }
-        }
-
-        if (response.status === 403) {
-            if (logout) await logout();
-            throw new Error('Acceso denegado');
+        if (!response) {
+            return { status: false, message: 'Sesión expirada' };
         }
 
         if (!response.ok) {

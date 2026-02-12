@@ -10,6 +10,7 @@ import {
   TextInput,
   TouchableOpacity,
   View,
+  Dimensions,
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Picker } from '@react-native-picker/picker';
@@ -28,10 +29,12 @@ import AppFooter from '@/components/AppFooter';
 import SlideMenu from '@/components/SlideMenu';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
+import { formatDateDMY as formatDateDMYValue } from '@/utils/formatDate';
 import { useAuth } from '@/contexts/AuthContext';
 import { eventBus } from '@/hooks/eventBus';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import { useQRScanner } from '@/hooks/useQRScanner';
+import authedFetch from '@/hooks/authedFetch';
 import {
   createGeneralInductionRegister,
   deleteGeneralInductionRegister,
@@ -272,6 +275,38 @@ async function getConnectionStatus() {
   }
 }
 
+// Funciones para formatear datos dinámicos para mostrar en cambios
+function formatTemasATratarForDisplay(temasJson: string, temasData: TemaData): string {
+  try {
+    const temas: TemaSelectedItem[] = safeJsonParse<TemaSelectedItem[]>(temasJson, []);
+    if (!Array.isArray(temas) || temas.length === 0) return 'No hay temas seleccionados.';
+    return temas.map((t, idx) => {
+      const temaText = temasData.leafTextById[t.id] || t.text || t.id || '-';
+      return `${idx + 1}. ${temaText}`;
+    }).join('\n');
+  } catch (e) {
+    console.error('Error formatting temas a tratar for display:', e);
+    return 'Error al formatear temas a tratar.';
+  }
+}
+
+function formatPersonasForDisplay(personasJson: string, label: string): string {
+  try {
+    const personas: PersonaItem[] = safeJsonParse<PersonaItem[]>(personasJson, []);
+    if (!Array.isArray(personas) || personas.length === 0) return `No hay ${label}.`;
+    return personas.map((p, idx) => {
+      const nombre = p?.nombre || '-';
+      const cedula = p?.cedula || '-';
+      const puesto = p?.puesto_text || '-';
+      const tieneFirma = p?.firma ? 'Sí' : 'No';
+      return `${idx + 1}. ${nombre} (Cédula: ${cedula}, Puesto: ${puesto}, Firma: ${tieneFirma})`;
+    }).join('\n');
+  } catch (e) {
+    console.error(`Error formatting ${label} for display:`, e);
+    return `Error al formatear ${label}.`;
+  }
+}
+
 function safeJsonParse<T>(value: any, fallback: T): T {
   try {
     if (!value) return fallback;
@@ -297,6 +332,13 @@ function formatSignatureForDisplay(signature: string | null | undefined): string
   const s = String(signature);
   if (s.startsWith('data:')) return s;
   return `data:image/png;base64,${s}`;
+}
+
+function formatDateDMY(date: Date): string {
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const year = String(date.getFullYear());
+  return `${day}-${month}-${year}`;
 }
 
 function buildTemaDataIterative(nodes: TemaNode[]): TemaData {
@@ -347,8 +389,27 @@ export default function GeneralInductionRegisterScreen() {
   // list state
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Importante: "sin internet" NO cuenta como error (solo es un estado informativo)
+  const [offlineMessage, setOfflineMessage] = useState<string | null>(null);
+
+  const isProbablyNetworkError = (err: any) => {
+    const msg = String((err as any)?.message ?? err ?? '').toLowerCase();
+    return (
+      msg.includes('network request failed') ||
+      msg.includes('failed to fetch') ||
+      msg.includes('networkerror') ||
+      msg.includes('timeout') ||
+      msg.includes('timed out')
+    );
+  };
   const [hasCurrentMarca, setHasCurrentMarca] = useState(true);
   const [records, setRecords] = useState<GeneralInductionRegisterRecord[]>([]);
+
+  // Modal: ver cambios (auditoría)
+  const [isCambiosModalVisible, setIsCambiosModalVisible] = useState(false);
+  const [cambiosTitle, setCambiosTitle] = useState<string>('Cambios');
+  const [cambiosItems, setCambiosItems] = useState<any[]>([]);
+  const [expandedCambioId, setExpandedCambioId] = useState<number | null>(null);
 
   // Filtros jerárquicos
   const [filterEmpresaId, setFilterEmpresaId] = useState<number | null>(null);
@@ -455,66 +516,21 @@ export default function GeneralInductionRegisterScreen() {
 
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) throw new Error('Server URL not configured');
-
-      let token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (logout) await logout();
-          throw new Error('Sesión expirada');
-        }
-        token = await AsyncStorage.getItem('access_token');
-      }
-
-      const response = await fetch(`${apiUrl}/api/main-structure`, {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': '69420',
-        },
-      });
-
-      if (response.status === 401 || response.status === 403) {
-        // Evitar recursividad infinita: reintentar UNA vez con token refrescado
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          await logout();
-          return;
-        }
-        let token2 = await AsyncStorage.getItem('access_token');
-        if (!token2) {
-          const refreshed = await refreshAccessToken();
-          if (!refreshed) {
-            if (logout) await logout();
-            throw new Error('Sesión expirada');
-          }
-          token2 = await AsyncStorage.getItem('access_token');
-        }
-        const retry = await fetch(`${apiUrl}/api/main-structure`, {
+      const response = await authedFetch({
+        url: `${apiUrl}/api/main-structure`,
+        init: {
           method: 'GET',
           headers: {
-            Authorization: `Bearer ${token2}`,
             'Content-Type': 'application/json',
-            'ngrok-skip-browser-warning': '69420',
           },
-        });
-        if (retry.status === 401 || retry.status === 403) {
-          await logout();
-          return;
-        }
-        if (!retry.ok) throw new Error(`HTTP error! status: ${retry.status}`);
-        const data2 = await retry.json();
-        const incoming2 = data2?.structure;
-        if (data2?.status && Array.isArray(incoming2)) {
-          setStructure(incoming2);
-          await AsyncStorage.setItem('main_structure_cache', JSON.stringify(incoming2));
-        }
-        return;
-      }
+        },
+        refreshAccessToken,
+        logout,
+      });
 
+      if (!response) return;
       if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-      const data = await response.json();
+      const data = await response.json().catch(() => ({}));
       const incoming = data?.structure;
       if (data?.status && Array.isArray(incoming)) {
         setStructure(incoming);
@@ -561,10 +577,118 @@ export default function GeneralInductionRegisterScreen() {
     }
   }, []);
 
+  const closeCambiosModal = () => {
+    setIsCambiosModalVisible(false);
+    setCambiosItems([]);
+    setExpandedCambioId(null);
+  };
+
+  const formatCambioCreatedAt = (value: any) => {
+    if (!value) return '-';
+    try {
+      const date = new Date(value);
+      return date.toLocaleString('es-CR', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true,
+      });
+    } catch {
+      return String(value);
+    }
+  };
+
+  const formatChangeValue = (prop: string, value: any): string => {
+    if (value === null || value === undefined) return 'N/A';
+    if (typeof value === 'boolean') return value ? 'Sí' : 'No';
+    if (typeof value === 'object') {
+      if (prop === 'temas_a_tratar') {
+        // Determinar qué temas data usar basado en la división del registro
+        // Por ahora, usar AYL como default, pero esto podría mejorarse
+        return formatTemasATratarForDisplay(JSON.stringify(value), TEMAS_DATA_AYL);
+      }
+      if (prop === 'colaboradores') {
+        return formatPersonasForDisplay(JSON.stringify(value), 'colaboradores');
+      }
+      if (prop === 'capacitadores') {
+        return formatPersonasForDisplay(JSON.stringify(value), 'capacitadores');
+      }
+      return JSON.stringify(value, null, 2);
+    }
+    if (typeof value === 'string') {
+      if (value.trim().startsWith('{') || value.trim().startsWith('[')) {
+        try {
+          const parsed = JSON.parse(value);
+          if (prop === 'temas_a_tratar') {
+            return formatTemasATratarForDisplay(value, TEMAS_DATA_AYL);
+          }
+          if (prop === 'colaboradores') {
+            return formatPersonasForDisplay(value, 'colaboradores');
+          }
+          if (prop === 'capacitadores') {
+            return formatPersonasForDisplay(value, 'capacitadores');
+          }
+          if (Array.isArray(parsed)) {
+            return parsed.map((item, idx) => {
+              if (typeof item === 'object' && item !== null) {
+                return `Item ${idx + 1}: ${JSON.stringify(item, null, 2)}`;
+              }
+              return String(item);
+            }).join('\n');
+          }
+          if (typeof parsed === 'object') {
+            return JSON.stringify(parsed, null, 2);
+          }
+        } catch {
+          // Not valid JSON, return as string
+        }
+      }
+      return value;
+    }
+    return String(value);
+  };
+
+  const fetchCambios = useCallback(async (tabla: string, registroId: number) => {
+    const isConnected = await getConnectionStatus();
+    if (!isConnected) {
+      Alert.alert('Sin conexión', 'Esta función solo está disponible con conexión a internet.');
+      return;
+    }
+    try {
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) throw new Error('Server URL not configured');
+      const resp = await authedFetch({
+        url: `${apiUrl}/api/cambios-apps-modules?tabla=${encodeURIComponent(tabla)}&registro_id=${registroId}`,
+        init: {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        },
+        refreshAccessToken,
+        logout,
+      });
+      if (!resp) return;
+
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data.status) {
+        throw new Error(data.message || 'No se pudieron cargar los cambios');
+      }
+      setCambiosItems(Array.isArray(data.data) ? data.data : []);
+      setIsCambiosModalVisible(true);
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'No se pudieron cargar los cambios');
+    }
+  }, [refreshAccessToken, logout]);
+
   const fetchRecords = useCallback(async () => {
     try {
       setIsLoading(true);
       setError(null);
+      setOfflineMessage(null);
 
       const current = await loadMarcaContext();
       if (!current && !filterCorpoId) {
@@ -610,7 +734,11 @@ export default function GeneralInductionRegisterScreen() {
       }
     } catch (e) {
       console.error('Error fetching general induction register records:', e);
-      setError('Error al cargar los registros de inducción general');
+      if (isProbablyNetworkError(e)) {
+        setOfflineMessage('Modo Offline: error de conexión. Mostrando datos guardados si existen.');
+      } else {
+        setError('Error al cargar los registros de inducción general');
+      }
       try {
         const cacheStr = await AsyncStorage.getItem('evaluations_cache');
         const cache = cacheStr ? JSON.parse(cacheStr) : [];
@@ -1313,7 +1441,7 @@ export default function GeneralInductionRegisterScreen() {
           const meta = parseMetaFromTemas(r.temas_a_tratar);
           const contratoNombre = meta?.contrato_nombre || 'N/A';
           const sucursalNombre = meta?.sucursal_nombre || 'N/A';
-          const fechaTxt = r.fecha ? String(r.fecha).split('T')[0] : 'N/A';
+          const fechaTxt = formatDateDMYValue(r.fecha, 'N/A');
 
           const temasObj = safeJsonParse<any>(r.temas_a_tratar, null);
           const temasSelected = Array.isArray(temasObj?.selected) ? temasObj.selected : [];
@@ -1475,6 +1603,19 @@ export default function GeneralInductionRegisterScreen() {
                     <Ionicons name="pencil" size={18} color="#FFFFFF" />
                     <ThemedText style={styles.buttonText}>Editar</ThemedText>
                   </TouchableOpacity>
+                  {!(r.id_local || String(r.id).startsWith('local-') || r.id === 0) && (
+                    <TouchableOpacity
+                      style={[styles.listItemButton, styles.changesButton]}
+                      onPress={() => {
+                        setCambiosTitle(`Cambios - Registro #${r.id}`);
+                        fetchCambios('c_registro_induccion_general', Number(r.id));
+                      }}
+                      activeOpacity={0.85}
+                    >
+                      <Ionicons name="list-outline" size={18} color="#FFFFFF" />
+                      <ThemedText style={styles.buttonText}>Cambios</ThemedText>
+                    </TouchableOpacity>
+                  )}
                   <TouchableOpacity style={[styles.listItemButton, styles.deleteButton]} onPress={() => deleteHandler(r)} activeOpacity={0.85}>
                     <Ionicons name="trash" size={18} color="#FFFFFF" />
                     <ThemedText style={styles.buttonText}>Eliminar</ThemedText>
@@ -1677,140 +1818,152 @@ export default function GeneralInductionRegisterScreen() {
           {!isCreating ? (
             <>
               {/* Filtros Jerárquicos */}
-              <ThemedView style={styles.filtersContainer}>
-                <ThemedView style={styles.filtersHeader}>
-                  <TouchableOpacity
-                    style={styles.filterToggleButton}
-                    onPress={() => setIsHierarchyFiltersExpanded(!isHierarchyFiltersExpanded)}
-                  >
-                    <ThemedText style={styles.filtersTitle}>
-                      Filtros Jerárquicos
-                    </ThemedText>
-                    <Ionicons
-                      name={isHierarchyFiltersExpanded ? "chevron-up" : "chevron-down"}
-                      size={20}
-                      color="#007AFF"
-                    />
-                  </TouchableOpacity>
-                  {isHierarchyFiltersExpanded && (
+              {!isLoading && (
+                <ThemedView style={styles.filtersContainer}>
+                  <ThemedView style={styles.filtersHeader}>
                     <TouchableOpacity
-                      style={styles.resetFiltersButton}
-                      onPress={() => {
-                        setFilterEmpresaId(null);
-                        setFilterClienteId(null);
-                        setFilterCorpoId(null);
-                      }}
+                      style={styles.filterToggleButton}
+                      onPress={() => setIsHierarchyFiltersExpanded(!isHierarchyFiltersExpanded)}
                     >
-                      <Ionicons name="refresh" size={16} color="#FF3B30" />
-                      <ThemedText style={styles.resetFiltersText}>Reiniciar</ThemedText>
+                      <ThemedText style={styles.filtersTitle}>
+                        Filtros Jerárquicos
+                      </ThemedText>
+                      <Ionicons
+                        name={isHierarchyFiltersExpanded ? "chevron-up" : "chevron-down"}
+                        size={20}
+                        color="#007AFF"
+                      />
                     </TouchableOpacity>
-                  )}
-                </ThemedView>
-                {isHierarchyFiltersExpanded && (
-                  <ThemedView style={styles.filtersContent}>
-                    <ThemedView style={styles.filterGroup}>
-                      <ThemedText style={styles.filterLabel}>Empresa:</ThemedText>
-                      <View style={styles.pickerWrapper}>
-                        <Picker
-                          selectedValue={filterEmpresaId || ''}
-                          onValueChange={(value) => {
-                            setFilterEmpresaId(value && value !== '' ? Number(value) : null);
-                            setFilterClienteId(null);
-                            setFilterCorpoId(null);
-                          }}
-                          style={styles.picker}
-                        >
-                          <Picker.Item label="Seleccionar..." value="" />
-                          {filterEmpresas.map((e: any) => (
-                            <Picker.Item key={e.id} label={e.nombre} value={e.id} />
-                          ))}
-                        </Picker>
-                      </View>
-                    </ThemedView>
-
-                    {filterEmpresaId && (
+                    {isHierarchyFiltersExpanded && (
+                      <TouchableOpacity
+                        style={styles.resetFiltersButton}
+                        onPress={() => {
+                          setFilterEmpresaId(null);
+                          setFilterClienteId(null);
+                          setFilterCorpoId(null);
+                        }}
+                      >
+                        <Ionicons name="refresh" size={16} color="#FF3B30" />
+                        <ThemedText style={styles.resetFiltersText}>Reiniciar</ThemedText>
+                      </TouchableOpacity>
+                    )}
+                  </ThemedView>
+                  {isHierarchyFiltersExpanded && (
+                    <ThemedView style={styles.filtersContent}>
                       <ThemedView style={styles.filterGroup}>
-                        <ThemedText style={styles.filterLabel}>Cliente:</ThemedText>
+                        <ThemedText style={styles.filterLabel}>Empresa:</ThemedText>
                         <View style={styles.pickerWrapper}>
                           <Picker
-                            selectedValue={filterClienteId || ''}
+                            selectedValue={filterEmpresaId || ''}
                             onValueChange={(value) => {
-                              setFilterClienteId(value && value !== '' ? Number(value) : null);
+                              setFilterEmpresaId(value && value !== '' ? Number(value) : null);
+                              setFilterClienteId(null);
                               setFilterCorpoId(null);
                             }}
                             style={styles.picker}
                           >
                             <Picker.Item label="Seleccionar..." value="" />
-                            {filterClientes.map((c: any) => (
-                              <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                            {filterEmpresas.map((e: any) => (
+                              <Picker.Item key={e.id} label={e.nombre} value={e.id} />
                             ))}
                           </Picker>
                         </View>
                       </ThemedView>
-                    )}
 
-                    {filterClienteId && (
-                      <ThemedView style={styles.filterGroup}>
-                        <ThemedText style={styles.filterLabel}>División:</ThemedText>
-                        <View style={styles.pickerWrapper}>
-                          <Picker
-                            selectedValue={''}
-                            enabled={false}
-                            style={styles.picker}
-                          >
-                            <Picker.Item label="Seleccionar..." value="" />
-                            {filterDivisiones.map((d: any) => (
-                              <Picker.Item key={d.id} label={d.nombre} value={d.id} />
-                            ))}
-                          </Picker>
-                        </View>
-                      </ThemedView>
-                    )}
+                      {filterEmpresaId && (
+                        <ThemedView style={styles.filterGroup}>
+                          <ThemedText style={styles.filterLabel}>Cliente:</ThemedText>
+                          <View style={styles.pickerWrapper}>
+                            <Picker
+                              selectedValue={filterClienteId || ''}
+                              onValueChange={(value) => {
+                                setFilterClienteId(value && value !== '' ? Number(value) : null);
+                                setFilterCorpoId(null);
+                              }}
+                              style={styles.picker}
+                            >
+                              <Picker.Item label="Seleccionar..." value="" />
+                              {filterClientes.map((c: any) => (
+                                <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                              ))}
+                            </Picker>
+                          </View>
+                        </ThemedView>
+                      )}
 
-                    {filterClienteId && (
-                      <ThemedView style={styles.filterGroup}>
-                        <ThemedText style={styles.filterLabel}>Contrato:</ThemedText>
-                        <View style={styles.pickerWrapper}>
-                          <Picker
-                            selectedValue={''}
-                            enabled={false}
-                            style={styles.picker}
-                          >
-                            <Picker.Item label="Seleccionar..." value="" />
-                            {filterContratos.map((c: any) => (
-                              <Picker.Item key={c.id} label={c.nombre} value={c.id} />
-                            ))}
-                          </Picker>
-                        </View>
-                      </ThemedView>
-                    )}
+                      {filterClienteId && (
+                        <ThemedView style={styles.filterGroup}>
+                          <ThemedText style={styles.filterLabel}>División:</ThemedText>
+                          <View style={styles.pickerWrapper}>
+                            <Picker
+                              selectedValue={''}
+                              enabled={false}
+                              style={styles.picker}
+                            >
+                              <Picker.Item label="Seleccionar..." value="" />
+                              {filterDivisiones.map((d: any) => (
+                                <Picker.Item key={d.id} label={d.nombre} value={d.id} />
+                              ))}
+                            </Picker>
+                          </View>
+                        </ThemedView>
+                      )}
 
-                    {filterClienteId && (
-                      <ThemedView style={styles.filterGroup}>
-                        <ThemedText style={styles.filterLabel}>Sucursal:</ThemedText>
-                        <View style={styles.pickerWrapper}>
-                          <Picker
-                            selectedValue={filterCorpoId || ''}
-                            onValueChange={(value) => {
-                              setFilterCorpoId(value && value !== '' ? Number(value) : null);
-                            }}
-                            style={styles.picker}
-                          >
-                            <Picker.Item label="Seleccionar..." value="" />
-                            {filterSucursales.map((s: any) => (
-                              <Picker.Item key={s.id} label={s.nombre} value={s.id} />
-                            ))}
-                          </Picker>
-                        </View>
-                      </ThemedView>
-                    )}
-                  </ThemedView>
-                )}
-              </ThemedView>
+                      {filterClienteId && (
+                        <ThemedView style={styles.filterGroup}>
+                          <ThemedText style={styles.filterLabel}>Contrato:</ThemedText>
+                          <View style={styles.pickerWrapper}>
+                            <Picker
+                              selectedValue={''}
+                              enabled={false}
+                              style={styles.picker}
+                            >
+                              <Picker.Item label="Seleccionar..." value="" />
+                              {filterContratos.map((c: any) => (
+                                <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                              ))}
+                            </Picker>
+                          </View>
+                        </ThemedView>
+                      )}
 
-              <TouchableOpacity style={styles.createButton} onPress={startCreate} activeOpacity={0.85}>
-                <Ionicons name="add" size={24} color="#FFFFFF" />
-              </TouchableOpacity>
+                      {filterClienteId && (
+                        <ThemedView style={styles.filterGroup}>
+                          <ThemedText style={styles.filterLabel}>Sucursal:</ThemedText>
+                          <View style={styles.pickerWrapper}>
+                            <Picker
+                              selectedValue={filterCorpoId || ''}
+                              onValueChange={(value) => {
+                                setFilterCorpoId(value && value !== '' ? Number(value) : null);
+                              }}
+                              style={styles.picker}
+                            >
+                              <Picker.Item label="Seleccionar..." value="" />
+                              {filterSucursales.map((s: any) => (
+                                <Picker.Item key={s.id} label={s.nombre} value={s.id} />
+                              ))}
+                            </Picker>
+                          </View>
+                        </ThemedView>
+                      )}
+                    </ThemedView>
+                  )}
+                </ThemedView>
+              )}
+
+
+              {!!offlineMessage && !error && (
+                <ThemedView style={styles.offlineBanner}>
+                  <Ionicons name="cloud-offline-outline" size={18} color="#8A6D00" />
+                  <ThemedText style={styles.offlineBannerText}>{offlineMessage}</ThemedText>
+                </ThemedView>
+              )}
+
+              {!isLoading && !error && (
+                <TouchableOpacity style={styles.createButton} onPress={startCreate} activeOpacity={0.85}>
+                  <Ionicons name="add" size={24} color="#FFFFFF" />
+                </TouchableOpacity>
+              )}
               {renderList()}
             </>
           ) : (
@@ -1823,7 +1976,7 @@ export default function GeneralInductionRegisterScreen() {
               <ThemedView style={styles.formGroup}>
                 <ThemedText style={styles.formLabel}>Fecha</ThemedText>
                 <TouchableOpacity style={styles.dateButton} onPress={() => setShowDatePicker(true)} activeOpacity={0.85}>
-                  <ThemedText style={styles.dateButtonText}>{fecha.toISOString().split('T')[0]}</ThemedText>
+                  <ThemedText style={styles.dateButtonText}>{formatDateDMY(fecha)}</ThemedText>
                   <Ionicons name="calendar" size={20} color="#007AFF" />
                 </TouchableOpacity>
                 {showDatePicker && (
@@ -2141,6 +2294,88 @@ export default function GeneralInductionRegisterScreen() {
         </ThemedView>
       </Modal>
 
+      {/* Modal: ver cambios */}
+      <Modal
+        visible={isCambiosModalVisible}
+        animationType="fade"
+        transparent
+        presentationStyle="overFullScreen"
+        onRequestClose={closeCambiosModal}
+      >
+        <View style={styles.overlay}>
+          <ThemedView style={styles.floatModalCardMovimientos}>
+            <ThemedView style={styles.floatModalHeader}>
+              <ThemedText style={styles.modalTitle}>{cambiosTitle}</ThemedText>
+              <TouchableOpacity onPress={closeCambiosModal}>
+                <Ionicons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+            </ThemedView>
+
+            <ScrollView style={{ maxHeight: Dimensions.get('window').height * 0.75 }} contentContainerStyle={{ padding: 16 }}>
+              {(!cambiosItems || cambiosItems.length === 0) ? (
+                <ThemedView style={styles.emptyContainer}>
+                  <ThemedText style={styles.emptyText}>No hay cambios registrados</ThemedText>
+                </ThemedView>
+              ) : (
+                cambiosItems.map((row: any) => {
+                  let parsed: any[] = [];
+                  try {
+                    parsed = row?.cambios ? JSON.parse(row.cambios) : [];
+                  } catch {
+                    parsed = [];
+                  }
+                  const createdAtLabel = formatCambioCreatedAt(row?.created_at);
+                  const isOpen = expandedCambioId === row.id;
+
+                  return (
+                    <ThemedView key={`chg-${row.id}`} style={styles.cambioCollapsableMain}>
+                      <TouchableOpacity
+                        style={styles.cambioCollapsableHeader}
+                        onPress={() => setExpandedCambioId((prev) => (prev === row.id ? null : row.id))}
+                        activeOpacity={0.8}
+                      >
+                        <ThemedText style={styles.cambioCollapsableTitle}>
+                          {createdAtLabel}
+                        </ThemedText>
+                        <Ionicons
+                          name={isOpen ? "chevron-up" : "chevron-down"}
+                          size={18}
+                          color="#007AFF"
+                        />
+                      </TouchableOpacity>
+
+                      {isOpen && (
+                        <ThemedView style={styles.cambioCollapsableContent}>
+                          <ThemedView style={styles.filterGroupSearch}>
+                            <ThemedText style={styles.filterLabel}>Cambio realizado por:</ThemedText>
+                            <ThemedText style={styles.changeDescription}>
+                              {row.empleado_nombre || 'Desconocido'}
+                              {row.empleado_cedula ? ` - Cédula: ${row.empleado_cedula}` : ''}
+                            </ThemedText>
+                          </ThemedView>
+
+                          {(Array.isArray(parsed) ? parsed : []).length > 0 && (
+                            <ThemedView style={styles.filterGroupSearch}>
+                              <ThemedText style={styles.filterLabel}>Cambios:</ThemedText>
+                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => (
+                                <ThemedText key={`c-${row.id}-${idx}`} style={styles.changeDescription}>
+                                  <ThemedText style={{ fontWeight: '800' }}>{String(c?.prop ?? '-')}: </ThemedText>
+                                  {formatChangeValue(c?.prop, c?.after)}
+                                </ThemedText>
+                              ))}
+                            </ThemedView>
+                          )}
+                        </ThemedView>
+                      )}
+                    </ThemedView>
+                  );
+                })
+              )}
+            </ScrollView>
+          </ThemedView>
+        </View>
+      </Modal>
+
       {QRScannerComponent}
 
       <SlideMenu
@@ -2424,10 +2659,20 @@ const styles = StyleSheet.create({
     borderRadius: 10,
   },
   editButton: { backgroundColor: '#007AFF' },
+  changesButton: { backgroundColor: '#5856D6', flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 12, borderRadius: 8, gap: 8 },
   deleteButton: { backgroundColor: '#FF3B30' },
   saveButton: { backgroundColor: '#007AFF' },
   cancelButton: { backgroundColor: '#8E8E93' },
   buttonText: { color: '#FFFFFF', fontSize: 14, fontWeight: '700' },
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 },
+  floatModalCardMovimientos: { backgroundColor: '#FFFFFF', borderRadius: 12, width: '100%', maxWidth: 500, maxHeight: '80%', borderWidth: 1, borderColor: '#E0E0E0', overflow: 'hidden' },
+  floatModalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#E0E0E0' },
+  cambioCollapsableMain: { width: '100%', marginBottom: 10, backgroundColor: '#fff', borderRadius: 6, borderWidth: 1, borderColor: '#E0E0E0', overflow: 'hidden' },
+  cambioCollapsableHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, backgroundColor: '#F8F9FA' },
+  cambioCollapsableTitle: { fontSize: 14, fontWeight: '600', color: '#007AFF', flex: 1 },
+  cambioCollapsableContent: { padding: 12, gap: 8, backgroundColor: '#F8F9FA' },
+  changeDescription: { fontSize: 14, lineHeight: 20, color: '#666', marginBottom: 8 },
+  filterGroupSearch: { marginBottom: 12 },
 
   smallButton: {
     flexDirection: 'row',
@@ -2518,6 +2763,18 @@ const styles = StyleSheet.create({
   },
   errorContainer: { padding: 14, borderRadius: 10, backgroundColor: '#FFEBEE', borderWidth: 1, borderColor: '#FFCDD2' },
   errorText: { color: '#B00020', fontWeight: '700' },
+  offlineBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    padding: 14,
+    borderRadius: 10,
+    backgroundColor: '#FFF3CD',
+    borderWidth: 1,
+    borderColor: '#FFEBAA',
+    marginBottom: 12,
+  },
+  offlineBannerText: { flex: 1, color: '#8A6D00', fontWeight: '700' },
   emptyContainer: { padding: 14, borderRadius: 10, backgroundColor: '#F2F2F7', borderWidth: 1, borderColor: '#E5E5EA' },
   emptyText: { color: '#000', opacity: 0.6 },
 

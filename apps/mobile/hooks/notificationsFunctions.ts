@@ -1,5 +1,5 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import Constants from "expo-constants";
+import authedFetch from "./authedFetch";
 
 interface MarkAsReadParams {
     notificationIds: { id: number, is_plaza: boolean }[];
@@ -13,51 +13,30 @@ export async function markNotificationsAsRead({
     logout
 }: MarkAsReadParams) {
     try {
+        if (!refreshAccessToken || !logout) {
+            throw new Error('Auth handlers not provided');
+        }
+
         const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
         if (!apiUrl) {
             throw new Error('Server URL not configured');
         }
 
-        let token = await AsyncStorage.getItem('access_token');
-        if (!token) {
-            if (refreshAccessToken) {
-                const refreshed = await refreshAccessToken();
-                if (!refreshed) {
-                    if (logout) await logout();
-                    throw new Error('Sesión expirada');
-                }
-                token = await AsyncStorage.getItem('access_token');
-            } else {
-                if (logout) await logout();
-                throw new Error('Sesión expirada');
-            }
-        }
-
-        const response = await fetch(`${apiUrl}/api/notification`, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json',
-                'ngrok-skip-browser-warning': '69420',
+        const response = await authedFetch({
+            url: `${apiUrl}/api/notification`,
+            init: {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ notifications: notificationIds }),
             },
-            body: JSON.stringify({ notifications: notificationIds }),
+            refreshAccessToken,
+            logout,
         });
 
-        if (response.status === 401) {
-            if (refreshAccessToken) {
-                const refreshed = await refreshAccessToken();
-                if (refreshed) {
-                    return markNotificationsAsRead({ notificationIds, refreshAccessToken, logout });
-                } else if (logout) {
-                    await logout();
-                    return { status: false, message: 'Sesión expirada' };
-                }
-            }
-        }
-
-        if (response.status === 403) {
-            if (logout) await logout();
-            throw new Error('Acceso denegado');
+        if (!response) {
+            return { status: false, message: 'Sesión expirada' };
         }
 
         if (!response.ok) {

@@ -167,6 +167,7 @@ export async function POST(req: NextRequest) {
     }
 
     const createdAt = toZonedTime(new Date(), 'America/Costa_Rica');
+    const createdByNum = payload.id ? parseInt(String(payload.id), 10) : 0;
 
     const newRecord = await prisma.c_acta_entre_producto.create({
       data: {
@@ -192,6 +193,39 @@ export async function POST(req: NextRequest) {
         firma_responsable: String(firma_responsable),
       },
       include: { c_imagenes_acta_entrega_producto: true },
+    });
+
+    // Registrar cambio de creación
+    await prisma.c_cambios_apps_modules.create({
+      data: {
+        nombre_tabla: "c_acta_entre_producto",
+        registro_id: newRecord.id,
+        cambios: JSON.stringify([{
+          prop: "__created__",
+          before: null,
+          after: {
+            id: newRecord.id,
+            empresa_id: newRecord.empresa_id,
+            cliente_id: newRecord.cliente_id,
+            division_id: newRecord.division_id,
+            contrato_id: newRecord.contrato_id,
+            corpo_id: newRecord.corpo_id,
+            fecha: newRecord.fecha.toISOString(),
+            tipo_entrega: newRecord.tipo_entrega,
+            mensual: newRecord.mensual,
+            detalle: newRecord.detalle,
+            observaciones: newRecord.observaciones,
+            nombre_entrega: newRecord.nombre_entrega,
+            cedula_entrega: newRecord.cedula_entrega,
+            fecha_entrega: newRecord.fecha_entrega.toISOString(),
+            nombre_recibe: newRecord.nombre_recibe,
+            cedula_recibe: newRecord.cedula_recibe,
+            fecha_recibe: newRecord.fecha_recibe.toISOString(),
+          },
+        }]),
+        created_at: createdAt,
+        created_by: createdByNum,
+      },
     });
 
     if (newRecord) {

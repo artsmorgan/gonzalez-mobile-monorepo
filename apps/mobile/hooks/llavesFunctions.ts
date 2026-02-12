@@ -1,5 +1,5 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
+import authedFetch from './authedFetch';
 
 type BasicResponse = { status: boolean; message?: string;[k: string]: any };
 
@@ -56,46 +56,37 @@ const getApiUrl = () => {
   return apiUrl;
 };
 
-async function getToken(refreshAccessToken?: () => Promise<boolean>, logout?: () => Promise<any>) {
-  let token = await AsyncStorage.getItem('access_token');
-  if (!token && refreshAccessToken) {
-    const refreshed = await refreshAccessToken();
-    if (refreshed) token = await AsyncStorage.getItem('access_token');
-    else if (logout) await logout();
+const requireAuthHandlers = (refreshAccessToken?: () => Promise<boolean>, logout?: () => Promise<any>) => {
+  if (!refreshAccessToken || !logout) {
+    throw new Error('Auth handlers not provided');
   }
-  if (!token) {
-    if (logout) await logout();
-    throw new Error('Sesión expirada');
-  }
-  return token;
-}
+  return {
+    refreshAccessToken,
+    logout,
+  } as {
+    refreshAccessToken: () => Promise<boolean>;
+    logout: () => Promise<any>;
+  };
+};
 
 export async function listLlaves({ marcaId, refreshAccessToken, logout }: ListParams): Promise<ListLlavesResponse> {
   try {
     const apiUrl = getApiUrl();
-    const token = await getToken(refreshAccessToken, logout);
-    const response = await fetch(`${apiUrl}/api/llaves?m=${marcaId}`, {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
+
+    const response = await authedFetch({
+      url: `${apiUrl}/api/llaves?m=${marcaId}`,
+      init: {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       },
+      refreshAccessToken: refresh,
+      logout: doLogout,
     });
 
-    if (response.status === 401) {
-      if (refreshAccessToken) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) return listLlaves({ marcaId, refreshAccessToken, logout });
-        if (logout) await logout();
-      }
-      return { status: false, message: 'Sesión expirada' };
-    }
-
-    if (response.status === 403) {
-      if (logout) await logout();
-      throw new Error('Acceso denegado');
-    }
+    if (!response) return { status: false, message: 'Sesión expirada' };
 
     const data = await response.json();
     return data;
@@ -108,30 +99,22 @@ export async function listLlaves({ marcaId, refreshAccessToken, logout }: ListPa
 export async function createLlave({ requestData, refreshAccessToken, logout }: CreateParams): Promise<BasicResponse> {
   try {
     const apiUrl = getApiUrl();
-    const token = await getToken(refreshAccessToken, logout);
-    const response = await fetch(`${apiUrl}/api/llaves`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
+
+    const response = await authedFetch({
+      url: `${apiUrl}/api/llaves`,
+      init: {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestData),
       },
-      body: JSON.stringify(requestData),
+      refreshAccessToken: refresh,
+      logout: doLogout,
     });
 
-    if (response.status === 401) {
-      if (refreshAccessToken) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) return createLlave({ requestData, refreshAccessToken, logout });
-        if (logout) await logout();
-      }
-      return { status: false, message: 'Sesión expirada' };
-    }
-
-    if (response.status === 403) {
-      if (logout) await logout();
-      throw new Error('Acceso denegado');
-    }
+    if (!response) return { status: false, message: 'Sesión expirada' };
 
     const data: any = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.message || `HTTP error! status: ${response.status}`);
@@ -145,30 +128,22 @@ export async function createLlave({ requestData, refreshAccessToken, logout }: C
 export async function updateLlave({ id, requestData, refreshAccessToken, logout }: UpdateParams): Promise<BasicResponse> {
   try {
     const apiUrl = getApiUrl();
-    const token = await getToken(refreshAccessToken, logout);
-    const response = await fetch(`${apiUrl}/api/llaves/${id}`, {
-      method: 'PUT',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
+
+    const response = await authedFetch({
+      url: `${apiUrl}/api/llaves/${id}`,
+      init: {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestData),
       },
-      body: JSON.stringify(requestData),
+      refreshAccessToken: refresh,
+      logout: doLogout,
     });
 
-    if (response.status === 401) {
-      if (refreshAccessToken) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) return updateLlave({ id, requestData, refreshAccessToken, logout });
-        if (logout) await logout();
-      }
-      return { status: false, message: 'Sesión expirada' };
-    }
-
-    if (response.status === 403) {
-      if (logout) await logout();
-      throw new Error('Acceso denegado');
-    }
+    if (!response) return { status: false, message: 'Sesión expirada' };
 
     const data: any = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.message || `HTTP error! status: ${response.status}`);
@@ -182,29 +157,21 @@ export async function updateLlave({ id, requestData, refreshAccessToken, logout 
 export async function deleteLlave({ id, marcaId, refreshAccessToken, logout }: DeleteParams): Promise<BasicResponse> {
   try {
     const apiUrl = getApiUrl();
-    const token = await getToken(refreshAccessToken, logout);
-    const response = await fetch(`${apiUrl}/api/llaves/${id}?m=${marcaId}`, {
-      method: 'DELETE',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
+
+    const response = await authedFetch({
+      url: `${apiUrl}/api/llaves/${id}?m=${marcaId}`,
+      init: {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       },
+      refreshAccessToken: refresh,
+      logout: doLogout,
     });
 
-    if (response.status === 401) {
-      if (refreshAccessToken) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) return deleteLlave({ id, marcaId, refreshAccessToken, logout });
-        if (logout) await logout();
-      }
-      return { status: false, message: 'Sesión expirada' };
-    }
-
-    if (response.status === 403) {
-      if (logout) await logout();
-      throw new Error('Acceso denegado');
-    }
+    if (!response) return { status: false, message: 'Sesión expirada' };
 
     const data: any = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.message || `HTTP error! status: ${response.status}`);

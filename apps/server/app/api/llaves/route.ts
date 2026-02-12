@@ -150,6 +150,30 @@ export async function POST(req: NextRequest) {
       sendNotificationByRole(marcaDia.corpo_id, [created.created_by], "Llave registrada", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
     }
 
+    // Registrar cambio de creación
+    const createdBy = parseInt(String((payload as any)?.id ?? 0)) || 0;
+    await prisma.c_cambios_apps_modules.create({
+      data: {
+        nombre_tabla: "e_llave",
+        registro_id: created.id,
+        cambios: JSON.stringify([{
+          prop: "__created__",
+          before: null,
+          after: {
+            id: created.id,
+            cliente_id: created.cliente_id,
+            corpo_id: created.corpo_id,
+            puesto_id: created.puesto_id,
+            lugar_abre: created.lugar_abre,
+            cantidad_copias: created.cantidad_copias,
+            observaciones: created.observaciones,
+          },
+        }]),
+        created_at: createdAt,
+        created_by: createdBy,
+      },
+    });
+
     return NextResponse.json({ status: true, message: "Llave creada correctamente", id: created.id }, { status: 200 });
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";

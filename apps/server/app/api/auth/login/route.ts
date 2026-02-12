@@ -196,6 +196,7 @@ export async function POST(request: NextRequest) {
                 message: "Logeado con éxito",
                 accessToken,
                 refreshToken,
+                createdAt: now.getTime(), // Fecha en formato numérico
                 empleado: {
                     id: empleado.id,
                     cedula: empleado.cedula,

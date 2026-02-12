@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator, Platform, Modal, View, Image } from 'react-native';
+import { Alert, ScrollView, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator, Platform, Modal, View, Image, Dimensions } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Network from 'expo-network';
@@ -20,6 +20,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { eventBus } from '../hooks/eventBus';
 import getHoraAccion from '../hooks/getHoraAccion';
 import { useQRScanner } from '../hooks/useQRScanner';
+import authedFetch from '../hooks/authedFetch';
 import {
   createChecklistSupervision,
   deleteChecklistSupervision,
@@ -697,6 +698,17 @@ function dateToLocalString(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
+function formatYMDToDMY(value?: string): string {
+  const v = String(value || '').trim();
+  if (!v) return '';
+  const onlyDate = v.split('T')[0];
+  const ymd = onlyDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (ymd) return `${ymd[3]}-${ymd[2]}-${ymd[1]}`;
+  const dmy = onlyDate.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+  if (dmy) return `${dmy[1]}-${dmy[2]}-${dmy[3]}`;
+  return onlyDate;
+}
+
 function decodeFirmaHash(hash: string): { sessionId?: string; empleadoId?: string; latitud?: string; longitud?: string; timestamp?: string } | null {
   try {
     const decoded = atob(hash);
@@ -765,6 +777,12 @@ export default function ChecklistSupervisionScreen() {
   const [isSignatureModalVisible, setIsSignatureModalVisible] = useState(false);
   const signatureRef = useRef<any>(null);
   const [signatureKey, setSignatureKey] = useState(0);
+
+  // Modal: ver cambios (auditoría)
+  const [isCambiosModalVisible, setIsCambiosModalVisible] = useState(false);
+  const [cambiosTitle, setCambiosTitle] = useState<string>('Cambios');
+  const [cambiosItems, setCambiosItems] = useState<any[]>([]);
+  const [expandedCambioId, setExpandedCambioId] = useState<number | null>(null);
 
   // Estados para cámara (recreado desde cero)
   const [isCameraVisible, setIsCameraVisible] = useState(false);
@@ -854,37 +872,18 @@ export default function ChecklistSupervisionScreen() {
 
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) return;
-
-      let token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (logout) await logout();
-          throw new Error('Sesión expirada');
-        }
-        token = await AsyncStorage.getItem('access_token');
-      }
-
-      const response = await fetch(`${apiUrl}/api/main-structure`, {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': '69420',
+      const response = await authedFetch({
+        url: `${apiUrl}/api/main-structure`,
+        init: {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
         },
+        refreshAccessToken,
+        logout,
       });
-
-      if (response.status === 401) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) return fetchMainStructure();
-        await logout();
-        return;
-      }
-
-      if (response.status === 403) {
-        if (logout) await logout();
-        throw new Error('Acceso denegado');
-      }
+      if (!response) return;
 
       if (response.ok) {
         const data = await response.json();
@@ -896,12 +895,134 @@ export default function ChecklistSupervisionScreen() {
     } catch (error) {
       console.error('Error fetching main structure:', error);
     }
-  }, [refreshAccessToken]);
+  }, [refreshAccessToken, logout]);
 
   const getConnectionStatus = async (): Promise<boolean> => {
     const networkState = await Network.getNetworkStateAsync();
     return networkState.isConnected && networkState.isInternetReachable ? true : false;
   };
+
+  const closeCambiosModal = () => {
+    setIsCambiosModalVisible(false);
+    setCambiosItems([]);
+    setExpandedCambioId(null);
+  };
+
+  const formatCambioCreatedAt = (value: any) => {
+    if (!value) return '-';
+    try {
+      const d = new Date(value);
+      if (isNaN(d.getTime())) return String(value);
+      return d.toLocaleString('es-CR', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+    } catch {
+      return String(value);
+    }
+  };
+
+  const formatEvaluacionForDisplay = (evaluacionStr: string): string => {
+    try {
+      const evalData = JSON.parse(evaluacionStr || '[]');
+      if (!Array.isArray(evalData)) return evaluacionStr;
+
+      const lines: string[] = [];
+      evalData.forEach((section: any) => {
+        if (section.title) {
+          lines.push(`\n${section.title}:`);
+        }
+        if (Array.isArray(section.subsections)) {
+          section.subsections.forEach((subsection: any) => {
+            if (subsection.title) {
+              lines.push(`  - ${subsection.title}`);
+            }
+            if (Array.isArray(subsection.inputs)) {
+              subsection.inputs.forEach((input: any) => {
+                const title = input.title || 'Valor';
+                let value = input.value || '';
+                if (input.type === 'checkbox') {
+                  value = value === 'true' ? 'Marcado' : 'No marcado';
+                } else if (input.type === 'photo') {
+                  value = value || input.file_name ? 'Imagen adjunta' : '-';
+                }
+                lines.push(`    • ${title}: ${value}`);
+              });
+            }
+          });
+        }
+      });
+      return lines.join('\n') || evaluacionStr;
+    } catch {
+      return evaluacionStr;
+    }
+  };
+
+  const formatChangeValue = (value: any): string => {
+    if (value === null || value === undefined) return '-';
+    if (typeof value === 'string') {
+      // Si parece ser JSON, intentar parsearlo
+      if (value.trim().startsWith('{') || value.trim().startsWith('[')) {
+        try {
+          const parsed = JSON.parse(value);
+          if (Array.isArray(parsed)) {
+            return parsed.map((item, idx) => {
+              if (typeof item === 'object' && item !== null) {
+                return `Item ${idx + 1}: ${JSON.stringify(item, null, 2)}`;
+              }
+              return String(item);
+            }).join('\n');
+          }
+          if (typeof parsed === 'object') {
+            return JSON.stringify(parsed, null, 2);
+          }
+        } catch {
+          // No es JSON válido, retornar como string
+        }
+      }
+      return value;
+    }
+    if (typeof value === 'object') {
+      return JSON.stringify(value, null, 2);
+    }
+    return String(value);
+  };
+
+  const fetchCambios = useCallback(async (tabla: string, registroId: number) => {
+    const isConnected = await getConnectionStatus();
+    if (!isConnected) {
+      Alert.alert('Sin conexión', 'Esta función solo está disponible con conexión a internet.');
+      return;
+    }
+    try {
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) throw new Error('Server URL not configured');
+      const resp = await authedFetch({
+        url: `${apiUrl}/api/cambios-apps-modules?tabla=${encodeURIComponent(tabla)}&registro_id=${registroId}`,
+        init: {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        },
+        refreshAccessToken,
+        logout,
+      });
+      if (!resp) return;
+
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data.status) {
+        throw new Error(data.message || 'No se pudieron cargar los cambios');
+      }
+      setCambiosItems(Array.isArray(data.data) ? data.data : []);
+      setIsCambiosModalVisible(true);
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'No se pudieron cargar los cambios');
+    }
+  }, [getConnectionStatus, refreshAccessToken, logout]);
 
   const requestLocation = async () => {
     try {
@@ -1810,7 +1931,7 @@ export default function ChecklistSupervisionScreen() {
             }}
           >
             <ThemedText style={styles.dateButtonText}>
-              {input.value || 'Seleccionar fecha'}
+              {input.value ? formatYMDToDMY(input.value) : 'Seleccionar fecha'}
             </ThemedText>
             <Ionicons name="calendar-outline" size={18} color="#007AFF" />
           </TouchableOpacity>
@@ -2028,6 +2149,18 @@ export default function ChecklistSupervisionScreen() {
             <Ionicons name="pencil" size={18} color="#FFFFFF" />
             <ThemedText style={styles.listItemButtonText}>Editar</ThemedText>
           </TouchableOpacity>
+          {!(it.id_local || it.id === 0) && (
+            <TouchableOpacity
+              style={[styles.listItemButton, styles.changesButton]}
+              onPress={() => {
+                setCambiosTitle(`Cambios - Checklist #${it.id}`);
+                fetchCambios('c_checklist_supervision', it.id);
+              }}
+            >
+              <Ionicons name="list-outline" size={18} color="#FFFFFF" />
+              <ThemedText style={styles.listItemButtonText}>Cambios</ThemedText>
+            </TouchableOpacity>
+          )}
           <TouchableOpacity style={[styles.listItemButton, styles.deleteButton]} onPress={() => handleDelete(it)}>
             <Ionicons name="trash" size={18} color="#FFFFFF" />
             <ThemedText style={styles.listItemButtonText}>Eliminar</ThemedText>
@@ -2052,7 +2185,7 @@ export default function ChecklistSupervisionScreen() {
           </ThemedView>
 
           {/* Filtros */}
-          {!isCreating && (
+          {!isCreating && !isLoading && (
             <ThemedView style={styles.filtersMain}>
               <ThemedView style={styles.filterHeader}>
                 <TouchableOpacity
@@ -2222,7 +2355,7 @@ export default function ChecklistSupervisionScreen() {
             </ThemedView>
           )}
 
-          {!isCreating && (
+          {!isCreating && !isLoading && (
             <TouchableOpacity style={styles.createButton} onPress={startCreating}>
               <ThemedText style={styles.createButtonText}>
                 <Ionicons name="add" size={20} color="#FFFFFF" /> Nuevo registro
@@ -2384,7 +2517,7 @@ export default function ChecklistSupervisionScreen() {
               <ThemedText style={styles.label}>Fecha *</ThemedText>
               <TouchableOpacity style={styles.dateButton} onPress={() => setShowFechaPicker(true)}>
                 <ThemedText style={styles.dateButtonText}>
-                  {dateToLocalString(fecha)}
+                  {formatYMDToDMY(dateToLocalString(fecha))}
                 </ThemedText>
                 <Ionicons name="calendar-outline" size={18} color="#007AFF" />
               </TouchableOpacity>
@@ -2577,9 +2710,6 @@ export default function ChecklistSupervisionScreen() {
                           {/* Encabezados de la tabla */}
                           <View style={styles.tableHeader}>
                             <View style={styles.tableHeaderCell}>
-                              <ThemedText style={styles.tableHeaderText}>Tipo</ThemedText>
-                            </View>
-                            <View style={styles.tableHeaderCell}>
                               <ThemedText style={styles.tableHeaderText}>Estado</ThemedText>
                             </View>
                             <View style={styles.tableHeaderCell}>
@@ -2595,11 +2725,6 @@ export default function ChecklistSupervisionScreen() {
                           {/* Filas de datos */}
                           {articulos.map((articulo, index) => (
                             <View key={articulo.id} style={styles.tableRow}>
-                              <View style={styles.tableCell}>
-                                <ThemedText style={styles.tableCellText}>
-                                  {articulo.tipo || '-'}
-                                </ThemedText>
-                              </View>
                               <View style={styles.tableCell}>
                                 <View style={styles.pickerContainerTable}>
                                   <Picker
@@ -2767,6 +2892,95 @@ export default function ChecklistSupervisionScreen() {
           }}
         />
       )}
+
+      {/* Modal: ver cambios */}
+      <Modal
+        visible={isCambiosModalVisible}
+        animationType="fade"
+        transparent
+        presentationStyle="overFullScreen"
+        onRequestClose={closeCambiosModal}
+      >
+        <View style={styles.overlay}>
+          <ThemedView style={styles.floatModalCardMovimientos}>
+            <ThemedView style={styles.floatModalHeader}>
+              <ThemedText style={styles.modalTitle}>{cambiosTitle}</ThemedText>
+              <TouchableOpacity onPress={closeCambiosModal}>
+                <Ionicons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+            </ThemedView>
+
+            <ScrollView style={{ maxHeight: Dimensions.get('window').height * 0.75 }} contentContainerStyle={{ padding: 16 }}>
+              {(!cambiosItems || cambiosItems.length === 0) ? (
+                <ThemedView style={styles.emptyContainer}>
+                  <ThemedText style={styles.emptyText}>No hay cambios registrados</ThemedText>
+                </ThemedView>
+              ) : (
+                cambiosItems.map((row: any) => {
+                  let parsed: any[] = [];
+                  try {
+                    parsed = row?.cambios ? JSON.parse(row.cambios) : [];
+                  } catch {
+                    parsed = [];
+                  }
+                  const createdAtLabel = formatCambioCreatedAt(row?.created_at);
+                  const isOpen = expandedCambioId === row.id;
+
+                  return (
+                    <ThemedView key={`chg-${row.id}`} style={styles.cambioCollapsableMain}>
+                      <TouchableOpacity
+                        style={styles.cambioCollapsableHeader}
+                        onPress={() => setExpandedCambioId((prev) => (prev === row.id ? null : row.id))}
+                        activeOpacity={0.8}
+                      >
+                        <ThemedText style={styles.cambioCollapsableTitle}>
+                          {createdAtLabel}
+                        </ThemedText>
+                        <Ionicons
+                          name={isOpen ? "chevron-up" : "chevron-down"}
+                          size={18}
+                          color="#007AFF"
+                        />
+                      </TouchableOpacity>
+
+                      {isOpen && (
+                        <ThemedView style={styles.cambioCollapsableContent}>
+                          <ThemedView style={styles.filterGroupSearch}>
+                            <ThemedText style={styles.filterLabel}>Cambio realizado por:</ThemedText>
+                            <ThemedText style={styles.changeDescription}>
+                              {row.empleado_nombre || 'Desconocido'}
+                              {row.empleado_cedula ? ` - Cédula: ${row.empleado_cedula}` : ''}
+                            </ThemedText>
+                          </ThemedView>
+
+                          {(Array.isArray(parsed) ? parsed : []).length > 0 && (
+                            <ThemedView style={styles.filterGroupSearch}>
+                              <ThemedText style={styles.filterLabel}>Cambios:</ThemedText>
+                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => {
+                                let displayValue = formatChangeValue(c?.after);
+                                // Si es el campo evaluacion, formatearlo especialmente
+                                if (c?.prop === 'evaluacion') {
+                                  displayValue = formatEvaluacionForDisplay(String(c?.after || ''));
+                                }
+                                return (
+                                  <ThemedText key={`c-${row.id}-${idx}`} style={styles.changeDescription}>
+                                    <ThemedText style={{ fontWeight: '800' }}>{String(c?.prop ?? '-')}: </ThemedText>
+                                    {displayValue}
+                                  </ThemedText>
+                                );
+                              })}
+                            </ThemedView>
+                          )}
+                        </ThemedView>
+                      )}
+                    </ThemedView>
+                  );
+                })
+              )}
+            </ScrollView>
+          </ThemedView>
+        </View>
+      </Modal>
 
       {/* Modal de firma dibujada */}
       <Modal
@@ -3192,8 +3406,17 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   editButton: { backgroundColor: '#007AFF' },
+  changesButton: { backgroundColor: '#5856D6' },
   deleteButton: { backgroundColor: '#FF3B30' },
   listItemButtonText: { color: '#FFFFFF', fontSize: 13, fontWeight: '600' },
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 },
+  floatModalCardMovimientos: { backgroundColor: '#FFFFFF', borderRadius: 12, width: '100%', maxWidth: 500, maxHeight: '80%', borderWidth: 1, borderColor: '#E0E0E0', overflow: 'hidden' },
+  floatModalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#E0E0E0' },
+  cambioCollapsableMain: { width: '100%', marginBottom: 10, backgroundColor: '#fff', borderRadius: 6, borderWidth: 1, borderColor: '#E0E0E0', overflow: 'hidden' },
+  cambioCollapsableHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, backgroundColor: '#F8F9FA' },
+  cambioCollapsableTitle: { fontSize: 14, fontWeight: '600', color: '#007AFF', flex: 1 },
+  cambioCollapsableContent: { padding: 12, gap: 8, backgroundColor: '#F8F9FA' },
+  changeDescription: { fontSize: 14, lineHeight: 20, color: '#666', marginBottom: 8 },
   // Estilos para componente collapsable (como StaffEvaluationsScreen)
   collapseButton: {
     flexDirection: 'row',

@@ -135,6 +135,7 @@ export async function POST(request: NextRequest) {
         newAccessToken: newAccessToken,
         newRefreshToken: newRefreshToken,
         newSessionId: newSessionId,
+        createdAt: toZonedTime(new Date(), "America/Costa_Rica").getTime(), // Fecha en formato numérico
       },
       { status: 200 }
     );

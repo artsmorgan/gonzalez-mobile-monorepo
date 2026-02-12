@@ -18,6 +18,7 @@ import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import AppHeader from '@/components/AppHeader';
 import AppFooter from '@/components/AppFooter';
+import { formatDateDMY } from '@/utils/formatDate';
 import SlideMenu from '@/components/SlideMenu';
 import { useAuth } from '@/contexts/AuthContext';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
@@ -32,6 +33,8 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { createStaffEvaluation, deleteStaffEvaluation } from '@/hooks/staffEvaluationsFunctions';
 import getHoraAccion from '@/hooks/getHoraAccion';
+import authedFetch from '@/hooks/authedFetch';
+import getValidAccessTokenOrLogout from '@/hooks/getValidAccessTokenOrLogout';
 
 type StaffEvaluationsNavigationProp = NativeStackNavigationProp<
   RootStackParamList,
@@ -402,37 +405,19 @@ export default function StaffEvaluationsScreen() {
       }
 
       if (hasConnection) {
-        let token = await AsyncStorage.getItem('access_token');
-        if (!token) {
-          const refreshed = await refreshAccessToken();
-          if (!refreshed) {
-            if (logout) await logout();
-            throw new Error('Sesión expirada');
-          }
-          token = await AsyncStorage.getItem('access_token');
-        }
-
         // Evaluaciones
-        const evalRes = await fetch(`${apiUrl}/api/evaluation/corpo/${currentMarca.corpo.id}`, {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-            'ngrok-skip-browser-warning': '69420',
+        const evalRes = await authedFetch({
+          url: `${apiUrl}/api/evaluation/corpo/${currentMarca.corpo.id}`,
+          init: {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+            },
           },
+          refreshAccessToken,
+          logout,
         });
-
-        if (evalRes.status === 401) {
-          const refreshed = await refreshAccessToken();
-          if (refreshed) return fetchData();
-          await logout();
-          return;
-        }
-
-        if (evalRes.status === 403) {
-          if (logout) await logout();
-          throw new Error('Acceso denegado');
-        }
+        if (!evalRes) return;
 
         if (!evalRes.ok) {
           throw new Error(`HTTP error! status: ${evalRes.status}`);
@@ -447,26 +432,18 @@ export default function StaffEvaluationsScreen() {
         }
 
         // Empleados
-        const empRes = await fetch(`${apiUrl}/api/empleados/corpo/${currentMarca.corpo.id}`, {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-            'ngrok-skip-browser-warning': '69420',
+        const empRes = await authedFetch({
+          url: `${apiUrl}/api/empleados/corpo/${currentMarca.corpo.id}`,
+          init: {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+            },
           },
+          refreshAccessToken,
+          logout,
         });
-
-        if (empRes.status === 401) {
-          const refreshed = await refreshAccessToken();
-          if (refreshed) return fetchData();
-          await logout();
-          return;
-        }
-
-        if (empRes.status === 403) {
-          if (logout) await logout();
-          throw new Error('Acceso denegado');
-        }
+        if (!empRes) return;
 
         if (empRes.ok) {
           const empData = await empRes.json();
@@ -632,21 +609,8 @@ export default function StaffEvaluationsScreen() {
       if (!apiUrl) {
         throw new Error('Server URL not configured');
       }
-
-      let token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (logout) await logout();
-          throw new Error('Sesión expirada');
-        }
-        token = await AsyncStorage.getItem('access_token');
-      }
-
-      if (!token) {
-        Alert.alert('Error', 'No se pudo obtener el token de sesión');
-        return;
-      }
+      const token = await getValidAccessTokenOrLogout({ refreshAccessToken, logout });
+      if (!token) return;
 
       const decodedToken: any = jwtDecode(token);
       const sessionId = decodedToken.sessionId;
@@ -675,26 +639,18 @@ export default function StaffEvaluationsScreen() {
       let empleadoDetalle: FirmaData['empleadoDetalle'] = undefined;
       const isConnected = await checkConnection();
       if (isConnected) {
-        const response = await fetch(`${apiUrl}/api/empleados/${decodedEmpleadoId}`, {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-            'ngrok-skip-browser-warning': '69420',
+        const response = await authedFetch({
+          url: `${apiUrl}/api/empleados/${decodedEmpleadoId}`,
+          init: {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+            },
           },
+          refreshAccessToken,
+          logout,
         });
-
-        if (response.status === 401) {
-          const refreshed = await refreshAccessToken();
-          if (refreshed) return generateFirmaEvaluador();
-          await logout();
-          return;
-        }
-
-        if (response.status === 403) {
-          if (logout) await logout();
-          throw new Error('Acceso denegado');
-        }
+        if (!response) return;
 
         if (response.ok) {
           const empleadoData = await response.json();
@@ -742,46 +698,27 @@ export default function StaffEvaluationsScreen() {
         let empleadoDetalle: FirmaData['empleadoDetalle'] = undefined;
         const isConnected = await checkConnection();
         if (isConnected && apiUrl) {
-          let token = await AsyncStorage.getItem('access_token');
-          if (!token) {
-            const refreshed = await refreshAccessToken();
-            if (!refreshed) {
-              if (logout) await logout();
-              throw new Error('Sesión expirada');
-            }
-            token = await AsyncStorage.getItem('access_token');
-          }
-          if (token) {
-            const response = await fetch(`${apiUrl}/api/empleados/${empleadoId}`, {
+          const response = await authedFetch({
+            url: `${apiUrl}/api/empleados/${empleadoId}`,
+            init: {
               method: 'GET',
               headers: {
-                'Authorization': `Bearer ${token}`,
                 'Content-Type': 'application/json',
-                'ngrok-skip-browser-warning': '69420',
               },
-            });
+            },
+            refreshAccessToken,
+            logout,
+          });
+          if (!response) return;
 
-            if (response.status === 401) {
-              const refreshed = await refreshAccessToken();
-              if (refreshed) return handleScanFirmaEmpleado();
-              await logout();
-              return;
-            }
-
-            if (response.status === 403) {
-              if (logout) await logout();
-              throw new Error('Acceso denegado');
-            }
-
-            if (response.ok) {
-              const empleadoData = await response.json();
-              empleadoDetalle = {
-                nombre: empleadoData.nombre,
-                primer_apellido: empleadoData.primer_apellido,
-                segundo_apellido: empleadoData.segundo_apellido,
-                cedula_empleado: empleadoData.cedula,
-              };
-            }
+          if (response.ok) {
+            const empleadoData = await response.json();
+            empleadoDetalle = {
+              nombre: empleadoData.nombre,
+              primer_apellido: empleadoData.primer_apellido,
+              segundo_apellido: empleadoData.segundo_apellido,
+              cedula_empleado: empleadoData.cedula,
+            };
           }
         }
 
@@ -1341,7 +1278,7 @@ export default function StaffEvaluationsScreen() {
             onPress={() => setShowFechaIngresoPicker(true)}
           >
             <ThemedText style={styles.dateButtonText}>
-              {fechaIngreso || 'Seleccionar fecha'}
+              {fechaIngreso ? formatDateDMY(fechaIngreso) : 'Seleccionar fecha'}
             </ThemedText>
             <Ionicons name="calendar-outline" size={20} color="#007AFF" />
           </TouchableOpacity>
@@ -1355,7 +1292,7 @@ export default function StaffEvaluationsScreen() {
             onPress={() => setShowFechaEvaluacionPicker(true)}
           >
             <ThemedText style={styles.dateButtonText}>
-              {fechaEvaluacion || 'Seleccionar fecha'}
+              {fechaEvaluacion ? formatDateDMY(fechaEvaluacion) : 'Seleccionar fecha'}
             </ThemedText>
             <Ionicons name="calendar-outline" size={20} color="#007AFF" />
           </TouchableOpacity>
@@ -1704,11 +1641,11 @@ export default function StaffEvaluationsScreen() {
         </ThemedText>
         <ThemedText style={styles.evalLine}>
           <ThemedText style={styles.evalLabel}>Fecha ingreso: </ThemedText>
-          <ThemedText style={styles.evalValue}>{ev.fecha_ingreso.split('T')[0]}</ThemedText>
+          <ThemedText style={styles.evalValue}>{formatDateDMY(ev.fecha_ingreso)}</ThemedText>
         </ThemedText>
         <ThemedText style={styles.evalLine}>
           <ThemedText style={styles.evalLabel}>Fecha evaluación: </ThemedText>
-          <ThemedText style={styles.evalValue}>{ev.fecha_evaluacion.split('T')[0]}</ThemedText>
+          <ThemedText style={styles.evalValue}>{formatDateDMY(ev.fecha_evaluacion)}</ThemedText>
         </ThemedText>
 
         {/* Evaluación detallada */}
@@ -2011,7 +1948,7 @@ export default function StaffEvaluationsScreen() {
                     onPress={() => setShowFilterFechaPicker(true)}
                   >
                     <ThemedText style={styles.dateButtonText}>
-                      {filterFechaEvaluacion || 'Seleccionar fecha'}
+                      {filterFechaEvaluacion ? formatDateDMY(filterFechaEvaluacion) : 'Seleccionar fecha'}
                     </ThemedText>
                     <Ionicons name="calendar-outline" size={20} color="#007AFF" />
                   </TouchableOpacity>

@@ -1,5 +1,5 @@
 import Constants from 'expo-constants';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import authedFetch from './authedFetch';
 import type {
   BasicResponse,
   CreateIncidentRequest,
@@ -84,48 +84,38 @@ const normalizeBase64 = (b64: string) => {
   return b64;
 };
 
+const requireAuthHandlers = (refreshAccessToken?: () => Promise<boolean>, logout?: () => Promise<any>) => {
+  if (!refreshAccessToken || !logout) {
+    throw new Error('Auth handlers not provided');
+  }
+  return {
+    refreshAccessToken,
+    logout,
+  } as {
+    refreshAccessToken: () => Promise<boolean>;
+    logout: () => Promise<any>;
+  };
+};
+
 export const listIncidentsByMarca = async ({ marcaId, refreshAccessToken, logout }: ListIncidentsParams): Promise<IncidentsListResponse> => {
   try {
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) throw new Error('Server URL not configured');
+    const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
 
-    let token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-      if (refreshAccessToken) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (logout) await logout();
-          throw new Error('Sesión expirada');
-        }
-        token = await AsyncStorage.getItem('access_token');
-      } else {
-        if (logout) await logout();
-        throw new Error('Sesión expirada');
-      }
-    }
-
-    const response = await fetch(`${apiUrl}/api/incidents?m=${marcaId}`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/incidents?m=${marcaId}`,
+      init: {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       },
+      refreshAccessToken: refresh,
+      logout: doLogout,
     });
 
-    if (response.status === 401) {
-      if (refreshAccessToken) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) return listIncidentsByMarca({ marcaId, refreshAccessToken, logout });
-        if (logout) await logout();
-      }
-      return { status: false, message: 'Sesión expirada' };
-    }
-
-    if (response.status === 403) {
-      if (logout) await logout();
-      throw new Error('Acceso denegado');
-    }
+    if (!response) return { status: false, message: 'Sesión expirada' };
 
     const data = await response.json();
     return data;
@@ -139,44 +129,21 @@ export const listIncidentClassifications = async ({ refreshAccessToken, logout }
   try {
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) throw new Error('Server URL not configured');
+    const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
 
-    let token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-      if (refreshAccessToken) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (logout) await logout();
-          throw new Error('Sesión expirada');
-        }
-        token = await AsyncStorage.getItem('access_token');
-      } else {
-        if (logout) await logout();
-        throw new Error('Sesión expirada');
-      }
-    }
-
-    const response = await fetch(`${apiUrl}/api/incidents/classification`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/incidents/classification`,
+      init: {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       },
+      refreshAccessToken: refresh,
+      logout: doLogout,
     });
 
-    if (response.status === 401) {
-      if (refreshAccessToken) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) return listIncidentClassifications({ refreshAccessToken, logout });
-        if (logout) await logout();
-      }
-      return { status: false, message: 'Sesión expirada' };
-    }
-
-    if (response.status === 403) {
-      if (logout) await logout();
-      throw new Error('Acceso denegado');
-    }
+    if (!response) return { status: false, message: 'Sesión expirada' };
 
     const data = await response.json();
     return data;
@@ -190,44 +157,21 @@ export const listExecutives = async ({ refreshAccessToken, logout }: ListExecuti
   try {
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) throw new Error('Server URL not configured');
+    const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
 
-    let token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-      if (refreshAccessToken) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (logout) await logout();
-          throw new Error('Sesión expirada');
-        }
-        token = await AsyncStorage.getItem('access_token');
-      } else {
-        if (logout) await logout();
-        throw new Error('Sesión expirada');
-      }
-    }
-
-    const response = await fetch(`${apiUrl}/api/executives`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/executives`,
+      init: {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       },
+      refreshAccessToken: refresh,
+      logout: doLogout,
     });
 
-    if (response.status === 401) {
-      if (refreshAccessToken) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) return listExecutives({ refreshAccessToken, logout });
-        if (logout) await logout();
-      }
-      return { status: false, message: 'Sesión expirada' };
-    }
-
-    if (response.status === 403) {
-      if (logout) await logout();
-      throw new Error('Acceso denegado');
-    }
+    if (!response) return { status: false, message: 'Sesión expirada' };
 
     const data = await response.json();
     return data;
@@ -243,21 +187,7 @@ export const createIncident = async ({ requestData, refreshAccessToken, logout }
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
-
-    let token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-      if (refreshAccessToken) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (logout) await logout();
-          throw new Error('Sesión expirada');
-        }
-        token = await AsyncStorage.getItem('access_token');
-      } else {
-        if (logout) await logout();
-        throw new Error('Sesión expirada');
-      }
-    }
+    const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
 
     // Normalizar archivos: el server acepta string JSON o array, pero siempre guardamos base64 puro
     const payload: any = { ...requestData };
@@ -268,33 +198,20 @@ export const createIncident = async ({ requestData, refreshAccessToken, logout }
       }));
     }
 
-    const response = await fetch(`${apiUrl}/api/incidents`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/incidents`,
+      init: {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
       },
-      body: JSON.stringify(payload),
+      refreshAccessToken: refresh,
+      logout: doLogout,
     });
 
-    if (response.status === 401) {
-      if (refreshAccessToken) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) {
-          return createIncident({ requestData, refreshAccessToken, logout });
-        } else if (logout) {
-          await logout();
-          return { status: false, message: 'Sesión expirada' };
-        }
-      }
-      return { status: false, message: 'Sesión expirada' };
-    }
-
-    if (response.status === 403) {
-      if (logout) await logout();
-      throw new Error('Acceso denegado');
-    }
+    if (!response) return { status: false, message: 'Sesión expirada' };
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
@@ -315,49 +232,22 @@ export const updateIncident = async ({ requestData, incidentId, refreshAccessTok
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
+    const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
 
-    let token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-      if (refreshAccessToken) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (logout) await logout();
-          throw new Error('Sesión expirada');
-        }
-        token = await AsyncStorage.getItem('access_token');
-      } else {
-        if (logout) await logout();
-        throw new Error('Sesión expirada');
-      }
-    }
-
-    const response = await fetch(`${apiUrl}/api/incidents/${incidentId}`, {
-      method: 'PUT',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/incidents/${incidentId}`,
+      init: {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestData),
       },
-      body: JSON.stringify(requestData),
+      refreshAccessToken: refresh,
+      logout: doLogout,
     });
 
-    if (response.status === 401) {
-      if (refreshAccessToken) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) {
-          return updateIncident({ requestData, incidentId, refreshAccessToken, logout });
-        } else if (logout) {
-          await logout();
-          return { status: false, message: 'Sesión expirada' };
-        }
-      }
-      return { status: false, message: 'Sesión expirada' };
-    }
-
-    if (response.status === 403) {
-      if (logout) await logout();
-      throw new Error('Acceso denegado');
-    }
+    if (!response) return { status: false, message: 'Sesión expirada' };
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
@@ -382,39 +272,21 @@ export const deleteIncident = async ({ incidentId, refreshAccessToken, logout }:
   try {
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) throw new Error('Server URL not configured');
+    const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
 
-    let token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-      if (refreshAccessToken) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (logout) await logout();
-          throw new Error('Sesión expirada');
-        }
-        token = await AsyncStorage.getItem('access_token');
-      } else {
-        if (logout) await logout();
-        throw new Error('Sesión expirada');
-      }
-    }
-
-    const response = await fetch(`${apiUrl}/api/incidents/${incidentId}`, {
-      method: 'DELETE',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/incidents/${incidentId}`,
+      init: {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       },
+      refreshAccessToken: refresh,
+      logout: doLogout,
     });
 
-    if (response.status === 401) {
-      if (refreshAccessToken) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) return deleteIncident({ incidentId, refreshAccessToken, logout });
-        if (logout) await logout();
-      }
-      return { status: false, message: 'Sesión expirada' };
-    }
+    if (!response) return { status: false, message: 'Sesión expirada' };
 
     const data: any = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.message || `HTTP error! status: ${response.status}`);
@@ -436,44 +308,21 @@ export const deleteIncidentFile = async ({ incidentId, fileId, refreshAccessToke
   try {
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) throw new Error('Server URL not configured');
+    const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
 
-    let token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-      if (refreshAccessToken) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (logout) await logout();
-          throw new Error('Sesión expirada');
-        }
-        token = await AsyncStorage.getItem('access_token');
-      } else {
-        if (logout) await logout();
-        throw new Error('Sesión expirada');
-      }
-    }
-
-    const response = await fetch(`${apiUrl}/api/incidents/${incidentId}/files/${fileId}`, {
-      method: 'DELETE',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/incidents/${incidentId}/files/${fileId}`,
+      init: {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       },
+      refreshAccessToken: refresh,
+      logout: doLogout,
     });
 
-    if (response.status === 401) {
-      if (refreshAccessToken) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) return deleteIncidentFile({ incidentId, fileId, refreshAccessToken, logout });
-        if (logout) await logout();
-      }
-      return { status: false, message: 'Sesión expirada' };
-    }
-
-    if (response.status === 403) {
-      if (logout) await logout();
-      throw new Error('Acceso denegado');
-    }
+    if (!response) return { status: false, message: 'Sesión expirada' };
 
     const data: any = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.message || `HTTP error! status: ${response.status}`);
@@ -492,44 +341,21 @@ export const listIncidentContributions = async ({
   try {
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) throw new Error('Server URL not configured');
+    const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
 
-    let token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-      if (refreshAccessToken) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (logout) await logout();
-          throw new Error('Sesión expirada');
-        }
-        token = await AsyncStorage.getItem('access_token');
-      } else {
-        if (logout) await logout();
-        throw new Error('Sesión expirada');
-      }
-    }
-
-    const response = await fetch(`${apiUrl}/api/incidents/${incidentId}/contributions`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/incidents/${incidentId}/contributions`,
+      init: {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       },
+      refreshAccessToken: refresh,
+      logout: doLogout,
     });
 
-    if (response.status === 401) {
-      if (refreshAccessToken) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) return listIncidentContributions({ incidentId, refreshAccessToken, logout });
-        if (logout) await logout();
-      }
-      return { status: false, message: 'Sesión expirada' };
-    }
-
-    if (response.status === 403) {
-      if (logout) await logout();
-      throw new Error('Acceso denegado');
-    }
+    if (!response) return { status: false, message: 'Sesión expirada' };
 
     const data = await response.json();
     return data;
@@ -548,21 +374,7 @@ export const createIncidentContribution = async ({
   try {
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) throw new Error('Server URL not configured');
-
-    let token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-      if (refreshAccessToken) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (logout) await logout();
-          throw new Error('Sesión expirada');
-        }
-        token = await AsyncStorage.getItem('access_token');
-      } else {
-        if (logout) await logout();
-        throw new Error('Sesión expirada');
-      }
-    }
+    const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
 
     const payload: any = { ...requestData };
     if (Array.isArray(payload.archivos)) {
@@ -572,29 +384,20 @@ export const createIncidentContribution = async ({
       }));
     }
 
-    const response = await fetch(`${apiUrl}/api/incidents/${incidentId}/contributions`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/incidents/${incidentId}/contributions`,
+      init: {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
       },
-      body: JSON.stringify(payload),
+      refreshAccessToken: refresh,
+      logout: doLogout,
     });
 
-    if (response.status === 401) {
-      if (refreshAccessToken) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) return createIncidentContribution({ incidentId, requestData, refreshAccessToken, logout });
-        if (logout) await logout();
-      }
-      return { status: false, message: 'Sesión expirada' };
-    }
-
-    if (response.status === 403) {
-      if (logout) await logout();
-      throw new Error('Acceso denegado');
-    }
+    if (!response) return { status: false, message: 'Sesión expirada' };
 
     const data: any = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.message || `HTTP error! status: ${response.status}`);
@@ -615,21 +418,7 @@ export const updateIncidentContribution = async ({
   try {
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) throw new Error('Server URL not configured');
-
-    let token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-      if (refreshAccessToken) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (logout) await logout();
-          throw new Error('Sesión expirada');
-        }
-        token = await AsyncStorage.getItem('access_token');
-      } else {
-        if (logout) await logout();
-        throw new Error('Sesión expirada');
-      }
-    }
+    const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
 
     const payload: any = { ...requestData };
     if (Array.isArray(payload.archivos)) {
@@ -639,29 +428,20 @@ export const updateIncidentContribution = async ({
       }));
     }
 
-    const response = await fetch(`${apiUrl}/api/incidents/${incidentId}/contributions/${contributionId}`, {
-      method: 'PUT',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/incidents/${incidentId}/contributions/${contributionId}`,
+      init: {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
       },
-      body: JSON.stringify(payload),
+      refreshAccessToken: refresh,
+      logout: doLogout,
     });
 
-    if (response.status === 401) {
-      if (refreshAccessToken) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) return updateIncidentContribution({ incidentId, contributionId, requestData, refreshAccessToken, logout });
-        if (logout) await logout();
-      }
-      return { status: false, message: 'Sesión expirada' };
-    }
-
-    if (response.status === 403) {
-      if (logout) await logout();
-      throw new Error('Acceso denegado');
-    }
+    if (!response) return { status: false, message: 'Sesión expirada' };
 
     const data: any = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.message || `HTTP error! status: ${response.status}`);
@@ -681,44 +461,21 @@ export const deleteIncidentContribution = async ({
   try {
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) throw new Error('Server URL not configured');
+    const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
 
-    let token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-      if (refreshAccessToken) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (logout) await logout();
-          throw new Error('Sesión expirada');
-        }
-        token = await AsyncStorage.getItem('access_token');
-      } else {
-        if (logout) await logout();
-        throw new Error('Sesión expirada');
-      }
-    }
-
-    const response = await fetch(`${apiUrl}/api/incidents/${incidentId}/contributions/${contributionId}`, {
-      method: 'DELETE',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/incidents/${incidentId}/contributions/${contributionId}`,
+      init: {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       },
+      refreshAccessToken: refresh,
+      logout: doLogout,
     });
 
-    if (response.status === 401) {
-      if (refreshAccessToken) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) return deleteIncidentContribution({ incidentId, contributionId, refreshAccessToken, logout });
-        if (logout) await logout();
-      }
-      return { status: false, message: 'Sesión expirada' };
-    }
-
-    if (response.status === 403) {
-      if (logout) await logout();
-      throw new Error('Acceso denegado');
-    }
+    if (!response) return { status: false, message: 'Sesión expirada' };
 
     const data: any = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.message || `HTTP error! status: ${response.status}`);
@@ -739,44 +496,21 @@ export const deleteIncidentContributionFile = async ({
   try {
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) throw new Error('Server URL not configured');
+    const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
 
-    let token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-      if (refreshAccessToken) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (logout) await logout();
-          throw new Error('Sesión expirada');
-        }
-        token = await AsyncStorage.getItem('access_token');
-      } else {
-        if (logout) await logout();
-        throw new Error('Sesión expirada');
-      }
-    }
-
-    const response = await fetch(`${apiUrl}/api/incidents/${incidentId}/contributions/${contributionId}/files/${fileId}`, {
-      method: 'DELETE',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/incidents/${incidentId}/contributions/${contributionId}/files/${fileId}`,
+      init: {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       },
+      refreshAccessToken: refresh,
+      logout: doLogout,
     });
 
-    if (response.status === 401) {
-      if (refreshAccessToken) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) return deleteIncidentContributionFile({ incidentId, contributionId, fileId, refreshAccessToken, logout });
-        if (logout) await logout();
-      }
-      return { status: false, message: 'Sesión expirada' };
-    }
-
-    if (response.status === 403) {
-      if (logout) await logout();
-      throw new Error('Acceso denegado');
-    }
+    if (!response) return { status: false, message: 'Sesión expirada' };
 
     const data: any = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.message || `HTTP error! status: ${response.status}`);

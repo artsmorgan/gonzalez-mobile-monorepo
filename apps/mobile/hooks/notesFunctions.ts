@@ -1,5 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Constants from "expo-constants";
+import authedFetch from "./authedFetch";
 
 interface CreateNoteParams {
     requestData: any;
@@ -39,48 +40,27 @@ export async function createNote({
             throw new Error('Puesto ID not found');
         }
 
-        let token = await AsyncStorage.getItem('access_token');
-        if (!token) {
-            if (refreshAccessToken) {
-                const refreshed = await refreshAccessToken();
-                if (!refreshed) {
-                    if (logout) await logout();
-                    throw new Error('Sesión expirada');
-                }
-                token = await AsyncStorage.getItem('access_token');
-            } else {
-                if (logout) await logout();
-                throw new Error('Sesión expirada');
-            }
+        if (!refreshAccessToken || !logout) {
+            throw new Error('Auth handlers not provided');
         }
 
         requestData.marca_id = marcaId;
 
-        const response = await fetch(`${apiUrl}/api/puestos/${puestoId}/notas`, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json',
-                'ngrok-skip-browser-warning': '69420',
+        const response = await authedFetch({
+            url: `${apiUrl}/api/puestos/${puestoId}/notas`,
+            init: {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(requestData),
             },
-            body: JSON.stringify(requestData),
+            refreshAccessToken,
+            logout,
         });
 
-        if (response.status === 401) {
-            if (refreshAccessToken) {
-                const refreshed = await refreshAccessToken();
-                if (refreshed) {
-                    return createNote({ requestData, marcaId, puestoId, refreshAccessToken, logout });
-                } else if (logout) {
-                    await logout();
-                    return { status: false, message: 'Sesión expirada' };
-                }
-            }
-        }
-
-        if (response.status === 403) {
-            if (logout) await logout();
-            throw new Error('Acceso denegado');
+        if (!response) {
+            return { status: false, message: 'Sesión expirada' };
         }
 
         if (!response.ok) {
@@ -142,48 +122,27 @@ export async function updateNote({
             throw new Error('Puesto ID not found');
         }
 
-        let token = await AsyncStorage.getItem('access_token');
-        if (!token) {
-            if (refreshAccessToken) {
-                const refreshed = await refreshAccessToken();
-                if (!refreshed) {
-                    if (logout) await logout();
-                    throw new Error('Sesión expirada');
-                }
-                token = await AsyncStorage.getItem('access_token');
-            } else {
-                if (logout) await logout();
-                throw new Error('Sesión expirada');
-            }
+        if (!refreshAccessToken || !logout) {
+            throw new Error('Auth handlers not provided');
         }
 
         requestData.marca_id = marcaId;
 
-        const response = await fetch(`${apiUrl}/api/puestos/${puestoId}/notas/${noteId}`, {
-            method: 'PUT',
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json',
-                'ngrok-skip-browser-warning': '69420',
+        const response = await authedFetch({
+            url: `${apiUrl}/api/puestos/${puestoId}/notas/${noteId}`,
+            init: {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(requestData),
             },
-            body: JSON.stringify(requestData),
+            refreshAccessToken,
+            logout,
         });
 
-        if (response.status === 401) {
-            if (refreshAccessToken) {
-                const refreshed = await refreshAccessToken();
-                if (refreshed) {
-                    return updateNote({ requestData, noteId, puestoId, marcaId, refreshAccessToken, logout });
-                } else if (logout) {
-                    await logout();
-                    return { status: false, message: 'Sesión expirada' };
-                }
-            }
-        }
-
-        if (response.status === 403) {
-            if (logout) await logout();
-            throw new Error('Acceso denegado');
+        if (!response) {
+            return { status: false, message: 'Sesión expirada' };
         }
 
         if (!response.ok) {

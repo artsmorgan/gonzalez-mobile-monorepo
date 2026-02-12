@@ -3,19 +3,19 @@ import SlideMenu from '@/components/SlideMenu';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import { useAuth } from '@/contexts/AuthContext';
+import authedFetch from '@/hooks/authedFetch';
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useState, useRef } from 'react';
 import { ActivityIndicator, Alert, StyleSheet, TouchableOpacity, View, ScrollView, Modal, Image, Dimensions } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
 import Constants from 'expo-constants';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import SignatureScreen from "react-native-signature-canvas";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 export default function DigitalSignatureScreen() {
-  const { isAuthenticated, isLoading, employee } = useAuth();
+  const { isAuthenticated, isLoading, employee, refreshAccessToken, logout } = useAuth();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const [location, setLocation] = useState<Location.LocationObject | null>(null);
   const [locationError, setLocationError] = useState<string | null>(null);
@@ -132,11 +132,6 @@ export default function DigitalSignatureScreen() {
         throw new Error('Server URL not configured');
       }
 
-      const token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        throw new Error('No authentication token found');
-      }
-
       const requestData = {
         empleadoId: employee.id,
         timestamp: Date.now(),
@@ -147,15 +142,22 @@ export default function DigitalSignatureScreen() {
         },
       };
 
-      const response = await fetch(`${apiUrl}/api/digital-signature/generate-signature`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': '69420',
+      const response = await authedFetch({
+        url: `${apiUrl}/api/digital-signature/generate-signature`,
+        init: {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(requestData),
         },
-        body: JSON.stringify(requestData),
+        refreshAccessToken,
+        logout,
       });
+
+      if (!response) {
+        throw new Error('Sesión expirada');
+      }
 
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
@@ -188,19 +190,21 @@ export default function DigitalSignatureScreen() {
         throw new Error('Server URL not configured');
       }
 
-      const token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        throw new Error('No authentication token found');
-      }
-
-      const response = await fetch(`${apiUrl}/api/digital-signature/manual-signature/${employee.id}`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': '69420',
+      const response = await authedFetch({
+        url: `${apiUrl}/api/digital-signature/manual-signature/${employee.id}`,
+        init: {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
         },
+        refreshAccessToken,
+        logout,
       });
+
+      if (!response) {
+        throw new Error('Sesión expirada');
+      }
 
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
@@ -267,20 +271,22 @@ export default function DigitalSignatureScreen() {
         throw new Error('Server URL not configured');
       }
 
-      const token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        throw new Error('No authentication token found');
-      }
-
-      const response = await fetch(`${apiUrl}/api/digital-signature/manual-signature/${employee.id}`, {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': '69420',
+      const response = await authedFetch({
+        url: `${apiUrl}/api/digital-signature/manual-signature/${employee.id}`,
+        init: {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ manualSignature: signature }),
         },
-        body: JSON.stringify({ manualSignature: signature }),
+        refreshAccessToken,
+        logout,
       });
+
+      if (!response) {
+        throw new Error('Sesión expirada');
+      }
 
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);

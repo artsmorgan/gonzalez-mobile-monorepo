@@ -18,6 +18,7 @@ import * as Network from 'expo-network';
 import { createNote as createNoteAPI, updateNote as updateNoteAPI } from '@/hooks/notesFunctions';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import { eventBus } from '@/hooks/eventBus';
+import authedFetch from '@/hooks/authedFetch';
 
 type NotesScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Notes'>;
 
@@ -129,6 +130,8 @@ export default function NotesScreen() {
   const [notes, setNotes] = useState<Note[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Importante: "sin internet" NO cuenta como error (solo es un estado informativo)
+  const [offlineMessage, setOfflineMessage] = useState<string | null>(null);
   const [puesto, setPuesto] = useState<Puesto | null>(null);
   const [hasCurrentMarca, setHasCurrentMarca] = useState<boolean>(false);
 
@@ -237,6 +240,25 @@ export default function NotesScreen() {
     return true;
   };
 
+  const isProbablyNetworkError = (err: any) => {
+    const msg = String(err?.message ?? err ?? '').toLowerCase();
+    // RN / fetch típicamente: "Network request failed"
+    return (
+      msg.includes('network request failed') ||
+      msg.includes('failed to fetch') ||
+      msg.includes('networkerror') ||
+      msg.includes('timeout') ||
+      msg.includes('timed out')
+    );
+  };
+
+  const formatDateDMY = (date: Date) => {
+    const day = String(date.getDate()).padStart(2, '0');
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const year = String(date.getFullYear());
+    return `${day}-${month}-${year}`;
+  };
+
   const fetchCategories = async () => {
     try {
       setIsLoadingCategories(true);
@@ -250,41 +272,18 @@ export default function NotesScreen() {
         if (!apiUrl) {
           throw new Error('Server URL not configured');
         }
-
-        let token = await AsyncStorage.getItem('access_token');
-        if (!token) {
-          const refreshed = await refreshAccessToken();
-          if (!refreshed) {
-            if (logout) await logout();
-            throw new Error('Sesión expirada');
-          }
-          token = await AsyncStorage.getItem('access_token');
-        }
-
-        const response = await fetch(`${apiUrl}/api/categories`, {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-            'ngrok-skip-browser-warning': '69420',
+        const response = await authedFetch({
+          url: `${apiUrl}/api/categories`,
+          init: {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+            },
           },
+          refreshAccessToken,
+          logout,
         });
-
-        if (response.status === 401) {
-          const refreshed = await refreshAccessToken();
-          if (refreshed) {
-            return fetchCategories();
-          } else {
-            Alert.alert('6', 'Sesión expirada. Por favor inicie sesión nuevamente.');
-            await logout();
-            return;
-          }
-        }
-
-        if (response.status === 403) {
-          if (logout) await logout();
-          throw new Error('Acceso denegado');
-        }
+        if (!response) return;
 
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`);
@@ -356,41 +355,18 @@ export default function NotesScreen() {
         if (!apiUrl) {
           throw new Error('Server URL not configured');
         }
-
-        let token = await AsyncStorage.getItem('access_token');
-        if (!token) {
-          const refreshed = await refreshAccessToken();
-          if (!refreshed) {
-            if (logout) await logout();
-            throw new Error('Sesión expirada');
-          }
-          token = await AsyncStorage.getItem('access_token');
-        }
-
-        const response = await fetch(`${apiUrl}/api/puestos/corpo/${corpoId}`, {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-            'ngrok-skip-browser-warning': '69420',
+        const response = await authedFetch({
+          url: `${apiUrl}/api/puestos/corpo/${corpoId}`,
+          init: {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+            },
           },
+          refreshAccessToken,
+          logout,
         });
-
-        if (response.status === 401) {
-          const refreshed = await refreshAccessToken();
-          if (refreshed) {
-            return fetchPuestosCorpo();
-          } else {
-            Alert.alert('7', 'Sesión expirada. Por favor inicie sesión nuevamente.');
-            await logout();
-            return;
-          }
-        }
-
-        if (response.status === 403) {
-          if (logout) await logout();
-          throw new Error('Acceso denegado');
-        }
+        if (!response) return;
 
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`);
@@ -455,6 +431,7 @@ export default function NotesScreen() {
     try {
       setIsLoading(true);
       setError(null);
+      setOfflineMessage(null);
 
       // Verificar conectividad
       const isConnected = await getConnectionStatus();
@@ -465,41 +442,18 @@ export default function NotesScreen() {
         if (!apiUrl) {
           throw new Error('Server URL not configured');
         }
-
-        let token = await AsyncStorage.getItem('access_token');
-        if (!token) {
-          const refreshed = await refreshAccessToken();
-          if (!refreshed) {
-            if (logout) await logout();
-            throw new Error('Sesión expirada');
-          }
-          token = await AsyncStorage.getItem('access_token');
-        }
-
-        const response = await fetch(`${apiUrl}/api/puestos/${currentMarcaData.id}/notas`, {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-            'ngrok-skip-browser-warning': '69420',
+        const response = await authedFetch({
+          url: `${apiUrl}/api/puestos/${currentMarcaData.id}/notas`,
+          init: {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+            },
           },
+          refreshAccessToken,
+          logout,
         });
-
-        if (response.status === 401) {
-          const refreshed = await refreshAccessToken();
-          if (refreshed) {
-            return fetchNotes();
-          } else {
-            Alert.alert('8', 'Sesión expirada. Por favor inicie sesión nuevamente.');
-            await logout();
-            return;
-          }
-        }
-
-        if (response.status === 403) {
-          if (logout) await logout();
-          throw new Error('Acceso denegado');
-        }
+        if (!response) return;
 
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`);
@@ -516,8 +470,8 @@ export default function NotesScreen() {
             puesto: currentMarcaData.puesto || null
           }));
         } else {
+          // Error real del servidor / lógica (sí cuenta como error)
           setError(data.message || 'Error al cargar las notas');
-          Alert.alert('Error', data.message || 'Error al cargar las notas');
         }
       } else {
         // Sin internet: cargar desde cache
@@ -526,10 +480,10 @@ export default function NotesScreen() {
           const cachedData = JSON.parse(notesCache);
           setNotes(cachedData.notas || []);
           setPuesto(currentMarcaData.puesto || null);
-          Alert.alert('Modo Offline', 'No hay conexión a internet. Mostrando datos guardados.');
+          setOfflineMessage('Modo Offline: no hay conexión a internet. Mostrando datos guardados.');
         } else {
-          setError('No hay datos guardados y no hay conexión a internet');
-          Alert.alert('Sin conexión', 'No hay conexión a internet y no hay datos guardados previamente.');
+          // Sin internet NO es error: permitir crear registros offline si aplica
+          setOfflineMessage('Sin conexión: no hay datos guardados previamente. Puedes crear notas offline y se sincronizarán cuando haya conexión.');
           setNotes([]);
         }
       }
@@ -542,14 +496,22 @@ export default function NotesScreen() {
           const cachedData = JSON.parse(notesCache);
           setNotes(cachedData.notas || []);
           setPuesto(currentMarcaData.puesto || null);
-          Alert.alert('Modo Offline', 'Error de conexión. Mostrando datos guardados.');
+          setOfflineMessage('Modo Offline: error de conexión. Mostrando datos guardados.');
         } else {
-          setError('Error al cargar las notas');
-          Alert.alert('Error', 'No se pudieron cargar las notas');
+          if (isProbablyNetworkError(err)) {
+            setOfflineMessage('Sin conexión: no hay datos guardados previamente. Puedes crear notas offline y se sincronizarán cuando haya conexión.');
+            setNotes([]);
+          } else {
+            setError('Error al cargar las notas');
+          }
         }
       } catch (cacheErr) {
-        setError('Error al cargar las notas');
-        Alert.alert('Error', 'No se pudieron cargar las notas');
+        if (isProbablyNetworkError(err) || isProbablyNetworkError(cacheErr)) {
+          setOfflineMessage('Sin conexión: no hay datos guardados previamente. Puedes crear notas offline y se sincronizarán cuando haya conexión.');
+          setNotes([]);
+        } else {
+          setError('Error al cargar las notas');
+        }
       }
     } finally {
       setIsLoading(false);
@@ -820,41 +782,18 @@ export default function NotesScreen() {
               if (!apiUrl) {
                 throw new Error('Server URL not configured');
               }
-
-              let token = await AsyncStorage.getItem('access_token');
-              if (!token) {
-                const refreshed = await refreshAccessToken();
-                if (!refreshed) {
-                  if (logout) await logout();
-                  throw new Error('Sesión expirada');
-                }
-                token = await AsyncStorage.getItem('access_token');
-              }
-
-              const response = await fetch(`${apiUrl}/api/empleados/${employee?.id}/notas/${noteId}`, {
-                method: 'DELETE',
-                headers: {
-                  'Authorization': `Bearer ${token}`,
-                  'Content-Type': 'application/json',
-                  'ngrok-skip-browser-warning': '69420',
+              const response = await authedFetch({
+                url: `${apiUrl}/api/empleados/${employee?.id}/notas/${noteId}`,
+                init: {
+                  method: 'DELETE',
+                  headers: {
+                    'Content-Type': 'application/json',
+                  },
                 },
+                refreshAccessToken,
+                logout,
               });
-
-              if (response.status === 401) {
-                const refreshed = await refreshAccessToken();
-                if (refreshed) {
-                  return deleteNote(noteId);
-                } else {
-                  Alert.alert('9', 'Sesión expirada. Por favor inicie sesión nuevamente.');
-                  await logout();
-                  return;
-                }
-              }
-
-              if (response.status === 403) {
-                if (logout) await logout();
-                throw new Error('Acceso denegado');
-              }
+              if (!response) return;
 
               const data = await response.json();
 
@@ -1065,7 +1004,7 @@ export default function NotesScreen() {
   };
 
   const formatDateForDisplay = (date: Date) => {
-    return `${date.getDate()}/${date.getMonth() + 1}/${date.getFullYear()}`;
+    return formatDateDMY(date);
   };
 
   const formatCambioCreatedAt = (value: any) => {
@@ -1078,7 +1017,7 @@ export default function NotesScreen() {
       const year = d.getFullYear();
       const hours = d.getHours().toString().padStart(2, '0');
       const minutes = d.getMinutes().toString().padStart(2, '0');
-      return `${day}/${month}/${year} ${hours}:${minutes}`;
+      return `${day}-${month}-${year} ${hours}:${minutes}`;
     } catch {
       return String(value);
     }
@@ -1110,46 +1049,18 @@ export default function NotesScreen() {
         throw new Error('Server URL not configured');
       }
 
-      let token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (logout) await logout();
-          throw new Error('Sesión expirada');
-        }
-        token = await AsyncStorage.getItem('access_token');
-      }
-      if (!token) throw new Error('Sesión expirada');
-
-      const doRequest = async (tk: string) =>
-        fetch(`${apiUrl}/api/cambios-apps-modules?tabla=${encodeURIComponent('c_puesto_notas')}&registro_id=${noteId}`, {
+      const response = await authedFetch({
+        url: `${apiUrl}/api/cambios-apps-modules?tabla=${encodeURIComponent('c_puesto_notas')}&registro_id=${noteId}`,
+        init: {
           method: 'GET',
           headers: {
-            'Authorization': `Bearer ${tk}`,
             'Content-Type': 'application/json',
-            'ngrok-skip-browser-warning': '69420',
           },
-        });
-
-      let response = await doRequest(token);
-
-      if (response.status === 401) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) {
-          token = await AsyncStorage.getItem('access_token');
-          if (!token) return;
-          response = await doRequest(token);
-        } else {
-          Alert.alert('10', 'Sesión expirada. Por favor inicie sesión nuevamente.');
-          await logout();
-          return;
-        }
-      }
-
-      if (response.status === 403) {
-        if (logout) await logout();
-        throw new Error('Acceso denegado');
-      }
+        },
+        refreshAccessToken,
+        logout,
+      });
+      if (!response) return;
 
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
@@ -1498,6 +1409,18 @@ export default function NotesScreen() {
   return (
     <ThemedView style={styles.container}>
       <AppHeader onMenuPress={handleMenuPress} title="Bitácora de novedades" />
+      {!!error && (
+        <ThemedView style={styles.errorBanner}>
+          <Ionicons name="alert-circle-outline" size={18} color="#B00020" />
+          <ThemedText style={styles.errorBannerText}>{error}</ThemedText>
+        </ThemedView>
+      )}
+      {!!offlineMessage && !error && (
+        <ThemedView style={styles.offlineBanner}>
+          <Ionicons name="cloud-offline-outline" size={18} color="#8A6D00" />
+          <ThemedText style={styles.offlineBannerText}>{offlineMessage}</ThemedText>
+        </ThemedView>
+      )}
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
@@ -1653,7 +1576,7 @@ export default function NotesScreen() {
           )}
 
           {/* Create Button */}
-          {!isCreating && (
+          {!isCreating && !error && (
             <TouchableOpacity style={styles.createButton} onPress={startCreating}>
               <ThemedText style={styles.createButtonText}>{getActionIcon('add')}</ThemedText>
             </TouchableOpacity>
@@ -1847,6 +1770,44 @@ const styles = StyleSheet.create({
     marginTop: 16,
     fontSize: 16,
     opacity: 0.7,
+  },
+  errorBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 20,
+    marginTop: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#F5C2C7',
+    backgroundColor: '#F8D7DA',
+  },
+  errorBannerText: {
+    flex: 1,
+    color: '#B00020',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  offlineBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 20,
+    marginTop: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#FFEBAA',
+    backgroundColor: '#FFF3CD',
+  },
+  offlineBannerText: {
+    flex: 1,
+    color: '#8A6D00',
+    fontSize: 14,
+    fontWeight: '600',
   },
   noMarcaContainer: {
     flex: 1,

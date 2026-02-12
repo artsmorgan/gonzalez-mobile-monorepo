@@ -30,6 +30,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../App';
 import { eventBus } from '@/hooks/eventBus';
 import getHoraAccion from '@/hooks/getHoraAccion';
+import authedFetch from '@/hooks/authedFetch';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'TrasladoPlazas'>;
 
@@ -134,6 +135,19 @@ const buildFileUrl = (intercambioLineaId: number | string, fileName: string, fil
 };
 
 export default function TrasladoPlazasScreen() {
+    const formatDateDMY = (value: any) => {
+        if (!value) return '';
+        try {
+            const d = new Date(String(value));
+            if (isNaN(d.getTime())) return String(value);
+            const day = String(d.getDate()).padStart(2, '0');
+            const month = String(d.getMonth() + 1).padStart(2, '0');
+            const year = String(d.getFullYear());
+            return `${day}-${month}-${year}`;
+        } catch {
+            return String(value);
+        }
+    };
     const navigation = useNavigation<Nav>();
     const { employee, refreshAccessToken, logout } = useAuth();
 
@@ -178,16 +192,6 @@ export default function TrasladoPlazasScreen() {
                     throw new Error('Server URL not configured');
                 }
 
-                let token = await AsyncStorage.getItem('access_token');
-                if (!token) {
-                    const refreshed = await refreshAccessToken();
-                    if (!refreshed) {
-                        if (logout) await logout();
-                        throw new Error('Sesión expirada');
-                    }
-                    token = await AsyncStorage.getItem('access_token');
-                }
-
                 const currentMarca = await AsyncStorage.getItem('current_marca');
                 if (!currentMarca) {
                     throw new Error('No se encontró la marca actual');
@@ -198,30 +202,18 @@ export default function TrasladoPlazasScreen() {
                     throw new Error('No se encontró la ID de la plaza');
                 }
 
-                const response = await fetch(`${apiUrl}/api/traslado-plaza?emp=${empleadoId}&plaza=${plazaId}`, {
-                    method: 'GET',
-                    headers: {
-                        'Authorization': `Bearer ${token}`,
-                        'Content-Type': 'application/json',
-                        'ngrok-skip-browser-warning': '69420',
+                const response = await authedFetch({
+                    url: `${apiUrl}/api/traslado-plaza?emp=${empleadoId}&plaza=${plazaId}`,
+                    init: {
+                        method: 'GET',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
                     },
+                    refreshAccessToken,
+                    logout,
                 });
-
-                if (response.status === 401) {
-                    const refreshed = await refreshAccessToken();
-                    if (refreshed) {
-                        return fetchTraslados();
-                    } else {
-                        Alert.alert('Error', 'Sesión expirada. Por favor inicie sesión nuevamente.');
-                        await logout();
-                        return;
-                    }
-                }
-
-                if (response.status === 403) {
-                    if (logout) await logout();
-                    throw new Error('Acceso denegado');
-                }
+                if (!response) return;
 
                 if (!response.ok) {
                     throw new Error(`HTTP error! status: ${response.status}`);
@@ -381,41 +373,19 @@ export default function TrasladoPlazasScreen() {
                     throw new Error('Server URL not configured');
                 }
 
-                let token = await AsyncStorage.getItem('access_token');
-                if (!token) {
-                    const refreshed = await refreshAccessToken();
-                    if (!refreshed) {
-                        if (logout) await logout();
-                        throw new Error('Sesión expirada');
-                    }
-                    token = await AsyncStorage.getItem('access_token');
-                }
-
-                const response = await fetch(`${apiUrl}/api/traslado-plaza/${intercambioLineaId}/upload-file`, {
-                    method: 'PUT',
-                    headers: {
-                        'Authorization': `Bearer ${token}`,
-                        'Content-Type': 'application/json',
-                        'ngrok-skip-browser-warning': '69420',
+                const response = await authedFetch({
+                    url: `${apiUrl}/api/traslado-plaza/${intercambioLineaId}/upload-file`,
+                    init: {
+                        method: 'PUT',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify(requestData),
                     },
-                    body: JSON.stringify(requestData),
+                    refreshAccessToken,
+                    logout,
                 });
-
-                if (response.status === 401) {
-                    const refreshed = await refreshAccessToken();
-                    if (refreshed) {
-                        return uploadFile(intercambioLineaId, file);
-                    } else {
-                        Alert.alert('Error', 'Sesión expirada. Por favor inicie sesión nuevamente.');
-                        await logout();
-                        return;
-                    }
-                }
-
-                if (response.status === 403) {
-                    if (logout) await logout();
-                    throw new Error('Acceso denegado');
-                }
+                if (!response) return;
 
                 if (!response.ok) {
                     const errorData = await response.json().catch(() => ({ message: 'Error desconocido' }));
@@ -680,7 +650,7 @@ export default function TrasladoPlazasScreen() {
                                         <ThemedText style={styles.cardLine}>
                                             <ThemedText style={styles.cardLabel}>Fecha: </ThemedText>
                                             <ThemedText style={styles.cardValue}>
-                                                {new Date(item.intercambio.fecha).toLocaleDateString()}
+                                                {formatDateDMY(item.intercambio.fecha)}
                                             </ThemedText>
                                         </ThemedText>
                                     )}

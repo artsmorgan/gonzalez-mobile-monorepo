@@ -19,6 +19,7 @@ import { jwtDecode } from 'jwt-decode';
 import * as Network from 'expo-network';
 import saveManualSignature from '@/hooks/saveManualSignature';
 import getHoraAccion from '@/hooks/getHoraAccion';
+import getValidAccessTokenOrLogout from '@/hooks/getValidAccessTokenOrLogout';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -178,10 +179,8 @@ export default function DigitalSignatureScreen() {
         throw new Error('Server URL not configured');
       }
 
-      const token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        throw new Error('No authentication token found');
-      }
+      const token = await getValidAccessTokenOrLogout({ refreshAccessToken, logout });
+      if (!token) return;
       
       const decodedToken = jwtDecode(token);
       const sessionId = JSON.parse(JSON.stringify(decodedToken)).sessionId;
@@ -194,54 +193,10 @@ export default function DigitalSignatureScreen() {
       // Encode base64
       const hash = btoa(sessionId + ":" + employee.id + ":" + currentLocation.coords.latitude + ":" + currentLocation.coords.longitude + ":" + horaAccion);
 
-      /*
-      const requestData = {
-        empleadoId: employee.id,
-        timestamp: Date.now(),
-        gps: {
-          latitude: currentLocation.coords.latitude,
-          longitude: currentLocation.coords.longitude,
-          accuracy: currentLocation.coords.accuracy || 0,
-        },
-      };
-
-      const response = await fetch(`${apiUrl}/api/digital-signature/generate-signature`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': '69420',
-        },
-        body: JSON.stringify(requestData),
-      });
-
-      if (response.status === 401 || response.status === 403) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) {
-          return generateSignature(currentLocation);
-        } else {
-          // If refresh fails, logout the user
-          await logout();
-        }
-      }
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const data = await response.json();
-
-      console.log('data', data);
-      */
-
-      //if (data.status && data.hash) {
-        setSignatureHash(hash);
-        // Start the refresh timer when signature is generated successfully
-        setIsTimerActive(true);
-        setRefreshTimer(20);
-      /*} else {
-        throw new Error(data.message || 'Error al generar la firma');
-      }*/
+      setSignatureHash(hash);
+      // Start the refresh timer when signature is generated successfully
+      setIsTimerActive(true);
+      setRefreshTimer(20);
     } catch (error) {
       console.error('Error generating signature:', error);
       setSignatureError('Error al generar la firma digital. Por favor, intenta nuevamente.');
@@ -257,46 +212,6 @@ export default function DigitalSignatureScreen() {
 
     setIsLoadingManualSignature(true);
     try {
-      /*
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-      if (!apiUrl) {
-        throw new Error('Server URL not configured');
-      }
-
-      const token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        throw new Error('No authentication token found');
-      }
-
-      const response = await fetch(`${apiUrl}/api/digital-signature/manual-signature/${employee.id}`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': '69420',
-        },
-      });
-
-      if (response.status === 401 || response.status === 403) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) {
-          return fetchManualSignature();
-        } else {
-          // If refresh fails, logout the user
-          await logout();
-        }
-      }
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const data = await response.json();
-
-      if (data.status) {
-        setManualSignature(data.manualSignature);
-      }*/
-
       setManualSignature(employee.firmaManual);
     } catch (error) {
       console.error('Error fetching manual signature:', error);

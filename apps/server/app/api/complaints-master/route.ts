@@ -173,6 +173,45 @@ export async function POST(req: NextRequest) {
             sendNotificationByRole(marcaDia.corpo_id, [marcaDia.plaza_id], "Queja registrada", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
         }
 
+        // Registrar cambio de creación
+        const createdBy = parseInt(String(payload?.id ?? 0), 10) || 0;
+        await prisma.c_cambios_apps_modules.create({
+            data: {
+                nombre_tabla: "c_maestro_quejas",
+                registro_id: new_record.id,
+                cambios: JSON.stringify([{
+                    prop: "__created__",
+                    before: null,
+                    after: {
+                        id: new_record.id,
+                        empresa_id: new_record.empresa_id,
+                        cliente_id: new_record.cliente_id,
+                        corpo_id: new_record.corpo_id,
+                        puesto_id: new_record.puesto_id,
+                        sociedad: new_record.sociedad,
+                        nombre_realiza_queja: new_record.nombre_realiza_queja,
+                        cliente: new_record.cliente,
+                        empresa_presenta_queja: new_record.empresa_presenta_queja,
+                        persona_presenta_queja: new_record.persona_presenta_queja,
+                        medio_recepcion_queja: new_record.medio_recepcion_queja,
+                        tipo_queja: new_record.tipo_queja,
+                        ubicacion: new_record.ubicacion,
+                        nivel_queja: new_record.nivel_queja,
+                        fecha_queja: new_record.fecha_queja,
+                        motivo_queja: new_record.motivo_queja,
+                        descripcion_queja: new_record.descripcion_queja,
+                        fecha_inicio: new_record.fecha_inicio,
+                        fecha_revision: new_record.fecha_revision,
+                        resolucion_queja: new_record.resolucion_queja,
+                        estado: new_record.estado,
+                        accion_correctiva_preventiva: new_record.accion_correctiva_preventiva,
+                    },
+                }]),
+                created_at: created_at,
+                created_by: createdBy,
+            },
+        });
+
         return NextResponse.json({
             status: true,
             message: "Queja creada correctamente",

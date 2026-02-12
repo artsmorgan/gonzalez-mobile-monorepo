@@ -98,6 +98,7 @@ export async function POST(req: NextRequest) {
         }
 
         const createdAt = toZonedTime(new Date(), "America/Costa_Rica");
+        const createdByNum = parseInt(String(payload.id), 10);
 
         const newRecord = await prisma.c_apertura_cierre_puesto.create({
             data: {
@@ -118,9 +119,38 @@ export async function POST(req: NextRequest) {
                 firma_representante_empresa_saliente: String(firma_representante_empresa_saliente),
                 firma_responsable: String(firma_responsable),
                 created_at: createdAt,
-                created_by: parseInt(String(payload.id), 10),
+                created_by: createdByNum,
             },
             include: { c_imagenes_apertura_cierre_puesto: true },
+        });
+
+        // Registrar cambio de creación
+        await prisma.c_cambios_apps_modules.create({
+            data: {
+                nombre_tabla: "c_apertura_cierre_puesto",
+                registro_id: newRecord.id,
+                cambios: JSON.stringify([{
+                    prop: "__created__",
+                    before: null,
+                    after: {
+                        id: newRecord.id,
+                        cliente_id: newRecord.cliente_id,
+                        corpo_id: newRecord.corpo_id,
+                        puesto_id: newRecord.puesto_id,
+                        division_id: newRecord.division_id,
+                        fecha: newRecord.fecha.toISOString(),
+                        tipo: newRecord.tipo,
+                        nombre_representante_cliente: newRecord.nombre_representante_cliente,
+                        nombre_representante_empresa_entrante: newRecord.nombre_representante_empresa_entrante,
+                        nombre_representante_empresa_saliente: newRecord.nombre_representante_empresa_saliente,
+                        actividades: newRecord.actividades,
+                        inventario: newRecord.inventario,
+                        otras_observaciones: newRecord.otras_observaciones,
+                    },
+                }]),
+                created_at: createdAt,
+                created_by: createdByNum,
+            },
         });
 
         if (newRecord) {

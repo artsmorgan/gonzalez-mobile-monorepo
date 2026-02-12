@@ -48,6 +48,7 @@ interface AuthContextType {
   employee: Employee | null;
   accessToken: string | null;
   refreshToken: string | null;
+  tokenCreatedAt: number | null;
   isLoading: boolean;
   isAuthenticated: boolean;
   login: (cedula: string, password: string) => Promise<{ success: boolean; passwordExpired?: boolean; error?: string }>;
@@ -64,11 +65,13 @@ interface AuthProviderProps {
 const ACCESS_TOKEN_KEY = 'access_token';
 const REFRESH_TOKEN_KEY = 'refresh_token';
 const EMPLOYEE_KEY = 'employee_data';
+const TOKEN_CREATED_AT_KEY = 'token_created_at';
 
 export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [employee, setEmployee] = useState<Employee | null>(null);
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [refreshToken, setRefreshToken] = useState<string | null>(null);
+  const [tokenCreatedAt, setTokenCreatedAt] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const isRefreshingRef = useRef(false);
   const refreshPromiseRef = useRef<Promise<boolean> | null>(null);
@@ -82,16 +85,21 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   const loadStoredAuth = async () => {
     try {
-      const [storedAccessToken, storedRefreshToken, storedEmployee] = await Promise.all([
+      const [storedAccessToken, storedRefreshToken, storedEmployee, storedTokenCreatedAt] = await Promise.all([
         AsyncStorage.getItem(ACCESS_TOKEN_KEY),
         AsyncStorage.getItem(REFRESH_TOKEN_KEY),
         AsyncStorage.getItem(EMPLOYEE_KEY),
+        AsyncStorage.getItem(TOKEN_CREATED_AT_KEY),
       ]);
 
       if (storedAccessToken && storedEmployee) {
         setAccessToken(storedAccessToken);
         setRefreshToken(storedRefreshToken);
         setEmployee(JSON.parse(storedEmployee));
+        if (storedTokenCreatedAt) {
+          const parsed = parseInt(storedTokenCreatedAt, 10);
+          if (!Number.isNaN(parsed)) setTokenCreatedAt(parsed);
+        }
       }
     } catch (error) {
       console.error('Error loading stored auth:', error);
@@ -135,6 +143,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       // Use real tokens from server response
       const accessToken = responseData.accessToken;
       const refreshToken = responseData.refreshToken;
+      const tokenCreatedAt = responseData.createdAt;
 
       if (!accessToken || !refreshToken) {
         return { success: false, passwordExpired: false, error: 'Tokens no recibidos del servidor' };
@@ -159,10 +168,12 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         AsyncStorage.setItem(ACCESS_TOKEN_KEY, accessToken),
         AsyncStorage.setItem(REFRESH_TOKEN_KEY, refreshToken),
         AsyncStorage.setItem(EMPLOYEE_KEY, JSON.stringify(employeeData)),
+        AsyncStorage.setItem(TOKEN_CREATED_AT_KEY, tokenCreatedAt.toString()),
       ]);
 
       setAccessToken(accessToken);
       setRefreshToken(refreshToken);
+      setTokenCreatedAt(tokenCreatedAt);
       setEmployee(employeeData);
 
       return { success: true, passwordExpired: false };
@@ -206,12 +217,14 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         AsyncStorage.removeItem(ACCESS_TOKEN_KEY),
         AsyncStorage.removeItem(REFRESH_TOKEN_KEY),
         AsyncStorage.removeItem(EMPLOYEE_KEY),
+        AsyncStorage.removeItem(TOKEN_CREATED_AT_KEY),
         AsyncStorage.removeItem('temp_state'),
       ]);
 
       setAccessToken(null);
       setRefreshToken(null);
       setEmployee(null);
+      setTokenCreatedAt(null);
 
       return serverResponse;
     } catch (error) {
@@ -240,9 +253,10 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   const refreshAccessTokenSafe = async (): Promise<boolean> => {
     try {
-      if (!refreshToken) {
-        return false;
-      }
+      // Preferir estado, pero hacer fallback a AsyncStorage para evitar false negativos
+      // (p.ej. si el estado aún no se cargó en arranque pero AsyncStorage sí tiene el token).
+      const tokenToUse = refreshToken || (await AsyncStorage.getItem(REFRESH_TOKEN_KEY));
+      if (!tokenToUse) return false;
 
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) {
@@ -257,7 +271,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           'ngrok-skip-browser-warning': '69420'
         },
         body: JSON.stringify({
-          refreshToken: refreshToken
+          refreshToken: tokenToUse
         }),
       });
 
@@ -274,20 +288,26 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
       const newAccessToken = responseData.newAccessToken;
       const newRefreshToken = responseData.newRefreshToken;
+      const newTokenCreatedAt = responseData.createdAt;
 
       console.log('newAccessToken', newAccessToken);
       console.log('newRefreshToken', newRefreshToken);
+      console.log('tokenCreatedAt', tokenCreatedAt);
 
       const ops = [AsyncStorage.setItem(ACCESS_TOKEN_KEY, newAccessToken)];
 
       ops.push(AsyncStorage.setItem(REFRESH_TOKEN_KEY, newRefreshToken));
 
+      ops.push(AsyncStorage.setItem(TOKEN_CREATED_AT_KEY, newTokenCreatedAt.toString()));
+
       await Promise.all(ops);
 
       setAccessToken(newAccessToken);
-      if (newRefreshToken !== refreshToken) {
+      if (newRefreshToken && newRefreshToken !== refreshToken) {
         setRefreshToken(newRefreshToken);
       }
+
+      setTokenCreatedAt(newTokenCreatedAt);
 
       return true;
     } catch (error) {
@@ -300,6 +320,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     employee,
     accessToken,
     refreshToken,
+    tokenCreatedAt,
     isLoading,
     isAuthenticated,
     login,

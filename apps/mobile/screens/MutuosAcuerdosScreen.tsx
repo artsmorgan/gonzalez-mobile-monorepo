@@ -29,10 +29,12 @@ import AppFooter from '@/components/AppFooter';
 import SlideMenu from '@/components/SlideMenu';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
+import { formatDateDMY } from '@/utils/formatDate';
 import { useAuth } from '@/contexts/AuthContext';
 import { eventBus } from '@/hooks/eventBus';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import { useQRScanner } from '@/hooks/useQRScanner';
+import authedFetch from '@/hooks/authedFetch';
 
 import type { ExecutiveOption } from '@/hooks/incidentsTypes';
 import { listExecutives } from '@/hooks/incidentsFunctions';
@@ -88,6 +90,12 @@ const dateToLocalString = (d: Date): string => {
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
+};
+
+const formatDateForDisplay = (d: Date): string => {
+  const ymd = dateToLocalString(d);
+  const [y, m, day] = ymd.split('-');
+  return `${day}-${m}-${y}`;
 };
 
 const decodeFirmaHash = (hash?: string | null) => {
@@ -319,39 +327,18 @@ export default function MutuosAcuerdosScreen() {
     try {
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) throw new Error('Server URL not configured');
-
-      let token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (logout) await logout();
-          return;
-        }
-        token = await AsyncStorage.getItem('access_token');
-      }
-      if (!token) return;
-
-      const doRequest = async (tk: string) =>
-        fetch(`${apiUrl}/api/cambios-apps-modules?tabla=${encodeURIComponent(tabla)}&registro_id=${registroId}`, {
+      const resp = await authedFetch({
+        url: `${apiUrl}/api/cambios-apps-modules?tabla=${encodeURIComponent(tabla)}&registro_id=${registroId}`,
+        init: {
           method: 'GET',
           headers: {
-            Authorization: `Bearer ${tk}`,
             'Content-Type': 'application/json',
-            'ngrok-skip-browser-warning': '69420',
           },
-        });
-
-      let resp = await doRequest(token);
-      if (resp.status === 401) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (logout) await logout();
-          return;
-        }
-        const nextToken = await AsyncStorage.getItem('access_token');
-        if (!nextToken) return;
-        resp = await doRequest(nextToken);
-      }
+        },
+        refreshAccessToken,
+        logout,
+      });
+      if (!resp) return;
 
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok || !data.status) {
@@ -994,7 +981,7 @@ export default function MutuosAcuerdosScreen() {
   const renderRecord = (r: MutuoAcuerdo, idx: number) => {
     const key = r.id !== 0 ? `ma-${r.id}` : r.id_local ? `ma-${r.id_local}` : `ma-${idx}`;
     const isExpanded = expanded.has(key);
-    const fechaTxt = r.fecha ? String(r.fecha).split('T')[0] : '';
+    const fechaTxt = formatDateDMY(r.fecha, '');
     const firmaInfo = decodeFirmaHash(r.firma_responsable);
     const firmaEjecutivoUri = formatSignatureForDisplay(r.firma_ejecutivo_cuenta);
 
@@ -1145,7 +1132,7 @@ export default function MutuosAcuerdosScreen() {
             </ThemedView>
           ) : null}
 
-          {!isCreating && (
+          {!isCreating && !isLoading && (
             <TouchableOpacity style={styles.createButton} onPress={startCreate} activeOpacity={0.85}>
               <ThemedText style={styles.createButtonText}>
                 <Ionicons name="add" size={20} color="#FFFFFF" /> Nuevo registro
@@ -1175,7 +1162,7 @@ export default function MutuosAcuerdosScreen() {
 
               <ThemedText style={styles.label}>Fecha *</ThemedText>
               <TouchableOpacity style={styles.dateButton} onPress={() => setShowFechaPicker(true)} activeOpacity={0.85}>
-                <ThemedText style={styles.dateButtonText}>{dateToLocalString(fecha)}</ThemedText>
+                <ThemedText style={styles.dateButtonText}>{formatDateForDisplay(fecha)}</ThemedText>
                 <Ionicons name="calendar-outline" size={18} color="#007AFF" />
               </TouchableOpacity>
               {showFechaPicker && (

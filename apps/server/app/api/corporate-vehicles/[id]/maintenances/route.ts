@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessToken } from "../../../../../utils/verifyToken";
 import { prisma } from "../../../../../utils/prismaClient";
+import { toZonedTime } from "date-fns-tz";
 import fs from "fs";
 import path from "path";
 import { v4 as uuidv4 } from "uuid";
@@ -101,10 +102,11 @@ export async function POST(
         const imagenAntesFileName = imagen_antes ? processMaintenanceImage(imagen_antes, vehiculoId, "antes") : "";
         const imagenDespuesFileName = imagen_despues ? processMaintenanceImage(imagen_despues, vehiculoId, "despues") : "";
 
+        const createdAt = toZonedTime(new Date(), "America/Costa_Rica");
         const created = await prisma.c_mantenimiento_vehiculos_corporativos.create({
             data: {
                 vehiculo_id: vehiculoId,
-                fecha: fecha ? new Date(fecha) : new Date(),
+                fecha: fecha ? new Date(fecha) : createdAt,
                 imagen_antes: imagenAntesFileName || String(imagen_antes ?? ""),
                 tipo: String(tipo ?? ""),
                 mantenimiento: String(mantenimiento ?? ""),
@@ -115,7 +117,31 @@ export async function POST(
                 firma_mecanico: String(firma_mecanico ?? ""),
                 firma_responsable: String(firma_responsable ?? ""),
                 created_by,
-                created_at: new Date(),
+                created_at: createdAt,
+            },
+        });
+
+        // Registrar cambio de creación
+        await prisma.c_cambios_apps_modules.create({
+            data: {
+                nombre_tabla: "c_mantenimiento_vehiculos_corporativos",
+                registro_id: created.id,
+                cambios: JSON.stringify([{
+                    prop: "__created__",
+                    before: null,
+                    after: {
+                        id: created.id,
+                        vehiculo_id: created.vehiculo_id,
+                        fecha: created.fecha.toISOString(),
+                        tipo: created.tipo,
+                        mantenimiento: created.mantenimiento,
+                        diagnostico: created.diagnostico,
+                        kilometraje_siguiente_revision: created.kilometraje_siguiente_revision,
+                        nombre_mecanico: created.nombre_mecanico,
+                    },
+                }]),
+                created_at: createdAt,
+                created_by,
             },
         });
 

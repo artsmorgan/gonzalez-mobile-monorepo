@@ -10,6 +10,7 @@ import {
   Modal,
   View,
   Image,
+  Dimensions,
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Picker } from '@react-native-picker/picker';
@@ -30,6 +31,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import * as Network from 'expo-network';
 import getHoraAccion from '@/hooks/getHoraAccion';
+import authedFetch from '@/hooks/authedFetch';
 import {
   createInductionTourRecord,
   updateInductionTourRecord,
@@ -125,6 +127,12 @@ export default function InductionTourRecordScreen() {
   // Data states
   const [records, setRecords] = useState<InductionTourRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+
+  // Modal: ver cambios (auditoría)
+  const [isCambiosModalVisible, setIsCambiosModalVisible] = useState(false);
+  const [cambiosTitle, setCambiosTitle] = useState<string>('Cambios');
+  const [cambiosItems, setCambiosItems] = useState<any[]>([]);
+  const [expandedCambioId, setExpandedCambioId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [hasCurrentMarca, setHasCurrentMarca] = useState<boolean>(false);
 
@@ -232,6 +240,160 @@ export default function InductionTourRecordScreen() {
     return networkState.isConnected && networkState.isInternetReachable ? true : false;
   };
 
+  const closeCambiosModal = () => {
+    setIsCambiosModalVisible(false);
+    setCambiosItems([]);
+    setExpandedCambioId(null);
+  };
+
+  const formatCambioCreatedAt = (value: any) => {
+    if (!value) return '-';
+    try {
+      const date = new Date(value);
+      return date.toLocaleString('es-CR', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true,
+      });
+    } catch {
+      return String(value);
+    }
+  };
+
+  const formatTemasDesarrolladosForDisplay = (temasJson: string): string => {
+    try {
+      const temas: TemaDesarrollado[] = safeParseJsonArray<TemaDesarrollado>(temasJson);
+      if (!Array.isArray(temas) || temas.length === 0) return 'No hay temas desarrollados.';
+      return temas.map((t, idx) => {
+        const tema = t?.tema || '-';
+        const respuesta = t?.respuesta === 'SI' ? 'Sí' : t?.respuesta === 'NO' ? 'No' : t?.respuesta === 'NA' ? 'N/A' : '-';
+        const comentarios = t?.comentarios || '-';
+        return `${idx + 1}. ${tema}\n   Respuesta: ${respuesta}\n   Comentarios: ${comentarios}`;
+      }).join('\n\n');
+    } catch (e) {
+      console.error('Error formatting temas desarrollados for display:', e);
+      return 'Error al formatear temas desarrollados.';
+    }
+  };
+
+  const formatAspectosEspecificosForDisplay = (aspectosJson: string): string => {
+    try {
+      const aspectos: AspectoEspecifico[] = safeParseJsonArray<AspectoEspecifico>(aspectosJson);
+      if (!Array.isArray(aspectos) || aspectos.length === 0) return 'No hay aspectos específicos.';
+      return aspectos.map((a, idx) => {
+        const aspecto = a?.aspecto || '-';
+        const respuesta = a?.respuesta === 'SI' ? 'Sí' : a?.respuesta === 'NO' ? 'No' : a?.respuesta === 'NA' ? 'N/A' : '-';
+        const comentarios = a?.comentarios || '-';
+        return `${idx + 1}. ${aspecto}\n   Respuesta: ${respuesta}\n   Comentarios: ${comentarios}`;
+      }).join('\n\n');
+    } catch (e) {
+      console.error('Error formatting aspectos específicos for display:', e);
+      return 'Error al formatear aspectos específicos.';
+    }
+  };
+
+  const formatParticipantesForDisplay = (participantesJson: string): string => {
+    try {
+      const participantes: Participante[] = safeParseJsonArray<Participante>(participantesJson);
+      if (!Array.isArray(participantes) || participantes.length === 0) return 'No hay participantes.';
+      return participantes.map((p, idx) => {
+        const nombre = p?.nombre_completo || '-';
+        const cedula = p?.cedula || '-';
+        const tieneFirma = p?.firma ? 'Sí' : 'No';
+        return `${idx + 1}. ${nombre} (Cédula: ${cedula}, Firma: ${tieneFirma})`;
+      }).join('\n');
+    } catch (e) {
+      console.error('Error formatting participantes for display:', e);
+      return 'Error al formatear participantes.';
+    }
+  };
+
+  const formatChangeValue = (prop: string, value: any): string => {
+    if (value === null || value === undefined) return 'N/A';
+    if (typeof value === 'boolean') return value ? 'Sí' : 'No';
+    if (typeof value === 'object') {
+      if (prop === 'temas_desarrollados') {
+        return formatTemasDesarrolladosForDisplay(JSON.stringify(value));
+      }
+      if (prop === 'aspectos_especificos') {
+        return formatAspectosEspecificosForDisplay(JSON.stringify(value));
+      }
+      if (prop === 'participantes') {
+        return formatParticipantesForDisplay(JSON.stringify(value));
+      }
+      return JSON.stringify(value, null, 2);
+    }
+    if (typeof value === 'string') {
+      if (value.trim().startsWith('{') || value.trim().startsWith('[')) {
+        try {
+          const parsed = JSON.parse(value);
+          if (prop === 'temas_desarrollados') {
+            return formatTemasDesarrolladosForDisplay(value);
+          }
+          if (prop === 'aspectos_especificos') {
+            return formatAspectosEspecificosForDisplay(value);
+          }
+          if (prop === 'participantes') {
+            return formatParticipantesForDisplay(value);
+          }
+          if (Array.isArray(parsed)) {
+            return parsed.map((item, idx) => {
+              if (typeof item === 'object' && item !== null) {
+                return `Item ${idx + 1}: ${JSON.stringify(item, null, 2)}`;
+              }
+              return String(item);
+            }).join('\n');
+          }
+          if (typeof parsed === 'object') {
+            return JSON.stringify(parsed, null, 2);
+          }
+        } catch {
+          // Not valid JSON, return as string
+        }
+      }
+      return value;
+    }
+    return String(value);
+  };
+
+  const fetchCambios = useCallback(async (tabla: string, registroId: number) => {
+    const isConnected = await getConnectionStatus();
+    if (!isConnected) {
+      Alert.alert('Sin conexión', 'Esta función solo está disponible con conexión a internet.');
+      return;
+    }
+    try {
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) throw new Error('Server URL not configured');
+
+      const resp = await authedFetch({
+        url: `${apiUrl}/api/cambios-apps-modules?tabla=${encodeURIComponent(tabla)}&registro_id=${registroId}`,
+        init: {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        },
+        refreshAccessToken,
+        logout,
+      });
+      if (!resp) return;
+
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data.status) {
+        throw new Error(data.message || 'No se pudieron cargar los cambios');
+      }
+      setCambiosItems(Array.isArray(data.data) ? data.data : []);
+      setIsCambiosModalVisible(true);
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'No se pudieron cargar los cambios');
+    }
+  }, [refreshAccessToken, logout]);
+
   const generateRandomId = (): string => {
     return `local-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
   };
@@ -240,7 +402,7 @@ export default function InductionTourRecordScreen() {
     const day = date.getDate().toString().padStart(2, '0');
     const month = (date.getMonth() + 1).toString().padStart(2, '0');
     const year = date.getFullYear();
-    return `${day}/${month}/${year}`;
+    return `${day}-${month}-${year}`;
   };
 
   const formatDateForRequest = (date: Date): string => {
@@ -250,8 +412,12 @@ export default function InductionTourRecordScreen() {
 
   const formatDateForDisplay = (value?: string | null): string => {
     if (!value) return 'N/A';
-    if (String(value).includes('/')) return String(value);
-    return String(value).split('T')[0];
+    const raw = String(value).split('T')[0];
+    const ymd = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (ymd) return `${ymd[3]}-${ymd[2]}-${ymd[1]}`;
+    const dmy = raw.match(/^(\d{2})[\/-](\d{2})[\/-](\d{4})$/);
+    if (dmy) return `${dmy[1]}-${dmy[2]}-${dmy[3]}`;
+    return raw;
   };
 
   // Helper para extraer solo el base64 de las firmas
@@ -1467,6 +1633,17 @@ export default function InductionTourRecordScreen() {
                 >
                   {getActionIcon('edit')}
                 </TouchableOpacity>
+                {!(record.id_local || String(record.id).startsWith('local-') || record.id === 0) && (
+                  <TouchableOpacity
+                    style={[styles.listItemButton, styles.changesButton]}
+                    onPress={() => {
+                      setCambiosTitle(`Cambios - Registro #${record.id}`);
+                      fetchCambios('c_registro_induccion_recorrido', Number(record.id));
+                    }}
+                  >
+                    <Ionicons name="list-outline" size={20} color="#FFFFFF" />
+                  </TouchableOpacity>
+                )}
                 <TouchableOpacity
                   style={[styles.listItemButton, styles.deleteButton]}
                   onPress={() => deleteRecordHandler(record)}
@@ -2150,71 +2327,49 @@ export default function InductionTourRecordScreen() {
           ) : (
             <ThemedView style={styles.listSection}>
               {/* Filtros Jerárquicos */}
-              <ThemedView style={styles.filtersContainer}>
-                <ThemedView style={styles.filtersHeader}>
-                  <TouchableOpacity
-                    style={styles.filterToggleButton}
-                    onPress={() => setIsHierarchyFiltersExpanded(!isHierarchyFiltersExpanded)}
-                  >
-                    <ThemedText style={styles.filtersTitle}>
-                      Filtros Jerárquicos
-                    </ThemedText>
-                    <Ionicons
-                      name={isHierarchyFiltersExpanded ? "chevron-up" : "chevron-down"}
-                      size={20}
-                      color="#007AFF"
-                    />
-                  </TouchableOpacity>
-                  {isHierarchyFiltersExpanded && (
+              {!isLoading && (
+                <ThemedView style={styles.filtersContainer}>
+                  <ThemedView style={styles.filtersHeader}>
                     <TouchableOpacity
-                      style={styles.resetFiltersButton}
-                      onPress={() => {
-                        setFilterEmpresaId(null);
-                        setFilterClienteId(null);
-                        setFilterContratoId(null);
-                        setFilterCorpoId(null);
-                        setFilterPuestoId(null);
-                        setFilterPlazaId(null);
-                      }}
+                      style={styles.filterToggleButton}
+                      onPress={() => setIsHierarchyFiltersExpanded(!isHierarchyFiltersExpanded)}
                     >
-                      <Ionicons name="refresh" size={16} color="#FF3B30" />
-                      <ThemedText style={styles.resetFiltersText}>Reiniciar</ThemedText>
+                      <ThemedText style={styles.filtersTitle}>
+                        Filtros Jerárquicos
+                      </ThemedText>
+                      <Ionicons
+                        name={isHierarchyFiltersExpanded ? "chevron-up" : "chevron-down"}
+                        size={20}
+                        color="#007AFF"
+                      />
                     </TouchableOpacity>
-                  )}
-                </ThemedView>
-                {isHierarchyFiltersExpanded && (
-                  <ThemedView style={styles.filtersContent}>
-                    <ThemedView style={styles.filterGroup}>
-                      <ThemedText style={styles.filterLabel}>Empresa:</ThemedText>
-                      <View style={styles.pickerWrapper}>
-                        <Picker
-                          selectedValue={filterEmpresaId || ''}
-                          onValueChange={(value) => {
-                            setFilterEmpresaId(value && value !== '' ? Number(value) : null);
-                            setFilterClienteId(null);
-                            setFilterContratoId(null);
-                            setFilterCorpoId(null);
-                            setFilterPuestoId(null);
-                            setFilterPlazaId(null);
-                          }}
-                          style={styles.picker}
-                        >
-                          <Picker.Item label="Seleccionar..." value="" />
-                          {filterEmpresas.map((e: any) => (
-                            <Picker.Item key={e.id} label={e.nombre} value={e.id} />
-                          ))}
-                        </Picker>
-                      </View>
-                    </ThemedView>
-
-                    {filterEmpresaId && (
+                    {isHierarchyFiltersExpanded && (
+                      <TouchableOpacity
+                        style={styles.resetFiltersButton}
+                        onPress={() => {
+                          setFilterEmpresaId(null);
+                          setFilterClienteId(null);
+                          setFilterContratoId(null);
+                          setFilterCorpoId(null);
+                          setFilterPuestoId(null);
+                          setFilterPlazaId(null);
+                        }}
+                      >
+                        <Ionicons name="refresh" size={16} color="#FF3B30" />
+                        <ThemedText style={styles.resetFiltersText}>Reiniciar</ThemedText>
+                      </TouchableOpacity>
+                    )}
+                  </ThemedView>
+                  {isHierarchyFiltersExpanded && (
+                    <ThemedView style={styles.filtersContent}>
                       <ThemedView style={styles.filterGroup}>
-                        <ThemedText style={styles.filterLabel}>Cliente:</ThemedText>
+                        <ThemedText style={styles.filterLabel}>Empresa:</ThemedText>
                         <View style={styles.pickerWrapper}>
                           <Picker
-                            selectedValue={filterClienteId || ''}
+                            selectedValue={filterEmpresaId || ''}
                             onValueChange={(value) => {
-                              setFilterClienteId(value && value !== '' ? Number(value) : null);
+                              setFilterEmpresaId(value && value !== '' ? Number(value) : null);
+                              setFilterClienteId(null);
                               setFilterContratoId(null);
                               setFilterCorpoId(null);
                               setFilterPuestoId(null);
@@ -2223,126 +2378,152 @@ export default function InductionTourRecordScreen() {
                             style={styles.picker}
                           >
                             <Picker.Item label="Seleccionar..." value="" />
-                            {filterClientes.map((c: any) => (
-                              <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                            {filterEmpresas.map((e: any) => (
+                              <Picker.Item key={e.id} label={e.nombre} value={e.id} />
                             ))}
                           </Picker>
                         </View>
                       </ThemedView>
-                    )}
 
-                    {filterClienteId && (
-                      <ThemedView style={styles.filterGroup}>
-                        <ThemedText style={styles.filterLabel}>División:</ThemedText>
-                        <View style={styles.pickerWrapper}>
-                          <Picker
-                            selectedValue={''}
-                            enabled={false}
-                            style={styles.picker}
-                          >
-                            <Picker.Item label="Seleccionar..." value="" />
-                            {filterDivisiones.map((d: any) => (
-                              <Picker.Item key={d.id} label={d.nombre} value={d.id} />
-                            ))}
-                          </Picker>
-                        </View>
-                      </ThemedView>
-                    )}
+                      {filterEmpresaId && (
+                        <ThemedView style={styles.filterGroup}>
+                          <ThemedText style={styles.filterLabel}>Cliente:</ThemedText>
+                          <View style={styles.pickerWrapper}>
+                            <Picker
+                              selectedValue={filterClienteId || ''}
+                              onValueChange={(value) => {
+                                setFilterClienteId(value && value !== '' ? Number(value) : null);
+                                setFilterContratoId(null);
+                                setFilterCorpoId(null);
+                                setFilterPuestoId(null);
+                                setFilterPlazaId(null);
+                              }}
+                              style={styles.picker}
+                            >
+                              <Picker.Item label="Seleccionar..." value="" />
+                              {filterClientes.map((c: any) => (
+                                <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                              ))}
+                            </Picker>
+                          </View>
+                        </ThemedView>
+                      )}
 
-                    {filterClienteId && (
-                      <ThemedView style={styles.filterGroup}>
-                        <ThemedText style={styles.filterLabel}>Contrato:</ThemedText>
-                        <View style={styles.pickerWrapper}>
-                          <Picker
-                            selectedValue={filterContratoId || ''}
-                            onValueChange={(value) => {
-                              setFilterContratoId(value && value !== '' ? Number(value) : null);
-                              setFilterCorpoId(null);
-                              setFilterPuestoId(null);
-                              setFilterPlazaId(null);
-                            }}
-                            style={styles.picker}
-                          >
-                            <Picker.Item label="Seleccionar..." value="" />
-                            {filterContratos.map((c: any) => (
-                              <Picker.Item key={c.id} label={c.nombre} value={c.id} />
-                            ))}
-                          </Picker>
-                        </View>
-                      </ThemedView>
-                    )}
+                      {filterClienteId && (
+                        <ThemedView style={styles.filterGroup}>
+                          <ThemedText style={styles.filterLabel}>División:</ThemedText>
+                          <View style={styles.pickerWrapper}>
+                            <Picker
+                              selectedValue={''}
+                              enabled={false}
+                              style={styles.picker}
+                            >
+                              <Picker.Item label="Seleccionar..." value="" />
+                              {filterDivisiones.map((d: any) => (
+                                <Picker.Item key={d.id} label={d.nombre} value={d.id} />
+                              ))}
+                            </Picker>
+                          </View>
+                        </ThemedView>
+                      )}
 
-                    {filterContratoId && (
-                      <ThemedView style={styles.filterGroup}>
-                        <ThemedText style={styles.filterLabel}>Sucursal:</ThemedText>
-                        <View style={styles.pickerWrapper}>
-                          <Picker
-                            selectedValue={filterCorpoId || ''}
-                            onValueChange={(value) => {
-                              setFilterCorpoId(value && value !== '' ? Number(value) : null);
-                              setFilterPuestoId(null);
-                              setFilterPlazaId(null);
-                            }}
-                            style={styles.picker}
-                          >
-                            <Picker.Item label="Seleccionar..." value="" />
-                            {filterSucursales.map((s: any) => (
-                              <Picker.Item key={s.id} label={s.nombre} value={s.id} />
-                            ))}
-                          </Picker>
-                        </View>
-                      </ThemedView>
-                    )}
+                      {filterClienteId && (
+                        <ThemedView style={styles.filterGroup}>
+                          <ThemedText style={styles.filterLabel}>Contrato:</ThemedText>
+                          <View style={styles.pickerWrapper}>
+                            <Picker
+                              selectedValue={filterContratoId || ''}
+                              onValueChange={(value) => {
+                                setFilterContratoId(value && value !== '' ? Number(value) : null);
+                                setFilterCorpoId(null);
+                                setFilterPuestoId(null);
+                                setFilterPlazaId(null);
+                              }}
+                              style={styles.picker}
+                            >
+                              <Picker.Item label="Seleccionar..." value="" />
+                              {filterContratos.map((c: any) => (
+                                <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                              ))}
+                            </Picker>
+                          </View>
+                        </ThemedView>
+                      )}
 
-                    {filterCorpoId && (
-                      <ThemedView style={styles.filterGroup}>
-                        <ThemedText style={styles.filterLabel}>Puesto:</ThemedText>
-                        <View style={styles.pickerWrapper}>
-                          <Picker
-                            selectedValue={filterPuestoId || ''}
-                            onValueChange={(value) => {
-                              setFilterPuestoId(value && value !== '' ? Number(value) : null);
-                              setFilterPlazaId(null);
-                            }}
-                            style={styles.picker}
-                          >
-                            <Picker.Item label="Seleccionar..." value="" />
-                            {filterPuestos.map((p: any) => (
-                              <Picker.Item key={p.id} label={p.nombre} value={p.id} />
-                            ))}
-                          </Picker>
-                        </View>
-                      </ThemedView>
-                    )}
+                      {filterContratoId && (
+                        <ThemedView style={styles.filterGroup}>
+                          <ThemedText style={styles.filterLabel}>Sucursal:</ThemedText>
+                          <View style={styles.pickerWrapper}>
+                            <Picker
+                              selectedValue={filterCorpoId || ''}
+                              onValueChange={(value) => {
+                                setFilterCorpoId(value && value !== '' ? Number(value) : null);
+                                setFilterPuestoId(null);
+                                setFilterPlazaId(null);
+                              }}
+                              style={styles.picker}
+                            >
+                              <Picker.Item label="Seleccionar..." value="" />
+                              {filterSucursales.map((s: any) => (
+                                <Picker.Item key={s.id} label={s.nombre} value={s.id} />
+                              ))}
+                            </Picker>
+                          </View>
+                        </ThemedView>
+                      )}
 
-                    {filterPuestoId && (
-                      <ThemedView style={styles.filterGroup}>
-                        <ThemedText style={styles.filterLabel}>Plaza:</ThemedText>
-                        <View style={styles.pickerWrapper}>
-                          <Picker
-                            selectedValue={filterPlazaId || ''}
-                            onValueChange={(value) => {
-                              setFilterPlazaId(value && value !== '' ? Number(value) : null);
-                            }}
-                            style={styles.picker}
-                          >
-                            <Picker.Item label="Seleccionar..." value="" />
-                            {filterPlazas.map((p: any) => (
-                              <Picker.Item key={p.id} label={p.nombre} value={p.id} />
-                            ))}
-                          </Picker>
-                        </View>
-                      </ThemedView>
-                    )}
-                  </ThemedView>
-                )}
-              </ThemedView>
+                      {filterCorpoId && (
+                        <ThemedView style={styles.filterGroup}>
+                          <ThemedText style={styles.filterLabel}>Puesto:</ThemedText>
+                          <View style={styles.pickerWrapper}>
+                            <Picker
+                              selectedValue={filterPuestoId || ''}
+                              onValueChange={(value) => {
+                                setFilterPuestoId(value && value !== '' ? Number(value) : null);
+                                setFilterPlazaId(null);
+                              }}
+                              style={styles.picker}
+                            >
+                              <Picker.Item label="Seleccionar..." value="" />
+                              {filterPuestos.map((p: any) => (
+                                <Picker.Item key={p.id} label={p.nombre} value={p.id} />
+                              ))}
+                            </Picker>
+                          </View>
+                        </ThemedView>
+                      )}
 
-              <TouchableOpacity style={styles.createButton} onPress={startCreating}>
-                <ThemedText style={styles.createButtonText}>
-                  <Ionicons name="add" size={20} color="#FFFFFF" />
-                </ThemedText>
-              </TouchableOpacity>
+                      {filterPuestoId && (
+                        <ThemedView style={styles.filterGroup}>
+                          <ThemedText style={styles.filterLabel}>Plaza:</ThemedText>
+                          <View style={styles.pickerWrapper}>
+                            <Picker
+                              selectedValue={filterPlazaId || ''}
+                              onValueChange={(value) => {
+                                setFilterPlazaId(value && value !== '' ? Number(value) : null);
+                              }}
+                              style={styles.picker}
+                            >
+                              <Picker.Item label="Seleccionar..." value="" />
+                              {filterPlazas.map((p: any) => (
+                                <Picker.Item key={p.id} label={p.nombre} value={p.id} />
+                              ))}
+                            </Picker>
+                          </View>
+                        </ThemedView>
+                      )}
+                    </ThemedView>
+                  )}
+                </ThemedView>
+              )}
+
+              {!isLoading && (
+                <TouchableOpacity style={styles.createButton} onPress={startCreating}>
+                  <ThemedText style={styles.createButtonText}>
+                    <Ionicons name="add" size={20} color="#FFFFFF" />
+                  </ThemedText>
+                </TouchableOpacity>
+              )}
               {renderRecordList()}
             </ThemedView>
           )}
@@ -2392,6 +2573,88 @@ export default function InductionTourRecordScreen() {
             </ThemedView>
           </ThemedView>
         </ThemedView>
+      </Modal>
+
+      {/* Modal: ver cambios */}
+      <Modal
+        visible={isCambiosModalVisible}
+        animationType="fade"
+        transparent
+        presentationStyle="overFullScreen"
+        onRequestClose={closeCambiosModal}
+      >
+        <View style={styles.overlay}>
+          <ThemedView style={styles.floatModalCardMovimientos}>
+            <ThemedView style={styles.floatModalHeader}>
+              <ThemedText style={styles.modalTitle}>{cambiosTitle}</ThemedText>
+              <TouchableOpacity onPress={closeCambiosModal}>
+                <Ionicons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+            </ThemedView>
+
+            <ScrollView style={{ maxHeight: Dimensions.get('window').height * 0.75 }} contentContainerStyle={{ padding: 16 }}>
+              {(!cambiosItems || cambiosItems.length === 0) ? (
+                <ThemedView style={styles.emptyContainer}>
+                  <ThemedText style={styles.emptyText}>No hay cambios registrados</ThemedText>
+                </ThemedView>
+              ) : (
+                cambiosItems.map((row: any) => {
+                  let parsed: any[] = [];
+                  try {
+                    parsed = row?.cambios ? JSON.parse(row.cambios) : [];
+                  } catch {
+                    parsed = [];
+                  }
+                  const createdAtLabel = formatCambioCreatedAt(row?.created_at);
+                  const isOpen = expandedCambioId === row.id;
+
+                  return (
+                    <ThemedView key={`chg-${row.id}`} style={styles.cambioCollapsableMain}>
+                      <TouchableOpacity
+                        style={styles.cambioCollapsableHeader}
+                        onPress={() => setExpandedCambioId((prev) => (prev === row.id ? null : row.id))}
+                        activeOpacity={0.8}
+                      >
+                        <ThemedText style={styles.cambioCollapsableTitle}>
+                          {createdAtLabel}
+                        </ThemedText>
+                        <Ionicons
+                          name={isOpen ? "chevron-up" : "chevron-down"}
+                          size={18}
+                          color="#007AFF"
+                        />
+                      </TouchableOpacity>
+
+                      {isOpen && (
+                        <ThemedView style={styles.cambioCollapsableContent}>
+                          <ThemedView style={styles.filterGroupSearch}>
+                            <ThemedText style={styles.filterLabel}>Cambio realizado por:</ThemedText>
+                            <ThemedText style={styles.changeDescription}>
+                              {row.empleado_nombre || 'Desconocido'}
+                              {row.empleado_cedula ? ` - Cédula: ${row.empleado_cedula}` : ''}
+                            </ThemedText>
+                          </ThemedView>
+
+                          {(Array.isArray(parsed) ? parsed : []).length > 0 && (
+                            <ThemedView style={styles.filterGroupSearch}>
+                              <ThemedText style={styles.filterLabel}>Cambios:</ThemedText>
+                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => (
+                                <ThemedText key={`c-${row.id}-${idx}`} style={styles.changeDescription}>
+                                  <ThemedText style={{ fontWeight: '800' }}>{String(c?.prop ?? '-')}: </ThemedText>
+                                  {formatChangeValue(c?.prop, c?.after)}
+                                </ThemedText>
+                              ))}
+                            </ThemedView>
+                          )}
+                        </ThemedView>
+                      )}
+                    </ThemedView>
+                  );
+                })
+              )}
+            </ScrollView>
+          </ThemedView>
+        </View>
       </Modal>
 
       {QRScannerComponent}
@@ -2908,9 +3171,19 @@ const styles = StyleSheet.create({
   editButton: {
     backgroundColor: '#007AFF',
   },
+  changesButton: { backgroundColor: '#5856D6', flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 12, borderRadius: 8, gap: 8 },
   deleteButton: {
     backgroundColor: '#FF3B30',
   },
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 },
+  floatModalCardMovimientos: { backgroundColor: '#FFFFFF', borderRadius: 12, width: '100%', maxWidth: 500, maxHeight: '80%', borderWidth: 1, borderColor: '#E0E0E0', overflow: 'hidden' },
+  floatModalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#E0E0E0' },
+  cambioCollapsableMain: { width: '100%', marginBottom: 10, backgroundColor: '#fff', borderRadius: 6, borderWidth: 1, borderColor: '#E0E0E0', overflow: 'hidden' },
+  cambioCollapsableHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, backgroundColor: '#F8F9FA' },
+  cambioCollapsableTitle: { fontSize: 14, fontWeight: '600', color: '#007AFF', flex: 1 },
+  cambioCollapsableContent: { padding: 12, gap: 8, backgroundColor: '#F8F9FA' },
+  changeDescription: { fontSize: 14, lineHeight: 20, color: '#666', marginBottom: 8 },
+  filterGroupSearch: { marginBottom: 12 },
   listItemButtonText: {
     color: '#FFFFFF',
     fontSize: 14,

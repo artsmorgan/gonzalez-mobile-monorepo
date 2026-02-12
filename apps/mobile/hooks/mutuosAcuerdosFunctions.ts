@@ -1,5 +1,5 @@
 import Constants from 'expo-constants';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import authedFetch from './authedFetch';
 import type { BasicResponse, ListMutuosAcuerdosResponse, MutuoAcuerdoUpsertResponse } from './mutuosAcuerdosTypes';
 
 type CommonAuth = {
@@ -13,19 +13,18 @@ const normalizeBase64 = (b64: string) => {
   return b64;
 };
 
-async function getTokenOrRefresh(refreshAccessToken?: () => Promise<boolean>, logout?: () => Promise<any>) {
-  let token = await AsyncStorage.getItem('access_token');
-  if (!token && refreshAccessToken) {
-    const refreshed = await refreshAccessToken();
-    if (refreshed) token = await AsyncStorage.getItem('access_token');
-    else if (logout) await logout();
+const requireAuthHandlers = (refreshAccessToken?: () => Promise<boolean>, logout?: () => Promise<any>) => {
+  if (!refreshAccessToken || !logout) {
+    throw new Error('Auth handlers not provided');
   }
-  if (!token) {
-    if (logout) await logout();
-    throw new Error('Sesión expirada');
-  }
-  return token;
-}
+  return {
+    refreshAccessToken,
+    logout,
+  } as {
+    refreshAccessToken: () => Promise<boolean>;
+    logout: () => Promise<any>;
+  };
+};
 
 export const listMutuosAcuerdosByCorpo = async ({
   corpo_id,
@@ -35,35 +34,21 @@ export const listMutuosAcuerdosByCorpo = async ({
   try {
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) throw new Error('Server URL not configured');
+    const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
 
-    const token = await getTokenOrRefresh(refreshAccessToken, logout);
-    if (!token) {
-      if (logout) await logout();
-      throw new Error('Sesión expirada');
-    }
-
-    const response = await fetch(`${apiUrl}/api/mutuos-acuerdos/corpo/${corpo_id}`, {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/mutuos-acuerdos/corpo/${corpo_id}`,
+      init: {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       },
+      refreshAccessToken: refresh,
+      logout: doLogout,
     });
 
-    if (response.status === 401) {
-      if (refreshAccessToken) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) return listMutuosAcuerdosByCorpo({ corpo_id, refreshAccessToken, logout });
-      }
-      if (logout) await logout();
-      return { status: false, message: 'Sesión expirada', data: [] };
-    }
-
-    if (response.status === 403) {
-      if (logout) await logout();
-      throw new Error('Acceso denegado');
-    }
+    if (!response) return { status: false, message: 'Sesión expirada', data: [] };
 
     const data = (await response.json()) as ListMutuosAcuerdosResponse;
     return data;
@@ -81,41 +66,27 @@ export const createMutuoAcuerdo = async ({
   try {
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) throw new Error('Server URL not configured');
-
-    const token = await getTokenOrRefresh(refreshAccessToken, logout);
-    if (!token) {
-      if (logout) await logout();
-      throw new Error('Sesión expirada');
-    }
+    const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
 
     const payload: any = { ...requestData };
     if (typeof payload.firma_ejecutivo_cuenta === 'string') {
       payload.firma_ejecutivo_cuenta = normalizeBase64(payload.firma_ejecutivo_cuenta);
     }
 
-    const response = await fetch(`${apiUrl}/api/mutuos-acuerdos`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/mutuos-acuerdos`,
+      init: {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
       },
-      body: JSON.stringify(payload),
+      refreshAccessToken: refresh,
+      logout: doLogout,
     });
 
-    if (response.status === 401) {
-      if (refreshAccessToken) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) return createMutuoAcuerdo({ requestData, refreshAccessToken, logout });
-      }
-      if (logout) await logout();
-      return { status: false, message: 'Sesión expirada' };
-    }
-
-    if (response.status === 403) {
-      if (logout) await logout();
-      throw new Error('Acceso denegado');
-    }
+    if (!response) return { status: false, message: 'Sesión expirada' };
 
     const data = (await response.json()) as MutuoAcuerdoUpsertResponse;
     return data;
@@ -134,33 +105,22 @@ export const updateMutuoAcuerdo = async ({
   try {
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) throw new Error('Server URL not configured');
+    const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
 
-    const token = await getTokenOrRefresh(refreshAccessToken, logout);
-    if (!token) throw new Error('No authentication token found');
-
-    const response = await fetch(`${apiUrl}/api/mutuos-acuerdos/${id}`, {
-      method: 'PUT',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/mutuos-acuerdos/${id}`,
+      init: {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestData),
       },
-      body: JSON.stringify(requestData),
+      refreshAccessToken: refresh,
+      logout: doLogout,
     });
 
-    if (response.status === 401) {
-      if (refreshAccessToken) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) return updateMutuoAcuerdo({ id, requestData, refreshAccessToken, logout });
-      }
-      if (logout) await logout();
-      return { status: false, message: 'Sesión expirada' };
-    }
-
-    if (response.status === 403) {
-      if (logout) await logout();
-      throw new Error('Acceso denegado');
-    }
+    if (!response) return { status: false, message: 'Sesión expirada' };
 
     const data = (await response.json()) as MutuoAcuerdoUpsertResponse;
     return data;
@@ -178,35 +138,21 @@ export const deleteMutuoAcuerdo = async ({
   try {
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) throw new Error('Server URL not configured');
+    const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
 
-    const token = await getTokenOrRefresh(refreshAccessToken, logout);
-    if (!token) {
-      if (logout) await logout();
-      throw new Error('Sesión expirada');
-    }
-
-    const response = await fetch(`${apiUrl}/api/mutuos-acuerdos/${id}`, {
-      method: 'DELETE',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/mutuos-acuerdos/${id}`,
+      init: {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       },
+      refreshAccessToken: refresh,
+      logout: doLogout,
     });
 
-    if (response.status === 401) {
-      if (refreshAccessToken) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) return deleteMutuoAcuerdo({ id, refreshAccessToken, logout });
-      }
-      if (logout) await logout();
-      return { status: false, message: 'Sesión expirada' };
-    }
-
-    if (response.status === 403) {
-      if (logout) await logout();
-      throw new Error('Acceso denegado');
-    }
+    if (!response) return { status: false, message: 'Sesión expirada' };
 
     const data = (await response.json()) as BasicResponse;
     return data;
@@ -225,38 +171,24 @@ export const signMutuoAcuerdoEjecutivo = async ({
   try {
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) throw new Error('Server URL not configured');
-
-    const token = await getTokenOrRefresh(refreshAccessToken, logout);
-    if (!token) {
-      if (logout) await logout();
-      throw new Error('Sesión expirada');
-    }
+    const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
 
     const payload = { firma_ejecutivo_cuenta: normalizeBase64(String(firma_ejecutivo_cuenta || '')) };
 
-    const response = await fetch(`${apiUrl}/api/mutuos-acuerdos/${id}/firma-ejecutivo`, {
-      method: 'PUT',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/mutuos-acuerdos/${id}/firma-ejecutivo`,
+      init: {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
       },
-      body: JSON.stringify(payload),
+      refreshAccessToken: refresh,
+      logout: doLogout,
     });
 
-    if (response.status === 401) {
-      if (refreshAccessToken) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) return signMutuoAcuerdoEjecutivo({ id, firma_ejecutivo_cuenta, refreshAccessToken, logout });
-      }
-      if (logout) await logout();
-      return { status: false, message: 'Sesión expirada' };
-    }
-
-    if (response.status === 403) {
-      if (logout) await logout();
-      throw new Error('Acceso denegado');
-    }
+    if (!response) return { status: false, message: 'Sesión expirada' };
 
     const data = (await response.json()) as BasicResponse;
     return data;

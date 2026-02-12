@@ -19,6 +19,7 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import { createVehicle as createVehicleAPI, updateVehicle as updateVehicleAPI, deleteVehicle as deleteVehicleAPI } from '@/hooks/vehiclesFunctions';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import { eventBus } from '@/hooks/eventBus';
+import authedFetch from '@/hooks/authedFetch';
 
 type VehiclesScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Vehicles'>;
 
@@ -72,6 +73,8 @@ export default function VehiclesScreen() {
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Importante: "sin internet" NO cuenta como error (solo es un estado informativo)
+  const [offlineMessage, setOfflineMessage] = useState<string | null>(null);
   const [hasCurrentMarca, setHasCurrentMarca] = useState<boolean>(false);
 
   // Editing state
@@ -232,6 +235,7 @@ export default function VehiclesScreen() {
     try {
       setIsLoading(true);
       setError(null);
+      setOfflineMessage(null);
 
       // Verificar si existe current_marca
       const currentMarca = await AsyncStorage.getItem('current_marca');
@@ -255,40 +259,18 @@ export default function VehiclesScreen() {
           throw new Error('Server URL not configured');
         }
 
-        let token = await AsyncStorage.getItem('access_token');
-        if (!token) {
-          const refreshed = await refreshAccessToken();
-          if (!refreshed) {
-            if (logout) await logout();
-            throw new Error('Sesión expirada');
-          }
-          token = await AsyncStorage.getItem('access_token');
-        }
-
-        const response = await fetch(`${apiUrl}/api/vehicles?m=${marcaId}`, {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-            'ngrok-skip-browser-warning': '69420',
+        const response = await authedFetch({
+          url: `${apiUrl}/api/vehicles?m=${marcaId}`,
+          init: {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+            },
           },
+          refreshAccessToken,
+          logout,
         });
-
-        if (response.status === 401) {
-          const refreshed = await refreshAccessToken();
-          if (refreshed) {
-            return fetchVehicles();
-          } else {
-            Alert.alert('15', 'Sesión expirada. Por favor inicie sesión nuevamente.');
-            await logout();
-            return;
-          }
-        }
-
-        if (response.status === 403) {
-          if (logout) await logout();
-          throw new Error('Acceso denegado');
-        }
+        if (!response) return;
 
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`);
@@ -315,10 +297,10 @@ export default function VehiclesScreen() {
             base64_image: v.base64_image || '',
           }));
           setVehicles(vehiclesWithBase64);
-          Alert.alert('Modo Offline', 'No hay conexión a internet. Mostrando datos guardados.');
+          setOfflineMessage('Modo Offline: no hay conexión a internet. Mostrando datos guardados.');
         } else {
-          setError('No hay datos guardados y no hay conexión a internet');
-          Alert.alert('Sin conexión', 'No hay conexión a internet y no hay datos guardados previamente.');
+          // Sin internet NO es error
+          setOfflineMessage('Sin conexión: no hay datos guardados previamente. Puedes registrar visitas offline y se sincronizarán cuando haya conexión.');
           setVehicles([]);
         }
       }
@@ -335,14 +317,22 @@ export default function VehiclesScreen() {
             base64_image: v.base64_image || '',
           }));
           setVehicles(vehiclesWithBase64);
-          Alert.alert('Modo Offline', 'Error de conexión. Mostrando datos guardados.');
+          setOfflineMessage('Modo Offline: error de conexión. Mostrando datos guardados.');
         } else {
-          setError('Error al cargar los vehículos');
-          Alert.alert('Error', 'No se pudieron cargar los vehículos');
+          if (isProbablyNetworkError(err)) {
+            setOfflineMessage('Sin conexión: no hay datos guardados previamente. Puedes registrar visitas offline y se sincronizarán cuando haya conexión.');
+            setVehicles([]);
+          } else {
+            setError('Error al cargar los vehículos');
+          }
         }
       } catch (cacheErr) {
-        setError('Error al cargar los vehículos');
-        Alert.alert('Error', 'No se pudieron cargar los vehículos');
+        if (isProbablyNetworkError(err) || isProbablyNetworkError(cacheErr)) {
+          setOfflineMessage('Sin conexión: no hay datos guardados previamente. Puedes registrar visitas offline y se sincronizarán cuando haya conexión.');
+          setVehicles([]);
+        } else {
+          setError('Error al cargar los vehículos');
+        }
       }
     } finally {
       setIsLoading(false);
@@ -397,6 +387,17 @@ export default function VehiclesScreen() {
     return networkState.isConnected && networkState.isInternetReachable ? true : false;
   };
 
+  const isProbablyNetworkError = (err: any) => {
+    const msg = String(err?.message ?? err ?? '').toLowerCase();
+    return (
+      msg.includes('network request failed') ||
+      msg.includes('failed to fetch') ||
+      msg.includes('networkerror') ||
+      msg.includes('timeout') ||
+      msg.includes('timed out')
+    );
+  };
+
   const fetchCambios = useCallback(async (tabla: string, registroId: number) => {
     const isConnected = await getConnectionStatus();
     if (!isConnected) {
@@ -407,38 +408,19 @@ export default function VehiclesScreen() {
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) throw new Error('Server URL not configured');
 
-      let token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (logout) await logout();
-          return;
-        }
-        token = await AsyncStorage.getItem('access_token');
-      }
-      if (!token) return;
-
-      const doRequest = async (tk: string) =>
-        fetch(`${apiUrl}/api/cambios-apps-modules?tabla=${encodeURIComponent(tabla)}&registro_id=${registroId}`, {
+      const resp = await authedFetch({
+        url: `${apiUrl}/api/cambios-apps-modules?tabla=${encodeURIComponent(tabla)}&registro_id=${registroId}`,
+        init: {
           method: 'GET',
           headers: {
-            Authorization: `Bearer ${tk}`,
             'Content-Type': 'application/json',
-            'ngrok-skip-browser-warning': '69420',
           },
-        });
+        },
+        refreshAccessToken,
+        logout,
+      });
 
-      let resp = await doRequest(token);
-      if (resp.status === 401) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (logout) await logout();
-          return;
-        }
-        const nextToken = await AsyncStorage.getItem('access_token');
-        if (!nextToken) return;
-        resp = await doRequest(nextToken);
-      }
+      if (!resp) return;
 
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok || !data.status) {
@@ -1273,23 +1255,16 @@ export default function VehiclesScreen() {
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (apiUrl) {
         try {
-          let token = await AsyncStorage.getItem('access_token');
-          if (!token) {
-            const refreshed = await refreshAccessToken();
-            if (!refreshed) {
-              if (logout) await logout();
-              throw new Error('Sesión expirada');
-            }
-            token = await AsyncStorage.getItem('access_token');
-          }
-
           const imageUrl = `${apiUrl}/api/vehicles/${vehicle.id}/get-image?t=${Date.now()}`;
-          const response = await fetch(imageUrl, {
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'ngrok-skip-browser-warning': '69420',
+          const response = await authedFetch({
+            url: imageUrl,
+            init: {
+              method: 'GET',
             },
+            refreshAccessToken,
+            logout,
           });
+          if (!response) return;
 
           if (response.ok) {
             const blob = await response.blob();
@@ -1481,6 +1456,18 @@ export default function VehiclesScreen() {
   return (
     <ThemedView style={styles.container}>
       <AppHeader onMenuPress={handleMenuPress} title="Visitas de vehículos" />
+      {!!error && (
+        <ThemedView style={styles.errorBanner}>
+          <Ionicons name="alert-circle-outline" size={18} color="#B00020" />
+          <ThemedText style={styles.errorBannerText}>{error}</ThemedText>
+        </ThemedView>
+      )}
+      {!!offlineMessage && !error && (
+        <ThemedView style={styles.offlineBanner}>
+          <Ionicons name="cloud-offline-outline" size={18} color="#8A6D00" />
+          <ThemedText style={styles.offlineBannerText}>{offlineMessage}</ThemedText>
+        </ThemedView>
+      )}
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
@@ -1558,7 +1545,7 @@ export default function VehiclesScreen() {
           </ThemedView>
 
           {/* Create Button */}
-          {!isCreating && !editingVehicle && (
+          {!isCreating && !editingVehicle && !error && (
             <TouchableOpacity style={styles.createButton} onPress={startCreating}>
               <ThemedText style={styles.createButtonText}>{getActionIcon('add')}</ThemedText>
             </TouchableOpacity>
@@ -1772,22 +1759,15 @@ const VehicleItemComponent: React.FC<VehicleItemComponentProps> = ({
     }
 
     try {
-      let token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (logout) await logout();
-          throw new Error('Sesión expirada');
-        }
-        token = await AsyncStorage.getItem('access_token');
-      }
-
-      const response = await fetch(`${apiUrl}/api/vehicles/${vehicle.id}/get-image?t=${Date.now()}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'ngrok-skip-browser-warning': '69420',
+      const response = await authedFetch({
+        url: `${apiUrl}/api/vehicles/${vehicle.id}/get-image?t=${Date.now()}`,
+        init: {
+          method: 'GET',
         },
+        refreshAccessToken,
+        logout,
       });
+      if (!response) return;
 
       if (response.ok) {
         const blob = await response.blob();
@@ -1987,6 +1967,44 @@ const styles = StyleSheet.create({
     marginTop: 16,
     fontSize: 16,
     opacity: 0.7,
+  },
+  errorBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 20,
+    marginTop: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#F5C2C7',
+    backgroundColor: '#F8D7DA',
+  },
+  errorBannerText: {
+    flex: 1,
+    color: '#B00020',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  offlineBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 20,
+    marginTop: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#FFEBAA',
+    backgroundColor: '#FFF3CD',
+  },
+  offlineBannerText: {
+    flex: 1,
+    color: '#8A6D00',
+    fontSize: 14,
+    fontWeight: '600',
   },
   noMarcaContainer: {
     flex: 1,

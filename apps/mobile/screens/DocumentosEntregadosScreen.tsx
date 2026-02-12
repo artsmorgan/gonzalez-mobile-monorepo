@@ -10,6 +10,7 @@ import {
   TextInput,
   TouchableOpacity,
   View,
+  Dimensions,
 } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -29,6 +30,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { eventBus } from '../hooks/eventBus';
 import getHoraAccion from '../hooks/getHoraAccion';
 import { useQRScanner } from '../hooks/useQRScanner';
+import authedFetch from '../hooks/authedFetch';
 import {
   createDocumentoEntregado,
   deleteDocumentoEntregado,
@@ -37,6 +39,7 @@ import {
   updateDocumentoEntregado,
 } from '../hooks/documentosEntregadosFunctions';
 import { listDocumentosEntregados } from '../hooks/documentosEntregadosFunctions';
+import Constants from 'expo-constants';
 
 type DocUI = DocumentoEntregadoItem & { id_local?: string };
 type DocumentTypeUI = { id: number; nombre: string };
@@ -88,11 +91,40 @@ export default function DocumentosEntregadosScreen() {
   const [signatureKey, setSignatureKey] = useState(0);
   const [isReadingSignature, setIsReadingSignature] = useState(false);
 
+  // Modal: ver cambios (auditoría)
+  const [isCambiosModalVisible, setIsCambiosModalVisible] = useState(false);
+  const [cambiosTitle, setCambiosTitle] = useState<string>('Cambios');
+  const [cambiosItems, setCambiosItems] = useState<any[]>([]);
+  const [expandedCambioId, setExpandedCambioId] = useState<number | null>(null);
+
   const dateToLocalString = (d: Date): string => {
     const y = d.getFullYear();
     const m = String(d.getMonth() + 1).padStart(2, '0');
     const day = String(d.getDate()).padStart(2, '0');
     return `${y}-${m}-${day}`;
+  };
+
+  const formatYMDToDMY = (value?: string): string => {
+    const v = String(value || '').trim();
+    if (!v) return '';
+    const onlyDate = v.split('T')[0];
+    const ymd = onlyDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (ymd) return `${ymd[3]}-${ymd[2]}-${ymd[1]}`;
+    const dmy = onlyDate.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+    if (dmy) return `${dmy[1]}-${dmy[2]}-${dmy[3]}`;
+    return onlyDate;
+  };
+
+  const parseDateStringToDate = (value?: string): Date => {
+    const v = String(value || '').trim();
+    if (!v) return new Date();
+    const onlyDate = v.split('T')[0];
+    const ymd = onlyDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (ymd) return new Date(`${onlyDate}T00:00:00`);
+    const dmy = onlyDate.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+    if (dmy) return new Date(`${dmy[3]}-${dmy[2]}-${dmy[1]}T00:00:00`);
+    const parsed = new Date(v);
+    return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
   };
 
   const decodeFirmaHash = (hash?: string | null) => {
@@ -112,6 +144,74 @@ export default function DocumentosEntregadosScreen() {
     const state = await Network.getNetworkStateAsync();
     return !!(state.isConnected && state.isInternetReachable);
   };
+
+  const closeCambiosModal = () => {
+    setIsCambiosModalVisible(false);
+    setCambiosItems([]);
+    setExpandedCambioId(null);
+  };
+
+  const formatCambioCreatedAt = (value: any) => {
+    if (!value) return '-';
+    try {
+      const date = new Date(value);
+      return date.toLocaleString('es-CR', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true,
+      });
+    } catch {
+      return String(value);
+    }
+  };
+
+  const formatChangeValue = (prop: string, value: any): string => {
+    if (value === null || value === undefined) return 'N/A';
+    if (typeof value === 'boolean') return value ? 'Sí' : 'No';
+    if (typeof value === 'object') {
+      return JSON.stringify(value, null, 2);
+    }
+    return String(value);
+  };
+
+  const fetchCambios = useCallback(async (tabla: string, registroId: number) => {
+    const isConnected = await getConnectionStatus();
+    if (!isConnected) {
+      Alert.alert('Sin conexión', 'Esta función solo está disponible con conexión a internet.');
+      return;
+    }
+    try {
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) throw new Error('Server URL not configured');
+
+      const resp = await authedFetch({
+        url: `${apiUrl}/api/cambios-apps-modules?tabla=${encodeURIComponent(tabla)}&registro_id=${registroId}`,
+        init: {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        },
+        refreshAccessToken,
+        logout,
+      });
+
+      if (!resp) return;
+
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data.status) {
+        throw new Error(data.message || 'No se pudieron cargar los cambios');
+      }
+      setCambiosItems(Array.isArray(data.data) ? data.data : []);
+      setIsCambiosModalVisible(true);
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'No se pudieron cargar los cambios');
+    }
+  }, [refreshAccessToken, logout]);
 
   const loadMarcaContext = async () => {
     const currentMarcaStr = await AsyncStorage.getItem('current_marca');
@@ -554,7 +654,7 @@ export default function DocumentosEntregadosScreen() {
 
         <ThemedText style={styles.line}>
           <ThemedText style={styles.labelInline}>Fecha: </ThemedText>
-          <ThemedText style={styles.valueInline}>{d}</ThemedText>
+          <ThemedText style={styles.valueInline}>{formatYMDToDMY(d)}</ThemedText>
         </ThemedText>
         <ThemedText style={styles.line}>
           <ThemedText style={styles.labelInline}>Entrega: </ThemedText>
@@ -620,6 +720,18 @@ export default function DocumentosEntregadosScreen() {
             <Ionicons name="pencil" size={18} color="#FFFFFF" />
             <ThemedText style={styles.rowButtonText}>Editar</ThemedText>
           </TouchableOpacity>
+          {!(it.id_local || it.id === 0) && (
+            <TouchableOpacity
+              style={[styles.rowButton, styles.changesButton]}
+              onPress={() => {
+                setCambiosTitle(`Cambios - Documento #${it.id}`);
+                fetchCambios('e_control_documento_entregado_cliente', it.id);
+              }}
+            >
+              <Ionicons name="list-outline" size={18} color="#FFFFFF" />
+              <ThemedText style={styles.rowButtonText}>Cambios</ThemedText>
+            </TouchableOpacity>
+          )}
           <TouchableOpacity style={[styles.rowButton, styles.deleteButton]} onPress={() => handleDelete(it)}>
             <Ionicons name="trash" size={18} color="#FFFFFF" />
             <ThemedText style={styles.rowButtonText}>Eliminar</ThemedText>
@@ -651,7 +763,7 @@ export default function DocumentosEntregadosScreen() {
           ) : null}
 
           {/* Filtros */}
-          {!isCreating && (
+          {!isCreating && !isLoading && (
             <ThemedView style={styles.filtersMain}>
               <ThemedView style={styles.filterHeader}>
                 <TouchableOpacity style={styles.filterToggleButton} onPress={() => setIsFiltersExpanded(!isFiltersExpanded)}>
@@ -681,7 +793,7 @@ export default function DocumentosEntregadosScreen() {
                   <ThemedView style={styles.filterGroup}>
                     <ThemedText style={styles.filterLabel}>Fecha:</ThemedText>
                     <TouchableOpacity style={styles.dateButton} onPress={() => setShowFilterFechaPicker(true)}>
-                      <ThemedText style={styles.dateButtonText}>{filterFecha || 'Seleccionar fecha'}</ThemedText>
+                      <ThemedText style={styles.dateButtonText}>{filterFecha ? formatYMDToDMY(filterFecha) : 'Seleccionar fecha'}</ThemedText>
                       <Ionicons name="calendar-outline" size={18} color="#007AFF" />
                     </TouchableOpacity>
                   </ThemedView>
@@ -690,7 +802,7 @@ export default function DocumentosEntregadosScreen() {
             </ThemedView>
           )}
 
-          {!isCreating && (
+          {!isCreating && !isLoading && (
             <TouchableOpacity style={styles.createButton} onPress={startCreating}>
               <ThemedText style={styles.createButtonText}>
                 <Ionicons name="add" size={20} color="#FFFFFF" /> Nuevo registro
@@ -704,7 +816,7 @@ export default function DocumentosEntregadosScreen() {
 
               <ThemedText style={styles.label}>Fecha *</ThemedText>
               <TouchableOpacity style={styles.dateButton} onPress={() => setShowFechaPicker(true)}>
-                <ThemedText style={styles.dateButtonText}>{fecha || 'Seleccionar fecha'}</ThemedText>
+                <ThemedText style={styles.dateButtonText}>{fecha ? formatYMDToDMY(fecha) : 'Seleccionar fecha'}</ThemedText>
                 <Ionicons name="calendar-outline" size={18} color="#007AFF" />
               </TouchableOpacity>
 
@@ -831,7 +943,7 @@ export default function DocumentosEntregadosScreen() {
 
       {showFilterFechaPicker && (
         <DateTimePicker
-          value={filterFecha ? new Date(filterFecha) : new Date()}
+          value={filterFecha ? parseDateStringToDate(filterFecha) : new Date()}
           mode="date"
           display={Platform.OS === 'ios' ? 'spinner' : 'default'}
           onChange={(event, date) => {
@@ -843,7 +955,7 @@ export default function DocumentosEntregadosScreen() {
 
       {showFechaPicker && (
         <DateTimePicker
-          value={fecha ? new Date(fecha) : new Date()}
+          value={fecha ? parseDateStringToDate(fecha) : new Date()}
           mode="date"
           display={Platform.OS === 'ios' ? 'spinner' : 'default'}
           onChange={(event, date) => {
@@ -938,6 +1050,88 @@ export default function DocumentosEntregadosScreen() {
                 <ThemedText style={styles.modalAcceptButtonText}>Aceptar</ThemedText>
               </TouchableOpacity>
             </ThemedView>
+          </ThemedView>
+        </View>
+      </Modal>
+
+      {/* Modal: ver cambios */}
+      <Modal
+        visible={isCambiosModalVisible}
+        animationType="fade"
+        transparent
+        presentationStyle="overFullScreen"
+        onRequestClose={closeCambiosModal}
+      >
+        <View style={styles.overlay}>
+          <ThemedView style={styles.floatModalCardMovimientos}>
+            <ThemedView style={styles.floatModalHeader}>
+              <ThemedText style={styles.modalTitle}>{cambiosTitle}</ThemedText>
+              <TouchableOpacity onPress={closeCambiosModal}>
+                <Ionicons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+            </ThemedView>
+
+            <ScrollView style={{ maxHeight: Dimensions.get('window').height * 0.75 }} contentContainerStyle={{ padding: 16 }}>
+              {(!cambiosItems || cambiosItems.length === 0) ? (
+                <ThemedView style={styles.emptyContainer}>
+                  <ThemedText style={styles.emptyText}>No hay cambios registrados</ThemedText>
+                </ThemedView>
+              ) : (
+                cambiosItems.map((row: any) => {
+                  let parsed: any[] = [];
+                  try {
+                    parsed = row?.cambios ? JSON.parse(row.cambios) : [];
+                  } catch {
+                    parsed = [];
+                  }
+                  const createdAtLabel = formatCambioCreatedAt(row?.created_at);
+                  const isOpen = expandedCambioId === row.id;
+
+                  return (
+                    <ThemedView key={`chg-${row.id}`} style={styles.cambioCollapsableMain}>
+                      <TouchableOpacity
+                        style={styles.cambioCollapsableHeader}
+                        onPress={() => setExpandedCambioId((prev) => (prev === row.id ? null : row.id))}
+                        activeOpacity={0.8}
+                      >
+                        <ThemedText style={styles.cambioCollapsableTitle}>
+                          {createdAtLabel}
+                        </ThemedText>
+                        <Ionicons
+                          name={isOpen ? "chevron-up" : "chevron-down"}
+                          size={18}
+                          color="#007AFF"
+                        />
+                      </TouchableOpacity>
+
+                      {isOpen && (
+                        <ThemedView style={styles.cambioCollapsableContent}>
+                          <ThemedView style={styles.filterGroupSearch}>
+                            <ThemedText style={styles.filterLabel}>Cambio realizado por:</ThemedText>
+                            <ThemedText style={styles.changeDescription}>
+                              {row.empleado_nombre || 'Desconocido'}
+                              {row.empleado_cedula ? ` - Cédula: ${row.empleado_cedula}` : ''}
+                            </ThemedText>
+                          </ThemedView>
+
+                          {(Array.isArray(parsed) ? parsed : []).length > 0 && (
+                            <ThemedView style={styles.filterGroupSearch}>
+                              <ThemedText style={styles.filterLabel}>Cambios:</ThemedText>
+                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => (
+                                <ThemedText key={`c-${row.id}-${idx}`} style={styles.changeDescription}>
+                                  <ThemedText style={{ fontWeight: '800' }}>{String(c?.prop ?? '-')}: </ThemedText>
+                                  {formatChangeValue(c?.prop, c?.after)}
+                                </ThemedText>
+                              ))}
+                            </ThemedView>
+                          )}
+                        </ThemedView>
+                      )}
+                    </ThemedView>
+                  );
+                })
+              )}
+            </ScrollView>
           </ThemedView>
         </View>
       </Modal>
@@ -1131,6 +1325,7 @@ const styles = StyleSheet.create({
   rowButtons: { marginTop: 10, flexDirection: 'row', justifyContent: 'space-between', gap: 12 },
   rowButton: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 12, borderRadius: 8, gap: 8 },
   editButton: { backgroundColor: '#007AFF' },
+  changesButton: { backgroundColor: '#5856D6', flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 12, borderRadius: 8, gap: 8 },
   deleteButton: { backgroundColor: '#FF3B30' },
   rowButtonText: { color: '#FFFFFF', fontSize: 14, fontWeight: '600' },
 
@@ -1151,6 +1346,13 @@ const styles = StyleSheet.create({
     borderColor: '#E0E0E0',
     overflow: 'hidden',
   },
+  floatModalCardMovimientos: { backgroundColor: '#FFFFFF', borderRadius: 12, width: '100%', maxWidth: 500, maxHeight: '80%', borderWidth: 1, borderColor: '#E0E0E0', overflow: 'hidden' },
+  cambioCollapsableMain: { width: '100%', marginBottom: 10, backgroundColor: '#fff', borderRadius: 6, borderWidth: 1, borderColor: '#E0E0E0', overflow: 'hidden' },
+  cambioCollapsableHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, backgroundColor: '#F8F9FA' },
+  cambioCollapsableTitle: { fontSize: 14, fontWeight: '600', color: '#007AFF', flex: 1 },
+  cambioCollapsableContent: { padding: 12, gap: 8, backgroundColor: '#F8F9FA' },
+  changeDescription: { fontSize: 14, lineHeight: 20, color: '#666', marginBottom: 8 },
+  filterGroupSearch: { marginBottom: 12 },
   floatModalHeader: {
     flexDirection: 'row',
     alignItems: 'center',

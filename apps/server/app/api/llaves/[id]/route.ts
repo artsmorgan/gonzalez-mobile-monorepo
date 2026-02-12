@@ -38,20 +38,59 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       return NextResponse.json({ status: false, message: "No autorizado para modificar este registro" }, { status: 200 });
     }
 
+    // Registrar cambios (solo campos actualizados, excluyendo firmas)
+    const eq = (a: any, b: any) => {
+      if (a === b) return true;
+      if (a == null && b == null) return true;
+      return false;
+    };
+
+    const cambiosArr: Array<{ prop: string; before: any; after: any }> = [];
+    const updateData: any = {
+      lugar_abre: typeof lugar_abre === "string" ? lugar_abre : existing.lugar_abre,
+      cantidad_copias:
+        cantidad_copias === undefined || cantidad_copias === null
+          ? existing.cantidad_copias
+          : parseInt(String(cantidad_copias)) || 0,
+      observaciones: typeof observaciones === "string" ? observaciones : existing.observaciones,
+      firma_responsable: typeof firma_responsable === "string" ? firma_responsable : existing.firma_responsable,
+      created_at: existing.created_at ?? (toZonedTime(new Date(), "America/Costa_Rica") as Date),
+      created_by: existing.created_by ?? (parseInt(String((payload as any)?.id ?? 0)) || 0),
+    };
+
+    // Comparar cambios (excluir firmas)
+    for (const [k, v] of Object.entries(updateData)) {
+      if (k === "firma_responsable") continue; // Excluir firmas
+      const before = (existing as any)[k];
+      const after = v;
+      if (!eq(before, after)) {
+        cambiosArr.push({
+          prop: k,
+          before: before instanceof Date ? before.toISOString() : before,
+          after: after instanceof Date ? after.toISOString() : after,
+        });
+      }
+    }
+
     await prisma.e_llave.update({
       where: { id },
-      data: {
-        lugar_abre: typeof lugar_abre === "string" ? lugar_abre : existing.lugar_abre,
-        cantidad_copias:
-          cantidad_copias === undefined || cantidad_copias === null
-            ? existing.cantidad_copias
-            : parseInt(String(cantidad_copias)) || 0,
-        observaciones: typeof observaciones === "string" ? observaciones : existing.observaciones,
-        firma_responsable: typeof firma_responsable === "string" ? firma_responsable : existing.firma_responsable,
-        created_at: existing.created_at ?? (toZonedTime(new Date(), "America/Costa_Rica") as Date),
-        created_by: existing.created_by ?? (parseInt(String((payload as any)?.id ?? 0)) || 0),
-      },
+      data: updateData,
     });
+
+    // Registrar cambios si hay alguno
+    if (cambiosArr.length > 0) {
+      const createdBy = parseInt(String((payload as any)?.id ?? 0)) || 0;
+      const createdAt = toZonedTime(new Date(), "America/Costa_Rica") as Date;
+      await prisma.c_cambios_apps_modules.create({
+        data: {
+          nombre_tabla: "e_llave",
+          registro_id: id,
+          cambios: JSON.stringify(cambiosArr),
+          created_at: createdAt,
+          created_by: createdBy,
+        },
+      });
+    }
 
     return NextResponse.json({ status: true, message: "Llave actualizada correctamente" }, { status: 200 });
   } catch (error: unknown) {
@@ -90,6 +129,31 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
     if (existing.cliente_id !== marcaDia.cliente_id || existing.corpo_id !== marcaDia.corpo_id) {
       return NextResponse.json({ status: false, message: "No autorizado para eliminar este registro" }, { status: 200 });
     }
+
+    // Registrar cambio de eliminación antes de eliminar
+    const createdBy = parseInt(String((payload as any)?.id ?? 0)) || 0;
+    const createdAt = toZonedTime(new Date(), "America/Costa_Rica") as Date;
+    await prisma.c_cambios_apps_modules.create({
+      data: {
+        nombre_tabla: "e_llave",
+        registro_id: id,
+        cambios: JSON.stringify([{
+          prop: "__deleted__",
+          before: {
+            id: existing.id,
+            cliente_id: existing.cliente_id,
+            corpo_id: existing.corpo_id,
+            puesto_id: existing.puesto_id,
+            lugar_abre: existing.lugar_abre,
+            cantidad_copias: existing.cantidad_copias,
+            observaciones: existing.observaciones,
+          },
+          after: null,
+        }]),
+        created_at: createdAt,
+        created_by: createdBy,
+      },
+    });
 
     await prisma.e_llave.delete({ where: { id } });
     return NextResponse.json({ status: true, message: "Llave eliminada correctamente" }, { status: 200 });

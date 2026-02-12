@@ -30,6 +30,8 @@ import {
 } from '../hooks/movimientosArticulosMantenimientoFunctions';
 import Constants from 'expo-constants';
 import getHoraAccion from '../hooks/getHoraAccion';
+import authedFetch from '../hooks/authedFetch';
+import getValidAccessTokenOrLogout from '../hooks/getValidAccessTokenOrLogout';
 
 type TipoMantenimientoArticulo = { id: number; nombre: string };
 
@@ -812,6 +814,37 @@ export default function MantenimientoEquipoScreen() {
         return `${y}-${m}-${day}`;
     };
 
+    const formatYMDToDMY = (value?: string): string => {
+        const v = String(value || '').trim();
+        if (!v) return '';
+        const onlyDate = v.split('T')[0];
+        const ymd = onlyDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        if (ymd) return `${ymd[3]}-${ymd[2]}-${ymd[1]}`;
+        const dmy = onlyDate.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+        if (dmy) return `${dmy[1]}-${dmy[2]}-${dmy[3]}`;
+        return onlyDate;
+    };
+
+    const formatDateForDisplay = (value: Date | string | null): string => {
+        if (!value) return '';
+        if (value instanceof Date) {
+            return formatYMDToDMY(dateToLocalString(value));
+        }
+        return formatYMDToDMY(value);
+    };
+
+    const parseDateStringToDate = (value?: string): Date => {
+        const v = String(value || '').trim();
+        if (!v) return new Date();
+        const onlyDate = v.split('T')[0];
+        const ymd = onlyDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        if (ymd) return new Date(`${onlyDate}T00:00:00`);
+        const dmy = onlyDate.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+        if (dmy) return new Date(`${dmy[3]}-${dmy[2]}-${dmy[1]}T00:00:00`);
+        const parsed = new Date(v);
+        return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+    };
+
     const dateTimeToLocalString = (d: Date | string | null): string => {
         if (!d) return '';
         const date = typeof d === 'string' ? new Date(d) : d;
@@ -820,7 +853,7 @@ export default function MantenimientoEquipoScreen() {
         const day = String(date.getDate()).padStart(2, '0');
         const hh = String(date.getHours()).padStart(2, '0');
         const mm = String(date.getMinutes()).padStart(2, '0');
-        return `${y}-${m}-${day} ${hh}:${mm}`;
+        return `${day}-${m}-${y} ${hh}:${mm}`;
     };
 
     const timeToHHMMSS = (d: Date): string => {
@@ -896,38 +929,18 @@ export default function MantenimientoEquipoScreen() {
             const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
             if (!apiUrl) throw new Error('Server URL not configured');
 
-            let token = await AsyncStorage.getItem('access_token');
-            if (!token) {
-                const refreshed = await refreshAccessToken();
-                if (!refreshed) {
-                    if (logout) await logout();
-                    return;
-                }
-                token = await AsyncStorage.getItem('access_token');
-            }
-            if (!token) return;
-
-            const doRequest = async (tk: string) =>
-                fetch(`${apiUrl}/api/cambios-apps-modules?tabla=${encodeURIComponent(tabla)}&registro_id=${registroId}`, {
+            const resp = await authedFetch({
+                url: `${apiUrl}/api/cambios-apps-modules?tabla=${encodeURIComponent(tabla)}&registro_id=${registroId}`,
+                init: {
                     method: 'GET',
                     headers: {
-                        Authorization: `Bearer ${tk}`,
                         'Content-Type': 'application/json',
-                        'ngrok-skip-browser-warning': '69420',
                     },
-                });
-
-            let resp = await doRequest(token);
-            if (resp.status === 401) {
-                const refreshed = await refreshAccessToken();
-                if (!refreshed) {
-                    if (logout) await logout();
-                    return;
-                }
-                const nextToken = await AsyncStorage.getItem('access_token');
-                if (!nextToken) return;
-                resp = await doRequest(nextToken);
-            }
+                },
+                refreshAccessToken,
+                logout,
+            });
+            if (!resp) return;
 
             const data = await resp.json().catch(() => ({}));
             if (!resp.ok || !data.status) {
@@ -1003,46 +1016,18 @@ export default function MantenimientoEquipoScreen() {
             const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
             if (!apiUrl) return;
 
-            let token = await AsyncStorage.getItem('access_token');
-            if (!token) {
-                const refreshed = await refreshAccessToken();
-                if (!refreshed) {
-                    if (logout) await logout();
-                    return;
-                }
-                token = await AsyncStorage.getItem('access_token');
-            }
-
-            const doRequest = async (tk: string) =>
-                fetch(`${apiUrl}/api/main-structure`, {
+            const response = await authedFetch({
+                url: `${apiUrl}/api/main-structure`,
+                init: {
                     method: 'GET',
                     headers: {
-                        Authorization: `Bearer ${tk}`,
                         'Content-Type': 'application/json',
-                        'ngrok-skip-browser-warning': '69420',
                     },
-                });
-
-            if (!token) return;
-            let response = await doRequest(token);
-            if (response.status === 401) {
-                const refreshed = await refreshAccessToken();
-                if (!refreshed) {
-                    if (logout) await logout();
-                    return;
-                }
-                const nextToken = await AsyncStorage.getItem('access_token');
-                if (!nextToken) {
-                    if (logout) await logout();
-                    return;
-                }
-                response = await doRequest(nextToken);
-            }
-
-            if (response.status === 403) {
-                if (logout) await logout();
-                return;
-            }
+                },
+                refreshAccessToken,
+                logout,
+            });
+            if (!response) return;
 
             if (response.ok) {
                 const data = await response.json();
@@ -1091,31 +1076,18 @@ export default function MantenimientoEquipoScreen() {
                 const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
                 if (!apiUrl) return;
 
-                let token = await AsyncStorage.getItem('access_token');
-                if (!token) {
-                    const refreshed = await refreshAccessToken();
-                    if (!refreshed) return;
-                    token = await AsyncStorage.getItem('access_token');
-                }
-
-                const response = await fetch(`${apiUrl}/api/categoria-mantenimiento`, {
-                    method: 'GET',
-                    headers: {
-                        Authorization: `Bearer ${token}`,
-                        'Content-Type': 'application/json',
-                        'ngrok-skip-browser-warning': '69420',
+                const response = await authedFetch({
+                    url: `${apiUrl}/api/categoria-mantenimiento`,
+                    init: {
+                        method: 'GET',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
                     },
+                    refreshAccessToken,
+                    logout,
                 });
-
-                if (response.status === 401) {
-                    const refreshed = await refreshAccessToken();
-                    if (refreshed) {
-                        return fetchCategoriasMantenimiento();
-                    } else {
-                        if (logout) await logout();
-                        return;
-                    }
-                }
+                if (!response) return;
 
                 if (response.ok) {
                     const data = await response.json();
@@ -1167,14 +1139,22 @@ export default function MantenimientoEquipoScreen() {
         return null;
     }, []);
 
+    const normalizeArticuloSource = useCallback((tipoRaw: any): 'plan' | 'asignado' => {
+        const tipo = String(tipoRaw || '').toLowerCase();
+        if (tipo.includes('asignado')) return 'asignado';
+        return 'plan';
+    }, []);
+
     const getArticuloFromMainStructure = useCallback(async (opts: { puestoId: number; source: 'plan' | 'asignado'; estructuraId: number }) => {
         const tree = await getMainStructureTree();
         if (!tree) return null;
         const puestoNode: any = findPuestoNodeInTree(tree, opts.puestoId);
         const articulosRaw: any[] = Array.isArray(puestoNode?.articulos) ? puestoNode.articulos : [];
-        const tipoWanted = opts.source === 'asignado' ? 'Asignado' : 'Plan';
-        return articulosRaw.find((a: any) => Number(a.id) === Number(opts.estructuraId) && String(a.tipo) === tipoWanted) ?? null;
-    }, [findPuestoNodeInTree, getMainStructureTree]);
+        return articulosRaw.find((a: any) => {
+            const source = normalizeArticuloSource(a?.tipo);
+            return Number(a?.id) === Number(opts.estructuraId) && source === opts.source;
+        }) ?? null;
+    }, [findPuestoNodeInTree, getMainStructureTree, normalizeArticuloSource]);
 
     const fetchReportes = async () => {
         // Evitar llamadas múltiples simultáneas
@@ -1230,50 +1210,25 @@ export default function MantenimientoEquipoScreen() {
                     throw new Error('Server URL not configured');
                 }
 
-                let token = await AsyncStorage.getItem('access_token');
-                if (!token) {
-                    const refreshed = await refreshAccessToken();
-                    if (!refreshed) {
-                        setError('No se pudo autenticar');
-                        setIsLoading(false);
-                        isFetchingReportesRef.current = false;
-                        if (logout) await logout();
-                        return;
-                    }
-                    token = await AsyncStorage.getItem('access_token');
-                }
-
                 const url = `${apiUrl}/api/articulo-mantenimiento/puesto/${puestoIdForQuery}`;
 
                 console.log('url: ', url);
 
-                const response = await fetch(url, {
-                    method: 'GET',
-                    headers: {
-                        Authorization: `Bearer ${token}`,
-                        'Content-Type': 'application/json',
-                        'ngrok-skip-browser-warning': '69420',
+                const response = await authedFetch({
+                    url,
+                    init: {
+                        method: 'GET',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
                     },
+                    refreshAccessToken,
+                    logout,
                 });
-
-                if (response.status === 401) {
-                    const refreshed = await refreshAccessToken();
-                    if (refreshed) {
-                        isFetchingReportesRef.current = false;
-                        setIsLoading(false);
-                        return fetchReportes();
-                    }
+                if (!response) {
                     setIsLoading(false);
                     isFetchingReportesRef.current = false;
-                    if (logout) await logout();
                     return;
-                }
-
-                if (response.status === 403) {
-                    setIsLoading(false);
-                    isFetchingReportesRef.current = false;
-                    if (logout) await logout();
-                    throw new Error('Acceso denegado');
                 }
 
                 if (!response.ok) {
@@ -1306,9 +1261,9 @@ export default function MantenimientoEquipoScreen() {
                     const puestoNode: any = findPuestoNodeInTree(tree, puestoIdForQuery);
                     const articulosRaw: any[] = Array.isArray(puestoNode?.articulos) ? puestoNode.articulos : [];
                     const listFromStructure: ArticuloPuestoMantenimientoItem[] = articulosRaw.map((a: any) => {
-                        const source = String(a.tipo || '').toLowerCase() === 'asignado' ? 'asignado' : 'plan';
+                        const source = normalizeArticuloSource(a?.tipo);
                         const estructuraId = Number(a.id);
-                        const ultimo = a.ultimo_mantenimiento ?? null;
+                        const ultimo = a.ultimo_mantenimiento ?? a.ultimo_registro_mantenimiento ?? null;
                         const mantenimientosOffline = Array.isArray(a.mantenimientos)
                             ? a.mantenimientos.map(normalizeMantenimiento)
                             : ultimo
@@ -1318,12 +1273,14 @@ export default function MantenimientoEquipoScreen() {
                             key: `${source}-${estructuraId}`,
                             source,
                             estructura_id: estructuraId,
-                            articulo_nomenclador_id: null,
+                            articulo_nomenclador_id: Number.isFinite(Number(a?.articulo_nomenclador_id))
+                                ? Number(a.articulo_nomenclador_id)
+                                : null,
                             articulo_nombre: a.nombre ?? 'Desconocido',
                             tipo: source === 'plan' ? 'Plan de puesto' : 'Asignado al puesto',
                             marca: a.marca ?? null,
                             serie: a.serie ?? null,
-                            tipos_mantenimiento: [],
+                            tipos_mantenimiento: Array.isArray(a.tipos_mantenimiento) ? a.tipos_mantenimiento : [],
                             mantenimientos: mantenimientosOffline,
                             movimientos: Array.isArray(a.movimientos) ? a.movimientos : [],
                             ultimo_mantenimiento: ultimo,
@@ -1387,10 +1344,11 @@ export default function MantenimientoEquipoScreen() {
                     source: item.source,
                     estructuraId: item.estructura_id,
                 });
+                const ultimoMainStructure = artNode?.ultimo_mantenimiento ?? artNode?.ultimo_registro_mantenimiento ?? null;
                 const mantenimientosOffline = Array.isArray(artNode?.mantenimientos)
                     ? artNode.mantenimientos.map((m: any) => ({ ...m, id_local: m.id_local || '', archivos: Array.isArray(m.archivos) ? m.archivos : [] }))
-                    : artNode?.ultimo_mantenimiento
-                        ? [{ ...artNode.ultimo_mantenimiento, id_local: '', archivos: [] }]
+                    : ultimoMainStructure
+                        ? [{ ...ultimoMainStructure, id_local: '', archivos: [] }]
                         : [];
 
                 if (mantenimientosOffline.length > 0) {
@@ -1473,10 +1431,33 @@ export default function MantenimientoEquipoScreen() {
         // Re-registrar para que use el puesto activo actual
     }, [activePuestoId, marcaId, hasCurrentMarca]);
 
-    const handleVerActivos = (reporte: ArticuloPuestoMantenimientoItem) => {
-        setSelectedReporte(reporte);
+    const handleVerActivos = async (reporte: ArticuloPuestoMantenimientoItem) => {
+        let reporteToUse = reporte;
+        const isConnected = await getConnectionStatus();
+        if (!isConnected && activePuestoId && reporte?.estructura_id) {
+            const artNode = await getArticuloFromMainStructure({
+                puestoId: activePuestoId,
+                source: reporte.source,
+                estructuraId: reporte.estructura_id,
+            });
+            if (artNode) {
+                reporteToUse = {
+                    ...reporte,
+                    articulo_nomenclador_id: Number.isFinite(Number(artNode?.articulo_nomenclador_id))
+                        ? Number(artNode.articulo_nomenclador_id)
+                        : reporte.articulo_nomenclador_id,
+                    tipos_mantenimiento: Array.isArray(artNode?.tipos_mantenimiento)
+                        ? artNode.tipos_mantenimiento
+                        : (reporte.tipos_mantenimiento || []),
+                    movimientos: Array.isArray(artNode?.movimientos)
+                        ? artNode.movimientos
+                        : (reporte.movimientos || []),
+                };
+            }
+        }
+        setSelectedReporte(reporteToUse);
         setShowActivos(true);
-        fetchActivos(reporte);
+        fetchActivos(reporteToUse);
     };
 
     const handleVolverReportes = () => {
@@ -2011,36 +1992,19 @@ export default function MantenimientoEquipoScreen() {
 
         if (isConnected) {
             try {
-                let token = await AsyncStorage.getItem('access_token');
-                if (!token) {
-                    const refreshed = await refreshAccessToken();
-                    if (!refreshed) {
-                        Alert.alert('Error', 'No se pudo autenticar');
-                        if (logout) await logout();
-                        return;
-                    }
-                    token = await AsyncStorage.getItem('access_token');
-                }
-
-                const response = await fetch(`${apiUrl}/api/articulo-mantenimiento/${selectedActivo.id}`, {
-                    method: 'PUT',
-                    headers: {
-                        Authorization: `Bearer ${token}`,
-                        'Content-Type': 'application/json',
-                        'ngrok-skip-browser-warning': '69420',
+                const response = await authedFetch({
+                    url: `${apiUrl}/api/articulo-mantenimiento/${selectedActivo.id}`,
+                    init: {
+                        method: 'PUT',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify(requestData),
                     },
-                    body: JSON.stringify(requestData),
+                    refreshAccessToken,
+                    logout,
                 });
-
-                if (response.status === 401) {
-                    const refreshed = await refreshAccessToken();
-                    if (refreshed) {
-                        return handleSave();
-                    } else {
-                        if (logout) await logout();
-                        return;
-                    }
-                }
+                if (!response) return;
 
                 if (response.ok) {
                     const data = await response.json();
@@ -2390,15 +2354,11 @@ export default function MantenimientoEquipoScreen() {
                 Alert.alert('Error', 'No se pudo obtener ubicación o usuario');
                 return;
             }
-            const token = await AsyncStorage.getItem('access_token');
-            if (!token) throw new Error('No authentication token found');
+            const token = await getValidAccessTokenOrLogout({ refreshAccessToken, logout });
+            if (!token) return;
             const decodedToken: any = jwtDecode(token);
             const sessionId = decodedToken.sessionId;
-            const getHoraAccion = async () => {
-                const now = new Date();
-                return now.toISOString();
-            };
-            const horaAccion = await getHoraAccion();
+            const horaAccion = String((await getHoraAccion()) ?? new Date().toISOString());
             const hash = btoa(`${sessionId}:${employee.id}:${loc.coords.latitude}:${loc.coords.longitude}:${horaAccion}`);
             setMovFirmaResponsable(hash);
         } catch (e: any) {
@@ -2419,18 +2379,37 @@ export default function MantenimientoEquipoScreen() {
     };
 
     const openMovimientosModal = async (activo: ArticuloPuestoMantenimientoItem) => {
-        setMovActivo(activo);
+        let activoToUse = activo;
+        const isConnected = await getConnectionStatus();
+        if (!isConnected && activePuestoId && activo?.estructura_id) {
+            const artNode = await getArticuloFromMainStructure({
+                puestoId: activePuestoId,
+                source: activo.source,
+                estructuraId: activo.estructura_id,
+            });
+            if (artNode) {
+                activoToUse = {
+                    ...activo,
+                    movimientos: Array.isArray(artNode?.movimientos)
+                        ? artNode.movimientos
+                        : (activo.movimientos || []),
+                    tipos_mantenimiento: Array.isArray(artNode?.tipos_mantenimiento)
+                        ? artNode.tipos_mantenimiento
+                        : (activo.tipos_mantenimiento || []),
+                };
+            }
+        }
+        setMovActivo(activoToUse);
         const current = await loadMarcaContext();
         if (!current?.id) {
             Alert.alert('Error', 'Marca no encontrada');
             return;
         }
 
-        const isConnected = await getConnectionStatus();
-        const cacheKey = `movimientos_articulo_${activo.key}_cache`;
-        if (isConnected && activo.estructura_id) {
+        const cacheKey = `movimientos_articulo_${activoToUse.key}_cache`;
+        if (isConnected && activoToUse.estructura_id) {
             const res = await listMovimientosArticuloMantenimiento({
-                parent: { source: activo.source, estructuraId: activo.estructura_id },
+                parent: { source: activoToUse.source, estructuraId: activoToUse.estructura_id },
                 marcaId: current.id,
                 refreshAccessToken,
                 logout,
@@ -2440,29 +2419,34 @@ export default function MantenimientoEquipoScreen() {
                 setMovimientos(list);
                 await AsyncStorage.setItem(cacheKey, JSON.stringify(list));
             } else {
-                setMovimientos(Array.isArray(activo.movimientos) ? activo.movimientos : []);
+                setMovimientos(Array.isArray(activoToUse.movimientos) ? activoToUse.movimientos : []);
             }
         } else {
-            // Cargar desde cache si existe
-            const cacheStr = await AsyncStorage.getItem(cacheKey);
-            if (cacheStr) {
-                const cached = JSON.parse(cacheStr);
-                setMovimientos(cached.map((m: any) => ({ ...m, id_local: m.id_local || '' })));
-            } else {
-                // Offline: preferir main_structure_cache
-                if (activePuestoId && activo?.estructura_id) {
-                    const artNode = await getArticuloFromMainStructure({
-                        puestoId: activePuestoId,
-                        source: activo.source,
-                        estructuraId: activo.estructura_id,
-                    });
-                    if (Array.isArray(artNode?.movimientos)) {
-                        setMovimientos(artNode.movimientos.map((m: any) => ({ ...m, id_local: m.id_local || '' })));
-                    } else {
-                        setMovimientos(Array.isArray(activo.movimientos) ? activo.movimientos : []);
-                    }
+            // Offline: preferir main_structure_cache (fuente de verdad), luego cache local
+            if (activePuestoId && activoToUse?.estructura_id) {
+                const artNode = await getArticuloFromMainStructure({
+                    puestoId: activePuestoId,
+                    source: activoToUse.source,
+                    estructuraId: activoToUse.estructura_id,
+                });
+                if (Array.isArray(artNode?.movimientos)) {
+                    setMovimientos(artNode.movimientos.map((m: any) => ({ ...m, id_local: m.id_local || '' })));
                 } else {
-                    setMovimientos(Array.isArray(activo.movimientos) ? activo.movimientos : []);
+                    const cacheStr = await AsyncStorage.getItem(cacheKey);
+                    if (cacheStr) {
+                        const cached = JSON.parse(cacheStr);
+                        setMovimientos(cached.map((m: any) => ({ ...m, id_local: m.id_local || '' })));
+                    } else {
+                        setMovimientos(Array.isArray(activoToUse.movimientos) ? activoToUse.movimientos : []);
+                    }
+                }
+            } else {
+                const cacheStr = await AsyncStorage.getItem(cacheKey);
+                if (cacheStr) {
+                    const cached = JSON.parse(cacheStr);
+                    setMovimientos(cached.map((m: any) => ({ ...m, id_local: m.id_local || '' })));
+                } else {
+                    setMovimientos(Array.isArray(activoToUse.movimientos) ? activoToUse.movimientos : []);
                 }
             }
         }
@@ -2777,7 +2761,7 @@ export default function MantenimientoEquipoScreen() {
                 <ThemedText style={styles.label}>Fecha inicio:</ThemedText>
                 <TouchableOpacity style={styles.dateButton} onPress={() => setShowFechaInicioPicker(true)}>
                     <ThemedText style={styles.dateButtonText}>
-                        {fechaInicio ? dateToLocalString(fechaInicio) : 'Seleccionar fecha'}
+                        {fechaInicio ? formatDateForDisplay(fechaInicio) : 'Seleccionar fecha'}
                     </ThemedText>
                     <Ionicons name="calendar-outline" size={18} color="#007AFF" />
                 </TouchableOpacity>
@@ -3228,7 +3212,7 @@ export default function MantenimientoEquipoScreen() {
                         <ThemedText style={styles.label}>Fecha salida:</ThemedText>
                         <TouchableOpacity style={styles.dateButton} onPress={() => setShowFechaSalidaPicker(true)}>
                             <ThemedText style={styles.dateButtonText}>
-                                {fechaSalida ? dateToLocalString(fechaSalida) : 'Seleccionar fecha'}
+                                {fechaSalida ? formatDateForDisplay(fechaSalida) : 'Seleccionar fecha'}
                             </ThemedText>
                             <Ionicons name="calendar-outline" size={18} color="#007AFF" />
                         </TouchableOpacity>
@@ -3236,7 +3220,7 @@ export default function MantenimientoEquipoScreen() {
                         <ThemedText style={styles.label}>Fecha entrada:</ThemedText>
                         <TouchableOpacity style={styles.dateButton} onPress={() => setShowFechaEntradaPicker(true)}>
                             <ThemedText style={styles.dateButtonText}>
-                                {fechaEntrada ? dateToLocalString(fechaEntrada) : 'Seleccionar fecha'}
+                                {fechaEntrada ? formatDateForDisplay(fechaEntrada) : 'Seleccionar fecha'}
                             </ThemedText>
                             <Ionicons name="calendar-outline" size={18} color="#007AFF" />
                         </TouchableOpacity>
@@ -3329,7 +3313,7 @@ export default function MantenimientoEquipoScreen() {
                 <ThemedText style={styles.label}>Fecha fin:</ThemedText>
                 <TouchableOpacity style={styles.dateButton} onPress={() => setShowFechaFinPicker(true)}>
                     <ThemedText style={styles.dateButtonText}>
-                        {fechaFin ? dateToLocalString(fechaFin) : 'Seleccionar fecha'}
+                        {fechaFin ? formatDateForDisplay(fechaFin) : 'Seleccionar fecha'}
                     </ThemedText>
                     <Ionicons name="calendar-outline" size={18} color="#007AFF" />
                 </TouchableOpacity>
@@ -3588,7 +3572,7 @@ export default function MantenimientoEquipoScreen() {
                     ) : null}
 
                     {/* Filtros jerárquicos (Empresa → ... → Puesto) */}
-                    {!isUpdating && !showActivos && hasCurrentMarca && (
+                    {!isUpdating && !showActivos && hasCurrentMarca && !isLoading && (
                         <ThemedView style={styles.filtersMain}>
                             <ThemedView style={styles.filterHeader}>
                                 <TouchableOpacity
@@ -3921,7 +3905,7 @@ export default function MantenimientoEquipoScreen() {
                                         <ThemedView style={styles.filterGroupSearch}>
                                             <ThemedText style={styles.filterLabel}>Fecha:</ThemedText>
                                             <TouchableOpacity style={styles.dateButton} onPress={() => setShowMovFilterFechaPicker(true)}>
-                                                <ThemedText style={styles.dateButtonText}>{movFilterFecha || 'Seleccionar fecha'}</ThemedText>
+                                                <ThemedText style={styles.dateButtonText}>{movFilterFecha ? formatYMDToDMY(movFilterFecha) : 'Seleccionar fecha'}</ThemedText>
                                                 <Ionicons name="calendar-outline" size={18} color="#007AFF" />
                                             </TouchableOpacity>
                                         </ThemedView>
@@ -3961,7 +3945,7 @@ export default function MantenimientoEquipoScreen() {
 
                                     <ThemedText style={styles.label}>Fecha *</ThemedText>
                                     <TouchableOpacity style={styles.dateButton} onPress={() => setShowMovFechaPicker(true)}>
-                                        <ThemedText style={styles.dateButtonText}>{movFecha || 'Seleccionar fecha'}</ThemedText>
+                                        <ThemedText style={styles.dateButtonText}>{movFecha ? formatYMDToDMY(movFecha) : 'Seleccionar fecha'}</ThemedText>
                                         <Ionicons name="calendar-outline" size={18} color="#007AFF" />
                                     </TouchableOpacity>
 
@@ -4100,7 +4084,7 @@ export default function MantenimientoEquipoScreen() {
                                                     </ThemedText>
                                                     <ThemedText style={styles.bitLine}>
                                                         <ThemedText style={styles.bitLabel}>Fecha/Hora: </ThemedText>
-                                                        <ThemedText style={styles.bitValue}>{fecha} {hora}</ThemedText>
+                                                        <ThemedText style={styles.bitValue}>{formatYMDToDMY(fecha)} {hora}</ThemedText>
                                                     </ThemedText>
 
                                                     {/* Firma responsable visible con datos */}
@@ -4163,7 +4147,7 @@ export default function MantenimientoEquipoScreen() {
 
                         {showMovFilterFechaPicker && (
                             <DateTimePicker
-                                value={movFilterFecha ? new Date(movFilterFecha) : new Date()}
+                                value={movFilterFecha ? parseDateStringToDate(movFilterFecha) : new Date()}
                                 mode="date"
                                 display={Platform.OS === 'ios' ? 'spinner' : 'default'}
                                 onChange={(event, date) => {
@@ -4175,7 +4159,7 @@ export default function MantenimientoEquipoScreen() {
 
                         {showMovFechaPicker && (
                             <DateTimePicker
-                                value={movFecha ? new Date(movFecha) : new Date()}
+                                value={movFecha ? parseDateStringToDate(movFecha) : new Date()}
                                 mode="date"
                                 display={Platform.OS === 'ios' ? 'spinner' : 'default'}
                                 onChange={(event, date) => {

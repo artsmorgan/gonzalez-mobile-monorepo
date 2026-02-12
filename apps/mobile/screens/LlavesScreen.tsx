@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator, Platform, Modal, View, Image } from 'react-native';
+import { Alert, ScrollView, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator, Platform, Modal, View, Image, Dimensions } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Network from 'expo-network';
@@ -8,6 +8,7 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import { jwtDecode } from 'jwt-decode';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import SignatureScreen from 'react-native-signature-canvas';
+import Constants from 'expo-constants';
 
 import AppHeader from '../components/AppHeader';
 import AppFooter from '../components/AppFooter';
@@ -18,6 +19,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { eventBus } from '../hooks/eventBus';
 import getHoraAccion from '../hooks/getHoraAccion';
 import { useQRScanner } from '../hooks/useQRScanner';
+import authedFetch from '../hooks/authedFetch';
 import { createLlave, deleteLlave, listLlaves, LlaveItem, updateLlave } from '../hooks/llavesFunctions';
 import { createMovimientoLlave, deleteMovimientoLlave, updateMovimientoLlave } from '../hooks/movimientosLlavesFunctions';
 
@@ -92,6 +94,12 @@ export default function LlavesScreen() {
   const [signatureKey, setSignatureKey] = useState(0);
   const [isReadingSignature, setIsReadingSignature] = useState(false);
 
+  // Modal: ver cambios (auditoría)
+  const [isCambiosModalVisible, setIsCambiosModalVisible] = useState(false);
+  const [cambiosTitle, setCambiosTitle] = useState<string>('Cambios');
+  const [cambiosItems, setCambiosItems] = useState<any[]>([]);
+  const [expandedCambioId, setExpandedCambioId] = useState<number | null>(null);
+
   // UI: filtros (collapsable)
   const [isFiltersExpanded, setIsFiltersExpanded] = useState(false);
   const [filterSearch, setFilterSearch] = useState('');
@@ -129,6 +137,29 @@ export default function LlavesScreen() {
     return `${y}-${m}-${day}`;
   };
 
+  const formatYMDToDMY = (value?: string): string => {
+    const v = String(value || '').trim();
+    if (!v) return '';
+    const onlyDate = v.split('T')[0];
+    const ymd = onlyDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (ymd) return `${ymd[3]}-${ymd[2]}-${ymd[1]}`;
+    const dmy = onlyDate.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+    if (dmy) return `${dmy[1]}-${dmy[2]}-${dmy[3]}`;
+    return onlyDate;
+  };
+
+  const parseDateStringToDate = (value?: string): Date => {
+    const v = String(value || '').trim();
+    if (!v) return new Date();
+    const onlyDate = v.split('T')[0];
+    const ymd = onlyDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (ymd) return new Date(`${onlyDate}T00:00:00`);
+    const dmy = onlyDate.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+    if (dmy) return new Date(`${dmy[3]}-${dmy[2]}-${dmy[1]}T00:00:00`);
+    const parsed = new Date(v);
+    return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+  };
+
   const timeToHHMMSS = (d: Date): string => {
     const hh = String(d.getHours()).padStart(2, '0');
     const mm = String(d.getMinutes()).padStart(2, '0');
@@ -140,6 +171,72 @@ export default function LlavesScreen() {
     const state = await Network.getNetworkStateAsync();
     return !!(state.isConnected && state.isInternetReachable);
   };
+
+  const closeCambiosModal = () => {
+    setIsCambiosModalVisible(false);
+    setCambiosItems([]);
+    setExpandedCambioId(null);
+  };
+
+  const formatCambioCreatedAt = (value: any) => {
+    if (!value) return '-';
+    try {
+      const date = new Date(value);
+      return date.toLocaleString('es-CR', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true,
+      });
+    } catch {
+      return String(value);
+    }
+  };
+
+  const formatChangeValue = (prop: string, value: any): string => {
+    if (value === null || value === undefined) return 'N/A';
+    if (typeof value === 'boolean') return value ? 'Sí' : 'No';
+    if (typeof value === 'object') {
+      return JSON.stringify(value, null, 2);
+    }
+    return String(value);
+  };
+
+  const fetchCambios = useCallback(async (tabla: string, registroId: number) => {
+    const isConnected = await getConnectionStatus();
+    if (!isConnected) {
+      Alert.alert('Sin conexión', 'Esta función solo está disponible con conexión a internet.');
+      return;
+    }
+    try {
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) throw new Error('Server URL not configured');
+      const resp = await authedFetch({
+        url: `${apiUrl}/api/cambios-apps-modules?tabla=${encodeURIComponent(tabla)}&registro_id=${registroId}`,
+        init: {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        },
+        refreshAccessToken,
+        logout,
+      });
+      if (!resp) return;
+
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data.status) {
+        throw new Error(data.message || 'No se pudieron cargar los cambios');
+      }
+      setCambiosItems(Array.isArray(data.data) ? data.data : []);
+      setIsCambiosModalVisible(true);
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'No se pudieron cargar los cambios');
+    }
+  }, [refreshAccessToken, logout]);
 
   const loadMarcaContext = async () => {
     const currentMarcaStr = await AsyncStorage.getItem('current_marca');
@@ -764,7 +861,7 @@ export default function LlavesScreen() {
   const clearSignatureInModal = () => {
     try {
       signatureRef.current?.clearSignature?.();
-    } catch {}
+    } catch { }
     setIsReadingSignature(false);
     setSignatureKey((k) => k + 1);
   };
@@ -959,7 +1056,7 @@ export default function LlavesScreen() {
 
         <ThemedText style={styles.bitLine}>
           <ThemedText style={styles.bitLabel}>Fecha: </ThemedText>
-          <ThemedText style={styles.bitValue}>{fecha}</ThemedText>
+          <ThemedText style={styles.bitValue}>{formatYMDToDMY(fecha)}</ThemedText>
         </ThemedText>
 
         <TouchableOpacity style={styles.collapseButton} onPress={() => toggleExpanded(key)}>
@@ -1006,6 +1103,18 @@ export default function LlavesScreen() {
             <Ionicons name="pencil" size={18} color="#FFFFFF" />
             <ThemedText style={styles.listItemButtonText}>Editar</ThemedText>
           </TouchableOpacity>
+          {!(it.id_local || it.id === 0) && (
+            <TouchableOpacity
+              style={[styles.listItemButton, styles.changesButton]}
+              onPress={() => {
+                setCambiosTitle(`Cambios - Llave #${it.id}`);
+                fetchCambios('e_llave', it.id);
+              }}
+            >
+              <Ionicons name="list-outline" size={18} color="#FFFFFF" />
+              <ThemedText style={styles.listItemButtonText}>Cambios</ThemedText>
+            </TouchableOpacity>
+          )}
           <TouchableOpacity style={[styles.listItemButton, styles.deleteButton]} onPress={() => handleDelete(it)}>
             <Ionicons name="trash" size={18} color="#FFFFFF" />
             <ThemedText style={styles.listItemButtonText}>Eliminar</ThemedText>
@@ -1037,7 +1146,7 @@ export default function LlavesScreen() {
           </ThemedView>
 
           {/* Filtros (collapsable) */}
-          {!isCreating && (
+          {!isCreating && !isLoading && (
             <ThemedView style={styles.filtersMain}>
               <ThemedView style={styles.filterHeader}>
                 <TouchableOpacity
@@ -1080,7 +1189,7 @@ export default function LlavesScreen() {
                       onPress={() => setShowFilterFechaPicker(true)}
                     >
                       <ThemedText style={styles.dateButtonText}>
-                        {filterFecha || 'Seleccionar fecha'}
+                        {filterFecha ? formatYMDToDMY(filterFecha) : 'Seleccionar fecha'}
                       </ThemedText>
                       <Ionicons name="calendar-outline" size={18} color="#007AFF" />
                     </TouchableOpacity>
@@ -1096,7 +1205,7 @@ export default function LlavesScreen() {
             </ThemedView>
           ) : null}
 
-          {!isCreating && (
+          {!isCreating && !isLoading && (
             <TouchableOpacity style={styles.createButton} onPress={startCreating}>
               <ThemedText style={styles.createButtonText}>
                 <Ionicons name="add" size={20} color="#FFFFFF" /> Nuevo registro
@@ -1222,7 +1331,7 @@ export default function LlavesScreen() {
 
       {showFilterFechaPicker && (
         <DateTimePicker
-          value={filterFecha ? new Date(filterFecha) : new Date()}
+          value={filterFecha ? parseDateStringToDate(filterFecha) : new Date()}
           mode="date"
           display={Platform.OS === 'ios' ? 'spinner' : 'default'}
           onChange={(event, date) => {
@@ -1293,7 +1402,7 @@ export default function LlavesScreen() {
                   <ThemedView style={styles.filterGroupSearch}>
                     <ThemedText style={styles.filterLabel}>Fecha:</ThemedText>
                     <TouchableOpacity style={styles.dateButton} onPress={() => setShowMovFilterFechaPicker(true)}>
-                      <ThemedText style={styles.dateButtonText}>{movFilterFecha || 'Seleccionar fecha'}</ThemedText>
+                      <ThemedText style={styles.dateButtonText}>{movFilterFecha ? formatYMDToDMY(movFilterFecha) : 'Seleccionar fecha'}</ThemedText>
                       <Ionicons name="calendar-outline" size={18} color="#007AFF" />
                     </TouchableOpacity>
                   </ThemedView>
@@ -1333,7 +1442,7 @@ export default function LlavesScreen() {
 
                 <ThemedText style={styles.label}>Fecha *</ThemedText>
                 <TouchableOpacity style={styles.dateButton} onPress={() => setShowMovFechaPicker(true)}>
-                  <ThemedText style={styles.dateButtonText}>{movFecha || 'Seleccionar fecha'}</ThemedText>
+                  <ThemedText style={styles.dateButtonText}>{movFecha ? formatYMDToDMY(movFecha) : 'Seleccionar fecha'}</ThemedText>
                   <Ionicons name="calendar-outline" size={18} color="#007AFF" />
                 </TouchableOpacity>
 
@@ -1472,7 +1581,7 @@ export default function LlavesScreen() {
                         </ThemedText>
                         <ThemedText style={styles.bitLine}>
                           <ThemedText style={styles.bitLabel}>Fecha/Hora: </ThemedText>
-                          <ThemedText style={styles.bitValue}>{fecha} {hora}</ThemedText>
+                          <ThemedText style={styles.bitValue}>{formatYMDToDMY(fecha)} {hora}</ThemedText>
                         </ThemedText>
 
                         {/* Firma responsable visible con datos */}
@@ -1503,6 +1612,18 @@ export default function LlavesScreen() {
                             <Ionicons name="pencil" size={18} color="#FFFFFF" />
                             <ThemedText style={styles.listItemButtonText}>Editar</ThemedText>
                           </TouchableOpacity>
+                          {!(m.id_local || m.id === 0) && (
+                            <TouchableOpacity
+                              style={[styles.listItemButton, styles.changesButton]}
+                              onPress={() => {
+                                setCambiosTitle(`Cambios - Movimiento #${m.id}`);
+                                fetchCambios('e_movimiento_llave', m.id);
+                              }}
+                            >
+                              <Ionicons name="list-outline" size={18} color="#FFFFFF" />
+                              <ThemedText style={styles.listItemButtonText}>Cambios</ThemedText>
+                            </TouchableOpacity>
+                          )}
                           <TouchableOpacity style={[styles.listItemButton, styles.deleteButton]} onPress={() => handleMovDelete(m)}>
                             <Ionicons name="trash" size={18} color="#FFFFFF" />
                             <ThemedText style={styles.listItemButtonText}>Eliminar</ThemedText>
@@ -1518,7 +1639,7 @@ export default function LlavesScreen() {
 
           {showMovFilterFechaPicker && (
             <DateTimePicker
-              value={movFilterFecha ? new Date(movFilterFecha) : new Date()}
+              value={movFilterFecha ? parseDateStringToDate(movFilterFecha) : new Date()}
               mode="date"
               display={Platform.OS === 'ios' ? 'spinner' : 'default'}
               onChange={(event, date) => {
@@ -1530,7 +1651,7 @@ export default function LlavesScreen() {
 
           {showMovFechaPicker && (
             <DateTimePicker
-              value={movFecha ? new Date(movFecha) : new Date()}
+              value={movFecha ? parseDateStringToDate(movFecha) : new Date()}
               mode="date"
               display={Platform.OS === 'ios' ? 'spinner' : 'default'}
               onChange={(event, date) => {
@@ -1614,6 +1735,88 @@ export default function LlavesScreen() {
                 <ThemedText style={styles.modalAcceptButtonText}>Aceptar</ThemedText>
               </TouchableOpacity>
             </ThemedView>
+          </ThemedView>
+        </View>
+      </Modal>
+
+      {/* Modal: ver cambios */}
+      <Modal
+        visible={isCambiosModalVisible}
+        animationType="fade"
+        transparent
+        presentationStyle="overFullScreen"
+        onRequestClose={closeCambiosModal}
+      >
+        <View style={styles.overlay}>
+          <ThemedView style={styles.floatModalCardMovimientos}>
+            <ThemedView style={styles.floatModalHeader}>
+              <ThemedText style={styles.modalTitle}>{cambiosTitle}</ThemedText>
+              <TouchableOpacity onPress={closeCambiosModal}>
+                <Ionicons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+            </ThemedView>
+
+            <ScrollView style={{ maxHeight: Dimensions.get('window').height * 0.75 }} contentContainerStyle={{ padding: 16 }}>
+              {(!cambiosItems || cambiosItems.length === 0) ? (
+                <ThemedView style={styles.emptyContainer}>
+                  <ThemedText style={styles.emptyText}>No hay cambios registrados</ThemedText>
+                </ThemedView>
+              ) : (
+                cambiosItems.map((row: any) => {
+                  let parsed: any[] = [];
+                  try {
+                    parsed = row?.cambios ? JSON.parse(row.cambios) : [];
+                  } catch {
+                    parsed = [];
+                  }
+                  const createdAtLabel = formatCambioCreatedAt(row?.created_at);
+                  const isOpen = expandedCambioId === row.id;
+
+                  return (
+                    <ThemedView key={`chg-${row.id}`} style={styles.cambioCollapsableMain}>
+                      <TouchableOpacity
+                        style={styles.cambioCollapsableHeader}
+                        onPress={() => setExpandedCambioId((prev) => (prev === row.id ? null : row.id))}
+                        activeOpacity={0.8}
+                      >
+                        <ThemedText style={styles.cambioCollapsableTitle}>
+                          {createdAtLabel}
+                        </ThemedText>
+                        <Ionicons
+                          name={isOpen ? "chevron-up" : "chevron-down"}
+                          size={18}
+                          color="#007AFF"
+                        />
+                      </TouchableOpacity>
+
+                      {isOpen && (
+                        <ThemedView style={styles.cambioCollapsableContent}>
+                          <ThemedView style={styles.filterGroupSearch}>
+                            <ThemedText style={styles.filterLabel}>Cambio realizado por:</ThemedText>
+                            <ThemedText style={styles.changeDescription}>
+                              {row.empleado_nombre || 'Desconocido'}
+                              {row.empleado_cedula ? ` - Cédula: ${row.empleado_cedula}` : ''}
+                            </ThemedText>
+                          </ThemedView>
+
+                          {(Array.isArray(parsed) ? parsed : []).length > 0 && (
+                            <ThemedView style={styles.filterGroupSearch}>
+                              <ThemedText style={styles.filterLabel}>Cambios:</ThemedText>
+                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => (
+                                <ThemedText key={`c-${row.id}-${idx}`} style={styles.changeDescription}>
+                                  <ThemedText style={{ fontWeight: '800' }}>{String(c?.prop ?? '-')}: </ThemedText>
+                                  {formatChangeValue(c?.prop, c?.after)}
+                                </ThemedText>
+                              ))}
+                            </ThemedView>
+                          )}
+                        </ThemedView>
+                      )}
+                    </ThemedView>
+                  );
+                })
+              )}
+            </ScrollView>
           </ThemedView>
         </View>
       </Modal>
@@ -1789,6 +1992,7 @@ const styles = StyleSheet.create({
   listItemButton: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 12, borderRadius: 8, gap: 8 },
   movementsButton: { backgroundColor: '#34C759' },
   editButton: { backgroundColor: '#007AFF' },
+  changesButton: { backgroundColor: '#5856D6', flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 12, borderRadius: 8, gap: 8 },
   deleteButton: { backgroundColor: '#FF3B30' },
   listItemButtonText: { color: '#FFFFFF', fontSize: 14, fontWeight: '600' },
 
@@ -1919,6 +2123,12 @@ const styles = StyleSheet.create({
     borderBottomColor: '#E0E0E0',
     backgroundColor: '#F8F9FA',
   },
+  floatModalCardMovimientos: { backgroundColor: '#FFFFFF', borderRadius: 12, width: '100%', maxWidth: 500, maxHeight: '80%', borderWidth: 1, borderColor: '#E0E0E0', overflow: 'hidden' },
+  cambioCollapsableMain: { width: '100%', marginBottom: 10, backgroundColor: '#fff', borderRadius: 6, borderWidth: 1, borderColor: '#E0E0E0', overflow: 'hidden' },
+  cambioCollapsableHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, backgroundColor: '#F8F9FA' },
+  cambioCollapsableTitle: { fontSize: 14, fontWeight: '600', color: '#007AFF', flex: 1 },
+  cambioCollapsableContent: { padding: 12, gap: 8, backgroundColor: '#F8F9FA' },
+  changeDescription: { fontSize: 14, lineHeight: 20, color: '#666', marginBottom: 8 },
   signatureModalHint: { paddingHorizontal: 16, paddingTop: 12, color: '#666', fontSize: 13 },
   signaturePadBox: {
     marginTop: 10,

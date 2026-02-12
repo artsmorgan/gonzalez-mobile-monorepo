@@ -8,6 +8,8 @@ import {
   ActivityIndicator,
   Platform,
   View,
+  Dimensions,
+  Modal,
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { ThemedText } from '@/components/ThemedText';
@@ -16,6 +18,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import AppHeader from '@/components/AppHeader';
 import AppFooter from '@/components/AppFooter';
 import SlideMenu from '@/components/SlideMenu';
+import { formatDateDMY } from '@/utils/formatDate';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../App';
@@ -28,6 +31,8 @@ import { Picker } from '@react-native-picker/picker';
 import * as Location from 'expo-location';
 import { jwtDecode } from 'jwt-decode';
 import getHoraAccion from '@/hooks/getHoraAccion';
+import authedFetch from '@/hooks/authedFetch';
+import getValidAccessTokenOrLogout from '@/hooks/getValidAccessTokenOrLogout';
 import {
   createAttendanceControl,
   updateAttendanceControl,
@@ -130,6 +135,12 @@ export default function AttendanceControlScreen() {
   const [controls, setControls] = useState<AttendanceControl[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Modal: ver cambios (auditoría)
+  const [isCambiosModalVisible, setIsCambiosModalVisible] = useState(false);
+  const [cambiosTitle, setCambiosTitle] = useState<string>('Cambios');
+  const [cambiosItems, setCambiosItems] = useState<any[]>([]);
+  const [expandedCambioId, setExpandedCambioId] = useState<number | null>(null);
   const [hasCurrentMarca, setHasCurrentMarca] = useState<boolean>(false);
   const [marcaClienteName, setMarcaClienteName] = useState<string>('');
   const [marcaCorpoName, setMarcaCorpoName] = useState<string>('');
@@ -197,15 +208,133 @@ export default function AttendanceControlScreen() {
     return networkState.isConnected && networkState.isInternetReachable ? true : false;
   };
 
+  const closeCambiosModal = () => {
+    setIsCambiosModalVisible(false);
+    setCambiosItems([]);
+    setExpandedCambioId(null);
+  };
+
+  const formatCambioCreatedAt = (value: any) => {
+    if (!value) return '-';
+    try {
+      const date = new Date(value);
+      return date.toLocaleString('es-CR', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true,
+      });
+    } catch {
+      return String(value);
+    }
+  };
+
+  const formatColaboradoresForDisplay = (colaboradoresJson: string): string => {
+    try {
+      const colaboradores: Colaborador[] = JSON.parse(colaboradoresJson || '[]');
+      if (!Array.isArray(colaboradores) || colaboradores.length === 0) return 'No hay colaboradores.';
+      return colaboradores.map((c, idx) => {
+        const nombre = c?.nombre_colaborador || '-';
+        const cedula = c?.cedula || '-';
+        const entrada = c?.entrada || '-';
+        const salida = c?.salida || '-';
+        const sustituto = c?.nombre_sustituto ? ` (Sustituto: ${c.nombre_sustituto} - ${c.cedula_sustituto || '-'})` : '';
+        const tieneFirmaComentario = c?.firma_comentario ? 'Sí' : 'No';
+        const tieneFirmaSustituto = c?.firma_sustituto ? 'Sí' : 'No';
+        return `${idx + 1}. ${nombre} (Cédula: ${cedula})\n   Entrada: ${entrada}, Salida: ${salida}\n   Firma comentario: ${tieneFirmaComentario}, Firma sustituto: ${tieneFirmaSustituto}${sustituto}`;
+      }).join('\n\n');
+    } catch (e) {
+      console.error('Error formatting colaboradores for display:', e);
+      return 'Error al formatear colaboradores.';
+    }
+  };
+
+  const formatChangeValue = (prop: string, value: any): string => {
+    if (value === null || value === undefined) return 'N/A';
+    if (typeof value === 'boolean') return value ? 'Sí' : 'No';
+    if (typeof value === 'object') {
+      if (prop === 'colaboradores') {
+        return formatColaboradoresForDisplay(JSON.stringify(value));
+      }
+      return JSON.stringify(value, null, 2);
+    }
+    if (typeof value === 'string') {
+      if (value.trim().startsWith('{') || value.trim().startsWith('[')) {
+        try {
+          const parsed = JSON.parse(value);
+          if (prop === 'colaboradores') {
+            return formatColaboradoresForDisplay(value);
+          }
+          if (Array.isArray(parsed)) {
+            return parsed.map((item, idx) => {
+              if (typeof item === 'object' && item !== null) {
+                return `Item ${idx + 1}: ${JSON.stringify(item, null, 2)}`;
+              }
+              return String(item);
+            }).join('\n');
+          }
+          if (typeof parsed === 'object') {
+            return JSON.stringify(parsed, null, 2);
+          }
+        } catch {
+          // Not valid JSON, return as string
+        }
+      }
+      return value;
+    }
+    return String(value);
+  };
+
+  const fetchCambios = useCallback(async (tabla: string, registroId: number) => {
+    const isConnected = await getConnectionStatus();
+    if (!isConnected) {
+      Alert.alert('Sin conexión', 'Esta función solo está disponible con conexión a internet.');
+      return;
+    }
+    try {
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) throw new Error('Server URL not configured');
+      const resp = await authedFetch({
+        url: `${apiUrl}/api/cambios-apps-modules?tabla=${encodeURIComponent(tabla)}&registro_id=${registroId}`,
+        init: {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        },
+        refreshAccessToken,
+        logout,
+      });
+      if (!resp) return;
+
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data.status) {
+        throw new Error(data.message || 'No se pudieron cargar los cambios');
+      }
+      setCambiosItems(Array.isArray(data.data) ? data.data : []);
+      setIsCambiosModalVisible(true);
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'No se pudieron cargar los cambios');
+    }
+  }, [refreshAccessToken, logout]);
+
   const generateRandomId = (): string => {
     return `local-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
   };
 
   const formatDate = (date: Date): string => {
-    const day = date.getDate().toString().padStart(2, '0');
-    const month = (date.getMonth() + 1).toString().padStart(2, '0');
     const year = date.getFullYear();
-    return `${day}/${month}/${year}`;
+    const month = (date.getMonth() + 1).toString().padStart(2, '0');
+    const day = date.getDate().toString().padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  const formatDateForDisplay = (date: Date): string => {
+    const [year, month, day] = formatDate(date).split('-');
+    return `${day}-${month}-${year}`;
   };
 
   const formatTime = (date: Date): string => {
@@ -427,31 +556,18 @@ export default function AttendanceControlScreen() {
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) return;
 
-      let token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (logout) await logout();
-          throw new Error('Sesión expirada');
-        }
-        token = await AsyncStorage.getItem('access_token');
-      }
-
-      const resp = await fetch(`${apiUrl}/api/empleados/corpo/${corpoId}`, {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': '69420',
+      const resp = await authedFetch({
+        url: `${apiUrl}/api/empleados/corpo/${corpoId}`,
+        init: {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
         },
+        refreshAccessToken,
+        logout,
       });
-
-      if (resp.status === 401 || resp.status === 403) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) return fetchEmpleadosByCorpo(corpoId);
-        await logout();
-        return;
-      }
+      if (!resp) return;
 
       const data = await resp.json().catch(() => null);
       if (resp.ok && data?.status && Array.isArray(data.empleados)) {
@@ -466,7 +582,7 @@ export default function AttendanceControlScreen() {
     } catch (e) {
       console.error('Error fetching empleados by corpo:', e);
     }
-  }, [refreshAccessToken]);
+  }, [refreshAccessToken, logout]);
 
   useEffect(() => {
     if (corpoIdStr) {
@@ -692,37 +808,20 @@ export default function AttendanceControlScreen() {
                 const [sessionId, empleadoId, latitud, longitud, timestamp] = parts;
                 let empleadoDetalle = undefined;
                 const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-                let token = await AsyncStorage.getItem('access_token');
-                if (!token) {
-                  const refreshed = await refreshAccessToken();
-                  if (!refreshed) {
-                    if (logout) await logout();
-                    throw new Error('Sesión expirada');
-                  }
-                  token = await AsyncStorage.getItem('access_token');
-                }
-
-                if (apiUrl && token) {
+                if (apiUrl) {
                   try {
-                    const empleadoResponse = await fetch(`${apiUrl}/api/empleados/${empleadoId}`, {
-                      method: 'GET',
-                      headers: {
-                        'Authorization': `Bearer ${token}`,
-                        'Content-Type': 'application/json',
-                        'ngrok-skip-browser-warning': '69420',
+                    const empleadoResponse = await authedFetch({
+                      url: `${apiUrl}/api/empleados/${empleadoId}`,
+                      init: {
+                        method: 'GET',
+                        headers: {
+                          'Content-Type': 'application/json',
+                        },
                       },
+                      refreshAccessToken,
+                      logout,
                     });
-
-                    if (empleadoResponse.status === 401) {
-                      const refreshed = await refreshAccessToken();
-                      if (!refreshed) await logout();
-                    }
-
-                    if (empleadoResponse.status === 403) {
-                      if (logout) await logout();
-                      throw new Error('Acceso denegado');
-                    }
-
+                    if (!empleadoResponse) return decoded;
                     if (empleadoResponse.ok) {
                       const empleadoData = await empleadoResponse.json();
                       empleadoDetalle = {
@@ -759,37 +858,20 @@ export default function AttendanceControlScreen() {
                 const [sessionId, empleadoId, latitud, longitud, timestamp] = parts;
                 let empleadoDetalle = undefined;
                 const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-                let token = await AsyncStorage.getItem('access_token');
-                if (!token) {
-                  const refreshed = await refreshAccessToken();
-                  if (!refreshed) {
-                    if (logout) await logout();
-                    throw new Error('Sesión expirada');
-                  }
-                  token = await AsyncStorage.getItem('access_token');
-                }
-
-                if (apiUrl && token) {
+                if (apiUrl) {
                   try {
-                    const empleadoResponse = await fetch(`${apiUrl}/api/empleados/${empleadoId}`, {
-                      method: 'GET',
-                      headers: {
-                        'Authorization': `Bearer ${token}`,
-                        'Content-Type': 'application/json',
-                        'ngrok-skip-browser-warning': '69420',
+                    const empleadoResponse = await authedFetch({
+                      url: `${apiUrl}/api/empleados/${empleadoId}`,
+                      init: {
+                        method: 'GET',
+                        headers: {
+                          'Content-Type': 'application/json',
+                        },
                       },
+                      refreshAccessToken,
+                      logout,
                     });
-
-                    if (empleadoResponse.status === 401) {
-                      const refreshed = await refreshAccessToken();
-                      if (!refreshed) await logout();
-                    }
-
-                    if (empleadoResponse.status === 403) {
-                      if (logout) await logout();
-                      throw new Error('Acceso denegado');
-                    }
-
+                    if (!empleadoResponse) return decoded;
                     if (empleadoResponse.ok) {
                       const empleadoData = await empleadoResponse.json();
                       empleadoDetalle = {
@@ -998,40 +1080,23 @@ export default function AttendanceControlScreen() {
           // Intentar obtener detalles del empleado
           let empleadoDetalle = undefined;
           const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-          let token = await AsyncStorage.getItem('access_token');
-          if (!token) {
-            const refreshed = await refreshAccessToken();
-            if (!refreshed) {
-              if (logout) await logout();
-              throw new Error('Sesión expirada');
-              return;
-            }
-            token = await AsyncStorage.getItem('access_token');
-          }
-
-          if (apiUrl && token) {
+          if (apiUrl) {
             try {
-              const empleadoResponse = await fetch(`${apiUrl}/api/empleados/${empleadoId}`, {
-                method: 'GET',
-                headers: {
-                  'Authorization': `Bearer ${token}`,
-                  'Content-Type': 'application/json',
-                  'ngrok-skip-browser-warning': '69420',
+              const empleadoResponse = await authedFetch({
+                url: `${apiUrl}/api/empleados/${empleadoId}`,
+                init: {
+                  method: 'GET',
+                  headers: {
+                    'Content-Type': 'application/json',
+                  },
                 },
+                refreshAccessToken,
+                logout,
               });
-
-              if (empleadoResponse.status === 401) {
-                const refreshed = await refreshAccessToken();
-                if (refreshed) return handleScanQR(index, type);
-                await logout();
+              if (!empleadoResponse) {
+                setCurrentQRType(null);
                 return;
               }
-
-              if (empleadoResponse.status === 403) {
-                if (logout) await logout();
-                throw new Error('Acceso denegado');
-              }
-
               if (empleadoResponse.ok) {
                 const empleadoData = await empleadoResponse.json();
                 empleadoDetalle = {
@@ -1094,18 +1159,8 @@ export default function AttendanceControlScreen() {
 
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) throw new Error('Server URL not configured');
-
-      let token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (logout) await logout();
-          throw new Error('Sesión expirada');
-        }
-        token = await AsyncStorage.getItem('access_token');
-      }
-
-      if (!token) throw new Error('No authentication token found');
+      const token = await getValidAccessTokenOrLogout({ refreshAccessToken, logout });
+      if (!token) return;
       const decodedToken = jwtDecode(token);
       const sessionId = JSON.parse(JSON.stringify(decodedToken)).sessionId;
 
@@ -1123,27 +1178,18 @@ export default function AttendanceControlScreen() {
       let empleadoDetalle = undefined;
       if (connectionStatus) {
         try {
-          const empleadoResponse = await fetch(`${apiUrl}/api/empleados/${decodedEmpleadoId}`, {
-            method: 'GET',
-            headers: {
-              Authorization: `Bearer ${token}`,
-              'Content-Type': 'application/json',
-              'ngrok-skip-browser-warning': '69420',
+          const empleadoResponse = await authedFetch({
+            url: `${apiUrl}/api/empleados/${decodedEmpleadoId}`,
+            init: {
+              method: 'GET',
+              headers: {
+                'Content-Type': 'application/json',
+              },
             },
+            refreshAccessToken,
+            logout,
           });
-
-          if (empleadoResponse.status === 401) {
-            const refreshed = await refreshAccessToken();
-            if (refreshed) return generateSignatureResponsable();
-            await logout();
-            return;
-          }
-
-          if (empleadoResponse.status === 403) {
-            if (logout) await logout();
-            throw new Error('Acceso denegado');
-          }
-
+          if (!empleadoResponse) return;
           if (empleadoResponse.ok) {
             const empleadoData = await empleadoResponse.json();
             empleadoDetalle = {
@@ -1194,38 +1240,19 @@ export default function AttendanceControlScreen() {
       if (connectionStatus) {
         const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
         if (!apiUrl) throw new Error('Server URL not configured');
-
-        let token = await AsyncStorage.getItem('access_token');
-        if (!token) {
-          const refreshed = await refreshAccessToken();
-          if (!refreshed) {
-            if (logout) await logout();
-            throw new Error('Sesión expirada');
-            return;
-          }
-          token = await AsyncStorage.getItem('access_token');
-        }
-
-        const empleadoResponse = await fetch(`${apiUrl}/api/empleados/${empleadoId}`, {
-          method: 'GET',
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-            'ngrok-skip-browser-warning': '69420',
+        const empleadoResponse = await authedFetch({
+          url: `${apiUrl}/api/empleados/${empleadoId}`,
+          init: {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+            },
           },
+          refreshAccessToken,
+          logout,
         });
 
-        if (empleadoResponse.status === 401) {
-          const refreshed = await refreshAccessToken();
-          if (refreshed) return handleScanQRResponsable();
-          await logout();
-          return;
-        }
-
-        if (empleadoResponse.status === 403) {
-          if (logout) await logout();
-          throw new Error('Acceso denegado');
-        }
+        if (!empleadoResponse) return;
 
         if (empleadoResponse.ok) {
           const empleadoData = await empleadoResponse.json();
@@ -1628,7 +1655,7 @@ export default function AttendanceControlScreen() {
               <ThemedView style={styles.listItemHeader}>
                 <ThemedView style={styles.listItemContent}>
                   <ThemedText style={styles.listItemTitle}>
-                    {record.fecha ? record.fecha.split('T')[0] : 'N/A'}
+                    {formatDateDMY(record.fecha)}
                   </ThemedText>
                   <ThemedText style={styles.listItemSubtitle}>
                     Cliente: {record.cliente || 'N/A'}
@@ -1657,6 +1684,18 @@ export default function AttendanceControlScreen() {
                     {getActionIcon('edit')}
                     <ThemedText style={styles.listItemButtonText}>Editar</ThemedText>
                   </TouchableOpacity>
+                  {!(record.id_local || String(record.id).startsWith('local-') || String(record.id) === '0') && (
+                    <TouchableOpacity
+                      style={[styles.listItemButton, styles.changesButton]}
+                      onPress={() => {
+                        setCambiosTitle(`Cambios - Control #${record.id}`);
+                        fetchCambios('c_control_asistencia', Number(record.id));
+                      }}
+                    >
+                      <Ionicons name="list-outline" size={20} color="#FFFFFF" />
+                      <ThemedText style={styles.listItemButtonText}>Cambios</ThemedText>
+                    </TouchableOpacity>
+                  )}
                   <TouchableOpacity
                     style={[styles.listItemButton, styles.deleteButton]}
                     onPress={() => deleteControlHandler(record)}
@@ -1957,7 +1996,7 @@ export default function AttendanceControlScreen() {
             </ThemedView>
           )}
 
-          {hasCurrentMarca && !isCreating && !editingRecord && (
+          {hasCurrentMarca && !isCreating && !editingRecord && !isLoading && (
             <ThemedView style={styles.filtersContainer}>
               <TouchableOpacity
                 style={styles.filtersHeader}
@@ -2236,7 +2275,7 @@ export default function AttendanceControlScreen() {
                   onPress={() => setShowDatePicker(true)}
                 >
                   <ThemedText style={styles.dateButtonText}>
-                    {formatDate(fecha)}
+                    {formatDateForDisplay(fecha)}
                   </ThemedText>
                   <Ionicons name="calendar" size={20} color="#007AFF" />
                 </TouchableOpacity>
@@ -2402,27 +2441,101 @@ export default function AttendanceControlScreen() {
               </ThemedView>
             </ThemedView>
           ) : (
-            <ThemedView style={styles.listSection}>
-              <ThemedView style={styles.readonlyBox}>
-                <ThemedView style={styles.compactInfoRow}>
-                  <ThemedView style={styles.compactInfoItem}>
-                    <ThemedText style={styles.compactInfoLabel}>Cliente</ThemedText>
-                    <ThemedText style={styles.readonlyText}>{marcaClienteName || 'N/A'}</ThemedText>
-                  </ThemedView>
-                  <ThemedView style={styles.compactInfoItem}>
-                    <ThemedText style={styles.compactInfoLabel}>Sucursal</ThemedText>
-                    <ThemedText style={styles.readonlyText}>{marcaCorpoName || 'N/A'}</ThemedText>
-                  </ThemedView>
-                </ThemedView>
+            <>
+              <ThemedView style={styles.listSection}>
+                {!isLoading && (
+                  <TouchableOpacity style={styles.createButton} onPress={startCreating}>
+                    <Ionicons name="add" size={24} color="#FFFFFF" />
+                  </TouchableOpacity>
+                )}
+                {renderControlList()}
               </ThemedView>
-              <TouchableOpacity style={styles.createButton} onPress={startCreating}>
-                <Ionicons name="add" size={24} color="#FFFFFF" />
-              </TouchableOpacity>
-              {renderControlList()}
-            </ThemedView>
+            </>
           )}
         </ThemedView>
       </ScrollView>
+
+      {/* Modal: ver cambios */}
+      <Modal
+        visible={isCambiosModalVisible}
+        animationType="fade"
+        transparent
+        presentationStyle="overFullScreen"
+        onRequestClose={closeCambiosModal}
+      >
+        <View style={styles.overlay}>
+          <ThemedView style={styles.floatModalCardMovimientos}>
+            <ThemedView style={styles.floatModalHeader}>
+              <ThemedText style={styles.modalTitle}>{cambiosTitle}</ThemedText>
+              <TouchableOpacity onPress={closeCambiosModal}>
+                <Ionicons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+            </ThemedView>
+
+            <ScrollView style={{ maxHeight: Dimensions.get('window').height * 0.75 }} contentContainerStyle={{ padding: 16 }}>
+              {(!cambiosItems || cambiosItems.length === 0) ? (
+                <ThemedView style={styles.emptyContainer}>
+                  <ThemedText style={styles.emptyText}>No hay cambios registrados</ThemedText>
+                </ThemedView>
+              ) : (
+                cambiosItems.map((row: any) => {
+                  let parsed: any[] = [];
+                  try {
+                    parsed = row?.cambios ? JSON.parse(row.cambios) : [];
+                  } catch {
+                    parsed = [];
+                  }
+                  const createdAtLabel = formatCambioCreatedAt(row?.created_at);
+                  const isOpen = expandedCambioId === row.id;
+
+                  return (
+                    <ThemedView key={`chg-${row.id}`} style={styles.cambioCollapsableMain}>
+                      <TouchableOpacity
+                        style={styles.cambioCollapsableHeader}
+                        onPress={() => setExpandedCambioId((prev) => (prev === row.id ? null : row.id))}
+                        activeOpacity={0.8}
+                      >
+                        <ThemedText style={styles.cambioCollapsableTitle}>
+                          {createdAtLabel}
+                        </ThemedText>
+                        <Ionicons
+                          name={isOpen ? "chevron-up" : "chevron-down"}
+                          size={18}
+                          color="#007AFF"
+                        />
+                      </TouchableOpacity>
+
+                      {isOpen && (
+                        <ThemedView style={styles.cambioCollapsableContent}>
+                          <ThemedView style={styles.filterGroupSearch}>
+                            <ThemedText style={styles.filterLabel}>Cambio realizado por:</ThemedText>
+                            <ThemedText style={styles.changeDescription}>
+                              {row.empleado_nombre || 'Desconocido'}
+                              {row.empleado_cedula ? ` - Cédula: ${row.empleado_cedula}` : ''}
+                            </ThemedText>
+                          </ThemedView>
+
+                          {(Array.isArray(parsed) ? parsed : []).length > 0 && (
+                            <ThemedView style={styles.filterGroupSearch}>
+                              <ThemedText style={styles.filterLabel}>Cambios:</ThemedText>
+                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => (
+                                <ThemedText key={`c-${row.id}-${idx}`} style={styles.changeDescription}>
+                                  <ThemedText style={{ fontWeight: '800' }}>{String(c?.prop ?? '-')}: </ThemedText>
+                                  {formatChangeValue(c?.prop, c?.after)}
+                                </ThemedText>
+                              ))}
+                            </ThemedView>
+                          )}
+                        </ThemedView>
+                      )}
+                    </ThemedView>
+                  );
+                })
+              )}
+            </ScrollView>
+          </ThemedView>
+        </View>
+      </Modal>
 
       {QRScannerComponent}
 
@@ -2861,6 +2974,7 @@ const styles = StyleSheet.create({
   editButton: {
     backgroundColor: '#007AFF',
   },
+  changesButton: { backgroundColor: '#5856D6', flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 12, borderRadius: 8, gap: 8 },
   deleteButton: {
     backgroundColor: '#FF3B30',
   },
@@ -2905,5 +3019,15 @@ const styles = StyleSheet.create({
     color: '#666',
     textAlign: 'center',
   },
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 },
+  floatModalCardMovimientos: { backgroundColor: '#FFFFFF', borderRadius: 12, width: '100%', maxWidth: 500, maxHeight: '80%', borderWidth: 1, borderColor: '#E0E0E0', overflow: 'hidden' },
+  floatModalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#E0E0E0' },
+  modalTitle: { fontSize: 16, fontWeight: '800', color: '#000' },
+  cambioCollapsableMain: { width: '100%', marginBottom: 10, backgroundColor: '#fff', borderRadius: 6, borderWidth: 1, borderColor: '#E0E0E0', overflow: 'hidden' },
+  cambioCollapsableHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, backgroundColor: '#F8F9FA' },
+  cambioCollapsableTitle: { fontSize: 14, fontWeight: '600', color: '#007AFF', flex: 1 },
+  cambioCollapsableContent: { padding: 12, gap: 8, backgroundColor: '#F8F9FA' },
+  changeDescription: { fontSize: 14, lineHeight: 20, color: '#666', marginBottom: 8 },
+  filterGroupSearch: { marginBottom: 12 },
 });
 

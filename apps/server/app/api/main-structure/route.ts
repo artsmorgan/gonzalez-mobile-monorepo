@@ -3,6 +3,8 @@ import { verifyAccessToken } from "../../../utils/verifyToken";
 import { toZonedTime } from "date-fns-tz";
 import { prisma } from "../../../utils/prismaClient";
 
+type TipoMantenimientoArticuloDTO = { id: number; nombre: string };
+
 export async function GET(req: NextRequest) {
     try {
         const { valid, expired, payload, message } = verifyAccessToken(req);
@@ -103,7 +105,7 @@ export async function GET(req: NextRequest) {
                             for (const puesto of puestos) {
                                 const puesto_data = { id: puesto.id, nombre: `${puesto.codigo} - ${puesto.nombre}`, plazas: [], articulos: [] };
 
-                                let articulos_return: { id: number, tipo: string, nombre: string, marca: string, serie: string, cantidad: number }[] = [];
+                                let articulos_return: any[] = [];
 
                                 if (puesto.comboArticulosCP_id) {
                                     const combo_articulo_cp = await prisma.e_estructura_combo_articulo_cp.findUnique({ where: { id: puesto.comboArticulosCP_id } });
@@ -121,6 +123,8 @@ export async function GET(req: NextRequest) {
                                                 marca: "",
                                                 serie: "",
                                                 cantidad: articulo.cantidad,
+                                                articulo_nomenclador_id: articulo.articuloCP_id ?? null,
+                                                tipos_mantenimiento: [],
                                             });
                                         }
                                     }
@@ -139,6 +143,8 @@ export async function GET(req: NextRequest) {
                                         marca: "",
                                         serie: "",
                                         cantidad: articulo.cantidad,
+                                        articulo_nomenclador_id: articulo.articuloCP_id ?? null,
+                                        tipos_mantenimiento: [],
                                     });
                                 }
 
@@ -155,7 +161,37 @@ export async function GET(req: NextRequest) {
                                         marca: articulo.marca,
                                         serie: articulo.serie,
                                         cantidad: 1,
+                                        articulo_nomenclador_id: articulo.nomencladorArticuloCP_id ?? null,
+                                        tipos_mantenimiento: [],
                                     });
+                                }
+
+                                // Adjuntar tipos de mantenimiento por artículo nomenclador (n_tipo_mantenimiento_articulo)
+                                const articuloNomencladorIds = Array.from(
+                                    new Set(
+                                        articulos_return
+                                            .map((a) => a.articulo_nomenclador_id)
+                                            .filter((id): id is number => typeof id === "number" && Number.isFinite(id))
+                                    )
+                                );
+                                if (articuloNomencladorIds.length > 0) {
+                                    const tiposRows = await prisma.n_tipo_mantenimiento_articulo.findMany({
+                                        where: { articulo_id: { in: articuloNomencladorIds } },
+                                        select: { id: true, articulo_id: true, nombre: true },
+                                        orderBy: { id: "asc" },
+                                    });
+                                    const tiposByArticuloId = new Map<number, TipoMantenimientoArticuloDTO[]>();
+                                    for (const t of tiposRows) {
+                                        const list = tiposByArticuloId.get(t.articulo_id) ?? [];
+                                        list.push({ id: t.id, nombre: t.nombre });
+                                        tiposByArticuloId.set(t.articulo_id, list);
+                                    }
+                                    articulos_return = articulos_return.map((a) => ({
+                                        ...a,
+                                        tipos_mantenimiento: a.articulo_nomenclador_id
+                                            ? (tiposByArticuloId.get(a.articulo_nomenclador_id) ?? [])
+                                            : [],
+                                    }));
                                 }
 
                                 // Adjuntar último mantenimiento a cada artículo del puesto
@@ -170,24 +206,40 @@ export async function GET(req: NextRequest) {
                                     const mantenimientos = await prisma.c_articulo_mantenimiento.findMany({
                                         where: { OR: or },
                                         orderBy: { id: "desc" },
-                                        select: {
-                                            id: true,
-                                            articulo_plan_id: true,
-                                            articulo_asignado_id: true,
-                                            estado: true,
-                                            cantidad_necesaria: true,
-                                            cantidad_real: true,
-                                            observaciones: true,
-                                            fecha_solucion: true,
-                                            mant_armas_form: true,
+                                        include: {
+                                            c_archivos_adjuntos_articulo_mantenimiento: {
+                                                select: {
+                                                    id: true,
+                                                    name: true,
+                                                    original_name: true,
+                                                    type: true,
+                                                    extension: true,
+                                                },
+                                            },
                                         },
                                     });
 
                                     const latestByPlanId = new Map<number, any>();
                                     const latestByAsignadoId = new Map<number, any>();
+                                    const mantenimientosByPlanId = new Map<number, any[]>();
+                                    const mantenimientosByAsignadoId = new Map<number, any[]>();
                                     for (const m of mantenimientos) {
                                         if (m.articulo_plan_id && !latestByPlanId.has(m.articulo_plan_id)) latestByPlanId.set(m.articulo_plan_id, m);
                                         if (m.articulo_asignado_id && !latestByAsignadoId.has(m.articulo_asignado_id)) latestByAsignadoId.set(m.articulo_asignado_id, m);
+                                        if (m.articulo_plan_id) {
+                                            const list = mantenimientosByPlanId.get(m.articulo_plan_id) ?? [];
+                                            if (list.length < 8) {
+                                                list.push(m);
+                                                mantenimientosByPlanId.set(m.articulo_plan_id, list);
+                                            }
+                                        }
+                                        if (m.articulo_asignado_id) {
+                                            const list = mantenimientosByAsignadoId.get(m.articulo_asignado_id) ?? [];
+                                            if (list.length < 8) {
+                                                list.push(m);
+                                                mantenimientosByAsignadoId.set(m.articulo_asignado_id, list);
+                                            }
+                                        }
                                     }
 
                                     // Adjuntar movimientos a cada artículo del puesto
@@ -229,7 +281,32 @@ export async function GET(req: NextRequest) {
 
                                     articulos_return = (articulos_return as any[]).map((a) => ({
                                         ...a,
+                                        key: `${a.tipo === "Plan" ? "plan" : "asignado"}-${a.id}`,
+                                        source: a.tipo === "Plan" ? "plan" : "asignado",
+                                        estructura_id: a.id,
+                                        articulo_nombre: a.nombre,
+                                        cantidad_plan: a.tipo === "Plan" ? a.cantidad : null,
+                                        marca:
+                                            a.tipo === "Plan"
+                                                ? (latestByPlanId.get(a.id)?.marca ?? a.marca ?? null)
+                                                : (a.marca ?? null),
+                                        serie:
+                                            a.tipo === "Plan"
+                                                ? (latestByPlanId.get(a.id)?.serie_placa ?? a.serie ?? null)
+                                                : (a.serie ?? null),
+                                        mantenimientos:
+                                            a.tipo === "Plan"
+                                                ? (mantenimientosByPlanId.get(a.id) ?? [])
+                                                : a.tipo === "Asignado"
+                                                    ? (mantenimientosByAsignadoId.get(a.id) ?? [])
+                                                    : [],
                                         ultimo_mantenimiento:
+                                            a.tipo === "Plan"
+                                                ? latestByPlanId.get(a.id) ?? null
+                                                : a.tipo === "Asignado"
+                                                    ? latestByAsignadoId.get(a.id) ?? null
+                                                    : null,
+                                        ultimo_registro_mantenimiento:
                                             a.tipo === "Plan"
                                                 ? latestByPlanId.get(a.id) ?? null
                                                 : a.tipo === "Asignado"
@@ -243,7 +320,18 @@ export async function GET(req: NextRequest) {
                                                     : [],
                                     }));
                                 } else {
-                                    articulos_return = (articulos_return as any[]).map((a) => ({ ...a, ultimo_mantenimiento: null, movimientos: [] }));
+                                    articulos_return = (articulos_return as any[]).map((a) => ({
+                                        ...a,
+                                        key: `${a.tipo === "Plan" ? "plan" : "asignado"}-${a.id}`,
+                                        source: a.tipo === "Plan" ? "plan" : "asignado",
+                                        estructura_id: a.id,
+                                        articulo_nombre: a.nombre,
+                                        cantidad_plan: a.tipo === "Plan" ? a.cantidad : null,
+                                        mantenimientos: [],
+                                        ultimo_mantenimiento: null,
+                                        ultimo_registro_mantenimiento: null,
+                                        movimientos: [],
+                                    }));
                                 }
 
                                 puesto_data.articulos = articulos_return as never[];

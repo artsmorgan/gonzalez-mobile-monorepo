@@ -16,10 +16,12 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import { format, toZonedTime } from 'date-fns-tz';
 import * as Network from 'expo-network';
+import { formatDateDMY } from '../utils/formatDate';
 import saveMarca from '@/hooks/saveMarca';
 import saveAbsentReason from '@/hooks/saveAbsentReason';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import { eventBus } from '@/hooks/eventBus';
+import authedFetch from '@/hooks/authedFetch';
 
 type MarcarIngresoSalidaScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'MarcarIngresoSalida'>;
 
@@ -163,11 +165,6 @@ export default function MarcarIngresoSalidaScreen() {
         throw new Error('Server URL not configured');
       }
 
-      const token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        throw new Error('No authentication token found');
-      }
-
       if (!employee?.id) {
         throw new Error('Employee ID not found');
       }
@@ -230,30 +227,18 @@ export default function MarcarIngresoSalidaScreen() {
       let data = null;
 
       if (networkState.isConnected && networkState.isInternetReachable) {
-
-        const response = await fetch(`${apiUrl}/api/attendance/user/${employee.id}?lat=${lat}&long=${long}`, {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-            'ngrok-skip-browser-warning': '69420',
+        const response = await authedFetch({
+          url: `${apiUrl}/api/attendance/user/${employee.id}?lat=${lat}&long=${long}`,
+          init: {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+            },
           },
+          refreshAccessToken,
+          logout,
         });
-
-        if (response.status === 401) {
-          const refreshed = await refreshAccessToken();
-          if (refreshed) {
-            return fetchAttendanceStatus();
-          } else {
-            // If refresh fails, logout the user
-            await logout();
-          }
-        }
-
-        if (response.status === 403) {
-          if (logout) await logout();
-          throw new Error('Acceso denegado');
-        }
+        if (!response) return;
 
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`);
@@ -501,15 +486,6 @@ export default function MarcarIngresoSalidaScreen() {
           if (attendanceData) {
             attendanceData.marca.hora_entrada_digitada = new Date(horaAccion).toISOString();
             await AsyncStorage.setItem('current_marca', JSON.stringify(attendanceData.marca));
-            let token = await AsyncStorage.getItem('access_token');
-            if (!token) {
-              const refreshed = await refreshAccessToken();
-              if (!refreshed) {
-                if (logout) await logout();
-                throw new Error('Sesión expirada');
-              }
-              token = await AsyncStorage.getItem('access_token');
-            }
             await Promise.all([
               getLunchTimeConfig(attendanceData.marca.id),
               getActivities(attendanceData.marca.id),
@@ -562,18 +538,18 @@ export default function MarcarIngresoSalidaScreen() {
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
-    const token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-      throw new Error('No authentication token found');
-    }
-    const response = await fetch(`${apiUrl}/api/job-manuals?m=${marcaId}`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/job-manuals?m=${marcaId}`,
+      init: {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       },
+      refreshAccessToken,
+      logout,
     });
+    if (!response) return;
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status} getJobManuals`);
     }
@@ -589,18 +565,18 @@ export default function MarcarIngresoSalidaScreen() {
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
-    const token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-      throw new Error('No authentication token found');
-    }
-    const response = await fetch(`${apiUrl}/api/main-structure`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/main-structure`,
+      init: {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       },
+      refreshAccessToken,
+      logout,
     });
+    if (!response) return;
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status} getMainStructure`);
     }
@@ -618,18 +594,18 @@ export default function MarcarIngresoSalidaScreen() {
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
-    const token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-      throw new Error('No authentication token found');
-    }
-    const response = await fetch(`${apiUrl}/api/bitacora-vehiculo-detenido?m=${marcaId}`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/bitacora-vehiculo-detenido?m=${marcaId}`,
+      init: {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       },
+      refreshAccessToken,
+      logout,
     });
+    if (!response) return;
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status} getBitacoraVehiculoDetenido`);
     }
@@ -647,18 +623,18 @@ export default function MarcarIngresoSalidaScreen() {
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
-    const token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-      throw new Error('No authentication token found');
-    }
-    const response = await fetch(`${apiUrl}/api/documentos-entregados?m=${marcaId}`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/documentos-entregados?m=${marcaId}`,
+      init: {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       },
+      refreshAccessToken,
+      logout,
     });
+    if (!response) return;
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status} getDocumentosEntregados`);
     }
@@ -676,18 +652,18 @@ export default function MarcarIngresoSalidaScreen() {
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
-    const token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-      throw new Error('No authentication token found');
-    }
-    const response = await fetch(`${apiUrl}/api/llaves?m=${marcaId}`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/llaves?m=${marcaId}`,
+      init: {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       },
+      refreshAccessToken,
+      logout,
     });
+    if (!response) return;
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status} getLlaves`);
     }
@@ -705,18 +681,18 @@ export default function MarcarIngresoSalidaScreen() {
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
-    const token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-      throw new Error('No authentication token found');
-    }
-    const response = await fetch(`${apiUrl}/api/training?m=${marcaId}`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/training?m=${marcaId}`,
+      init: {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       },
+      refreshAccessToken,
+      logout,
     });
+    if (!response) return;
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status} getTrainings`);
     }
@@ -734,18 +710,18 @@ export default function MarcarIngresoSalidaScreen() {
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
-    const token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-      throw new Error('No authentication token found');
-    }
-    const response = await fetch(`${apiUrl}/api/voice-notes?m=${marcaId}`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/voice-notes?m=${marcaId}`,
+      init: {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       },
+      refreshAccessToken,
+      logout,
     });
+    if (!response) return;
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status} getVoiceNotes`);
     }
@@ -761,18 +737,18 @@ export default function MarcarIngresoSalidaScreen() {
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
-    const token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-      throw new Error('No authentication token found');
-    }
-    const response = await fetch(`${apiUrl}/api/categories`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/categories`,
+      init: {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       },
+      refreshAccessToken,
+      logout,
     });
+    if (!response) return;
     console.log("getCategories");
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status} getCategories`);
@@ -789,18 +765,18 @@ export default function MarcarIngresoSalidaScreen() {
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
-    const token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-      throw new Error('No authentication token found');
-    }
-    const response = await fetch(`${apiUrl}/api/visitors/categories`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/visitors/categories`,
+      init: {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       },
+      refreshAccessToken,
+      logout,
     });
+    if (!response) return;
     console.log("getTipoActivo");
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status} getTipoActivo`);
@@ -819,19 +795,19 @@ export default function MarcarIngresoSalidaScreen() {
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
-    const token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-      throw new Error('No authentication token found');
-    }
 
-    const response = await fetch(`${apiUrl}/api/puestos/${marcaId}/notas`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/puestos/${marcaId}/notas`,
+      init: {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       },
+      refreshAccessToken,
+      logout,
     });
+    if (!response) return;
     console.log("getNotes");
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status} getNotes`);
@@ -850,18 +826,18 @@ export default function MarcarIngresoSalidaScreen() {
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
-    const token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-      throw new Error('No authentication token found');
-    }
-    const response = await fetch(`${apiUrl}/api/evaluation/corpo/${corpoId}`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/evaluation/corpo/${corpoId}`,
+      init: {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       },
+      refreshAccessToken,
+      logout,
     });
+    if (!response) return;
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status} getEvaluations`);
     }
@@ -879,18 +855,18 @@ export default function MarcarIngresoSalidaScreen() {
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
-    const token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-      throw new Error('No authentication token found');
-    }
-    const response = await fetch(`${apiUrl}/api/empleados/corpo/${corpoId}`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/empleados/corpo/${corpoId}`,
+      init: {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       },
+      refreshAccessToken,
+      logout,
     });
+    if (!response) return;
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status} getEmployeesCorpo`);
     }
@@ -908,18 +884,18 @@ export default function MarcarIngresoSalidaScreen() {
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
-    const token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-      throw new Error('No authentication token found');
-    }
-    const response = await fetch(`${apiUrl}/api/incidents?m=${marcaId}`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/incidents?m=${marcaId}`,
+      init: {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       },
+      refreshAccessToken,
+      logout,
     });
+    if (!response) return;
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status} getIncidents`);
     }
@@ -936,18 +912,18 @@ export default function MarcarIngresoSalidaScreen() {
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
-    const token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-      throw new Error('No authentication token found');
-    }
-    const response = await fetch(`${apiUrl}/api/incidents/classification`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/incidents/classification`,
+      init: {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       },
+      refreshAccessToken,
+      logout,
     });
+    if (!response) return;
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status} getIncidentsClassifications`);
     }
@@ -964,18 +940,18 @@ export default function MarcarIngresoSalidaScreen() {
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
-    const token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-      throw new Error('No authentication token found');
-    }
-    const response = await fetch(`${apiUrl}/api/document-types`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/document-types`,
+      init: {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       },
+      refreshAccessToken,
+      logout,
     });
+    if (!response) return;
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status} getDocumentTypes`);
     }
@@ -993,18 +969,18 @@ export default function MarcarIngresoSalidaScreen() {
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
-    const token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-      throw new Error('No authentication token found');
-    }
-    const response = await fetch(`${apiUrl}/api/executives`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/executives`,
+      init: {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       },
+      refreshAccessToken,
+      logout,
     });
+    if (!response) return;
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status} getExecutives`);
     }
@@ -1022,18 +998,18 @@ export default function MarcarIngresoSalidaScreen() {
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
-    const token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-      throw new Error('No authentication token found');
-    }
-    const response = await fetch(`${apiUrl}/api/encuesta-nps?m=${marcaId}`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/encuesta-nps?m=${marcaId}`,
+      init: {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       },
+      refreshAccessToken,
+      logout,
     });
+    if (!response) return;
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status} getSurveys`);
     }
@@ -1051,18 +1027,18 @@ export default function MarcarIngresoSalidaScreen() {
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
-    const token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-      throw new Error('No authentication token found');
-    }
-    const response = await fetch(`${apiUrl}/api/puestos/corpo/${corpoId}`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/puestos/corpo/${corpoId}`,
+      init: {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       },
+      refreshAccessToken,
+      logout,
     });
+    if (!response) return;
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status} getPuestosCorpo`);
     }
@@ -1080,18 +1056,18 @@ export default function MarcarIngresoSalidaScreen() {
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
-    const token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-      throw new Error('No authentication token found');
-    }
-    const response = await fetch(`${apiUrl}/api/articulos`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/articulos`,
+      init: {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       },
+      refreshAccessToken,
+      logout,
     });
+    if (!response) return;
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status} getArticulos`);
     }
@@ -1225,19 +1201,19 @@ export default function MarcarIngresoSalidaScreen() {
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
-    const token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-      throw new Error('No authentication token found');
-    }
 
-    const response = await fetch(`${apiUrl}/api/lunch-time/${marcaId}`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/lunch-time/${marcaId}`,
+      init: {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       },
+      refreshAccessToken,
+      logout,
     });
+    if (!response) return;
     console.log("getLunchTimeConfig");
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status} getLunchTimeConfig`);
@@ -1320,18 +1296,18 @@ export default function MarcarIngresoSalidaScreen() {
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
-    const token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-      throw new Error('No authentication token found');
-    }
-    const response = await fetch(`${apiUrl}/api/activities/marca/${marcaId}`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/activities/marca/${marcaId}`,
+      init: {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       },
+      refreshAccessToken,
+      logout,
     });
+    if (!response) return;
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status} getActivities`);
     }
@@ -1349,19 +1325,19 @@ export default function MarcarIngresoSalidaScreen() {
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
-    const token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-      throw new Error('No authentication token found');
-    }
 
-    const response = await fetch(`${apiUrl}/api/corporate-vehicles/corpo/${corpoId}`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/corporate-vehicles/corpo/${corpoId}`,
+      init: {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       },
+      refreshAccessToken,
+      logout,
     });
+    if (!response) return;
     console.log("getCorporateVehicles");
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status} getCorporateVehicles`);
@@ -1380,19 +1356,19 @@ export default function MarcarIngresoSalidaScreen() {
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
-    const token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-      throw new Error('No authentication token found');
-    }
 
-    const response = await fetch(`${apiUrl}/api/visitors?m=${marcaId}`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/visitors?m=${marcaId}`,
+      init: {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       },
+      refreshAccessToken,
+      logout,
     });
+    if (!response) return;
     console.log("getVisitors");
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status} getVisitors`);
@@ -1422,38 +1398,18 @@ export default function MarcarIngresoSalidaScreen() {
         throw new Error('Server URL not configured');
       }
 
-      let token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          throw new Error('No authentication token found');
-        }
-        token = await AsyncStorage.getItem('access_token');
-      }
-
-      const response = await fetch(`${apiUrl}/api/attendance/user/${employee.id}/next`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': '69420',
+      const response = await authedFetch({
+        url: `${apiUrl}/api/attendance/user/${employee.id}/next`,
+        init: {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
         },
+        refreshAccessToken,
+        logout,
       });
-
-      if (response.status === 401) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) {
-          return fetchFutureMarks();
-        } else {
-          await logout();
-          return;
-        }
-      }
-
-      if (response.status === 403) {
-        if (logout) await logout();
-        throw new Error('Acceso denegado');
-      }
+      if (!response) return;
 
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
@@ -1496,7 +1452,8 @@ export default function MarcarIngresoSalidaScreen() {
             return;
           }
 
-          const dayKey = fecha.toISOString().split('T')[0];
+          const dayKeyRaw = fecha.toISOString().split('T')[0];
+          const dayKey = formatDateDMY(dayKeyRaw);
           if (!groupedByDay[dayKey]) {
             groupedByDay[dayKey] = [];
           }
@@ -1725,41 +1682,21 @@ export default function MarcarIngresoSalidaScreen() {
         throw new Error('Server URL not configured');
       }
 
-      let token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          throw new Error('No authentication token found');
-        }
-        token = await AsyncStorage.getItem('access_token');
-      }
-
-      const response = await fetch(`${apiUrl}/api/attendance/${employee.id}/dev-create-marca`, {
-        method: 'POST',
-        body: JSON.stringify({
-          dev: employee.id,
-        }),
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': '69420',
+      const response = await authedFetch({
+        url: `${apiUrl}/api/attendance/${employee.id}/dev-create-marca`,
+        init: {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            dev: employee.id,
+          }),
         },
+        refreshAccessToken,
+        logout,
       });
-
-      if (response.status === 401) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) {
-          return executeCreateTestMarca();
-        } else {
-          await logout();
-          return;
-        }
-      }
-
-      if (response.status === 403) {
-        if (logout) await logout();
-        throw new Error('Acceso denegado');
-      }
+      if (!response) return;
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
@@ -1947,7 +1884,7 @@ export default function MarcarIngresoSalidaScreen() {
 
                 <ThemedView style={styles.infoRow}>
                   <ThemedText style={styles.infoLabel}>Fecha de la marca:</ThemedText>
-                  <ThemedText style={styles.infoValue}>{attendanceData.marca.fecha.split('T')[0]}</ThemedText>
+                  <ThemedText style={styles.infoValue}>{formatDateDMY(attendanceData.marca.fecha)}</ThemedText>
                 </ThemedView>
 
                 <ThemedView style={styles.infoRow}>

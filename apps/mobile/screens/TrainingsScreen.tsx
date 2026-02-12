@@ -23,6 +23,7 @@ import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import { Picker } from '@react-native-picker/picker';
+import { formatDateDMY } from '@/utils/formatDate';
 import * as Location from 'expo-location';
 import { jwtDecode } from 'jwt-decode';
 import { useQRScanner } from '@/hooks/useQRScanner';
@@ -32,6 +33,8 @@ import getHoraAccion from '@/hooks/getHoraAccion';
 import { eventBus } from '@/hooks/eventBus';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Image } from 'react-native';
+import authedFetch from '@/hooks/authedFetch';
+import getValidAccessTokenOrLogout from '@/hooks/getValidAccessTokenOrLogout';
 
 type TrainingsScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Trainings'>;
 
@@ -121,6 +124,9 @@ export default function TrainingsScreen() {
   // Data states
   const [trainings, setTrainings] = useState<Training[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  // Importante: "sin internet" NO cuenta como error (solo es un estado informativo)
+  const [offlineMessage, setOfflineMessage] = useState<string | null>(null);
   const [hasMarca, setHasMarca] = useState<boolean>(false);
   const [marcaId, setMarcaId] = useState<number | null>(null);
   const [corpoId, setCorpoId] = useState<number | null>(null);
@@ -202,9 +208,22 @@ export default function TrainingsScreen() {
     //return false;
   };
 
+  const isProbablyNetworkError = (err: any) => {
+    const msg = String(err?.message ?? err ?? '').toLowerCase();
+    return (
+      msg.includes('network request failed') ||
+      msg.includes('failed to fetch') ||
+      msg.includes('networkerror') ||
+      msg.includes('timeout') ||
+      msg.includes('timed out')
+    );
+  };
+
   const fetchData = async () => {
     try {
       setIsLoading(true);
+      setError(null);
+      setOfflineMessage(null);
 
       // Check current_marca
       const currentMarca = await AsyncStorage.getItem('current_marca');
@@ -231,40 +250,18 @@ export default function TrainingsScreen() {
         if (!apiUrl) {
           throw new Error('Server URL not configured');
         }
-
-        let token = await AsyncStorage.getItem('access_token');
-        if (!token) {
-          const refreshed = await refreshAccessToken();
-          if (!refreshed) {
-            if (logout) await logout();
-            throw new Error('Sesión expirada');
-          }
-          token = await AsyncStorage.getItem('access_token');
-        }
-
-        const response = await fetch(`${apiUrl}/api/training?m=${marca_id}`, {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-            'ngrok-skip-browser-warning': '69420',
+        const response = await authedFetch({
+          url: `${apiUrl}/api/training?m=${marca_id}`,
+          init: {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+            },
           },
+          refreshAccessToken,
+          logout,
         });
-
-        if (response.status === 401) {
-          const refreshed = await refreshAccessToken();
-          if (refreshed) {
-            return fetchData();
-          } else {
-            await logout();
-            return;
-          }
-        }
-
-        if (response.status === 403) {
-          if (logout) await logout();
-          throw new Error('Acceso denegado');
-        }
+        if (!response) return;
 
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`);
@@ -286,14 +283,18 @@ export default function TrainingsScreen() {
                     // Obtener detalles del empleado
                     let empleadoDetalle = undefined;
                     try {
-                      const empleadoResponse = await fetch(`${apiUrl}/api/empleados/${empleadoId}`, {
-                        method: 'GET',
-                        headers: {
-                          'Authorization': `Bearer ${token}`,
-                          'Content-Type': 'application/json',
-                          'ngrok-skip-browser-warning': '69420',
+                      const empleadoResponse = await authedFetch({
+                        url: `${apiUrl}/api/empleados/${empleadoId}`,
+                        init: {
+                          method: 'GET',
+                          headers: {
+                            'Content-Type': 'application/json',
+                          },
                         },
+                        refreshAccessToken,
+                        logout,
                       });
+                      if (!empleadoResponse) return training;
 
                       if (empleadoResponse.ok) {
                         const empleadoData = await empleadoResponse.json();
@@ -337,6 +338,8 @@ export default function TrainingsScreen() {
           await AsyncStorage.setItem('trainings_cache', JSON.stringify(trainingsWithDecodedFirmas));
         } else {
           setTrainings([]);
+          // Error real del servidor / lógica (sí cuenta como error)
+          if (data?.message) setError(String(data.message));
         }
 
         // Fetch puestos and empleados
@@ -351,8 +354,10 @@ export default function TrainingsScreen() {
         if (trainingsCache) {
           const cachedTrainings = JSON.parse(trainingsCache);
           setTrainings(cachedTrainings);
+          setOfflineMessage('Modo Offline: mostrando capacitaciones guardadas.');
         } else {
           setTrainings([]);
+          setOfflineMessage('Sin conexión: no hay capacitaciones guardadas para mostrar.');
         }
 
         // Cargar puestos y empleados desde cache
@@ -379,8 +384,14 @@ export default function TrainingsScreen() {
       if (trainingsCache) {
         const cachedTrainings = JSON.parse(trainingsCache);
         setTrainings(cachedTrainings);
+        setOfflineMessage('Modo Offline: mostrando capacitaciones guardadas debido a un error de conexión.');
       } else {
         setTrainings([]);
+        if (isProbablyNetworkError(error)) {
+          setOfflineMessage('Sin conexión: no hay capacitaciones guardadas para mostrar.');
+        } else {
+          setError('Error al cargar las capacitaciones');
+        }
       }
 
       const puestosCache = await AsyncStorage.getItem('puestos_corpo_cache');
@@ -410,40 +421,18 @@ export default function TrainingsScreen() {
       if (!apiUrl) {
         throw new Error('Server URL not configured');
       }
-
-      let token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (logout) await logout();
-          throw new Error('Sesión expirada');
-        }
-        token = await AsyncStorage.getItem('access_token');
-      }
-
-      const response = await fetch(`${apiUrl}/api/puestos/corpo/${corpo_id}`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': '69420',
+      const response = await authedFetch({
+        url: `${apiUrl}/api/puestos/corpo/${corpo_id}`,
+        init: {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
         },
+        refreshAccessToken,
+        logout,
       });
-
-      if (response.status === 401) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) {
-          return fetchPuestos(corpo_id);
-        } else {
-          await logout();
-          return;
-        }
-      }
-
-      if (response.status === 403) {
-        if (logout) await logout();
-        throw new Error('Acceso denegado');
-      }
+      if (!response) return;
 
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
@@ -470,40 +459,18 @@ export default function TrainingsScreen() {
       if (!apiUrl) {
         throw new Error('Server URL not configured');
       }
-
-      let token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (logout) await logout();
-          throw new Error('Sesión expirada');
-        }
-        token = await AsyncStorage.getItem('access_token');
-      }
-
-      const response = await fetch(`${apiUrl}/api/empleados/corpo/${corpo_id}`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': '69420',
+      const response = await authedFetch({
+        url: `${apiUrl}/api/empleados/corpo/${corpo_id}`,
+        init: {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
         },
+        refreshAccessToken,
+        logout,
       });
-
-      if (response.status === 401) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) {
-          return fetchEmpleados(corpo_id);
-        } else {
-          await logout();
-          return;
-        }
-      }
-
-      if (response.status === 403) {
-        if (logout) await logout();
-        throw new Error('Acceso denegado');
-      }
+      if (!response) return;
 
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
@@ -534,7 +501,7 @@ export default function TrainingsScreen() {
   const formatDateForDisplay = (dateString: string): string => {
     if (!dateString) return 'Seleccionar fecha';
     const [year, month, day] = dateString.split('-');
-    return `${day}/${month}/${year}`;
+    return `${day}-${month}-${year}`;
   };
 
   const startCreating = () => {
@@ -681,21 +648,8 @@ export default function TrainingsScreen() {
       if (!apiUrl) {
         throw new Error('Server URL not configured');
       }
-
-      let token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (logout) await logout();
-          throw new Error('Sesión expirada');
-        }
-        token = await AsyncStorage.getItem('access_token');
-      }
-
-      if (!token) {
-        Alert.alert('Error', 'No se pudo obtener el token de sesión');
-        return;
-      }
+      const token = await getValidAccessTokenOrLogout({ refreshAccessToken, logout });
+      if (!token) return;
 
       const decodedToken = jwtDecode(token);
       const sessionId = JSON.parse(JSON.stringify(decodedToken)).sessionId;
@@ -716,14 +670,18 @@ export default function TrainingsScreen() {
       const connectionStatus = await checkConnection();
       let empleadoDetalle = undefined;
       if (connectionStatus) {
-        const empleadoResponse = await fetch(`${apiUrl}/api/empleados/${decodedEmpleadoId}`, {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-            'ngrok-skip-browser-warning': '69420',
+        const empleadoResponse = await authedFetch({
+          url: `${apiUrl}/api/empleados/${decodedEmpleadoId}`,
+          init: {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+            },
           },
+          refreshAccessToken,
+          logout,
         });
+        if (!empleadoResponse) return;
 
         if (empleadoResponse.ok) {
           const empleadoData = await empleadoResponse.json();
@@ -780,25 +738,18 @@ export default function TrainingsScreen() {
           if (!apiUrl) {
             throw new Error('Server URL not configured');
           }
-
-          let token = await AsyncStorage.getItem('access_token');
-          if (!token) {
-            const refreshed = await refreshAccessToken();
-            if (!refreshed) {
-              if (logout) await logout();
-              throw new Error('Sesión expirada');
-            }
-            token = await AsyncStorage.getItem('access_token');
-          }
-
-          const empleadoResponse = await fetch(`${apiUrl}/api/empleados/${empleadoId}`, {
-            method: 'GET',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json',
-              'ngrok-skip-browser-warning': '69420',
+          const empleadoResponse = await authedFetch({
+            url: `${apiUrl}/api/empleados/${empleadoId}`,
+            init: {
+              method: 'GET',
+              headers: {
+                'Content-Type': 'application/json',
+              },
             },
+            refreshAccessToken,
+            logout,
           });
+          if (!empleadoResponse) return;
 
           if (empleadoResponse.ok) {
             const empleadoData = await empleadoResponse.json();
@@ -1162,6 +1113,18 @@ export default function TrainingsScreen() {
   return (
     <ThemedView style={styles.container}>
       <AppHeader onMenuPress={handleMenuPress} title="Registro de Capacitaciones" />
+      {!!error && (
+        <ThemedView style={styles.errorBanner}>
+          <Ionicons name="alert-circle-outline" size={18} color="#B00020" />
+          <ThemedText style={styles.errorBannerText}>{error}</ThemedText>
+        </ThemedView>
+      )}
+      {!!offlineMessage && !error && (
+        <ThemedView style={styles.offlineBanner}>
+          <Ionicons name="cloud-offline-outline" size={18} color="#8A6D00" />
+          <ThemedText style={styles.offlineBannerText}>{offlineMessage}</ThemedText>
+        </ThemedView>
+      )}
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
         {/* Module Title */}
         <ThemedView style={styles.titleContainer}>
@@ -1331,7 +1294,7 @@ export default function TrainingsScreen() {
         )}
 
         {/* Create Button */}
-        {!isCreating && (
+        {!isCreating && !error && (
           <TouchableOpacity
             style={styles.createButton}
             onPress={startCreating}
@@ -1690,7 +1653,7 @@ export default function TrainingsScreen() {
                     </ThemedText>
                     <ThemedText style={styles.trainingDetail}>
                       <ThemedText style={styles.trainingLabel}>Fecha: </ThemedText>
-                      <ThemedText style={styles.trainingValue}>{training.fecha.split('T')[0]}</ThemedText>
+                      <ThemedText style={styles.trainingValue}>{formatDateDMY(training.fecha)}</ThemedText>
                     </ThemedText>
 
                     <ThemedText style={styles.trainingDetail}>
@@ -1902,24 +1865,15 @@ const TrainingImageComponent: React.FC<{ trainingId: number }> = ({ trainingId }
       try {
         const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
         if (!apiUrl) return;
-
-        let token = await AsyncStorage.getItem('access_token');
-        if (!token) {
-          const refreshed = await refreshAccessToken();
-          if (!refreshed) {
-            if (logout) await logout();
-            throw new Error('Sesión expirada');
-          }
-          token = await AsyncStorage.getItem('access_token');
-        }
-
-        const response = await fetch(`${apiUrl}/api/training/${trainingId}/get-image`, {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'ngrok-skip-browser-warning': '69420',
+        const response = await authedFetch({
+          url: `${apiUrl}/api/training/${trainingId}/get-image`,
+          init: {
+            method: 'GET',
           },
+          refreshAccessToken,
+          logout,
         });
+        if (!response) return;
 
         if (response.ok) {
           const blob = await response.blob();
@@ -1977,6 +1931,44 @@ const styles = StyleSheet.create({
   loadingText: {
     marginTop: 16,
     fontSize: 16,
+  },
+  errorBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 16,
+    marginTop: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#F5C2C7',
+    backgroundColor: '#F8D7DA',
+  },
+  errorBannerText: {
+    flex: 1,
+    color: '#B00020',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  offlineBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 16,
+    marginTop: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#FFEBAA',
+    backgroundColor: '#FFF3CD',
+  },
+  offlineBannerText: {
+    flex: 1,
+    color: '#8A6D00',
+    fontSize: 14,
+    fontWeight: '600',
   },
   errorText: {
     fontSize: 16,

@@ -1,5 +1,5 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
+import authedFetch from './authedFetch';
 
 type BasicResponse = { status: boolean; message?: string;[k: string]: any };
 
@@ -57,19 +57,18 @@ const getApiUrl = () => {
   return apiUrl;
 };
 
-async function getToken(refreshAccessToken?: () => Promise<boolean>, logout?: () => Promise<any>) {
-  let token = await AsyncStorage.getItem('access_token');
-  if (!token && refreshAccessToken) {
-    const refreshed = await refreshAccessToken();
-    if (refreshed) token = await AsyncStorage.getItem('access_token');
-    else if (logout) await logout();
+const requireAuthHandlers = (refreshAccessToken?: () => Promise<boolean>, logout?: () => Promise<any>) => {
+  if (!refreshAccessToken || !logout) {
+    throw new Error('Auth handlers not provided');
   }
-  if (!token) {
-    if (logout) await logout();
-    throw new Error('Sesión expirada');
-  }
-  return token;
-}
+  return {
+    refreshAccessToken,
+    logout,
+  } as {
+    refreshAccessToken: () => Promise<boolean>;
+    logout: () => Promise<any>;
+  };
+};
 
 export async function listBitacoraVehiculoDetenido({
   marcaId,
@@ -81,7 +80,7 @@ export async function listBitacoraVehiculoDetenido({
 }: ListParams): Promise<ListBitacoraResponse> {
   try {
     const apiUrl = getApiUrl();
-    const token = await getToken(refreshAccessToken, logout);
+    const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
     const params = new URLSearchParams();
     if (marcaId) params.set('m', String(marcaId));
     // si vienen ids directos, los mandamos también (el server prioriza estos cuando están completos)
@@ -89,28 +88,19 @@ export async function listBitacoraVehiculoDetenido({
     if (typeof clienteId === 'number') params.set('cliente_id', String(clienteId));
     if (typeof sucursalId === 'number') params.set('sucursal_id', String(sucursalId));
 
-    const response = await fetch(`${apiUrl}/api/bitacora-vehiculo-detenido?${params.toString()}`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+      url: `${apiUrl}/api/bitacora-vehiculo-detenido?${params.toString()}`,
+      init: {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       },
+      refreshAccessToken: refresh,
+      logout: doLogout,
     });
 
-    if (response.status === 401) {
-      if (refreshAccessToken) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) return listBitacoraVehiculoDetenido({ marcaId, refreshAccessToken, logout });
-        if (logout) await logout();
-      }
-      return { status: false, message: 'Sesión expirada' };
-    }
-
-    if (response.status === 403) {
-      if (logout) await logout();
-      throw new Error('Acceso denegado');
-    }
+    if (!response) return { status: false, message: 'Sesión expirada' };
 
     const data = await response.json();
     return data;
@@ -123,25 +113,22 @@ export async function listBitacoraVehiculoDetenido({
 export async function createBitacoraVehiculoDetenido({ requestData, refreshAccessToken, logout }: CreateParams): Promise<BasicResponse> {
   try {
     const apiUrl = getApiUrl();
-    const token = await getToken(refreshAccessToken, logout);
-    const response = await fetch(`${apiUrl}/api/bitacora-vehiculo-detenido`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
+
+    const response = await authedFetch({
+      url: `${apiUrl}/api/bitacora-vehiculo-detenido`,
+      init: {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestData),
       },
-      body: JSON.stringify(requestData),
+      refreshAccessToken: refresh,
+      logout: doLogout,
     });
 
-    if (response.status === 401) {
-      if (refreshAccessToken) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) return createBitacoraVehiculoDetenido({ requestData, refreshAccessToken, logout });
-        if (logout) await logout();
-      }
-      return { status: false, message: 'Sesión expirada' };
-    }
+    if (!response) return { status: false, message: 'Sesión expirada' };
 
     const data: any = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.message || `HTTP error! status: ${response.status}`);
@@ -155,30 +142,22 @@ export async function createBitacoraVehiculoDetenido({ requestData, refreshAcces
 export async function updateBitacoraVehiculoDetenido({ id, requestData, refreshAccessToken, logout }: UpdateParams): Promise<BasicResponse> {
   try {
     const apiUrl = getApiUrl();
-    const token = await getToken(refreshAccessToken, logout);
-    const response = await fetch(`${apiUrl}/api/bitacora-vehiculo-detenido/${id}`, {
-      method: 'PUT',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
+
+    const response = await authedFetch({
+      url: `${apiUrl}/api/bitacora-vehiculo-detenido/${id}`,
+      init: {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestData),
       },
-      body: JSON.stringify(requestData),
+      refreshAccessToken: refresh,
+      logout: doLogout,
     });
 
-    if (response.status === 401) {
-      if (refreshAccessToken) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) return updateBitacoraVehiculoDetenido({ id, requestData, refreshAccessToken, logout });
-        if (logout) await logout();
-      }
-      return { status: false, message: 'Sesión expirada' };
-    }
-
-    if (response.status === 403) {
-      if (logout) await logout();
-      throw new Error('Acceso denegado');
-    }
+    if (!response) return { status: false, message: 'Sesión expirada' };
 
     const data: any = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.message || `HTTP error! status: ${response.status}`);
@@ -192,29 +171,21 @@ export async function updateBitacoraVehiculoDetenido({ id, requestData, refreshA
 export async function deleteBitacoraVehiculoDetenido({ id, refreshAccessToken, logout }: DeleteParams): Promise<BasicResponse> {
   try {
     const apiUrl = getApiUrl();
-    const token = await getToken(refreshAccessToken, logout);
-    const response = await fetch(`${apiUrl}/api/bitacora-vehiculo-detenido/${id}`, {
-      method: 'DELETE',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420',
+    const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
+
+    const response = await authedFetch({
+      url: `${apiUrl}/api/bitacora-vehiculo-detenido/${id}`,
+      init: {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       },
+      refreshAccessToken: refresh,
+      logout: doLogout,
     });
 
-    if (response.status === 401) {
-      if (refreshAccessToken) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) return deleteBitacoraVehiculoDetenido({ id, refreshAccessToken, logout });
-        if (logout) await logout();
-      }
-      return { status: false, message: 'Sesión expirada' };
-    }
-
-    if (response.status === 403) {
-      if (logout) await logout();
-      throw new Error('Acceso denegado');
-    }
+    if (!response) return { status: false, message: 'Sesión expirada' };
 
     const data: any = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.message || `HTTP error! status: ${response.status}`);

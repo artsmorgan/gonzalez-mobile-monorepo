@@ -173,6 +173,9 @@ export async function POST(req: NextRequest) {
     }
 
     // Autocompletar campos desde la marca
+    const createdAt = toZonedTime(new Date(), "America/Costa_Rica");
+    const createdBy = payload.id !== undefined && payload.id !== null ? Number(payload.id) : 0;
+
     const new_record = await prisma.c_control_asistencia.create({
       data: {
         empresa_id: empresaId,
@@ -188,9 +191,38 @@ export async function POST(req: NextRequest) {
         fijos: fijosInt,
         colaboradores: String(colaboradores),
         firma_responsable: String(firma_responsable),
-        created_at: toZonedTime(new Date(), "America/Costa_Rica"),
-        created_by: payload.id
+        created_at: createdAt,
+        created_by: createdBy
       }
+    });
+
+    // Registrar cambio de creación
+    await prisma.c_cambios_apps_modules.create({
+      data: {
+        nombre_tabla: "c_control_asistencia",
+        registro_id: new_record.id,
+        cambios: JSON.stringify([{
+          prop: "__created__",
+          before: null,
+          after: {
+            id: new_record.id,
+            empresa_id: new_record.empresa_id,
+            cliente_id: new_record.cliente_id,
+            division_id: new_record.division_id,
+            contrato_id: new_record.contrato_id,
+            corpo_id: new_record.corpo_id,
+            nombre_cliente: (new_record as any).nombre_cliente,
+            fecha: (new_record as any).fecha ? (new_record as any).fecha.toISOString() : null,
+            turno: (new_record as any).turno,
+            area_piso: (new_record as any).area_piso,
+            total_presentes: (new_record as any).total_presentes,
+            fijos: (new_record as any).fijos,
+            colaboradores: (new_record as any).colaboradores,
+          },
+        }]),
+        created_at: createdAt,
+        created_by: createdBy,
+      },
     });
 
     if (new_record) {

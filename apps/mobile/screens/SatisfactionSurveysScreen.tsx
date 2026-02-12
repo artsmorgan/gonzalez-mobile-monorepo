@@ -32,6 +32,8 @@ import getHoraAccion from '@/hooks/getHoraAccion';
 import * as Network from 'expo-network';
 import { createSurvey as createSurveyAPI } from '@/hooks/surveysFunctions';
 import { eventBus } from '@/hooks/eventBus';
+import authedFetch from '@/hooks/authedFetch';
+import getValidAccessTokenOrLogout from '@/hooks/getValidAccessTokenOrLogout';
 
 type SatisfactionSurveysScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'SatisfactionSurveys'>;
 
@@ -396,37 +398,18 @@ export default function SatisfactionSurveysScreen() {
 
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) throw new Error('Server URL not configured');
-
-      let token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (logout) await logout();
-          throw new Error('Sesión expirada');
-        }
-        token = await AsyncStorage.getItem('access_token');
-      }
-
-      const response = await fetch(`${apiUrl}/api/main-structure`, {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': '69420',
+      const response = await authedFetch({
+        url: `${apiUrl}/api/main-structure`,
+        init: {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
         },
+        refreshAccessToken,
+        logout,
       });
-
-      if (response.status === 401) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) return fetchMainStructure();
-        await logout();
-        return;
-      }
-
-      if (response.status === 403) {
-        if (logout) await logout();
-        throw new Error('Acceso denegado');
-      }
+      if (!response) return;
 
       if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
       const data = await response.json();
@@ -515,16 +498,6 @@ export default function SatisfactionSurveysScreen() {
           throw new Error('Server URL not configured');
         }
 
-        let token = await AsyncStorage.getItem('access_token');
-        if (!token) {
-          const refreshed = await refreshAccessToken();
-          if (!refreshed) {
-            if (logout) await logout();
-            throw new Error('Sesión expirada');
-          }
-          token = await AsyncStorage.getItem('access_token');
-        }
-
         // Construir parámetros de filtro (jerarquía completa)
         const params = new URLSearchParams();
         if (filterEmpresaId) params.append('empresa_id', String(filterEmpresaId));
@@ -535,29 +508,15 @@ export default function SatisfactionSurveysScreen() {
         if (filterPuestoId) params.append('puesto_id', String(filterPuestoId));
 
         // Fetch surveys
-        const surveysResponse = await fetch(`${apiUrl}/api/encuesta-nps?${params.toString()}`, {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'ngrok-skip-browser-warning': '69420',
+        const surveysResponse = await authedFetch({
+          url: `${apiUrl}/api/encuesta-nps?${params.toString()}`,
+          init: {
+            method: 'GET',
           },
+          refreshAccessToken,
+          logout,
         });
-
-        if (surveysResponse.status === 401) {
-          const refreshed = await refreshAccessToken();
-          if (refreshed) {
-            return fetchSurveys();
-          } else {
-            Alert.alert('14', 'Sesión expirada. Por favor inicie sesión nuevamente.');
-            await logout();
-            return;
-          }
-        }
-
-        if (surveysResponse.status === 403) {
-          if (logout) await logout();
-          throw new Error('Acceso denegado');
-        }
+        if (!surveysResponse) return;
 
         const surveysData = await surveysResponse.json();
 
@@ -576,25 +535,15 @@ export default function SatisfactionSurveysScreen() {
 
         // Fetch puestos if filterCorpoId exists
         if (filterCorpoId) {
-          const puestosResponse = await fetch(`${apiUrl}/api/puestos/corpo/${filterCorpoId}`, {
-            method: 'GET',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'ngrok-skip-browser-warning': '69420',
+          const puestosResponse = await authedFetch({
+            url: `${apiUrl}/api/puestos/corpo/${filterCorpoId}`,
+            init: {
+              method: 'GET',
             },
+            refreshAccessToken,
+            logout,
           });
-
-          if (puestosResponse.status === 401) {
-            const refreshed = await refreshAccessToken();
-            if (refreshed) return fetchSurveys();
-            await logout();
-            return;
-          }
-
-          if (puestosResponse.status === 403) {
-            if (logout) await logout();
-            throw new Error('Acceso denegado');
-          }
+          if (!puestosResponse) return;
 
           if (puestosResponse.ok) {
             const puestosData = await puestosResponse.json();
@@ -708,27 +657,15 @@ export default function SatisfactionSurveysScreen() {
 
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) return;
-
-      let token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) return;
-        token = await AsyncStorage.getItem('access_token');
-      }
-
-      const puestosResponse = await fetch(`${apiUrl}/api/puestos/corpo/${corpoId}`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'ngrok-skip-browser-warning': '69420',
+      const puestosResponse = await authedFetch({
+        url: `${apiUrl}/api/puestos/corpo/${corpoId}`,
+        init: {
+          method: 'GET',
         },
+        refreshAccessToken,
+        logout,
       });
-
-      if (puestosResponse.status === 401) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) return fetchPuestosForCorpo(corpoId);
-        return;
-      }
+      if (!puestosResponse) return;
 
       if (puestosResponse.ok) {
         const puestosData = await puestosResponse.json();
@@ -764,37 +701,18 @@ export default function SatisfactionSurveysScreen() {
     try {
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) return null;
-
-      let token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (logout) await logout();
-          throw new Error('Sesión expirada');
-        }
-        token = await AsyncStorage.getItem('access_token');
-      }
-
-      const response = await fetch(`${apiUrl}/api/empleados/${empleadoId}`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': '69420',
+      const response = await authedFetch({
+        url: `${apiUrl}/api/empleados/${empleadoId}`,
+        init: {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
         },
+        refreshAccessToken,
+        logout,
       });
-
-      if (response.status === 401) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) return fetchEmpleadoDetalle(empleadoId);
-        await logout();
-        return null;
-      }
-
-      if (response.status === 403) {
-        if (logout) await logout();
-        throw new Error('Acceso denegado');
-      }
+      if (!response) return null;
 
       if (!response.ok) return null;
 
@@ -864,10 +782,8 @@ export default function SatisfactionSurveysScreen() {
       });
 
       // Get session ID from token
-      const token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        throw new Error('No authentication token found');
-      }
+      const token = await getValidAccessTokenOrLogout({ refreshAccessToken, logout });
+      if (!token) return;
 
       const decodedToken = jwtDecode(token);
       const sessionId = JSON.parse(JSON.stringify(decodedToken)).sessionId;
@@ -902,7 +818,7 @@ export default function SatisfactionSurveysScreen() {
     const day = date.getDate().toString().padStart(2, '0');
     const month = (date.getMonth() + 1).toString().padStart(2, '0');
     const year = date.getFullYear();
-    return `${day}/${month}/${year}`;
+    return `${day}-${month}-${year}`;
   };
 
   const dateToLocalString = (date: Date): string => {

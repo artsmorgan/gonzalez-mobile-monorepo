@@ -10,6 +10,7 @@ import {
   TextInput,
   TouchableOpacity,
   View,
+  Dimensions,
 } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -34,6 +35,7 @@ import { RootStackParamList } from '../App';
 import { eventBus } from '@/hooks/eventBus';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import { useQRScanner } from '@/hooks/useQRScanner';
+import authedFetch from '@/hooks/authedFetch';
 import {
   createActaEntregaProducto,
   deleteActaEntregaProducto,
@@ -106,6 +108,26 @@ const formatSignatureForDisplay = (value?: string | null) => {
   return value.startsWith('data:') ? value : `data:image/png;base64,${value}`;
 };
 
+const formatDateDMY = (date: Date) => {
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const year = String(date.getFullYear());
+  return `${day}-${month}-${year}`;
+};
+
+const formatDateStringDMY = (value?: any) => {
+  if (!value) return 'N/A';
+  try {
+    const iso = String(value);
+    const ymd = iso.includes('T') ? iso.split('T')[0] : iso;
+    const [y, m, d] = ymd.split('-');
+    if (!y || !m || !d) return ymd;
+    return `${d.padStart(2, '0')}-${m.padStart(2, '0')}-${y}`;
+  } catch {
+    return String(value);
+  }
+};
+
 const signatureWebStyle = `
   .m-signature-pad {box-shadow: none; border: none;}
   .m-signature-pad--body {border: 1px solid #e0e0e0;}
@@ -126,6 +148,12 @@ export default function ActaEntregaProductosScreen() {
   const [records, setRecords] = useState<ActaEntregaProducto[]>([]);
   const [isCreating, setIsCreating] = useState(false);
   const [editingRecord, setEditingRecord] = useState<ActaEntregaProducto | null>(null);
+
+  // Modal: ver cambios (auditoría)
+  const [isCambiosModalVisible, setIsCambiosModalVisible] = useState(false);
+  const [cambiosTitle, setCambiosTitle] = useState<string>('Cambios');
+  const [cambiosItems, setCambiosItems] = useState<any[]>([]);
+  const [expandedCambioId, setExpandedCambioId] = useState<number | null>(null);
 
   // Filtros jerárquicos
   const [filterEmpresaId, setFilterEmpresaId] = useState<number | null>(null);
@@ -199,6 +227,119 @@ export default function ActaEntregaProductosScreen() {
     const networkState = await Network.getNetworkStateAsync();
     return networkState.isConnected && networkState.isInternetReachable ? true : false;
   };
+
+  const closeCambiosModal = () => {
+    setIsCambiosModalVisible(false);
+    setCambiosItems([]);
+    setExpandedCambioId(null);
+  };
+
+  const formatCambioCreatedAt = (value: any) => {
+    if (!value) return '-';
+    try {
+      const date = new Date(value);
+      return date.toLocaleString('es-CR', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true,
+      });
+    } catch {
+      return String(value);
+    }
+  };
+
+  const formatDetalleForDisplay = (detalleJson: string): string => {
+    try {
+      const detalle: DetalleItem[] = JSON.parse(detalleJson || '[]');
+      if (!Array.isArray(detalle) || detalle.length === 0) return 'No hay productos en el detalle.';
+      return detalle.map((d, idx) => {
+        const descripcion = d.descripcion || 'N/A';
+        const unidadMedida = d.unidad_medida || 'N/A';
+        const cantidad = d.cantidad || 'N/A';
+        const devolucion = d.devolucion || 'N/A';
+        const faltantes = d.faltantes || 'N/A';
+        return `${idx + 1}. ${descripcion}\n   Unidad: ${unidadMedida}, Cantidad: ${cantidad}\n   Devolución: ${devolucion}, Faltantes: ${faltantes}`;
+      }).join('\n\n');
+    } catch (e) {
+      console.error('Error formatting detalle for display:', e);
+      return 'Error al formatear detalle.';
+    }
+  };
+
+  const formatChangeValue = (prop: string, value: any): string => {
+    if (value === null || value === undefined) return 'N/A';
+    if (typeof value === 'boolean') return value ? 'Sí' : 'No';
+    if (typeof value === 'object') {
+      if (prop === 'detalle') {
+        return formatDetalleForDisplay(JSON.stringify(value));
+      }
+      return JSON.stringify(value, null, 2);
+    }
+    if (typeof value === 'string') {
+      if (value.trim().startsWith('{') || value.trim().startsWith('[')) {
+        try {
+          const parsed = JSON.parse(value);
+          if (prop === 'detalle') {
+            return formatDetalleForDisplay(value);
+          }
+          if (Array.isArray(parsed)) {
+            return parsed.map((item, idx) => {
+              if (typeof item === 'object' && item !== null) {
+                return `Item ${idx + 1}: ${JSON.stringify(item, null, 2)}`;
+              }
+              return String(item);
+            }).join('\n');
+          }
+          if (typeof parsed === 'object') {
+            return JSON.stringify(parsed, null, 2);
+          }
+        } catch {
+          // Not valid JSON, return as string
+        }
+      }
+      return value;
+    }
+    return String(value);
+  };
+
+  const fetchCambios = useCallback(async (tabla: string, registroId: number) => {
+    const isConnected = await getConnectionStatus();
+    if (!isConnected) {
+      Alert.alert('Sin conexión', 'Esta función solo está disponible con conexión a internet.');
+      return;
+    }
+    try {
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) throw new Error('Server URL not configured');
+
+      const resp = await authedFetch({
+        url: `${apiUrl}/api/cambios-apps-modules?tabla=${encodeURIComponent(tabla)}&registro_id=${registroId}`,
+        init: {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        },
+        refreshAccessToken,
+        logout,
+      });
+
+      if (!resp) return;
+
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data.status) {
+        throw new Error(data.message || 'No se pudieron cargar los cambios');
+      }
+      setCambiosItems(Array.isArray(data.data) ? data.data : []);
+      setIsCambiosModalVisible(true);
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'No se pudieron cargar los cambios');
+    }
+  }, [refreshAccessToken, logout]);
 
   // Auth redirect
   useEffect(() => {
@@ -349,20 +490,15 @@ export default function ActaEntregaProductosScreen() {
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) return null;
 
-      let token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) return null;
-        token = await AsyncStorage.getItem('access_token');
-      }
-      if (!token) return null;
-
-      const resp = await fetch(`${apiUrl}/api/acta-entrega-productos/${actaId}/get-image/${encodeURIComponent(imageName)}?t=${Date.now()}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'ngrok-skip-browser-warning': '69420',
+      const resp = await authedFetch({
+        url: `${apiUrl}/api/acta-entrega-productos/${actaId}/get-image/${encodeURIComponent(imageName)}?t=${Date.now()}`,
+        init: {
+          method: 'GET',
         },
+        refreshAccessToken,
+        logout,
       });
+      if (!resp) return null;
       if (!resp.ok) return null;
 
       const blob = await resp.blob();
@@ -377,7 +513,7 @@ export default function ActaEntregaProductosScreen() {
       console.error('Error loading acta image from server:', e);
       return null;
     }
-  }, [refreshAccessToken]);
+  }, [refreshAccessToken, logout]);
 
   const preloadServerImagesForEdit = useCallback(async (record: ActaEntregaProducto) => {
     try {
@@ -1241,7 +1377,7 @@ export default function ActaEntregaProductosScreen() {
                 <ThemedText style={styles.listItemTitle}>{r.tipo_entrega || 'N/A'}</ThemedText>
                 <ThemedText style={styles.listItemSubtitle}>Mensual: {r.mensual || ''}</ThemedText>
                 <ThemedText style={styles.listItemSubtitle}>
-                  Fecha: {r.fecha ? String(r.fecha).split('T')[0] : (r.fecha_entrega ? String(r.fecha_entrega).split('T')[0] : 'N/A')}
+                  Fecha: {formatDateStringDMY(r.fecha || r.fecha_entrega)}
                 </ThemedText>
                 <ThemedText style={styles.listItemSubtitle}>Cantidad de productos: {r.detalle ? JSON.parse(r.detalle).length : 0}</ThemedText>
               </ThemedView>
@@ -1255,6 +1391,18 @@ export default function ActaEntregaProductosScreen() {
               <TouchableOpacity style={[styles.listItemButton, styles.editButton]} onPress={() => startEditing(r)}>
                 <Ionicons name="pencil" size={18} color="#FFFFFF" />
               </TouchableOpacity>
+              {!(r.id_local || String(r.id).startsWith('local-') || String(r.id) === '0') && (
+                <TouchableOpacity
+                  style={[styles.listItemButton, styles.changesButton]}
+                  onPress={() => {
+                    setCambiosTitle(`Cambios - Acta #${r.id}`);
+                    fetchCambios('c_acta_entre_producto', Number(r.id));
+                  }}
+                >
+                  <Ionicons name="list-outline" size={18} color="#FFFFFF" />
+                  <ThemedText style={styles.listItemButtonText}>Cambios</ThemedText>
+                </TouchableOpacity>
+              )}
               <TouchableOpacity style={[styles.listItemButton, styles.deleteButton]} onPress={() => deleteHandler(r)}>
                 <Ionicons name="trash" size={18} color="#FFFFFF" />
               </TouchableOpacity>
@@ -1369,7 +1517,7 @@ export default function ActaEntregaProductosScreen() {
             </ThemedView>
           )}
 
-          {hasCurrentMarca && !isCreating && !editingRecord && (
+          {hasCurrentMarca && !isCreating && !editingRecord && !isLoadingData && (
             <ThemedView style={styles.filtersContainer}>
               <TouchableOpacity
                 style={styles.filtersHeader}
@@ -1668,7 +1816,7 @@ export default function ActaEntregaProductosScreen() {
               <ThemedView style={styles.formGroup}>
                 <ThemedText style={styles.formLabel}>Fecha entrega *</ThemedText>
                 <TouchableOpacity style={styles.dateButton} onPress={() => setShowFechaEntregaPicker(true)}>
-                  <ThemedText style={styles.dateButtonText}>{fechaEntrega.toISOString().split('T')[0]}</ThemedText>
+                  <ThemedText style={styles.dateButtonText}>{formatDateDMY(fechaEntrega)}</ThemedText>
                   <Ionicons name="calendar" size={18} color="#007AFF" />
                 </TouchableOpacity>
                 {showFechaEntregaPicker && (
@@ -1714,7 +1862,7 @@ export default function ActaEntregaProductosScreen() {
               <ThemedView style={styles.formGroup}>
                 <ThemedText style={styles.formLabel}>Fecha recibe *</ThemedText>
                 <TouchableOpacity style={styles.dateButton} onPress={() => setShowFechaRecibePicker(true)}>
-                  <ThemedText style={styles.dateButtonText}>{fechaRecibe.toISOString().split('T')[0]}</ThemedText>
+                  <ThemedText style={styles.dateButtonText}>{formatDateDMY(fechaRecibe)}</ThemedText>
                   <Ionicons name="calendar" size={18} color="#007AFF" />
                 </TouchableOpacity>
                 {showFechaRecibePicker && (
@@ -1820,11 +1968,13 @@ export default function ActaEntregaProductosScreen() {
             </ThemedView>
           ) : (
             <ThemedView style={styles.listSection}>
-              <TouchableOpacity style={styles.createButton} onPress={startCreating}>
-                <ThemedText style={styles.createButtonText}>
-                  <Ionicons name="add" size={20} color="#FFFFFF" />
-                </ThemedText>
-              </TouchableOpacity>
+              {!isLoadingData && !error && (
+                <TouchableOpacity style={styles.createButton} onPress={startCreating}>
+                  <ThemedText style={styles.createButtonText}>
+                    <Ionicons name="add" size={20} color="#FFFFFF" />
+                  </ThemedText>
+                </TouchableOpacity>
+              )}
               {renderList()}
             </ThemedView>
           )}
@@ -1886,6 +2036,88 @@ export default function ActaEntregaProductosScreen() {
         </ThemedView>
       </Modal>
 
+      {/* Modal: ver cambios */}
+      <Modal
+        visible={isCambiosModalVisible}
+        animationType="fade"
+        transparent
+        presentationStyle="overFullScreen"
+        onRequestClose={closeCambiosModal}
+      >
+        <View style={styles.overlay}>
+          <ThemedView style={styles.floatModalCardMovimientos}>
+            <ThemedView style={styles.floatModalHeader}>
+              <ThemedText style={styles.modalTitle}>{cambiosTitle}</ThemedText>
+              <TouchableOpacity onPress={closeCambiosModal}>
+                <Ionicons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+            </ThemedView>
+
+            <ScrollView style={{ maxHeight: Dimensions.get('window').height * 0.75 }} contentContainerStyle={{ padding: 16 }}>
+              {(!cambiosItems || cambiosItems.length === 0) ? (
+                <ThemedView style={styles.emptyContainer}>
+                  <ThemedText style={styles.emptyText}>No hay cambios registrados</ThemedText>
+                </ThemedView>
+              ) : (
+                cambiosItems.map((row: any) => {
+                  let parsed: any[] = [];
+                  try {
+                    parsed = row?.cambios ? JSON.parse(row.cambios) : [];
+                  } catch {
+                    parsed = [];
+                  }
+                  const createdAtLabel = formatCambioCreatedAt(row?.created_at);
+                  const isOpen = expandedCambioId === row.id;
+
+                  return (
+                    <ThemedView key={`chg-${row.id}`} style={styles.cambioCollapsableMain}>
+                      <TouchableOpacity
+                        style={styles.cambioCollapsableHeader}
+                        onPress={() => setExpandedCambioId((prev) => (prev === row.id ? null : row.id))}
+                        activeOpacity={0.8}
+                      >
+                        <ThemedText style={styles.cambioCollapsableTitle}>
+                          {createdAtLabel}
+                        </ThemedText>
+                        <Ionicons
+                          name={isOpen ? "chevron-up" : "chevron-down"}
+                          size={18}
+                          color="#007AFF"
+                        />
+                      </TouchableOpacity>
+
+                      {isOpen && (
+                        <ThemedView style={styles.cambioCollapsableContent}>
+                          <ThemedView style={styles.filterGroupSearch}>
+                            <ThemedText style={styles.filterLabel}>Cambio realizado por:</ThemedText>
+                            <ThemedText style={styles.changeDescription}>
+                              {row.empleado_nombre || 'Desconocido'}
+                              {row.empleado_cedula ? ` - Cédula: ${row.empleado_cedula}` : ''}
+                            </ThemedText>
+                          </ThemedView>
+
+                          {(Array.isArray(parsed) ? parsed : []).length > 0 && (
+                            <ThemedView style={styles.filterGroupSearch}>
+                              <ThemedText style={styles.filterLabel}>Cambios:</ThemedText>
+                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => (
+                                <ThemedText key={`c-${row.id}-${idx}`} style={styles.changeDescription}>
+                                  <ThemedText style={{ fontWeight: '800' }}>{String(c?.prop ?? '-')}: </ThemedText>
+                                  {formatChangeValue(c?.prop, c?.after)}
+                                </ThemedText>
+                              ))}
+                            </ThemedView>
+                          )}
+                        </ThemedView>
+                      )}
+                    </ThemedView>
+                  );
+                })
+              )}
+            </ScrollView>
+          </ThemedView>
+        </View>
+      </Modal>
+
       <AppFooter />
       <SlideMenu isVisible={isMenuVisible} onClose={() => setIsMenuVisible(false)} onHomePress={() => navigation.navigate('Home')} currentRoute="ActaEntregaProductos" />
     </ThemedView>
@@ -1942,6 +2174,7 @@ const styles = StyleSheet.create({
   listItemButtons: { flexDirection: 'row', gap: 12, marginTop: 8, backgroundColor: '#fff' },
   listItemButton: { flex: 1, padding: 12, borderRadius: 6, alignItems: 'center' },
   editButton: { backgroundColor: '#007AFF' },
+  changesButton: { backgroundColor: '#5856D6', flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 12, borderRadius: 8, gap: 8 },
   deleteButton: { backgroundColor: '#FF3B30' },
   listItemButtonText: { color: '#fff', fontSize: 14, fontWeight: '600' },
 
@@ -2189,6 +2422,15 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
   },
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 },
+  floatModalCardMovimientos: { backgroundColor: '#FFFFFF', borderRadius: 12, width: '100%', maxWidth: 500, maxHeight: '80%', borderWidth: 1, borderColor: '#E0E0E0', overflow: 'hidden' },
+  floatModalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#E0E0E0' },
+  cambioCollapsableMain: { width: '100%', marginBottom: 10, backgroundColor: '#fff', borderRadius: 6, borderWidth: 1, borderColor: '#E0E0E0', overflow: 'hidden' },
+  cambioCollapsableHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, backgroundColor: '#F8F9FA' },
+  cambioCollapsableTitle: { fontSize: 14, fontWeight: '600', color: '#007AFF', flex: 1 },
+  cambioCollapsableContent: { padding: 12, gap: 8, backgroundColor: '#F8F9FA' },
+  changeDescription: { fontSize: 14, lineHeight: 20, color: '#666', marginBottom: 8 },
+  filterGroupSearch: { marginBottom: 12 },
 });
 
 

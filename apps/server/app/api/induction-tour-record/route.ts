@@ -171,6 +171,9 @@ export async function POST(req: NextRequest) {
         const fechaParsed = parseFechaInput(fecha);
 
         // Autocompletar campos desde la marca
+        const createdAt = toZonedTime(new Date(), "America/Costa_Rica");
+        const createdBy = payload.id !== undefined && payload.id !== null ? Number(payload.id) : 0;
+
         const new_record = await prisma.c_registro_induccion_recorrido.create({
             data: {
                 empresa_id: empresaId,
@@ -189,9 +192,40 @@ export async function POST(req: NextRequest) {
                 participantes: participantes ? String(participantes) : "[]",
                 firma_supervisor: firma_supervisor ? String(firma_supervisor) : "",
                 firma_responsable: firma_responsable ? String(firma_responsable) : "",
-                created_at: toZonedTime(new Date(), "America/Costa_Rica"),
-                created_by: payload.id?.toString() || ""
+                created_at: createdAt,
+                created_by: createdBy.toString()
             }
+        });
+
+        // Registrar cambio de creación
+        await prisma.c_cambios_apps_modules.create({
+            data: {
+                nombre_tabla: "c_registro_induccion_recorrido",
+                registro_id: new_record.id,
+                cambios: JSON.stringify([{
+                    prop: "__created__",
+                    before: null,
+                    after: {
+                        id: new_record.id,
+                        empresa_id: new_record.empresa_id,
+                        cliente_id: new_record.cliente_id,
+                        contrato_id: new_record.contrato_id,
+                        corpo_id: new_record.corpo_id,
+                        puesto_id: new_record.puesto_id,
+                        plaza_id: new_record.plaza_id,
+                        fecha: new_record.fecha ? new_record.fecha.toISOString() : null,
+                        division: new_record.division,
+                        renglon_edificio: new_record.renglon_edificio,
+                        supervisor_cliente: new_record.supervisor_cliente,
+                        supervisor_corporacion: new_record.supervisor_corporacion,
+                        temas_desarrollados: new_record.temas_desarrollados,
+                        aspectos_especificos: new_record.aspectos_especificos,
+                        participantes: new_record.participantes,
+                    },
+                }]),
+                created_at: createdAt,
+                created_by: createdBy,
+            },
         });
 
         if (new_record) {

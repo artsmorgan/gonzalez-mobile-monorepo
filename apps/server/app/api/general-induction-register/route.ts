@@ -211,6 +211,8 @@ export async function POST(req: NextRequest) {
 
     const createdAt = toZonedTime(new Date(), "America/Costa_Rica");
 
+    const createdBy = payload.id !== undefined && payload.id !== null ? Number(payload.id) : 0;
+
     const record = await prisma.c_registro_induccion_general.create({
       data: {
         empresa_id: empresaIdNum,
@@ -223,12 +225,37 @@ export async function POST(req: NextRequest) {
         capacitadores: ensureStringJson(capacitadores, "[]"),
         firma_responsable: String(firma_responsable),
         created_at: createdAt,
-        created_by: payload.id?.toString?.() || "",
+        created_by: createdBy.toString(),
       },
       include: {
         e_estructura_empresa: { select: { nombre: true, codigo: true } },
         e_estructura_cliente: { select: { nombre: true } },
         e_estructura_sucursal: { select: { nombre: true, nro_sucursal: true } },
+      },
+    });
+
+    // Registrar cambio de creación
+    await prisma.c_cambios_apps_modules.create({
+      data: {
+        nombre_tabla: "c_registro_induccion_general",
+        registro_id: record.id,
+        cambios: JSON.stringify([{
+          prop: "__created__",
+          before: null,
+          after: {
+            id: record.id,
+            empresa_id: record.empresa_id,
+            cliente_id: record.cliente_id,
+            corpo_id: record.corpo_id,
+            division: record.division,
+            fecha: record.fecha ? record.fecha.toISOString() : null,
+            temas_a_tratar: record.temas_a_tratar,
+            colaboradores: record.colaboradores,
+            capacitadores: record.capacitadores,
+          },
+        }]),
+        created_at: createdAt,
+        created_by: createdBy,
       },
     });
 

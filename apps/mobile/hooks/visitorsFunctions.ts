@@ -1,5 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Constants from "expo-constants";
+import authedFetch from "./authedFetch";
 
 interface CreateVisitorParams {
     requestData: any;
@@ -32,51 +33,25 @@ export async function createVisitor({
         throw new Error('Server URL not configured');
     }
 
-    let token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-        if (refreshAccessToken) {
-            const refreshed = await refreshAccessToken();
-            if (!refreshed) {
-                if (logout) await logout();
-                throw new Error('Sesión expirada');
-            }
-            token = await AsyncStorage.getItem('access_token');
-        } else {
-            if (logout) await logout();
-            throw new Error('Sesión expirada');
-        }
+    if (!refreshAccessToken || !logout) {
+        throw new Error('Auth handlers not provided');
     }
 
-    const response = await fetch(`${apiUrl}/api/visitors`, {
-        method: 'POST',
-        headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-            'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+        url: `${apiUrl}/api/visitors`,
+        init: {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(requestData)
         },
-        body: JSON.stringify(requestData)
+        refreshAccessToken,
+        logout,
     });
 
-    if (response.status === 401) {
-        const refreshed = refreshAccessToken ? await refreshAccessToken() : false;
-        if (refreshed) {
-            return createVisitor({
-                requestData,
-                marcaId,
-                refreshAccessToken,
-                logout
-            });
-        } else {
-            if (logout) {
-                await logout();
-            }
-            throw new Error('Session expired');
-        }
-    }
-
-    if (response.status === 403) {
-        if (logout) await logout();
-        throw new Error('Acceso denegado');
+    if (!response) {
+        return { status: false, message: 'Sesión expirada' };
     }
 
     if (!response.ok) {
@@ -98,51 +73,25 @@ export async function updateVisitor({
         throw new Error('Server URL not configured');
     }
 
-    let token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-        if (refreshAccessToken) {
-            const refreshed = await refreshAccessToken();
-            if (!refreshed) {
-                if (logout) await logout();
-                throw new Error('Sesión expirada');
-            }
-            token = await AsyncStorage.getItem('access_token');
-        } else {
-            if (logout) await logout();
-            throw new Error('Sesión expirada');
-        }
+    if (!refreshAccessToken || !logout) {
+        throw new Error('Auth handlers not provided');
     }
 
-    const response = await fetch(`${apiUrl}/api/visitors/${visitorId}`, {
-        method: 'PUT',
-        headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-            'ngrok-skip-browser-warning': '69420',
+    const response = await authedFetch({
+        url: `${apiUrl}/api/visitors/${visitorId}`,
+        init: {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(requestData)
         },
-        body: JSON.stringify(requestData)
+        refreshAccessToken,
+        logout,
     });
 
-    if (response.status === 401) {
-        const refreshed = refreshAccessToken ? await refreshAccessToken() : false;
-        if (refreshed) {
-            return updateVisitor({
-                requestData,
-                visitorId,
-                refreshAccessToken,
-                logout
-            });
-        } else {
-            if (logout) {
-                await logout();
-            }
-            throw new Error('Session expired');
-        }
-    }
-
-    if (response.status === 403) {
-        if (logout) await logout();
-        throw new Error('Acceso denegado');
+    if (!response) {
+        return { status: false, message: 'Sesión expirada' };
     }
 
     if (!response.ok) {
@@ -163,49 +112,24 @@ export async function deleteVisitor({
         throw new Error('Server URL not configured');
     }
 
-    let token = await AsyncStorage.getItem('access_token');
-    if (!token) {
-        if (refreshAccessToken) {
-            const refreshed = await refreshAccessToken();
-            if (!refreshed) {
-                if (logout) await logout();
-                throw new Error('Sesión expirada');
-            }
-            token = await AsyncStorage.getItem('access_token');
-        } else {
-            if (logout) await logout();
-            throw new Error('Sesión expirada');
-        }
+    if (!refreshAccessToken || !logout) {
+        throw new Error('Auth handlers not provided');
     }
 
-    const response = await fetch(`${apiUrl}/api/visitors/${visitorId}`, {
-        method: 'DELETE',
-        headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-            'ngrok-skip-browser-warning': '69420',
-        }
+    const response = await authedFetch({
+        url: `${apiUrl}/api/visitors/${visitorId}`,
+        init: {
+            method: 'DELETE',
+            headers: {
+                'Content-Type': 'application/json',
+            }
+        },
+        refreshAccessToken,
+        logout,
     });
 
-    if (response.status === 401) {
-        const refreshed = refreshAccessToken ? await refreshAccessToken() : false;
-        if (refreshed) {
-            return deleteVisitor({
-                visitorId,
-                refreshAccessToken,
-                logout
-            });
-        } else {
-            if (logout) {
-                await logout();
-            }
-            throw new Error('Session expired');
-        }
-    }
-
-    if (response.status === 403) {
-        if (logout) await logout();
-        throw new Error('Acceso denegado');
+    if (!response) {
+        return { status: false, message: 'Sesión expirada' };
     }
 
     if (!response.ok) {
