@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
 
 export const runtime = 'nodejs';
 
-import { prisma } from '../../../../../../utils/prismaClient';
+import { fetchDynamicFile } from '../../../../../../utils/callDynamicFilesApi';
+import { verifyAccessTokenByApi } from '../../../../../../utils/verifyAccessTokenByApi';
 
 export async function GET(
   req: NextRequest,
@@ -21,53 +20,17 @@ export async function GET(
     );
   }
 
-  const manual = await prisma.e_manual_puesto.findUnique({ where: { id } });
-  if (!manual) {
-    return NextResponse.json(
-      { status: false, message: 'Manual no encontrado' },
-      { status: 404 }
-    );
-  }
-
-  const fileRecord = await prisma.e_archivos_manual_puesto.findFirst({
-    where: { manual_puesto_id: manual.id, name: audio },
+  const fetched = await fetchDynamicFile({
+    req,
+    type: 'audio',
+    url: `job-manuals/${id}/${audio}`,
+    download: false,
   });
 
-  if (!fileRecord) {
-    return NextResponse.json(
-      { status: false, message: 'Archivo de audio no encontrado' },
-      { status: 404 }
-    );
-  }
-
-  const filePath = path.join(
-    process.cwd(),
-    'public',
-    'uploads',
-    'job-manuals',
-    `${manual.id}`,
-    audio
-  );
-
-  if (!fs.existsSync(filePath)) {
-    return NextResponse.json(
-      { status: false, message: 'Audio no encontrado' },
-      { status: 404 }
-    );
-  }
-
-  const file = await fs.promises.readFile(filePath);
-  const ext = path.extname(filePath).toLowerCase();
-
-  let contentType = 'audio/mpeg';
-  if (ext === '.wav') contentType = 'audio/wav';
-  if (ext === '.m4a') contentType = 'audio/mp4';
-  if (ext === '.ogg') contentType = 'audio/ogg';
-
-  return new NextResponse(Buffer.from(file), {
+  return new NextResponse(fetched.buffer, {
     headers: {
-      'Content-Type': contentType,
-      'Cache-Control': 'public, max-age=31536000',
+      'Content-Type': fetched.headers.contentType,
+      'Cache-Control': fetched.headers.cacheControl,
     },
   });
 }

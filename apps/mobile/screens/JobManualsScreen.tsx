@@ -113,7 +113,7 @@ interface JobManualRemote {
 }
 
 export default function JobManualsScreen() {
-  const { employee, refreshAccessToken, logout } = useAuth();
+  const { employee, refreshAccessToken, logout, accessToken } = useAuth();
   const navigation = useNavigation<JobManualsNavigationProp>();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
 
@@ -145,6 +145,9 @@ export default function JobManualsScreen() {
   const [retakeAllowed, setRetakeAllowed] = useState(false);
   const [updatingQuizResultByEmployee, setUpdatingQuizResultByEmployee] = useState<Record<number, boolean>>({});
 
+  // Quiz (revisión - puntajes por pregunta)
+  const [quizReviewScores, setQuizReviewScores] = useState<Record<string, Record<string, number>>>({}); // {empleadoId: {questionId: score}}
+
   const tituloRef = useRef('');
   const descripcionRef = useRef('');
 
@@ -152,6 +155,8 @@ export default function JobManualsScreen() {
 
   const [structure, setStructure] = useState<MainStructureTree>([]);
   const [isStructureLoading, setIsStructureLoading] = useState(false);
+  const [assignToAllDivision, setAssignToAllDivision] = useState(false);
+  const [selectedDivisionForAll, setSelectedDivisionForAll] = useState<number | null>(null);
   const [selectedEmpresaId, setSelectedEmpresaId] = useState<number | null>(null);
   const [selectedClienteId, setSelectedClienteId] = useState<number | null>(null);
   const [selectedDivisionId, setSelectedDivisionId] = useState<number | null>(null);
@@ -184,9 +189,16 @@ export default function JobManualsScreen() {
     options?: string[];
     answer?: string;
     answers?: string[];
+    points: number; // Puntaje de la pregunta (obligatorio)
+  };
+
+  type QuizConfig = {
+    questions: QuizQuestion[];
+    minApprovalPercentage?: number; // Porcentaje mínimo de aprobación
   };
 
   const [quizQuestions, setQuizQuestions] = useState<QuizQuestion[]>([]);
+  const [quizMinApprovalPercentage, setQuizMinApprovalPercentage] = useState<number>(70);
   const [isQuizModalVisible, setIsQuizModalVisible] = useState(false);
   const [quizTempTitle, setQuizTempTitle] = useState('');
   const [quizTempType, setQuizTempType] = useState<QuizQuestionType>('short');
@@ -194,25 +206,34 @@ export default function JobManualsScreen() {
   const [quizTempOptionInput, setQuizTempOptionInput] = useState('');
   const [quizTempAnswer, setQuizTempAnswer] = useState('');
   const [quizTempAnswers, setQuizTempAnswers] = useState<string[]>([]);
+  const [quizTempPoints, setQuizTempPoints] = useState<string>('');
+
+  const appendTokenToUrl = useCallback((url: string) => {
+    if (!url) return '';
+    if (!accessToken || accessToken.trim().length === 0) return url;
+    if (/[?&]token=/.test(url)) return url;
+    const separator = url.includes('?') ? '&' : '?';
+    return `${url}${separator}token=${encodeURIComponent(accessToken)}`;
+  }, [accessToken]);
 
   // Helpers para construir URLs de archivos en el servidor (similar a IncidentsScreen)
   const getManualImageUrl = (manualId: number, fileName: string) => {
     console.log("Accediendo a la imagen: ", fileName);
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) return '';
-    return `${apiUrl}/api/job-manuals/${manualId}/get-image/${encodeURIComponent(fileName)}`;
+    return appendTokenToUrl(`${apiUrl}/api/job-manuals/${manualId}/get-image/${encodeURIComponent(fileName)}`);
   };
 
   const getManualAudioUrl = (manualId: number, fileName: string) => {
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) return '';
-    return `${apiUrl}/api/job-manuals/${manualId}/get-audio/${encodeURIComponent(fileName)}`;
+    return appendTokenToUrl(`${apiUrl}/api/job-manuals/${manualId}/get-audio/${encodeURIComponent(fileName)}`);
   };
 
   const getManualVideoUrl = (manualId: number, fileName: string) => {
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) return '';
-    return `${apiUrl}/api/job-manuals/${manualId}/get-video/${encodeURIComponent(fileName)}`;
+    return appendTokenToUrl(`${apiUrl}/api/job-manuals/${manualId}/get-video/${encodeURIComponent(fileName)}`);
   };
 
   const buildFileUrl = (manualId: number | undefined, file: ManualFileRemote) => {
@@ -229,11 +250,11 @@ export default function JobManualsScreen() {
       if (file.type === 'audio') return getManualAudioUrl(manualId, file.name);
       if (file.type === 'video') return getManualVideoUrl(manualId, file.name);
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-      if (apiUrl) return `${apiUrl}/api/job-manuals/${manualId}/get-file/${encodeURIComponent(file.name)}`;
+      if (apiUrl) return appendTokenToUrl(`${apiUrl}/api/job-manuals/${manualId}/get-file/${encodeURIComponent(file.name)}`);
     }
 
     // Último recurso: URL ya provista
-    if (file.url) return file.url;
+    if (file.url) return appendTokenToUrl(file.url);
 
     return '';
   };
@@ -455,23 +476,52 @@ export default function JobManualsScreen() {
     })();
   };
 
-  const parseQuizFromManual = (quizStr: any): QuizQuestion[] => {
-    if (!quizStr || typeof quizStr !== 'string') return [];
+  const parseQuizFromManual = (quizStr: any): { questions: QuizQuestion[]; minApprovalPercentage?: number } => {
+    if (!quizStr || typeof quizStr !== 'string') return { questions: [] };
     try {
       const parsed = JSON.parse(quizStr);
-      if (!Array.isArray(parsed)) return [];
-      return parsed
-        .map((q: any) => ({
-          id: String(q?.id ?? ''),
-          title: String(q?.title ?? ''),
-          type: q?.type as QuizQuestionType,
-          options: Array.isArray(q?.options) ? q.options.map((o: any) => String(o)) : undefined,
-          answer: typeof q?.answer === 'string' ? q.answer : undefined,
-          answers: Array.isArray(q?.answers) ? q.answers.map((o: any) => String(o)) : undefined,
-        }))
-        .filter((q: any) => q.id && q.title && q.type);
+
+      // Si es un array (formato antiguo), convertir a nuevo formato
+      if (Array.isArray(parsed)) {
+        return {
+          questions: parsed
+            .map((q: any) => ({
+              id: String(q?.id ?? ''),
+              title: String(q?.title ?? ''),
+              type: q?.type as QuizQuestionType,
+              options: Array.isArray(q?.options) ? q.options.map((o: any) => String(o)) : undefined,
+              answer: typeof q?.answer === 'string' ? q.answer : undefined,
+              answers: Array.isArray(q?.answers) ? q.answers.map((o: any) => String(o)) : undefined,
+              points: typeof q?.points === 'number' ? q.points : 0,
+            }))
+            .filter((q: any) => q.id && q.title && q.type),
+          minApprovalPercentage: undefined,
+        };
+      }
+
+      // Si es un objeto con el nuevo formato
+      if (typeof parsed === 'object' && parsed !== null) {
+        return {
+          questions: Array.isArray(parsed.questions)
+            ? parsed.questions
+              .map((q: any) => ({
+                id: String(q?.id ?? ''),
+                title: String(q?.title ?? ''),
+                type: q?.type as QuizQuestionType,
+                options: Array.isArray(q?.options) ? q.options.map((o: any) => String(o)) : undefined,
+                answer: typeof q?.answer === 'string' ? q.answer : undefined,
+                answers: Array.isArray(q?.answers) ? q.answers.map((o: any) => String(o)) : undefined,
+                points: typeof q?.points === 'number' ? q.points : 0,
+              }))
+              .filter((q: any) => q.id && q.title && q.type)
+            : [],
+          minApprovalPercentage: typeof parsed.minApprovalPercentage === 'number' ? parsed.minApprovalPercentage : undefined,
+        };
+      }
+
+      return { questions: [] };
     } catch {
-      return [];
+      return { questions: [] };
     }
   };
 
@@ -508,7 +558,7 @@ export default function JobManualsScreen() {
     switch (t) {
       case 'short': return 'Respuesta corta';
       case 'paragraph': return 'Párrafo';
-      case 'multiple_choice': return 'Múltiples opciones';
+      case 'multiple_choice': return 'Selección única';
       case 'multiple_select': return 'Selección múltiple';
       case 'list': return 'Lista';
       default: return t;
@@ -693,6 +743,16 @@ export default function JobManualsScreen() {
     setAudioFiles([]);
     setVideoFiles([]);
     setFirmaResponsable(null);
+    setAssignToAllDivision(false);
+    setSelectedDivisionForAll(null);
+    setSelectedEmpresaId(null);
+    setSelectedClienteId(null);
+    setSelectedDivisionId(null);
+    setSelectedContratoId(null);
+    setSelectedSucursalId(null);
+    setSelectedPuestoId(null);
+    setHasConfirmedPuestos(false);
+    setIsSelectedPuestosExpanded(false);
   };
 
   const togglePuestoSelection = (puestoId: number) => {
@@ -704,7 +764,41 @@ export default function JobManualsScreen() {
     });
   };
 
+  // Función para obtener todos los puestos de una división
+  const getAllPuestosFromDivision = useCallback((divisionId: number): Puesto[] => {
+    if (!structure || structure.length === 0) return [];
+
+    const seen = new Set<number>();
+    const out: Puesto[] = [];
+
+    for (const empresa of structure) {
+      for (const cliente of empresa.clientes ?? []) {
+        for (const division of cliente.division ?? []) {
+          if (division.id === divisionId) {
+            for (const contrato of division.contratos ?? []) {
+              for (const sucursal of contrato.sucursales ?? []) {
+                for (const puesto of sucursal.puestos ?? []) {
+                  if (!seen.has(puesto.id)) {
+                    seen.add(puesto.id);
+                    out.push({ id: puesto.id, nombre: puesto.nombre });
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return out;
+  }, [structure]);
+
   const filteredPuestosFromTree: Puesto[] = useMemo(() => {
+    // Si está en modo "asignar a todos los puestos de una división", retornar esos puestos
+    if (assignToAllDivision && selectedDivisionForAll) {
+      return getAllPuestosFromDivision(selectedDivisionForAll);
+    }
+
     // Si no hay selección en el árbol, no sugerimos nada.
     const hasAnySelection =
       selectedEmpresaId !== null ||
@@ -751,9 +845,26 @@ export default function JobManualsScreen() {
     selectedContratoId,
     selectedSucursalId,
     selectedPuestoId,
+    assignToAllDivision,
+    selectedDivisionForAll,
+    getAllPuestosFromDivision,
   ]);
 
   const applyPuestosFromTree = () => {
+    // Si está en modo "asignar a todos los puestos de una división"
+    if (assignToAllDivision && selectedDivisionForAll) {
+      const puestosFromDivision = getAllPuestosFromDivision(selectedDivisionForAll);
+      if (puestosFromDivision.length === 0) {
+        Alert.alert('Información', 'No se encontraron puestos para la división seleccionada.');
+        return;
+      }
+      setSelectedPuestos(puestosFromDivision.map(p => p.id));
+      setHasConfirmedPuestos(true);
+      setIsSelectedPuestosExpanded(true);
+      return;
+    }
+
+    // Modo normal (jerarquía)
     if (filteredPuestosFromTree.length === 0) {
       Alert.alert('Información', 'Selecciona un nivel del árbol para obtener puestos.');
       return;
@@ -1032,13 +1143,13 @@ export default function JobManualsScreen() {
 
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (manualId && visId && apiUrl) {
-      if (file.type === 'image') return `${apiUrl}/api/job-manuals/${manualId}/visualizations/${visId}/get-image/${encodeURIComponent(file.name)}`;
-      if (file.type === 'audio') return `${apiUrl}/api/job-manuals/${manualId}/visualizations/${visId}/get-audio/${encodeURIComponent(file.name)}`;
-      if (file.type === 'video') return `${apiUrl}/api/job-manuals/${manualId}/visualizations/${visId}/get-video/${encodeURIComponent(file.name)}`;
-      return `${apiUrl}/api/job-manuals/${manualId}/visualizations/${visId}/get-file/${encodeURIComponent(file.name)}`;
+      if (file.type === 'image') return appendTokenToUrl(`${apiUrl}/api/job-manuals/${manualId}/visualizations/${visId}/get-image/${encodeURIComponent(file.name)}`);
+      if (file.type === 'audio') return appendTokenToUrl(`${apiUrl}/api/job-manuals/${manualId}/visualizations/${visId}/get-audio/${encodeURIComponent(file.name)}`);
+      if (file.type === 'video') return appendTokenToUrl(`${apiUrl}/api/job-manuals/${manualId}/visualizations/${visId}/get-video/${encodeURIComponent(file.name)}`);
+      return appendTokenToUrl(`${apiUrl}/api/job-manuals/${manualId}/visualizations/${visId}/get-file/${encodeURIComponent(file.name)}`);
     }
 
-    return file.url || '';
+    return file.url ? appendTokenToUrl(file.url) : '';
   };
 
   const removeLocalFile = (type: ManualFileLocal['type'], id: string) => {
@@ -1211,24 +1322,84 @@ export default function JobManualsScreen() {
   };
 
   const handleCreateManual = async () => {
+    // Prevenir múltiples llamadas simultáneas
+    if (isCreatingManual) {
+      return;
+    }
+
     try {
+      setIsCreatingManual(true);
+
       if (!marcaId) {
         Alert.alert('Error', 'No se encontró la marca actual');
+        setIsCreatingManual(false);
         return;
       }
 
       if (!tituloRef.current.trim()) {
         Alert.alert('Error', 'El título es obligatorio');
+        setIsCreatingManual(false);
         return;
       }
 
       if (!descripcionRef.current.trim()) {
         Alert.alert('Error', 'La descripción es obligatoria');
+        setIsCreatingManual(false);
         return;
       }
 
       if (!firmaResponsable) {
         Alert.alert('Error', 'La firma del responsable es obligatoria');
+        setIsCreatingManual(false);
+        return;
+      }
+
+      if (selectedPuestos.length === 0) {
+        Alert.alert('Error', 'Debe seleccionar al menos un puesto');
+        setIsCreatingManual(false);
+        return;
+      }
+
+      // Advertencia si hay más de 100 puestos
+      if (selectedPuestos.length > 100) {
+        return new Promise<void>((resolve) => {
+          Alert.alert(
+            'Advertencia',
+            `Se intentarán guardar ${selectedPuestos.length} puestos. Debido a la cantidad de puestos, el proceso tomará uno o varios minutos. ¿Desea continuar?`,
+            [
+              {
+                text: 'Cancelar',
+                style: 'cancel',
+                onPress: () => {
+                  setIsCreatingManual(false);
+                  resolve();
+                },
+              },
+              {
+                text: 'Continuar',
+                onPress: async () => {
+                  await proceedWithManualCreation();
+                  resolve();
+                },
+              },
+            ]
+          );
+        });
+      }
+
+      await proceedWithManualCreation();
+    } catch (error) {
+      console.error('Error creating job manual:', error);
+      Alert.alert('Error', 'No se pudo crear el manual');
+    } finally {
+      setIsCreatingManual(false);
+    }
+  };
+
+  const proceedWithManualCreation = async () => {
+    try {
+      if (!marcaId) {
+        Alert.alert('Error', 'No se encontró la marca actual');
         return;
       }
 
@@ -1240,7 +1411,7 @@ export default function JobManualsScreen() {
         ...videoFiles,
       ];
 
-      const signatureString = `${firmaResponsable.sessionId}:${firmaResponsable.empleadoId}:${firmaResponsable.latitud}:${firmaResponsable.longitud}:${firmaResponsable.timestamp}`;
+      const signatureString = `${firmaResponsable?.sessionId}:${firmaResponsable?.empleadoId}:${firmaResponsable?.latitud}:${firmaResponsable?.longitud}:${firmaResponsable?.timestamp}`;
       const signatureHash = btoa(signatureString);
 
       const requestBody = {
@@ -1248,7 +1419,10 @@ export default function JobManualsScreen() {
         description: descripcionRef.current,
         firma_responsable: signatureHash,
         puestos: JSON.stringify(puestosArray),
-        quiz: quizQuestions.length > 0 ? JSON.stringify(quizQuestions) : null,
+        quiz: quizQuestions.length > 0 ? JSON.stringify({
+          questions: quizQuestions,
+          minApprovalPercentage: quizMinApprovalPercentage,
+        }) : null,
         files: JSON.stringify(
           filesPayload.map(f => ({
             type: f.type,
@@ -1259,7 +1433,7 @@ export default function JobManualsScreen() {
         ),
       };
 
-      setIsCreatingManual(true);
+      // isCreatingManual ya está establecido en true por handleCreateManual
 
       const isConnected = await getConnectionStatus();
 
@@ -1282,6 +1456,7 @@ export default function JobManualsScreen() {
           setVideoFiles([]);
           setFirmaResponsable(null);
           setQuizQuestions([]);
+          setQuizMinApprovalPercentage(70);
 
           // Cerrar formulario
           setIsCreating(false);
@@ -1311,7 +1486,10 @@ export default function JobManualsScreen() {
         const cacheStr = await AsyncStorage.getItem('job_manuals_cache');
         const cache = cacheStr ? JSON.parse(cacheStr) : [];
         const horaAccionUse = await getHoraAccion();
-        const quizStrToStore = quizQuestions.length > 0 ? JSON.stringify(quizQuestions) : null;
+        const quizStrToStore = quizQuestions.length > 0 ? JSON.stringify({
+          questions: quizQuestions,
+          minApprovalPercentage: quizMinApprovalPercentage,
+        }) : null;
         cache.push({
           id: 0,
           id_local: localId,
@@ -1350,6 +1528,7 @@ export default function JobManualsScreen() {
         setVideoFiles([]);
         setFirmaResponsable(null);
         setQuizQuestions([]);
+        setQuizMinApprovalPercentage(70);
 
         // Cerrar formulario
         setIsCreating(false);
@@ -1362,6 +1541,7 @@ export default function JobManualsScreen() {
     } catch (error) {
       console.error('Error creating job manual:', error);
       Alert.alert('Error', 'No se pudo crear el manual');
+      throw error;
     } finally {
       setIsCreatingManual(false);
     }
@@ -1500,7 +1680,7 @@ export default function JobManualsScreen() {
                           {([
                             { key: 'short', label: 'Respuesta corta' },
                             { key: 'paragraph', label: 'Párrafo' },
-                            { key: 'multiple_choice', label: 'Múltiples opciones' },
+                            { key: 'multiple_choice', label: 'Selección única' },
                             { key: 'multiple_select', label: 'Selección múltiple' },
                             { key: 'list', label: 'Lista' },
                           ] as { key: QuizQuestionType; label: string }[]).map((t) => {
@@ -1655,6 +1835,22 @@ export default function JobManualsScreen() {
                         </ThemedView>
                       )}
 
+                      {/* Puntaje de la pregunta */}
+                      <ThemedView style={styles.formGroup}>
+                        <ThemedText style={styles.formLabel}>Puntaje *</ThemedText>
+                        <TextInput
+                          style={styles.formInput}
+                          value={quizTempPoints}
+                          onChangeText={setQuizTempPoints}
+                          placeholder="Ej: 10"
+                          placeholderTextColor="#999"
+                          keyboardType="numeric"
+                        />
+                        <ThemedText style={styles.signatureHintMuted}>
+                          Todos los puntos se sumarán automáticamente para obtener el puntaje máximo del quiz.
+                        </ThemedText>
+                      </ThemedView>
+
                       <TouchableOpacity
                         style={styles.signatureActionButton}
                         onPress={() => {
@@ -1689,6 +1885,17 @@ export default function JobManualsScreen() {
                           let id = 'q_';
                           for (let i = 0; i < 8; i++) id += chars.charAt(Math.floor(Math.random() * chars.length));
 
+                          if (!quizTempPoints.trim()) {
+                            Alert.alert('Error', 'El puntaje es obligatorio');
+                            return;
+                          }
+
+                          const pointsValue = parseFloat(quizTempPoints.trim());
+                          if (isNaN(pointsValue) || pointsValue < 0) {
+                            Alert.alert('Error', 'El puntaje debe ser un número válido mayor o igual a 0');
+                            return;
+                          }
+
                           const newQuestion: QuizQuestion = {
                             id,
                             title,
@@ -1698,9 +1905,17 @@ export default function JobManualsScreen() {
                               ? (quizTempAnswer.trim() || undefined)
                               : undefined,
                             answers: quizTempType === 'multiple_select' ? quizTempAnswers : undefined,
+                            points: pointsValue, // Obligatorio
                           };
 
                           setQuizQuestions(prev => [...prev, newQuestion]);
+                          setQuizTempTitle('');
+                          setQuizTempType('short');
+                          setQuizTempOptions([]);
+                          setQuizTempOptionInput('');
+                          setQuizTempAnswer('');
+                          setQuizTempAnswers([]);
+                          setQuizTempPoints('');
                           setIsQuizModalVisible(false);
                         }}
                       >
@@ -1729,166 +1944,222 @@ export default function JobManualsScreen() {
                   </ThemedText>
                 ) : (
                   <>
-                    <ThemedText style={styles.signatureHintMuted}>
-                      Filtra el árbol hasta el nivel deseado. Si seleccionas un nivel superior, se vincularán todos los puestos debajo.
-                    </ThemedText>
-
-                    <ThemedView style={styles.structureGroup}>
-                      <ThemedText style={styles.smallLabel}>Empresa</ThemedText>
-                      <ThemedView style={styles.pickerWrapper}>
-                        <Picker
-                          enabled={empresaOptions.length > 0}
-                          selectedValue={selectedEmpresaId ?? 0}
-                          onValueChange={(v) => {
-                            const next = Number(v) || 0;
-                            setSelectedEmpresaId(next === 0 ? null : next);
-                            setSelectedClienteId(null);
-                            setSelectedDivisionId(null);
-                            setSelectedContratoId(null);
-                            setSelectedSucursalId(null);
-                            setSelectedPuestoId(null);
+                    {/* Checkbox para asignar a todos los puestos de una división */}
+                    <ThemedView style={styles.checkboxContainer}>
+                      <TouchableOpacity
+                        style={styles.checkboxRow}
+                        onPress={() => {
+                          const newValue = !assignToAllDivision;
+                          setAssignToAllDivision(newValue);
+                          if (!newValue) {
+                            setSelectedDivisionForAll(null);
                             setHasConfirmedPuestos(false);
                             setIsSelectedPuestosExpanded(false);
-                          }}
-                        >
-                          <Picker.Item label="Seleccione empresa..." value={0} />
-                          {empresaOptions.map((e) => (
-                            <Picker.Item key={e.id} label={e.nombre} value={e.id} />
-                          ))}
-                        </Picker>
-                      </ThemedView>
+                            setSelectedPuestos([]);
+                          }
+                        }}
+                      >
+                        <Ionicons
+                          name={assignToAllDivision ? "checkbox" : "square-outline"}
+                          size={20}
+                          color={assignToAllDivision ? "#007AFF" : "#999"}
+                        />
+                        <ThemedText style={styles.checkboxLabel}>
+                          Asignar a todos los puestos de una división
+                        </ThemedText>
+                      </TouchableOpacity>
                     </ThemedView>
 
-                    <ThemedView style={styles.structureGroup}>
-                      <ThemedText style={styles.smallLabel}>Cliente</ThemedText>
-                      <ThemedView style={styles.pickerWrapper}>
-                        <Picker
-                          enabled={selectedEmpresaId !== null && clienteOptions.length > 0}
-                          selectedValue={selectedClienteId ?? 0}
-                          onValueChange={(v) => {
-                            const next = Number(v) || 0;
-                            setSelectedClienteId(next === 0 ? null : next);
-                            setSelectedDivisionId(null);
-                            setSelectedContratoId(null);
-                            setSelectedSucursalId(null);
-                            setSelectedPuestoId(null);
-                            setHasConfirmedPuestos(false);
-                            setIsSelectedPuestosExpanded(false);
-                          }}
-                        >
-                          <Picker.Item label={selectedEmpresaId ? 'Seleccione cliente...' : 'Seleccione empresa primero'} value={0} />
-                          {clienteOptions.map((c) => (
-                            <Picker.Item key={c.id} label={c.nombre} value={c.id} />
-                          ))}
-                        </Picker>
+                    {/* Select de divisiones cuando el checkbox está activado */}
+                    {assignToAllDivision && (
+                      <ThemedView style={styles.structureGroup}>
+                        <ThemedText style={styles.smallLabel}>División</ThemedText>
+                        <ThemedView style={styles.pickerWrapper}>
+                          <Picker
+                            enabled={!isStructureLoading}
+                            selectedValue={selectedDivisionForAll ?? 0}
+                            onValueChange={(v) => {
+                              const next = Number(v) || 0;
+                              setSelectedDivisionForAll(next === 0 ? null : next);
+                              setHasConfirmedPuestos(false);
+                              setIsSelectedPuestosExpanded(false);
+                              setSelectedPuestos([]);
+                            }}
+                          >
+                            <Picker.Item label="Seleccione división..." value={0} />
+                            <Picker.Item label="Aseo y limpieza" value={5} />
+                            <Picker.Item label="Seguridad" value={4} />
+                          </Picker>
+                        </ThemedView>
                       </ThemedView>
-                      {selectedEmpresaId !== null && clienteOptions.length === 0 && (
-                        <ThemedText style={styles.emptyText}>No hay clientes disponibles para esta empresa.</ThemedText>
-                      )}
-                    </ThemedView>
+                    )}
 
-                    <ThemedView style={styles.structureGroup}>
-                      <ThemedText style={styles.smallLabel}>División</ThemedText>
-                      <ThemedView style={styles.pickerWrapper}>
-                        <Picker
-                          enabled={selectedClienteId !== null && divisionOptions.length > 0}
-                          selectedValue={selectedDivisionId ?? 0}
-                          onValueChange={(v) => {
-                            const next = Number(v) || 0;
-                            setSelectedDivisionId(next === 0 ? null : next);
-                            setSelectedContratoId(null);
-                            setSelectedSucursalId(null);
-                            setSelectedPuestoId(null);
-                            setHasConfirmedPuestos(false);
-                            setIsSelectedPuestosExpanded(false);
-                          }}
-                        >
-                          <Picker.Item label={selectedClienteId ? 'Seleccione división...' : 'Seleccione cliente primero'} value={0} />
-                          {divisionOptions.map((d) => (
-                            <Picker.Item key={d.id} label={d.nombre} value={d.id} />
-                          ))}
-                        </Picker>
-                      </ThemedView>
-                      {selectedClienteId !== null && divisionOptions.length === 0 && (
-                        <ThemedText style={styles.emptyText}>Este cliente no tiene divisiones con contratos.</ThemedText>
-                      )}
-                    </ThemedView>
+                    {/* Jerarquía normal (oculta cuando el checkbox está activado) */}
+                    {!assignToAllDivision && (
+                      <>
+                        <ThemedText style={styles.signatureHintMuted}>
+                          Filtra el árbol hasta el nivel deseado. Si seleccionas un nivel superior, se vincularán todos los puestos debajo.
+                        </ThemedText>
 
-                    <ThemedView style={styles.structureGroup}>
-                      <ThemedText style={styles.smallLabel}>Contrato</ThemedText>
-                      <ThemedView style={styles.pickerWrapper}>
-                        <Picker
-                          enabled={selectedDivisionId !== null && contratoOptions.length > 0}
-                          selectedValue={selectedContratoId ?? 0}
-                          onValueChange={(v) => {
-                            const next = Number(v) || 0;
-                            setSelectedContratoId(next === 0 ? null : next);
-                            setSelectedSucursalId(null);
-                            setSelectedPuestoId(null);
-                            setHasConfirmedPuestos(false);
-                            setIsSelectedPuestosExpanded(false);
-                          }}
-                        >
-                          <Picker.Item label={selectedDivisionId ? 'Seleccione contrato...' : 'Seleccione división primero'} value={0} />
-                          {contratoOptions.map((c) => (
-                            <Picker.Item key={c.id} label={c.nombre} value={c.id} />
-                          ))}
-                        </Picker>
-                      </ThemedView>
-                      {selectedDivisionId !== null && contratoOptions.length === 0 && (
-                        <ThemedText style={styles.emptyText}>Esta división no tiene contratos para el cliente seleccionado.</ThemedText>
-                      )}
-                    </ThemedView>
+                        <ThemedView style={styles.structureGroup}>
+                          <ThemedText style={styles.smallLabel}>Empresa</ThemedText>
+                          <ThemedView style={styles.pickerWrapper}>
+                            <Picker
+                              enabled={empresaOptions.length > 0}
+                              selectedValue={selectedEmpresaId ?? 0}
+                              onValueChange={(v) => {
+                                const next = Number(v) || 0;
+                                setSelectedEmpresaId(next === 0 ? null : next);
+                                setSelectedClienteId(null);
+                                setSelectedDivisionId(null);
+                                setSelectedContratoId(null);
+                                setSelectedSucursalId(null);
+                                setSelectedPuestoId(null);
+                                setHasConfirmedPuestos(false);
+                                setIsSelectedPuestosExpanded(false);
+                              }}
+                            >
+                              <Picker.Item label="Seleccione empresa..." value={0} />
+                              {empresaOptions.map((e) => (
+                                <Picker.Item key={e.id} label={e.nombre} value={e.id} />
+                              ))}
+                            </Picker>
+                          </ThemedView>
+                        </ThemedView>
 
-                    <ThemedView style={styles.structureGroup}>
-                      <ThemedText style={styles.smallLabel}>Sucursal (Corpo)</ThemedText>
-                      <ThemedView style={styles.pickerWrapper}>
-                        <Picker
-                          enabled={selectedContratoId !== null && sucursalOptions.length > 0}
-                          selectedValue={selectedSucursalId ?? 0}
-                          onValueChange={(v) => {
-                            const next = Number(v) || 0;
-                            setSelectedSucursalId(next === 0 ? null : next);
-                            setSelectedPuestoId(null);
-                            setHasConfirmedPuestos(false);
-                            setIsSelectedPuestosExpanded(false);
-                          }}
-                        >
-                          <Picker.Item label={selectedContratoId ? 'Seleccione sucursal...' : 'Seleccione contrato primero'} value={0} />
-                          {sucursalOptions.map((s) => (
-                            <Picker.Item key={s.id} label={s.nombre} value={s.id} />
-                          ))}
-                        </Picker>
-                      </ThemedView>
-                      {selectedContratoId !== null && sucursalOptions.length === 0 && (
-                        <ThemedText style={styles.emptyText}>Este contrato no tiene sucursales.</ThemedText>
-                      )}
-                    </ThemedView>
+                        <ThemedView style={styles.structureGroup}>
+                          <ThemedText style={styles.smallLabel}>Cliente</ThemedText>
+                          <ThemedView style={styles.pickerWrapper}>
+                            <Picker
+                              enabled={selectedEmpresaId !== null && clienteOptions.length > 0}
+                              selectedValue={selectedClienteId ?? 0}
+                              onValueChange={(v) => {
+                                const next = Number(v) || 0;
+                                setSelectedClienteId(next === 0 ? null : next);
+                                setSelectedDivisionId(null);
+                                setSelectedContratoId(null);
+                                setSelectedSucursalId(null);
+                                setSelectedPuestoId(null);
+                                setHasConfirmedPuestos(false);
+                                setIsSelectedPuestosExpanded(false);
+                              }}
+                            >
+                              <Picker.Item label={selectedEmpresaId ? 'Seleccione cliente...' : 'Seleccione empresa primero'} value={0} />
+                              {clienteOptions.map((c) => (
+                                <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                              ))}
+                            </Picker>
+                          </ThemedView>
+                          {selectedEmpresaId !== null && clienteOptions.length === 0 && (
+                            <ThemedText style={styles.emptyText}>No hay clientes disponibles para esta empresa.</ThemedText>
+                          )}
+                        </ThemedView>
 
-                    <ThemedView style={styles.structureGroup}>
-                      <ThemedText style={styles.smallLabel}>Puesto</ThemedText>
-                      <ThemedView style={styles.pickerWrapper}>
-                        <Picker
-                          enabled={selectedSucursalId !== null && puestoOptions.length > 0}
-                          selectedValue={selectedPuestoId ?? 0}
-                          onValueChange={(v) => {
-                            const next = Number(v) || 0;
-                            setSelectedPuestoId(next === 0 ? null : next);
-                            setHasConfirmedPuestos(false);
-                            setIsSelectedPuestosExpanded(false);
-                          }}
-                        >
-                          <Picker.Item label={selectedSucursalId ? 'Seleccione puesto (opcional)' : 'Seleccione sucursal primero'} value={0} />
-                          {puestoOptions.map((p) => (
-                            <Picker.Item key={p.id} label={p.nombre} value={p.id} />
-                          ))}
-                        </Picker>
-                      </ThemedView>
-                      {selectedSucursalId !== null && puestoOptions.length === 0 && (
-                        <ThemedText style={styles.emptyText}>Esta sucursal no tiene puestos.</ThemedText>
-                      )}
-                    </ThemedView>
+                        <ThemedView style={styles.structureGroup}>
+                          <ThemedText style={styles.smallLabel}>División</ThemedText>
+                          <ThemedView style={styles.pickerWrapper}>
+                            <Picker
+                              enabled={selectedClienteId !== null && divisionOptions.length > 0}
+                              selectedValue={selectedDivisionId ?? 0}
+                              onValueChange={(v) => {
+                                const next = Number(v) || 0;
+                                setSelectedDivisionId(next === 0 ? null : next);
+                                setSelectedContratoId(null);
+                                setSelectedSucursalId(null);
+                                setSelectedPuestoId(null);
+                                setHasConfirmedPuestos(false);
+                                setIsSelectedPuestosExpanded(false);
+                              }}
+                            >
+                              <Picker.Item label={selectedClienteId ? 'Seleccione división...' : 'Seleccione cliente primero'} value={0} />
+                              {divisionOptions.map((d) => (
+                                <Picker.Item key={d.id} label={d.nombre} value={d.id} />
+                              ))}
+                            </Picker>
+                          </ThemedView>
+                          {selectedClienteId !== null && divisionOptions.length === 0 && (
+                            <ThemedText style={styles.emptyText}>Este cliente no tiene divisiones con contratos.</ThemedText>
+                          )}
+                        </ThemedView>
 
+                        <ThemedView style={styles.structureGroup}>
+                          <ThemedText style={styles.smallLabel}>Contrato</ThemedText>
+                          <ThemedView style={styles.pickerWrapper}>
+                            <Picker
+                              enabled={selectedDivisionId !== null && contratoOptions.length > 0}
+                              selectedValue={selectedContratoId ?? 0}
+                              onValueChange={(v) => {
+                                const next = Number(v) || 0;
+                                setSelectedContratoId(next === 0 ? null : next);
+                                setSelectedSucursalId(null);
+                                setSelectedPuestoId(null);
+                                setHasConfirmedPuestos(false);
+                                setIsSelectedPuestosExpanded(false);
+                              }}
+                            >
+                              <Picker.Item label={selectedDivisionId ? 'Seleccione contrato...' : 'Seleccione división primero'} value={0} />
+                              {contratoOptions.map((c) => (
+                                <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                              ))}
+                            </Picker>
+                          </ThemedView>
+                          {selectedDivisionId !== null && contratoOptions.length === 0 && (
+                            <ThemedText style={styles.emptyText}>Esta división no tiene contratos para el cliente seleccionado.</ThemedText>
+                          )}
+                        </ThemedView>
+
+                        <ThemedView style={styles.structureGroup}>
+                          <ThemedText style={styles.smallLabel}>Sucursal (Corpo)</ThemedText>
+                          <ThemedView style={styles.pickerWrapper}>
+                            <Picker
+                              enabled={selectedContratoId !== null && sucursalOptions.length > 0}
+                              selectedValue={selectedSucursalId ?? 0}
+                              onValueChange={(v) => {
+                                const next = Number(v) || 0;
+                                setSelectedSucursalId(next === 0 ? null : next);
+                                setSelectedPuestoId(null);
+                                setHasConfirmedPuestos(false);
+                                setIsSelectedPuestosExpanded(false);
+                              }}
+                            >
+                              <Picker.Item label={selectedContratoId ? 'Seleccione sucursal...' : 'Seleccione contrato primero'} value={0} />
+                              {sucursalOptions.map((s) => (
+                                <Picker.Item key={s.id} label={s.nombre} value={s.id} />
+                              ))}
+                            </Picker>
+                          </ThemedView>
+                          {selectedContratoId !== null && sucursalOptions.length === 0 && (
+                            <ThemedText style={styles.emptyText}>Este contrato no tiene sucursales.</ThemedText>
+                          )}
+                        </ThemedView>
+
+                        <ThemedView style={styles.structureGroup}>
+                          <ThemedText style={styles.smallLabel}>Puesto</ThemedText>
+                          <ThemedView style={styles.pickerWrapper}>
+                            <Picker
+                              enabled={selectedSucursalId !== null && puestoOptions.length > 0}
+                              selectedValue={selectedPuestoId ?? 0}
+                              onValueChange={(v) => {
+                                const next = Number(v) || 0;
+                                setSelectedPuestoId(next === 0 ? null : next);
+                                setHasConfirmedPuestos(false);
+                                setIsSelectedPuestosExpanded(false);
+                              }}
+                            >
+                              <Picker.Item label={selectedSucursalId ? 'Seleccione puesto (opcional)' : 'Seleccione sucursal primero'} value={0} />
+                              {puestoOptions.map((p) => (
+                                <Picker.Item key={p.id} label={p.nombre} value={p.id} />
+                              ))}
+                            </Picker>
+                          </ThemedView>
+                          {selectedSucursalId !== null && puestoOptions.length === 0 && (
+                            <ThemedText style={styles.emptyText}>Esta sucursal no tiene puestos.</ThemedText>
+                          )}
+                        </ThemedView>
+                      </>
+                    )}
+
+                    {/* Botón Confirmar y contador (siempre visible) */}
                     <ThemedView style={styles.treeActionsRow}>
                       <TouchableOpacity style={styles.treeActionPrimary} onPress={applyPuestosFromTree}>
                         <Ionicons name="checkmark-circle-outline" size={18} color="#FFFFFF" />
@@ -1911,6 +2182,7 @@ export default function JobManualsScreen() {
                       Seleccionados: {selectedPuestos.length} | En el filtro: {filteredPuestosFromTree.length}
                     </ThemedText>
 
+                    {/* Puestos confirmados en collapsable (siempre visible cuando hay puestos confirmados) */}
                     {hasConfirmedPuestos && selectedPuestosUi.length > 0 && (
                       <ThemedView style={styles.selectedPuestosBox}>
                         <TouchableOpacity
@@ -1956,9 +2228,9 @@ export default function JobManualsScreen() {
                       </ThemedView>
                     )}
 
-                    {filteredPuestosFromTree.length > 150 && (
+                    {!assignToAllDivision && filteredPuestosFromTree.length > 150 && (
                       <ThemedText style={styles.emptyText}>
-                        Hay {filteredPuestosFromTree.length} puestos en este nivel. Filtra más o pulsa “Confirmar”.
+                        Hay {filteredPuestosFromTree.length} puestos en este nivel. Filtra más o pulsa "Confirmar".
                       </ThemedText>
                     )}
                   </>
@@ -2089,6 +2361,7 @@ export default function JobManualsScreen() {
                       setQuizTempOptionInput('');
                       setQuizTempAnswer('');
                       setQuizTempAnswers([]);
+                      setQuizTempPoints('');
                       setIsQuizModalVisible(true);
                     }}
                   >
@@ -2100,26 +2373,62 @@ export default function JobManualsScreen() {
                 {quizQuestions.length === 0 ? (
                   <ThemedText style={styles.quizEmptyText}>Sin preguntas configuradas</ThemedText>
                 ) : (
-                  <ThemedView style={styles.quizList}>
-                    {quizQuestions.map((q) => (
-                      <ThemedView key={q.id} style={styles.quizQuestionCard}>
-                        <ThemedView style={styles.quizQuestionHeader}>
-                          <ThemedText style={styles.quizQuestionTitle} numberOfLines={2}>
-                            {q.title}
+                  <>
+                    <ThemedView style={styles.quizList}>
+                      {quizQuestions.map((q) => {
+                        const totalPoints = quizQuestions.reduce((sum, question) => sum + (question.points || 0), 0);
+                        return (
+                          <ThemedView key={q.id} style={styles.quizQuestionCard}>
+                            <ThemedView style={styles.quizQuestionHeader}>
+                              <ThemedText style={styles.quizQuestionTitle} numberOfLines={2}>
+                                {q.title}
+                              </ThemedText>
+                              <TouchableOpacity
+                                onPress={() => setQuizQuestions(prev => prev.filter(x => x.id !== q.id))}
+                                style={styles.quizRemoveButton}
+                              >
+                                <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                              </TouchableOpacity>
+                            </ThemedView>
+                            <ThemedText style={styles.quizQuestionMeta}>
+                              Tipo: {getQuizTypeLabel(q.type)} • Puntaje: {q.points || 0} puntos
+                            </ThemedText>
+                          </ThemedView>
+                        );
+                      })}
+                    </ThemedView>
+                    {(() => {
+                      const totalPoints = quizQuestions.reduce((sum, question) => sum + (question.points || 0), 0);
+                      return (
+                        <ThemedView style={styles.quizTotalPointsContainer}>
+                          <ThemedText style={styles.quizTotalPointsText}>
+                            Puntaje máximo del quiz: {totalPoints} puntos
                           </ThemedText>
-                          <TouchableOpacity
-                            onPress={() => setQuizQuestions(prev => prev.filter(x => x.id !== q.id))}
-                            style={styles.quizRemoveButton}
-                          >
-                            <Ionicons name="trash-outline" size={18} color="#FF3B30" />
-                          </TouchableOpacity>
                         </ThemedView>
-                        <ThemedText style={styles.quizQuestionMeta}>
-                          Tipo: {q.type}
-                        </ThemedText>
-                      </ThemedView>
-                    ))}
-                  </ThemedView>
+                      );
+                    })()}
+                    <ThemedView style={styles.formGroup}>
+                      <ThemedText style={styles.formLabel}>Porcentaje mínimo de aprobación (%) *</ThemedText>
+                      <TextInput
+                        style={styles.formInput}
+                        value={String(quizMinApprovalPercentage)}
+                        onChangeText={(text) => {
+                          const value = parseFloat(text);
+                          if (!isNaN(value) && value >= 0 && value <= 100) {
+                            setQuizMinApprovalPercentage(value);
+                          } else if (text === '') {
+                            setQuizMinApprovalPercentage(0);
+                          }
+                        }}
+                        placeholder="70"
+                        placeholderTextColor="#999"
+                        keyboardType="numeric"
+                      />
+                      <ThemedText style={styles.signatureHintMuted}>
+                        El usuario debe obtener al menos este porcentaje del puntaje total para aprobar.
+                      </ThemedText>
+                    </ThemedView>
+                  </>
                 )}
               </ThemedView>
 
@@ -2412,7 +2721,8 @@ export default function JobManualsScreen() {
                   <ThemedView style={styles.viewerSection}>
                     <ThemedText style={styles.viewerSectionTitle}>Firmas registradas</ThemedText>
                     {(() => {
-                      const quizCfg = parseQuizFromManual(selectedManual?.quiz);
+                      const quizCfgData = parseQuizFromManual(selectedManual?.quiz);
+                      const quizCfg = quizCfgData.questions;
                       const hasQuizConfigured = quizCfg.length > 0;
 
                       return (selectedManual?.visualizaciones || []).map((firma) => {
@@ -2540,13 +2850,23 @@ export default function JobManualsScreen() {
                                         (Array.isArray(q.answers) ? q.answers.join(', ') : '') ||
                                         '';
 
+                                      // Calificación automática para multiple_choice
+                                      const isAutoGraded = q.type === 'multiple_choice';
+                                      const isCorrect = isAutoGraded && userAnswer === correctAnswer;
+
+                                      // Obtener puntaje actual (si ya fue calificado) o calcular automáticamente
+                                      const currentScore = quizReviewScores[firma.empleado_id]?.[q.id];
+                                      const questionPoints = q.points || 0;
+                                      const autoScore = isAutoGraded && isCorrect ? questionPoints : (isAutoGraded ? 0 : undefined);
+                                      const displayScore = currentScore !== undefined ? currentScore : (autoScore !== undefined ? autoScore : null);
+
                                       return (
                                         <ThemedView key={q.id} style={styles.quizReviewItem}>
                                           <ThemedText style={styles.quizReviewQuestionTitle} numberOfLines={3}>
                                             {q.title}
                                           </ThemedText>
                                           <ThemedText style={styles.quizQuestionMeta}>
-                                            • {getQuizTypeLabel(q.type)}
+                                            • {getQuizTypeLabel(q.type)} {questionPoints > 0 ? `• Puntaje máximo: ${questionPoints}` : ''}
                                           </ThemedText>
 
                                           <ThemedView style={styles.quizReviewRow}>
@@ -2557,53 +2877,145 @@ export default function JobManualsScreen() {
                                             <ThemedText style={styles.quizReviewLabel}>Respuesta correcta</ThemedText>
                                             <ThemedText style={styles.quizReviewValue}>{correctAnswer || '—'}</ThemedText>
                                           </ThemedView>
+
+                                          {/* Campo de puntaje (excepto para multiple_choice que se califica automáticamente) */}
+                                          <ThemedView style={styles.quizReviewRow}>
+                                            <ThemedText style={styles.quizReviewLabel}>
+                                              Puntaje obtenido {isAutoGraded ? '(automático)' : `(máximo: ${questionPoints})`}
+                                            </ThemedText>
+                                            {isAutoGraded ? (
+                                              <ThemedText style={[styles.quizReviewValue, isCorrect && { color: '#34C759' }, !isCorrect && { color: '#FF3B30' }]}>
+                                                {displayScore !== null ? `${displayScore} / ${questionPoints}` : `0 / ${questionPoints}`}
+                                              </ThemedText>
+                                            ) : (
+                                              <TextInput
+                                                style={[styles.formInput, { width: 100, textAlign: 'right' }]}
+                                                value={displayScore !== null ? String(displayScore) : ''}
+                                                onChangeText={(text) => {
+                                                  const value = text.trim() === '' ? null : parseFloat(text);
+                                                  if (text.trim() === '' || (!isNaN(value as number) && value! >= 0 && value! <= questionPoints)) {
+                                                    setQuizReviewScores(prev => ({
+                                                      ...prev,
+                                                      [firma.empleado_id]: {
+                                                        ...(prev[firma.empleado_id] || {}),
+                                                        [q.id]: value === null ? 0 : value,
+                                                      },
+                                                    }));
+                                                  }
+                                                }}
+                                                placeholder="0"
+                                                placeholderTextColor="#999"
+                                                keyboardType="numeric"
+                                              />
+                                            )}
+                                          </ThemedView>
                                         </ThemedView>
                                       );
                                     })}
+
+                                    {/* Resumen de puntajes */}
+                                    {(() => {
+                                      const totalPoints = quizCfg.reduce((sum, q) => sum + (q.points || 0), 0);
+                                      const obtainedPoints = quizCfg.reduce((sum, q) => {
+                                        if (q.type === 'multiple_choice') {
+                                          const ans = quizAnswers.find(a => String(a.question_id) === String(q.id));
+                                          const userAnswer = (ans?.user_answer && String(ans.user_answer)) || '';
+                                          const correctAnswer = (q.answer && String(q.answer)) || '';
+                                          return sum + (userAnswer === correctAnswer ? (q.points || 0) : 0);
+                                        } else {
+                                          const score = quizReviewScores[firma.empleado_id]?.[q.id];
+                                          return sum + (score !== undefined ? score : 0);
+                                        }
+                                      }, 0);
+                                      // Calcular porcentaje: puntos obtenidos / puntaje máximo * 100
+                                      const percentage = totalPoints > 0 ? (obtainedPoints / totalPoints) * 100 : 0;
+                                      const minPercentage = quizCfgData.minApprovalPercentage || 70;
+                                      const isApproved = percentage >= minPercentage;
+
+                                      return (
+                                        <ThemedView style={styles.quizReviewSummary}>
+                                          <ThemedText style={styles.quizReviewSummaryTitle}>Resumen</ThemedText>
+                                          <ThemedView style={styles.quizReviewRow}>
+                                            <ThemedText style={styles.quizReviewLabel}>Puntaje máximo</ThemedText>
+                                            <ThemedText style={styles.quizReviewValue}>{totalPoints} puntos</ThemedText>
+                                          </ThemedView>
+                                          <ThemedView style={styles.quizReviewRow}>
+                                            <ThemedText style={styles.quizReviewLabel}>Puntaje obtenido</ThemedText>
+                                            <ThemedText style={styles.quizReviewValue}>{obtainedPoints} puntos</ThemedText>
+                                          </ThemedView>
+                                          <ThemedView style={styles.quizReviewRow}>
+                                            <ThemedText style={styles.quizReviewLabel}>Porcentaje obtenido</ThemedText>
+                                            <ThemedText style={styles.quizReviewValue}>{percentage.toFixed(1)}%</ThemedText>
+                                          </ThemedView>
+                                          <ThemedView style={styles.quizReviewRow}>
+                                            <ThemedText style={styles.quizReviewLabel}>Mínimo requerido</ThemedText>
+                                            <ThemedText style={styles.quizReviewValue}>{minPercentage}%</ThemedText>
+                                          </ThemedView>
+                                          <ThemedView style={styles.quizReviewRow}>
+                                            <ThemedText style={styles.quizReviewLabel}>Estado</ThemedText>
+                                            <ThemedText style={[styles.quizReviewValue, isApproved ? { color: '#34C759', fontWeight: '600' } : { color: '#FF3B30', fontWeight: '600' }]}>
+                                              {isApproved ? 'Aprobado' : 'Reprobado'}
+                                            </ThemedText>
+                                          </ThemedView>
+                                        </ThemedView>
+                                      );
+                                    })()}
                                   </ThemedView>
                                 )}
 
-                                {hasQuizAnswers && (
-                                  <ThemedView style={styles.quizReviewActionsRow}>
-                                    <TouchableOpacity
-                                      style={[
-                                        styles.quizReviewActionBtn,
-                                        styles.quizReviewApproveBtn,
-                                        (updatingQuizResultByEmployee[firma.empleado_id] || approvedPending) && styles.formButtonDisabled,
-                                      ]}
-                                      disabled={updatingQuizResultByEmployee[firma.empleado_id] || approvedPending}
-                                      onPress={() => handleSetQuizResult(selectedManual?.id ?? 0, firma.empleado_id, true)}
-                                    >
-                                      {updatingQuizResultByEmployee[firma.empleado_id] ? (
-                                        <ActivityIndicator size="small" color="#FFFFFF" />
-                                      ) : (
-                                        <>
-                                          <Ionicons name="checkmark-circle" size={18} color="#FFFFFF" />
-                                          <ThemedText style={styles.quizReviewActionText}>Aprobar</ThemedText>
-                                        </>
-                                      )}
-                                    </TouchableOpacity>
+                                {hasQuizAnswers && (() => {
+                                  const totalPoints = quizCfg.reduce((sum, q) => sum + (q.points || 0), 0);
+                                  const obtainedPoints = quizCfg.reduce((sum, q) => {
+                                    if (q.type === 'multiple_choice') {
+                                      const ans = quizAnswers.find(a => String(a.question_id) === String(q.id));
+                                      const userAnswer = (ans?.user_answer && String(ans.user_answer)) || '';
+                                      const correctAnswer = (q.answer && String(q.answer)) || '';
+                                      return sum + (userAnswer === correctAnswer ? (q.points || 0) : 0);
+                                    } else {
+                                      const score = quizReviewScores[firma.empleado_id]?.[q.id];
+                                      return sum + (score !== undefined ? score : 0);
+                                    }
+                                  }, 0);
+                                  const percentage = totalPoints > 0 ? (obtainedPoints / totalPoints) * 100 : 0;
+                                  const minPercentage = quizCfgData.minApprovalPercentage || 70;
+                                  const isApproved = percentage >= minPercentage;
 
-                                    <TouchableOpacity
-                                      style={[
-                                        styles.quizReviewActionBtn,
-                                        styles.quizReviewRejectBtn,
-                                        (updatingQuizResultByEmployee[firma.empleado_id] || approvedPending) && styles.formButtonDisabled,
-                                      ]}
-                                      disabled={updatingQuizResultByEmployee[firma.empleado_id] || approvedPending}
-                                      onPress={() => handleSetQuizResult(selectedManual?.id ?? 0, firma.empleado_id, false)}
-                                    >
-                                      {updatingQuizResultByEmployee[firma.empleado_id] ? (
-                                        <ActivityIndicator size="small" color="#FFFFFF" />
-                                      ) : (
-                                        <>
-                                          <Ionicons name="close-circle" size={18} color="#FFFFFF" />
-                                          <ThemedText style={styles.quizReviewActionText}>Reprobar</ThemedText>
-                                        </>
+                                  // Verificar si todas las preguntas han sido calificadas
+                                  const allQuestionsScored = quizCfg.every(q => {
+                                    if (q.type === 'multiple_choice') return true; // Se califica automáticamente
+                                    return quizReviewScores[firma.empleado_id]?.[q.id] !== undefined;
+                                  });
+
+                                  return (
+                                    <ThemedView style={styles.quizReviewActionsRow}>
+                                      <TouchableOpacity
+                                        style={[
+                                          styles.quizReviewActionBtn,
+                                          isApproved ? styles.quizReviewApproveBtn : styles.quizReviewRejectBtn,
+                                          (updatingQuizResultByEmployee[firma.empleado_id] || approvedPending || !allQuestionsScored) && styles.formButtonDisabled,
+                                        ]}
+                                        disabled={updatingQuizResultByEmployee[firma.empleado_id] || approvedPending || !allQuestionsScored}
+                                        onPress={() => handleSetQuizResult(selectedManual?.id ?? 0, firma.empleado_id, isApproved)}
+                                      >
+                                        {updatingQuizResultByEmployee[firma.empleado_id] ? (
+                                          <ActivityIndicator size="small" color="#FFFFFF" />
+                                        ) : (
+                                          <>
+                                            <Ionicons name={isApproved ? "checkmark-circle" : "close-circle"} size={18} color="#FFFFFF" />
+                                            <ThemedText style={styles.quizReviewActionText}>
+                                              Confirmar resultado {isApproved ? '(Aprobado)' : '(Reprobado)'}
+                                            </ThemedText>
+                                          </>
+                                        )}
+                                      </TouchableOpacity>
+                                      {!allQuestionsScored && (
+                                        <ThemedText style={[styles.quizEmptyText, { marginTop: 8, textAlign: 'center' }]}>
+                                          Debe calificar todas las preguntas con puntaje antes de confirmar
+                                        </ThemedText>
                                       )}
-                                    </TouchableOpacity>
-                                  </ThemedView>
-                                )}
+                                    </ThemedView>
+                                  );
+                                })()}
                               </ThemedView>
                             )}
                           </ThemedView>
@@ -2690,7 +3102,8 @@ export default function JobManualsScreen() {
               {/* Quiz (responder) */}
               {(() => {
                 if (!selectedManual) return null;
-                const quizCfg = parseQuizFromManual(selectedManual.quiz);
+                const quizCfgData = parseQuizFromManual(selectedManual.quiz);
+                const quizCfg = quizCfgData.questions;
                 if (!quizCfg || quizCfg.length === 0) return null;
 
                 // Regla: mostrar si no ha firmado o si puede reintentar por reprobación
@@ -2723,7 +3136,7 @@ export default function JobManualsScreen() {
                             {q.title}
                           </ThemedText>
                           <ThemedText style={styles.quizQuestionMeta}>
-                            {getQuizTypeLabel(q.type)}
+                            {getQuizTypeLabel(q.type)} • Puntaje: {q.points || 0} puntos
                           </ThemedText>
 
                           {q.type === 'short' && (
@@ -2947,7 +3360,8 @@ export default function JobManualsScreen() {
                               return;
                             }
 
-                            const quizCfg = parseQuizFromManual(selectedManual.quiz);
+                            const quizCfgData = parseQuizFromManual(selectedManual.quiz);
+                            const quizCfg = quizCfgData.questions;
                             const hasQuiz = quizCfg.length > 0;
 
                             // Validar quiz (obligatorio si existe)
@@ -3306,6 +3720,20 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#666666',
   },
+  quizTotalPointsContainer: {
+    marginTop: 12,
+    padding: 12,
+    backgroundColor: '#F0F4FF',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#D6E6FF',
+  },
+  quizTotalPointsText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#007AFF',
+    textAlign: 'center',
+  },
   quizTypeList: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -3405,6 +3833,20 @@ const styles = StyleSheet.create({
     marginTop: 6,
     marginBottom: 8,
     fontWeight: '600',
+  },
+  checkboxContainer: {
+    marginBottom: 16,
+    paddingVertical: 8,
+  },
+  checkboxRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  checkboxLabel: {
+    fontSize: 14,
+    color: '#000000',
+    flex: 1,
   },
   structureGroup: {
     marginTop: 10,
@@ -3855,6 +4297,20 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontWeight: '600',
     fontSize: 13,
+  },
+  quizReviewSummary: {
+    marginTop: 16,
+    padding: 12,
+    backgroundColor: '#F8F9FA',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+  },
+  quizReviewSummaryTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#000000',
+    marginBottom: 8,
   },
   deleteButton: {
     padding: 6,

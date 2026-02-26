@@ -1,13 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../utils/verifyToken";
-import { prisma } from "../../../utils/prismaClient";
+import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
-import fs from "fs";
-import path from "path";
-import { v4 as uuidv4 } from "uuid";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
 import { createReport } from "../../../utils/createReporteArticuloMantenimiento";
+import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
 
 function safeParseJson<T>(value: any, fallback: T): T {
   if (!value) return fallback;
@@ -21,71 +19,45 @@ function safeParseJson<T>(value: any, fallback: T): T {
   return value as T;
 }
 
-function normalizeBase64(b64: string): string {
-  if (!b64) return "";
-  const idx = b64.indexOf("base64,");
-  if (idx !== -1) return b64.slice(idx + "base64,".length);
-  return b64;
-}
-
-// Función recursiva para procesar imágenes en la evaluación (como StaffEvaluationsScreen)
-function processEvaluationImages(evaluation: any, checklistId: number): any {
+async function processEvaluationImages(req: NextRequest, evaluation: any, checklistId: number): Promise<any> {
   if (!evaluation || typeof evaluation !== "object") return evaluation;
 
-  if (Array.isArray(evaluation)) {
-    return evaluation.map((item) => processEvaluationImages(item, checklistId));
-  }
-
-  const processed: any = { ...evaluation };
-
-  // Si es un input de tipo photo con value (data URI), procesar la imagen
-  if (processed.type === "photo" && processed.value && typeof processed.value === "string" && processed.value.startsWith("data:image/")) {
-    try {
-      console.log(`Procesando imagen para input ID: ${processed.id}, value length: ${processed.value.length}`);
-      const dir = path.join(process.cwd(), "public", "uploads", "checklist-supervision", `${checklistId}`);
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-
-      // Extraer base64 del data URI
-      const normalizedBase64 = normalizeBase64(String(processed.value));
-      console.log(`Base64 normalizado length: ${normalizedBase64.length}`);
-
-      // Determinar extensión desde el data URI o usar jpg por defecto
-      const mimeMatch = processed.value.match(/data:image\/([^;]+)/);
-      const ext = mimeMatch ? mimeMatch[1].replace("jpeg", "jpg") : "jpg";
-
-      const buffer = Buffer.from(normalizedBase64, "base64");
-      const fileName = `${uuidv4()}.${ext}`;
-      const filePath = path.join(dir, fileName);
-
-      fs.writeFileSync(filePath, buffer);
-      console.log(`Imagen guardada: ${filePath}, tamaño: ${buffer.length} bytes`);
-
-      // Guardar el nombre del archivo y mantener imageOrientation si existe
-      processed.file_name = fileName;
-      // No eliminar value, pero el backend puede usar file_name para servir la imagen
-      // El frontend seguirá usando value para mostrar la imagen localmente
-      console.log(`Imagen procesada correctamente, file_name: ${fileName}`);
-    } catch (error) {
-      console.error("Error procesando imagen en evaluación:", error);
-      // Si falla, mantener el value original
+  const photoInputs: Array<{ input: any; value: string }> = [];
+  function collectPhotos(obj: any) {
+    if (!obj || typeof obj !== "object") return;
+    if (Array.isArray(obj)) {
+      obj.forEach(collectPhotos);
+      return;
     }
+    if (obj.type === "photo" && obj.value && typeof obj.value === "string" && obj.value.startsWith("data:image/")) {
+      photoInputs.push({ input: obj, value: obj.value });
+    }
+    if (obj.subsections) obj.subsections.forEach(collectPhotos);
+    if (obj.inputs) obj.inputs.forEach(collectPhotos);
   }
+  collectPhotos(evaluation);
 
-  // Procesar recursivamente subsections e inputs
-  if (processed.subsections && Array.isArray(processed.subsections)) {
-    processed.subsections = processed.subsections.map((sub: any) => processEvaluationImages(sub, checklistId));
+  if (photoInputs.length > 0) {
+    const getExt = (v: string) => {
+      const m = v.match(/data:image\/([^;]+)/);
+      return m ? m[1].replace("jpeg", "jpg") : "jpg";
+    };
+    const uploadResp = await uploadDynamicFiles({
+      req,
+      folderPath: `checklist-supervision/${checklistId}`,
+      files: photoInputs.map(({ value }) => ({ type: "image", extension: getExt(value), file_base64: value })),
+    });
+    const uploaded = Array.isArray(uploadResp?.files) ? uploadResp.files : [];
+    photoInputs.forEach(({ input }, i) => {
+      if (uploaded[i]) input.file_name = uploaded[i].name;
+    });
   }
-
-  if (processed.inputs && Array.isArray(processed.inputs)) {
-    processed.inputs = processed.inputs.map((input: any) => processEvaluationImages(input, checklistId));
-  }
-
-  return processed;
+  return evaluation;
 }
 
 export async function GET(req: NextRequest) {
   try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
     if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
     const clienteIdStr = req.nextUrl.searchParams.get("cliente_id");
@@ -97,23 +69,29 @@ export async function GET(req: NextRequest) {
     if (corpoIdStr) where.corpo_id = parseInt(corpoIdStr);
     if (puestoIdStr) where.puesto_id = parseInt(puestoIdStr);
 
-    const rows = await prisma.c_checklist_supervision.findMany({
-      where,
-      include: {
-        e_estructura_cliente: {
-          select: { id: true, nombre: true },
+    const rows = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "c_checklist_supervision",
+        operation: "findMany",
+        where,
+        include: {
+          e_estructura_cliente: {
+            select: { id: true, nombre: true },
+          },
+          e_estructura_sucursal: {
+            select: { id: true, nombre: true },
+          },
+          e_estructura_puesto: {
+            select: { id: true, nombre: true, codigo: true },
+          },
         },
-        e_estructura_sucursal: {
-          select: { id: true, nombre: true },
-        },
-        e_estructura_puesto: {
-          select: { id: true, nombre: true, codigo: true },
-        },
-      },
-      orderBy: { id: "desc" },
+        orderBy: { id: "desc" }
+      }
     });
 
-    const mapped = rows.map((r) => ({
+    const mapped = rows.map((r: any) => ({
       id: r.id,
       cliente_id: r.cliente_id,
       division_id: r.division_id,
@@ -142,7 +120,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
     if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
     const body = await req.json();
@@ -199,34 +177,44 @@ export async function POST(req: NextRequest) {
     console.log(`Total de imágenes encontradas en evaluación: ${imageCount}`);
 
     // Crear el registro primero para obtener el ID
-    const created = await prisma.c_checklist_supervision.create({
+    const created = await callDynamicPrisma({
+      req,
       data: {
-        cliente_id: parseInt(String(cliente_id)),
-        division_id: parseInt(String(division_id)),
-        corpo_id: parseInt(String(corpo_id)),
-        puesto_id: parseInt(String(puesto_id)),
-        fecha: fechaDate,
-        ejecutivo_cuenta: String(ejecutivo_cuenta),
-        evaluacion: JSON.stringify(evaluationParsed), // Temporal, se actualizará después
-        articulos_puesto: articulos_puesto ? String(articulos_puesto) : '',
-        firma_supervisor: String(firma_supervisor),
-        firma_responsable: String(firma_responsable),
-        created_by: parseInt(String((payload as any)?.id ?? 0)) || 0,
-        created_at: createdAt,
-      },
+        action: "POST",
+        table: "c_checklist_supervision",
+        data: {
+          cliente_id: parseInt(String(cliente_id)),
+          division_id: parseInt(String(division_id)),
+          corpo_id: parseInt(String(corpo_id)),
+          puesto_id: parseInt(String(puesto_id)),
+          fecha: fechaDate.toISOString(),
+          ejecutivo_cuenta: String(ejecutivo_cuenta),
+          evaluacion: JSON.stringify(evaluationParsed), // Temporal, se actualizará después
+          articulos_puesto: articulos_puesto ? String(articulos_puesto) : '',
+          firma_supervisor: String(firma_supervisor),
+          firma_responsable: String(firma_responsable),
+          created_by: parseInt(String((payload as any)?.id ?? 0)) || 0,
+          created_at: createdAt.toISOString(),
+        }
+      }
     });
 
     // Procesar imágenes en la evaluación y actualizar
     try {
       console.log("Procesando imágenes para checklist ID:", created.id);
-      const processedEvaluation = processEvaluationImages(evaluationParsed, created.id);
+      const processedEvaluation = await processEvaluationImages(req, evaluationParsed, created.id);
       console.log("Evaluación procesada, guardando...");
 
-      await prisma.c_checklist_supervision.update({
-        where: { id: created.id },
+      await callDynamicPrisma({
+        req,
         data: {
-          evaluacion: JSON.stringify(processedEvaluation),
-        },
+          action: "UPDATE",
+          table: "c_checklist_supervision",
+          where: { id: created.id },
+          data: {
+            evaluacion: JSON.stringify(processedEvaluation),
+          }
+        }
       });
       console.log("Evaluación actualizada correctamente");
     } catch (error) {
@@ -239,16 +227,25 @@ export async function POST(req: NextRequest) {
       let sucursalNombre = "Desconocida";
       let puestoNombre = "Desconocido";
       if (puesto_id) {
-        const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: puesto_id } });
+        const puesto = await callDynamicPrisma({
+          req,
+          data: { action: "GET", table: "e_estructura_puesto", operation: "findUnique", where: { id: puesto_id } }
+        });
         if (puesto) {
           puestoNombre = puesto.nombre + " (" + puesto.codigo + ")";
         }
       }
-      const empleado = await prisma.c_empleado.findUnique({ where: { id: parseInt(String((payload as any)?.id ?? 0)) || 0 } });
+      const empleado = await callDynamicPrisma({
+        req,
+        data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: parseInt(String((payload as any)?.id ?? 0)) || 0 } }
+      });
       if (empleado) {
         empNombre = empleado.nombre + " " + empleado.primer_apellido + " " + empleado.segundo_apellido;
       }
-      const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: corpo_id } });
+      const sucursal = await callDynamicPrisma({
+        req,
+        data: { action: "GET", table: "e_estructura_sucursal", operation: "findUnique", where: { id: corpo_id } }
+      });
       if (sucursal) {
         sucursalNombre = sucursal.nombre;
       }
@@ -273,7 +270,16 @@ export async function POST(req: NextRequest) {
 
               let was_good = false;
               if (articulo.tipo == "Plan") {
-                const last_mantenimiento = await prisma.c_articulo_mantenimiento.findFirst({ where: { articulo_plan_id: articulo.id }, orderBy: { fecha_solucion: "desc" } });
+                const last_mantenimiento = await callDynamicPrisma({
+                  req,
+                  data: {
+                    action: "GET",
+                    table: "c_articulo_mantenimiento",
+                    operation: "findFirst",
+                    where: { articulo_plan_id: articulo.id },
+                    orderBy: { fecha_solucion: "desc" }
+                  }
+                });
                 if (last_mantenimiento) {
                   if (last_mantenimiento.estado == "Bueno") {
                     was_good = true;
@@ -281,7 +287,16 @@ export async function POST(req: NextRequest) {
                 }
               }
               else {
-                const last_mantenimiento = await prisma.c_articulo_mantenimiento.findFirst({ where: { articulo_asignado_id: articulo.id }, orderBy: { fecha_solucion: "desc" } });
+                const last_mantenimiento = await callDynamicPrisma({
+                  req,
+                  data: {
+                    action: "GET",
+                    table: "c_articulo_mantenimiento",
+                    operation: "findFirst",
+                    where: { articulo_asignado_id: articulo.id },
+                    orderBy: { fecha_solucion: "desc" }
+                  }
+                });
                 if (last_mantenimiento) {
                   if (last_mantenimiento.estado == "Bueno") {
                     was_good = true;
@@ -321,37 +336,42 @@ export async function POST(req: NextRequest) {
 
       if (send_notification) {
         const description = "El empleado " + empNombre + " ha registrado un checklist de supervisión en el puesto " + puestoNombre + " en la sucursal " + sucursalNombre + " el día " + fechaRegistro + " a las " + horaRegistro + articulos_desc;
-        sendNotificationByRole(corpo_id, [created.created_by], "Checklist de supervisión registrado", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
-        createReport(articulos_reporte);
+        await sendNotificationByRole(req, corpo_id, [created.created_by], "Checklist de supervisión registrado", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+        await createReport(req, articulos_reporte);
       }
     }
 
     // Registrar cambio de creación
     const createdBy = parseInt(String((payload as any)?.id ?? 0)) || 0;
-    await prisma.c_cambios_apps_modules.create({
+    await callDynamicPrisma({
+      req,
       data: {
-        nombre_tabla: "c_checklist_supervision",
-        registro_id: created.id,
-        cambios: JSON.stringify([{
-          prop: "__created__",
-          before: null,
-          after: {
-            id: created.id,
-            cliente_id: created.cliente_id,
-            division_id: created.division_id,
-            corpo_id: created.corpo_id,
-            puesto_id: created.puesto_id,
-            fecha: created.fecha.toISOString(),
-            ejecutivo_cuenta: created.ejecutivo_cuenta,
-            evaluacion: created.evaluacion,
-            articulos_puesto: (created as any).articulos_puesto || null,
-            firma_supervisor: created.firma_supervisor,
-            firma_responsable: created.firma_responsable,
-          },
-        }]),
-        created_at: createdAt,
-        created_by: createdBy,
-      },
+        action: "POST",
+        table: "c_cambios_apps_modules",
+        data: {
+          nombre_tabla: "c_checklist_supervision",
+          registro_id: created.id,
+          cambios: JSON.stringify([{
+            prop: "__created__",
+            before: null,
+            after: {
+              id: created.id,
+              cliente_id: created.cliente_id,
+              division_id: created.division_id,
+              corpo_id: created.corpo_id,
+              puesto_id: created.puesto_id,
+              fecha: created.fecha instanceof Date ? created.fecha.toISOString() : created.fecha,
+              ejecutivo_cuenta: created.ejecutivo_cuenta,
+              evaluacion: created.evaluacion,
+              articulos_puesto: (created as any).articulos_puesto || null,
+              firma_supervisor: created.firma_supervisor,
+              firma_responsable: created.firma_responsable,
+            },
+          }]),
+          created_at: createdAt.toISOString(),
+          created_by: createdBy,
+        }
+      }
     });
 
     return NextResponse.json({ status: true, message: "Checklist creado correctamente", id: created.id }, { status: 200 });

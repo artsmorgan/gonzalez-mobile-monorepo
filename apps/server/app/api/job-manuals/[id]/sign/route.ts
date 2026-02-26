@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../../../utils/verifyToken";
-import { prisma } from "../../../../../utils/prismaClient";
+import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByEmployee, sendNotificationByRole } from "../../../../../utils/sendNotification";
 import fs from "fs";
 import path from "path";
-import { v4 as uuidv4 } from "uuid";
+import { uploadDynamicFiles } from "../../../../../utils/callDynamicFilesApi";
 
 export const runtime = "nodejs";
 
@@ -30,20 +30,12 @@ function safeParseJson<T>(value: any, fallback: T): T {
     }
 }
 
-function normalizeBase64(b64: string): string {
-    // acepta "data:...;base64,AAAA" o "AAAA"
-    if (!b64) return "";
-    const idx = b64.indexOf("base64,");
-    if (idx !== -1) return b64.slice(idx + "base64,".length);
-    return b64;
-}
-
 export async function POST(
     req: NextRequest,
     context: { params: Promise<{ id: string }> }
 ) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         const resolvedParams = await context.params;
@@ -56,8 +48,14 @@ export async function POST(
             );
         }
 
-        const manual = await prisma.e_manual_puesto.findUnique({
-            where: { id }
+        const manual = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "e_manual_puesto",
+                operation: "findUnique",
+                where: { id },
+            },
         });
         if (!manual) {
             return NextResponse.json(
@@ -65,6 +63,7 @@ export async function POST(
                 { status: 200 }
             );
         }
+        const manualObj = manual as any;
 
         const { firma_empleado, marca_id, quiz_answear, files } = await req.json();
         if (!firma_empleado || !marca_id) {
@@ -94,8 +93,14 @@ export async function POST(
             }
         }
 
-        const marca = await prisma.c_marca_dia.findUnique({
-            where: { id: marca_id }
+        const marca = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_marca_dia",
+                operation: "findUnique",
+                where: { id: marca_id },
+            },
         });
         if (!marca) {
             return NextResponse.json(
@@ -104,7 +109,8 @@ export async function POST(
             );
         }
 
-        const empleadoId = marca.empleadoFijo_id;
+        const marcaObj = marca as any;
+        const empleadoId = marcaObj.empleadoFijo_id;
         if (!empleadoId) {
             return NextResponse.json(
                 { status: false, message: "Empleado no encontrado" },
@@ -112,8 +118,14 @@ export async function POST(
             );
         }
 
-        const empleado = await prisma.c_empleado.findUnique({
-            where: { id: empleadoId }
+        const empleado = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_empleado",
+                operation: "findUnique",
+                where: { id: empleadoId },
+            },
         });
 
         if (!empleado) {
@@ -123,8 +135,15 @@ export async function POST(
             );
         }
 
-        const puesto = await prisma.e_estructura_puesto.findUnique({
-            where: { id: manual.puesto_id }
+        const empleadoObj = empleado as any;
+        const puesto = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "e_estructura_puesto",
+                operation: "findUnique",
+                where: { id: manualObj.puesto_id },
+            },
         });
         if (!puesto) {
             return NextResponse.json(
@@ -133,8 +152,15 @@ export async function POST(
             );
         }
 
-        const corpo = await prisma.e_estructura_sucursal.findUnique({
-            where: { id: marca.corpo_id }
+        const puestoObj = puesto as any;
+        const corpo = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "e_estructura_sucursal",
+                operation: "findUnique",
+                where: { id: marcaObj.corpo_id },
+            },
         });
         if (!corpo) {
             return NextResponse.json(
@@ -143,15 +169,20 @@ export async function POST(
             );
         }
 
+        const corpoObj = corpo as any;
         // Evitar firmas duplicadas del mismo empleado para el mismo manual
-        const existing = await prisma.e_empleado_visualizacion_manual_puesto.findFirst(
-            {
+        const existing = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "e_empleado_visualizacion_manual_puesto",
+                operation: "findFirst",
                 where: {
                     empleado_id: empleadoId,
                     manual_puesto_id: id
                 }
-            }
-        );
+            },
+        });
 
         const created_at = toZonedTime(
             new Date(),
@@ -160,6 +191,7 @@ export async function POST(
 
         // Si ya firmó antes, eliminar el registro para crear uno nuevo (permite reintentos/revisión de quiz)
         if (existing) {
+            const existingObj = existing as any;
             // borrar archivos físicos asociados a la visualización anterior (si existieran)
             const oldDir = path.join(
                 process.cwd(),
@@ -168,7 +200,7 @@ export async function POST(
                 "job-manuals",
                 `${id}`,
                 "visualizaciones",
-                `${existing.id}`
+                `${existingObj.id}`
             );
             if (fs.existsSync(oldDir)) {
                 try {
@@ -177,8 +209,14 @@ export async function POST(
                     // ignore
                 }
             }
-            await prisma.e_empleado_visualizacion_manual_puesto.delete({
-                where: { id: existing.id }
+            await callDynamicPrisma({
+                req,
+                data: {
+                    action: "DELETE",
+                    table: "e_empleado_visualizacion_manual_puesto",
+                    operation: "delete",
+                    where: { id: existingObj.id },
+                },
             });
         }
 
@@ -187,92 +225,91 @@ export async function POST(
                 ? quiz_answear.trim()
                 : null;
 
-        const createdVis = await prisma.e_empleado_visualizacion_manual_puesto.create({
+        const createdVis = await callDynamicPrisma({
+            req,
             data: {
-                empleado_id: empleadoId,
-                manual_puesto_id: id,
-                nombre_empleado: `${empleado.nombre} ${empleado.primer_apellido} ${empleado.segundo_apellido}`,
-                firma_empleado,
-                quiz_answear: quizAnswearToStore,
-                approved: null,
-                created_at,
-                updated_at: created_at
+                action: "POST",
+                table: "e_empleado_visualizacion_manual_puesto",
+                operation: "create",
+                data: {
+                    empleado_id: empleadoId,
+                    manual_puesto_id: id,
+                    nombre_empleado: `${empleadoObj.nombre} ${empleadoObj.primer_apellido} ${empleadoObj.segundo_apellido}`,
+                    firma_empleado,
+                    quiz_answear: quizAnswearToStore,
+                    approved: null,
+                    created_at: created_at.toISOString(),
+                    updated_at: created_at.toISOString()
+                }
             }
         });
+        const createdVisObj = createdVis as any;
 
-        // Guardar archivos adjuntos (opcional)
+        // Guardar archivos adjuntos (opcional), delegando a /api/dynamic-prisma/files
         if (filesParsed.length > 0) {
-            const dir = path.join(
-                process.cwd(),
-                "public",
-                "uploads",
-                "job-manuals",
-                `${id}`,
-                "visualizaciones",
-                `${createdVis.id}`
-            );
-            if (!fs.existsSync(dir)) {
-                fs.mkdirSync(dir, { recursive: true });
-            }
+            const uploadResp = await uploadDynamicFiles({
+                req,
+                folderPath: `job-manuals/${id}/visualizaciones/${createdVisObj.id}`,
+                files: filesParsed.map((f) => ({
+                    type: f.type,
+                    extension: f.extension,
+                    original_name: f.original_name,
+                    file_base64: f.file_base64,
+                })),
+            });
 
-            for (const f of filesParsed) {
-                if (!f?.file_base64 || !f?.extension || !f?.type) continue;
-
-                let buffer: Buffer;
-                try {
-                    buffer = Buffer.from(normalizeBase64(String(f.file_base64)), "base64");
-                } catch {
-                    console.warn("Formato de archivo inválido, se omite uno de los archivos");
-                    continue;
-                }
-
-                const ext = String(f.extension).replace(".", "").trim() || "dat";
-                const fileName = `${uuidv4()}.${ext}`;
-                const filePath = path.join(dir, fileName);
-                fs.writeFileSync(filePath, buffer);
-
-                const originalName =
-                    (typeof f.original_name === "string" && f.original_name.trim().length > 0)
-                        ? f.original_name.trim()
-                        : fileName;
-
-                await prisma.e_empleado_visualizacion_archivos.create({
+            const uploadedFiles = Array.isArray(uploadResp?.files) ? uploadResp.files : [];
+            for (const uploaded of uploadedFiles) {
+                await callDynamicPrisma({
+                    req,
                     data: {
-                        name: fileName,
-                        original_name: originalName,
-                        type: String(f.type),
-                        extension: ext,
-                        visualizacion_id: createdVis.id,
-                    },
+                        action: "POST",
+                        table: "e_empleado_visualizacion_archivos",
+                        operation: "create",
+                        data: {
+                            name: uploaded.name,
+                            original_name: uploaded.original_name || uploaded.name,
+                            type: String(uploaded.type),
+                            extension: uploaded.extension,
+                            visualizacion_id: createdVisObj.id,
+                        }
+                    }
                 });
             }
         }
 
         const fecha_string = created_at.toISOString().split("T")[0];
         const hora_string = created_at.toISOString().split("T")[1].split(".")[0];
-        const description = `El empleado ${empleado.nombre} ${empleado.primer_apellido} ${empleado.segundo_apellido} ha firmado el manual ${manual.title} desde el puesto ${puesto.nombre} en la sucursal ${corpo.nombre} el día ${fecha_string} a las ${hora_string}`;
+        const description = `El empleado ${empleadoObj.nombre} ${empleadoObj.primer_apellido} ${empleadoObj.segundo_apellido} ha firmado el manual ${manualObj.title} desde el puesto ${puestoObj.nombre} en la sucursal ${corpoObj.nombre} el día ${fecha_string} a las ${hora_string}`;
         // Notificaciones NO deben bloquear la firma (si fallan, solo registrar warning)
         try {
-            await sendNotificationByRole(marca.corpo_id, [marca.plaza_id], "Firma de manual", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+            await sendNotificationByRole(req, marcaObj.corpo_id, [marcaObj.plaza_id], "Firma de manual", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
         } catch (err) {
             console.warn("Fallo enviando notificación por rol (no bloquea la firma):", err);
         }
 
-        const creator = await prisma.c_empleado.findUnique({
-            where: { id: parseInt(manual.created_by) }
+        const creator = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_empleado",
+                operation: "findUnique",
+                where: { id: parseInt(manualObj.created_by) },
+            },
         });
 
         if (creator) {
-            const description = `El empleado ${creator.nombre} ${creator.primer_apellido} ${creator.segundo_apellido} ha firmado el manual ${manual.title} desde el puesto ${puesto.nombre} en la sucursal ${corpo.nombre} el día ${fecha_string} a las ${hora_string}`;
+            const creatorObj = creator as any;
+            const description = `El empleado ${creatorObj.nombre} ${creatorObj.primer_apellido} ${creatorObj.segundo_apellido} ha firmado el manual ${manualObj.title} desde el puesto ${puestoObj.nombre} en la sucursal ${corpoObj.nombre} el día ${fecha_string} a las ${hora_string}`;
             try {
-                await sendNotificationByEmployee(marca.corpo_id, [creator.id], "Firma de manual", description, [creator.id]);
+                await sendNotificationByEmployee(req, marcaObj.corpo_id, [creatorObj.id], "Firma de manual", description, [creatorObj.id]);
             } catch (err) {
                 console.warn("Fallo enviando notificación al creador (no bloquea la firma):", err);
             }
         }
 
         return NextResponse.json(
-            { status: true, message: "Manual firmado correctamente", visualizacion_id: createdVis.id },
+            { status: true, message: "Manual firmado correctamente", visualizacion_id: createdVisObj.id },
             { status: 200 }
         );
     } catch (error: unknown) {

@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../../../utils/verifyToken";
-import { prisma } from "../../../../../utils/prismaClient";
+import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 
 export async function GET(req: NextRequest, context: { params: Promise<{ corpo_id: string }> }) {
   try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
+    const { valid, expired, message } = await verifyAccessTokenByApi(req);
     if (!valid) return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
 
     const resolvedParams = await context.params;
@@ -13,17 +13,24 @@ export async function GET(req: NextRequest, context: { params: Promise<{ corpo_i
       return NextResponse.json({ status: false, message: "Corpo inválido", data: [] }, { status: 400 });
     }
 
-    const records = await prisma.c_agenda_minuta.findMany({
-      where: { corpo_id: corpoIdNum },
-      orderBy: { created_at: "desc" },
-      include: {
-        e_estructura_cliente: { select: { nombre: true } },
-        e_estructura_sucursal: { select: { nombre: true, nro_sucursal: true } },
-        e_estructura_puesto: { select: { nombre: true, codigo: true } },
+    const records = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "c_agenda_minuta",
+        operation: "findMany",
+        where: { corpo_id: corpoIdNum },
+        orderBy: { created_at: "desc" },
+        include: {
+          e_estructura_cliente: { select: { nombre: true } },
+          e_estructura_sucursal: { select: { nombre: true, nro_sucursal: true } },
+          e_estructura_puesto: { select: { nombre: true, codigo: true } },
+        },
       },
     });
 
-    const recordsWithNames = records.map((r: any) => ({
+    const recordsArray = Array.isArray(records) ? records : [];
+    const recordsWithNames = recordsArray.map((r: any) => ({
       ...r,
       id_local: "",
       cliente_nombre: r.e_estructura_cliente?.nombre || null,

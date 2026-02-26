@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../../../utils/verifyToken";
+import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { toZonedTime } from "date-fns-tz";
-import { prisma } from "../../../../../utils/prismaClient";
+import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 
 
 export async function GET(request: NextRequest, context: { params: Promise<{ id: string }> }) {
@@ -9,15 +9,21 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
         const resolvedParams = await context.params;
         const id = parseInt(resolvedParams.id);
 
-        const { valid, expired, payload, message } = verifyAccessToken(request);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(request);
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
-        const empleado = await prisma.c_empleado.findUnique({ where: { id } });
+        const empleado = await callDynamicPrisma({
+            req: request,
+            data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id } }
+        });
         if (!empleado) {
             return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 200 });
         }
 
-        const marcaDia = await prisma.c_marca_dia.findFirst({ where: { empleadoFijo_id: id }, orderBy: { id: "desc" } });
+        const marcaDia = await callDynamicPrisma({
+            req: request,
+            data: { action: "GET", table: "c_marca_dia", operation: "findFirst", where: { empleadoFijo_id: id }, orderBy: { id: "desc" } }
+        });
         if (!marcaDia) {
             return NextResponse.json({ status: false, message: "No se encontró la marca del dia" }, { status: 200 });
         }
@@ -34,7 +40,10 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
             return NextResponse.json({ status: false, message: "Empresa no encontrada" }, { status: 200 });
         }
 
-        const empresa = await prisma.e_estructura_empresa.findUnique({ where: { id: marcaDia.empresa_id } });
+        const empresa = await callDynamicPrisma({
+            req: request,
+            data: { action: "GET", table: "e_estructura_empresa", operation: "findUnique", where: { id: marcaDia.empresa_id } }
+        });
         if (!empresa) {
             return NextResponse.json({ status: false, message: "Empresa no encontrada" }, { status: 200 });
         }

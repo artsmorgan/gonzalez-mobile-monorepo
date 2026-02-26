@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, ActivityIndicator, View, Image, Modal, Dimensions } from 'react-native';
+import { StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, ActivityIndicator, View, Image, Modal, Dimensions, Platform } from 'react-native';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import { useAuth } from '@/contexts/AuthContext';
@@ -19,6 +19,7 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import { eventBus } from '@/hooks/eventBus';
 import authedFetch from '@/hooks/authedFetch';
+import DateTimePicker from '@react-native-community/datetimepicker';
 
 type VisitorsScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Visitors'>;
 
@@ -58,6 +59,7 @@ interface Visitor {
   pers_autoriza_salida: string | null;
   foto_cedula: string | null;
   activos: Activo[];
+  created_at?: string;
   updated_at: string;
   id_local: string;
 }
@@ -67,8 +69,10 @@ interface EditingVisitor {
   id_local: string;
   nombre: string;
   cedula: string;
+  hora_entrada_fecha: string;
   hora_entrada_h: string;
   hora_entrada_m: string;
+  hora_salida_fecha: string;
   hora_salida_h: string;
   hora_salida_m: string;
   razon_visita: string;
@@ -94,9 +98,27 @@ interface EditingDetalle {
 }
 
 export default function VisitorsScreen() {
-  const { employee, refreshAccessToken, logout } = useAuth();
+  const { employee, refreshAccessToken, logout, accessToken } = useAuth();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const navigation = useNavigation<VisitorsScreenNavigationProp>();
+  const appendTokenToUrl = (url: string) => {
+    if (!url) return '';
+    if (!accessToken || accessToken.trim().length === 0) return url;
+    if (/[?&]token=/.test(url)) return url;
+    const sep = url.includes('?') ? '&' : '?';
+    return `${url}${sep}token=${encodeURIComponent(accessToken)}`;
+  };
+
+  const getVisitorCedulaImageUrl = (visitorId: number | string, fotoCedula: string | null): string | null => {
+    if (!fotoCedula || typeof fotoCedula !== 'string' || fotoCedula.trim() === '') return null;
+    if (fotoCedula.startsWith('data:')) return null;
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) return null;
+    const id = typeof visitorId === 'string' ? parseInt(visitorId, 10) : visitorId;
+    if (Number.isNaN(id) || id <= 0) return null;
+    const encodedName = encodeURIComponent(fotoCedula.trim());
+    return appendTokenToUrl(`${apiUrl}/api/uploads/visitors/${id}/cedula?name=${encodedName}`);
+  };
 
   // Visitors state
   const [visitors, setVisitors] = useState<Visitor[]>([]);
@@ -114,8 +136,10 @@ export default function VisitorsScreen() {
     id_local: '',
     nombre: '',
     cedula: '',
+    hora_entrada_fecha: '',
     hora_entrada_h: '',
     hora_entrada_m: '',
+    hora_salida_fecha: '',
     hora_salida_h: '',
     hora_salida_m: '',
     razon_visita: '',
@@ -131,8 +155,10 @@ export default function VisitorsScreen() {
   // Form refs for text inputs (main fields only, activos/detalles remain in state due to dynamic arrays)
   const nombreRef = useRef('');
   const cedulaRef = useRef('');
+  const horaEntradaFechaRef = useRef('');
   const horaEntradaHRef = useRef('');
   const horaEntradaMRef = useRef('');
+  const horaSalidaFechaRef = useRef('');
   const horaSalidaHRef = useRef('');
   const horaSalidaMRef = useRef('');
   const razonVisitaRef = useRef('');
@@ -142,6 +168,8 @@ export default function VisitorsScreen() {
   // Filters state
   const [searchText, setSearchText] = useState('');
   const [selectedTipoVisitante, setSelectedTipoVisitante] = useState<string>('all');
+  const [filterDesde, setFilterDesde] = useState('');
+  const [filterHasta, setFilterHasta] = useState('');
   const [isFiltersExpanded, setIsFiltersExpanded] = useState(false);
 
   // Expanded details state
@@ -152,6 +180,10 @@ export default function VisitorsScreen() {
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef<CameraView | null>(null);
   const [isEditingCamera, setIsEditingCamera] = useState(false);
+  const [showVisitorDatePicker, setShowVisitorDatePicker] = useState(false);
+  const [showVisitorTimePicker, setShowVisitorTimePicker] = useState(false);
+  const [visitorPickerValue, setVisitorPickerValue] = useState(new Date());
+  const [visitorPickerField, setVisitorPickerField] = useState<'entrada_fecha' | 'entrada_hora' | 'salida_fecha' | 'salida_hora' | null>(null);
 
   // Asset types cache
   const [tipoActivos, setTipoActivos] = useState<TipoActivo[]>([]);
@@ -446,40 +478,48 @@ export default function VisitorsScreen() {
     }
   };
 
-  const convert_date = (currentMarca: any, hora_entrada: string, hora_salida: string | null) => {
-    const fechaSplit = currentMarca.fecha.split("T")[0];
-    const year = fechaSplit.split("-")[0];
-    const month = fechaSplit.split("-")[1];
-    const day = fechaSplit.split("-")[2];
+  const normalizeDateToYMD = (value: string) => {
+    const raw = String(value || '').trim().split('T')[0];
+    if (!raw) return '';
+    const ymd = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    if (ymd) return `${ymd[1]}-${ymd[2].padStart(2, '0')}-${ymd[3].padStart(2, '0')}`;
+    const dmy = raw.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
+    if (dmy) return `${dmy[3]}-${dmy[2].padStart(2, '0')}-${dmy[1].padStart(2, '0')}`;
+    return '';
+  };
 
-    const horaInicioSplit = currentMarca.hora_inicio ? currentMarca.hora_inicio.split("T")[1].split(":") : null;
+  const toDMY = (value: string) => {
+    const ymd = normalizeDateToYMD(value);
+    if (!ymd) return String(value || '');
+    const [y, m, d] = ymd.split('-');
+    return `${d}-${m}-${y}`;
+  };
 
-    const hora_entrada_raw = hora_entrada.split(":");
+  const buildIsoFromDateAndTime = (dateInput: string, hh: string, mm: string) => {
+    const ymd = normalizeDateToYMD(dateInput);
+    if (!ymd) return '';
+    const h = String(hh || '').padStart(2, '0');
+    const m = String(mm || '').padStart(2, '0');
+    if (!/^\d{2}$/.test(h) || !/^\d{2}$/.test(m)) return '';
+    return `${ymd}T${h}:${m}:00.000Z`;
+  };
 
-    let final_day_initial = day;
-    if (horaInicioSplit && parseInt(horaInicioSplit[0]) > parseInt(hora_entrada_raw[0])) {
-      final_day_initial = (parseInt(day) + 1).toString().padStart(2, "0");
+  const dateOnlyFromIso = (value?: string | null) => {
+    if (!value) return '';
+    try {
+      const onlyDate = String(value).split('T')[0];
+      return normalizeDateToYMD(onlyDate);
+    } catch {
+      return '';
     }
-
-    let final_day_final = day;
-    if (hora_salida) {
-      const hora_salida_raw = hora_salida.split(":");
-      if (horaInicioSplit && parseInt(horaInicioSplit[0]) > parseInt(hora_salida_raw[0])) {
-        final_day_final = (parseInt(day) + 1).toString().padStart(2, "0");
-      }
-    }
-
-    const hora_entrada_converted = year + "-" + month + "-" + final_day_initial + "T" + hora_entrada_raw[0] + ":" + hora_entrada_raw[1] + ":00.000Z";
-    const hora_salida_converted = hora_salida ? year + "-" + month + "-" + final_day_final + "T" + hora_salida.split(":")[0] + ":" + hora_salida.split(":")[1] + ":00.000Z" : null;
-
-    return { converted_hora_entrada: hora_entrada_converted, converted_hora_salida: hora_salida_converted };
   };
 
   const convertDate = (dateString: string) => {
     try {
-      const dateSplit = dateString.split('T');
-      return dateSplit[0] + ' ' + dateSplit[1].split('.')[0];
-    } catch (error) {
+      const ymd = dateOnlyFromIso(dateString);
+      const timePart = String(dateString).split('T')[1]?.split('.')[0] || '';
+      return `${toDMY(ymd)}${timePart ? ` ${timePart}` : ''}`.trim();
+    } catch {
       return dateString;
     }
   };
@@ -494,15 +534,62 @@ export default function VisitorsScreen() {
     }
   };
 
+  const parseFechaFromString = (dateString: string) => {
+    try {
+      const ymd = dateOnlyFromIso(dateString);
+      return toDMY(ymd);
+    } catch {
+      return '';
+    }
+  };
+
+  const parseTimeToDate = (timeValue?: string) => {
+    const base = new Date();
+    const raw = String(timeValue || '').trim();
+    if (/^\d{2}:\d{2}$/.test(raw)) {
+      const [hh, mm] = raw.split(':').map((v) => parseInt(v, 10));
+      if (!Number.isNaN(hh) && !Number.isNaN(mm)) {
+        base.setHours(hh);
+        base.setMinutes(mm);
+        base.setSeconds(0);
+        base.setMilliseconds(0);
+      }
+    }
+    return base;
+  };
+
+  const parseDateToDate = (dateValue?: string) => {
+    const ymd = normalizeDateToYMD(String(dateValue || ''));
+    const d = ymd ? new Date(`${ymd}T00:00:00`) : new Date();
+    return Number.isNaN(d.getTime()) ? new Date() : d;
+  };
+
+  const openVisitorDatePicker = (field: 'entrada_fecha' | 'salida_fecha', current?: string) => {
+    setVisitorPickerField(field);
+    setVisitorPickerValue(parseDateToDate(current));
+    setShowVisitorDatePicker(true);
+  };
+
+  const openVisitorTimePicker = (field: 'entrada_hora' | 'salida_hora', current?: string) => {
+    setVisitorPickerField(field);
+    setVisitorPickerValue(parseTimeToDate(current));
+    setShowVisitorTimePicker(true);
+  };
+
   const startCreating = () => {
     setIsCreating(true);
+    setShowVisitorDatePicker(false);
+    setShowVisitorTimePicker(false);
+    setVisitorPickerField(null);
     setNewVisitor({
       id: null,
       id_local: '',
       nombre: '',
       cedula: '',
+      hora_entrada_fecha: '',
       hora_entrada_h: '',
       hora_entrada_m: '',
+      hora_salida_fecha: '',
       hora_salida_h: '',
       hora_salida_m: '',
       razon_visita: '',
@@ -517,8 +604,10 @@ export default function VisitorsScreen() {
     // Initialize refs
     nombreRef.current = '';
     cedulaRef.current = '';
+    horaEntradaFechaRef.current = '';
     horaEntradaHRef.current = '';
     horaEntradaMRef.current = '';
+    horaSalidaFechaRef.current = '';
     horaSalidaHRef.current = '';
     horaSalidaMRef.current = '';
     razonVisitaRef.current = '';
@@ -528,13 +617,18 @@ export default function VisitorsScreen() {
 
   const cancelCreating = () => {
     setIsCreating(false);
+    setShowVisitorDatePicker(false);
+    setShowVisitorTimePicker(false);
+    setVisitorPickerField(null);
     setNewVisitor({
       id: null,
       id_local: '',
       nombre: '',
       cedula: '',
+      hora_entrada_fecha: '',
       hora_entrada_h: '',
       hora_entrada_m: '',
+      hora_salida_fecha: '',
       hora_salida_h: '',
       hora_salida_m: '',
       razon_visita: '',
@@ -552,6 +646,8 @@ export default function VisitorsScreen() {
     try {
       const horaEntrada = parseHoraFromString(visitor.hora_entrada);
       const horaSalida = visitor.hora_salida ? parseHoraFromString(visitor.hora_salida) : { hour: '', minute: '' };
+      const fechaEntrada = parseFechaFromString(visitor.hora_entrada);
+      const fechaSalida = visitor.hora_salida ? parseFechaFromString(visitor.hora_salida) : '';
 
       // Helper para mapear activos - evitar duplicación de código
       const mapActivos = (detalles: any) => {
@@ -568,8 +664,10 @@ export default function VisitorsScreen() {
         id_local: visitor.id_local,
         nombre: visitor.nombre,
         cedula: visitor.cedula,
+        hora_entrada_fecha: fechaEntrada,
         hora_entrada_h: horaEntrada.hour,
         hora_entrada_m: horaEntrada.minute,
+        hora_salida_fecha: fechaSalida,
         hora_salida_h: horaSalida.hour,
         hora_salida_m: horaSalida.minute,
         razon_visita: visitor.razon_visita,
@@ -596,7 +694,7 @@ export default function VisitorsScreen() {
         try {
           const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
           if (apiUrl) {
-            const imageUrl = `${apiUrl}/api/uploads/visitors/${visitor.id}/cedula?name=${fotoCedula}`;
+            const imageUrl = appendTokenToUrl(`${apiUrl}/api/uploads/visitors/${visitor.id}/cedula?name=${fotoCedula}`);
             const response = await fetch(imageUrl);
 
             if (!response.ok) {
@@ -645,8 +743,10 @@ export default function VisitorsScreen() {
       // Initialize refs with visitor values
       nombreRef.current = visitor.nombre;
       cedulaRef.current = visitor.cedula;
+      horaEntradaFechaRef.current = fechaEntrada;
       horaEntradaHRef.current = horaEntrada.hour;
       horaEntradaMRef.current = horaEntrada.minute;
+      horaSalidaFechaRef.current = fechaSalida;
       horaSalidaHRef.current = horaSalida.hour;
       horaSalidaMRef.current = horaSalida.minute;
       razonVisitaRef.current = visitor.razon_visita;
@@ -659,6 +759,9 @@ export default function VisitorsScreen() {
   };
 
   const cancelEditing = () => {
+    setShowVisitorDatePicker(false);
+    setShowVisitorTimePicker(false);
+    setVisitorPickerField(null);
     setEditingVisitor(null);
   };
 
@@ -669,6 +772,10 @@ export default function VisitorsScreen() {
     }
     if (!cedulaRef.current.trim()) {
       Alert.alert('Error', 'La cédula es requerida');
+      return;
+    }
+    if (!horaEntradaFechaRef.current.trim()) {
+      Alert.alert('Error', 'La fecha de entrada es requerida');
       return;
     }
     if (!horaEntradaHRef.current || !horaEntradaMRef.current) {
@@ -731,14 +838,25 @@ export default function VisitorsScreen() {
                 Alert.alert('Error', 'No hay marca registrada');
                 return;
               }
-
               const currentMarcaData = JSON.parse(currentMarca);
-              const horaEntrada = `${horaEntradaHRef.current.padStart(2, '0')}:${horaEntradaMRef.current.padStart(2, '0')}`;
-              const horaSalida = horaSalidaHRef.current && horaSalidaMRef.current
-                ? `${horaSalidaHRef.current.padStart(2, '0')}:${horaSalidaMRef.current.padStart(2, '0')}`
-                : null;
 
-              const { converted_hora_entrada, converted_hora_salida } = convert_date(currentMarcaData, horaEntrada, horaSalida);
+              const converted_hora_entrada = buildIsoFromDateAndTime(
+                horaEntradaFechaRef.current,
+                horaEntradaHRef.current,
+                horaEntradaMRef.current
+              );
+              const hasSalidaTime = !!(horaSalidaHRef.current && horaSalidaMRef.current);
+              if (hasSalidaTime && !horaSalidaFechaRef.current.trim()) {
+                Alert.alert('Error', 'Si indicas hora de salida, también debes indicar la fecha de salida');
+                return;
+              }
+              const converted_hora_salida = hasSalidaTime
+                ? buildIsoFromDateAndTime(horaSalidaFechaRef.current, horaSalidaHRef.current, horaSalidaMRef.current)
+                : null;
+              if (!converted_hora_entrada || (hasSalidaTime && !converted_hora_salida)) {
+                Alert.alert('Error', 'Formato inválido en fecha u hora');
+                return;
+              }
 
               const requestBody = {
                 marca_id: currentMarcaData.id,
@@ -857,6 +975,10 @@ export default function VisitorsScreen() {
       Alert.alert('Error', 'La cédula es requerida');
       return;
     }
+    if (!horaEntradaFechaRef.current.trim()) {
+      Alert.alert('Error', 'La fecha de entrada es requerida');
+      return;
+    }
     if (!horaEntradaHRef.current || !horaEntradaMRef.current) {
       Alert.alert('Error', 'La hora de entrada es requerida');
       return;
@@ -918,13 +1040,23 @@ export default function VisitorsScreen() {
                 return;
               }
 
-              const currentMarcaData = JSON.parse(currentMarca);
-              const horaEntrada = `${horaEntradaHRef.current.padStart(2, '0')}:${horaEntradaMRef.current.padStart(2, '0')}`;
-              const horaSalida = horaSalidaHRef.current && horaSalidaMRef.current
-                ? `${horaSalidaHRef.current.padStart(2, '0')}:${horaSalidaMRef.current.padStart(2, '0')}`
+              const converted_hora_entrada = buildIsoFromDateAndTime(
+                horaEntradaFechaRef.current,
+                horaEntradaHRef.current,
+                horaEntradaMRef.current
+              );
+              const hasSalidaTime = !!(horaSalidaHRef.current && horaSalidaMRef.current);
+              if (hasSalidaTime && !horaSalidaFechaRef.current.trim()) {
+                Alert.alert('Error', 'Si indicas hora de salida, también debes indicar la fecha de salida');
+                return;
+              }
+              const converted_hora_salida = hasSalidaTime
+                ? buildIsoFromDateAndTime(horaSalidaFechaRef.current, horaSalidaHRef.current, horaSalidaMRef.current)
                 : null;
-
-              const { converted_hora_entrada, converted_hora_salida } = convert_date(currentMarcaData, horaEntrada, horaSalida);
+              if (!converted_hora_entrada || (hasSalidaTime && !converted_hora_salida)) {
+                Alert.alert('Error', 'Formato inválido en fecha u hora');
+                return;
+              }
 
               const requestBody = {
                 nombre: nombreRef.current,
@@ -1164,6 +1296,8 @@ export default function VisitorsScreen() {
   const resetAllFilters = () => {
     setSearchText('');
     setSelectedTipoVisitante('all');
+    setFilterDesde('');
+    setFilterHasta('');
   };
 
   const toggleVisitorDetails = (visitorId: number) => {
@@ -1436,7 +1570,19 @@ export default function VisitorsScreen() {
       (selectedTipoVisitante === 'visitante' && !visitor.es_funcionario) ||
       (selectedTipoVisitante === 'funcionario' && visitor.es_funcionario);
 
-    return matchesSearch && matchesTipoVisitante;
+    const desdeYmd = normalizeDateToYMD(filterDesde);
+    const hastaYmd = normalizeDateToYMD(filterHasta);
+    const entradaYmd = dateOnlyFromIso(visitor.hora_entrada);
+    const salidaYmd = dateOnlyFromIso(visitor.hora_salida);
+    const relevantDates = [entradaYmd, salidaYmd].filter((d) => !!d) as string[];
+    const matchesDateRange = (!desdeYmd && !hastaYmd)
+      ? true
+      : relevantDates.some((d) =>
+          (!desdeYmd || d >= desdeYmd) &&
+          (!hastaYmd || d <= hastaYmd)
+        );
+
+    return matchesSearch && matchesTipoVisitante && matchesDateRange;
   });
 
   const renderVisitorForm = (visitor: EditingVisitor, isEditing: boolean) => {
@@ -1446,6 +1592,50 @@ export default function VisitorsScreen() {
       } else {
         setNewVisitor({ ...newVisitor, [field]: value });
       }
+    };
+
+    const entradaHoraValue =
+      visitor.hora_entrada_h != null && visitor.hora_entrada_m != null &&
+      String(visitor.hora_entrada_h).trim() !== '' && String(visitor.hora_entrada_m).trim() !== ''
+        ? `${String(visitor.hora_entrada_h).padStart(2, '0')}:${String(visitor.hora_entrada_m).padStart(2, '0')}`
+        : '';
+    const salidaHoraValue =
+      visitor.hora_salida_h != null && visitor.hora_salida_m != null &&
+      String(visitor.hora_salida_h).trim() !== '' && String(visitor.hora_salida_m).trim() !== ''
+        ? `${String(visitor.hora_salida_h).padStart(2, '0')}:${String(visitor.hora_salida_m).padStart(2, '0')}`
+        : '';
+
+    const applyDateField = (field: 'entrada_fecha' | 'salida_fecha', dmy: string) => {
+      if (field === 'entrada_fecha') {
+        updateField('hora_entrada_fecha', dmy);
+        horaEntradaFechaRef.current = dmy;
+        return;
+      }
+      updateField('hora_salida_fecha', dmy);
+      horaSalidaFechaRef.current = dmy;
+    };
+
+    const applyTimeField = (field: 'entrada_hora' | 'salida_hora', hhmm: string) => {
+      const [hh, mm] = hhmm.split(':');
+      const h = (hh ?? '').trim();
+      const m = (mm ?? '').trim();
+      if (field === 'entrada_hora') {
+        if (isEditing && editingVisitor) {
+          setEditingVisitor({ ...editingVisitor, hora_entrada_h: h, hora_entrada_m: m });
+        } else {
+          setNewVisitor({ ...newVisitor, hora_entrada_h: h, hora_entrada_m: m });
+        }
+        horaEntradaHRef.current = h;
+        horaEntradaMRef.current = m;
+        return;
+      }
+      if (isEditing && editingVisitor) {
+        setEditingVisitor({ ...editingVisitor, hora_salida_h: h, hora_salida_m: m });
+      } else {
+        setNewVisitor({ ...newVisitor, hora_salida_h: h, hora_salida_m: m });
+      }
+      horaSalidaHRef.current = h;
+      horaSalidaMRef.current = m;
     };
 
     return (
@@ -1481,61 +1671,97 @@ export default function VisitorsScreen() {
           />
         </ThemedView>
 
-        {/* Hora Entrada */}
+        {/* Entrada (fecha + hora) */}
         <ThemedView style={styles.formGroup}>
-          <ThemedText style={styles.label}>Hora de Entrada *</ThemedText>
-          <ThemedView style={styles.timeInputContainer}>
-            <TextInput
-              style={[styles.timeInput, styles.timeInputHour]}
-              defaultValue={visitor.hora_entrada_h}
-              onChangeText={(text) => { horaEntradaHRef.current = text; }}
-              placeholder="00"
-              placeholderTextColor="#999"
-              keyboardType="numeric"
-              maxLength={2}
-              key={`hora-entrada-h-${isEditing ? 'edit' : 'create'}-${isEditing ? visitor.id : 'new'}`}
-            />
-            <ThemedText style={styles.timeSeparator}>:</ThemedText>
-            <TextInput
-              style={[styles.timeInput, styles.timeInputMinute]}
-              defaultValue={visitor.hora_entrada_m}
-              onChangeText={(text) => { horaEntradaMRef.current = text; }}
-              placeholder="00"
-              placeholderTextColor="#999"
-              keyboardType="numeric"
-              maxLength={2}
-              key={`hora-entrada-m-${isEditing ? 'edit' : 'create'}-${isEditing ? visitor.id : 'new'}`}
-            />
-          </ThemedView>
+          <ThemedText style={styles.label}>Fecha de Entrada *</ThemedText>
+          <TouchableOpacity
+            style={styles.dateButton}
+            onPress={() => openVisitorDatePicker('entrada_fecha', visitor.hora_entrada_fecha)}
+            activeOpacity={0.85}
+          >
+            <ThemedText style={styles.dateButtonText}>
+              {visitor.hora_entrada_fecha || 'Seleccionar fecha'}
+            </ThemedText>
+            <Ionicons name="calendar-outline" size={18} color="#007AFF" />
+          </TouchableOpacity>
+
+          <ThemedText style={[styles.label, { marginTop: 8 }]}>Hora de Entrada *</ThemedText>
+          <TouchableOpacity
+            style={styles.dateButton}
+            onPress={() => openVisitorTimePicker('entrada_hora', entradaHoraValue)}
+            activeOpacity={0.85}
+          >
+            <ThemedText style={styles.dateButtonText}>
+              {entradaHoraValue || 'Seleccionar hora'}
+            </ThemedText>
+            <Ionicons name="time-outline" size={18} color="#007AFF" />
+          </TouchableOpacity>
         </ThemedView>
 
-        {/* Hora Salida */}
+        {/* Salida (fecha + hora) */}
         <ThemedView style={styles.formGroup}>
-          <ThemedText style={styles.label}>Hora de Salida (Opcional)</ThemedText>
-          <ThemedView style={styles.timeInputContainer}>
-            <TextInput
-              style={[styles.timeInput, styles.timeInputHour]}
-              defaultValue={visitor.hora_salida_h}
-              onChangeText={(text) => { horaSalidaHRef.current = text; }}
-              placeholder="00"
-              placeholderTextColor="#999"
-              keyboardType="numeric"
-              maxLength={2}
-              key={`hora-salida-h-${isEditing ? 'edit' : 'create'}-${isEditing ? visitor.id : 'new'}`}
-            />
-            <ThemedText style={styles.timeSeparator}>:</ThemedText>
-            <TextInput
-              style={[styles.timeInput, styles.timeInputMinute]}
-              defaultValue={visitor.hora_salida_m}
-              onChangeText={(text) => { horaSalidaMRef.current = text; }}
-              placeholder="00"
-              placeholderTextColor="#999"
-              keyboardType="numeric"
-              maxLength={2}
-              key={`hora-salida-m-${isEditing ? 'edit' : 'create'}-${isEditing ? visitor.id : 'new'}`}
-            />
-          </ThemedView>
+          <ThemedText style={styles.label}>Fecha de Salida (Opcional)</ThemedText>
+          <TouchableOpacity
+            style={styles.dateButton}
+            onPress={() => openVisitorDatePicker('salida_fecha', visitor.hora_salida_fecha)}
+            activeOpacity={0.85}
+          >
+            <ThemedText style={styles.dateButtonText}>
+              {visitor.hora_salida_fecha || 'Seleccionar fecha'}
+            </ThemedText>
+            <Ionicons name="calendar-outline" size={18} color="#007AFF" />
+          </TouchableOpacity>
+
+          <ThemedText style={[styles.label, { marginTop: 8 }]}>Hora de Salida (Opcional)</ThemedText>
+          <TouchableOpacity
+            style={styles.dateButton}
+            onPress={() => openVisitorTimePicker('salida_hora', salidaHoraValue)}
+            activeOpacity={0.85}
+          >
+            <ThemedText style={styles.dateButtonText}>
+              {salidaHoraValue || 'Seleccionar hora'}
+            </ThemedText>
+            <Ionicons name="time-outline" size={18} color="#007AFF" />
+          </TouchableOpacity>
         </ThemedView>
+
+        {showVisitorDatePicker ? (
+          <DateTimePicker
+            value={visitorPickerValue}
+            mode="date"
+            display={Platform.OS === 'ios' ? 'inline' : 'default'}
+            onChange={(_event, selected) => {
+              if (Platform.OS === 'android') setShowVisitorDatePicker(false);
+              const dt = selected;
+              if (!dt || !visitorPickerField) return;
+              const dmy = toDMY(normalizeDateToYMD(dt.toISOString()));
+              if (visitorPickerField === 'entrada_fecha') applyDateField('entrada_fecha', dmy);
+              if (visitorPickerField === 'salida_fecha') applyDateField('salida_fecha', dmy);
+              setShowVisitorDatePicker(false);
+              setVisitorPickerField(null);
+            }}
+          />
+        ) : null}
+
+        {showVisitorTimePicker ? (
+          <DateTimePicker
+            value={visitorPickerValue}
+            mode="time"
+            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+            onChange={(_event, selected) => {
+              if (Platform.OS === 'android') setShowVisitorTimePicker(false);
+              const dt = selected;
+              if (!dt || !visitorPickerField) return;
+              const hh = String(dt.getHours()).padStart(2, '0');
+              const mm = String(dt.getMinutes()).padStart(2, '0');
+              const hhmm = `${hh}:${mm}`;
+              if (visitorPickerField === 'entrada_hora') applyTimeField('entrada_hora', hhmm);
+              if (visitorPickerField === 'salida_hora') applyTimeField('salida_hora', hhmm);
+              setShowVisitorTimePicker(false);
+              setVisitorPickerField(null);
+            }}
+          />
+        ) : null}
 
         {/* Razón de visita */}
         <ThemedView style={styles.formGroup}>
@@ -1803,16 +2029,23 @@ export default function VisitorsScreen() {
         </ThemedView>
 
         <ThemedView style={styles.visitorDetailMain}>
-          <ThemedText style={styles.visitorLabelMain}>Hora Entrada:</ThemedText>
+          <ThemedText style={styles.visitorLabelMain}>Entrada:</ThemedText>
           <ThemedText style={styles.visitorValueMain}>{convertDate(visitor.hora_entrada)}</ThemedText>
         </ThemedView>
 
         {visitor.hora_salida && (
           <ThemedView style={styles.visitorDetailMain}>
-            <ThemedText style={styles.visitorLabelMain}>Hora Salida:</ThemedText>
+            <ThemedText style={styles.visitorLabelMain}>Salida:</ThemedText>
             <ThemedText style={styles.visitorValueMain}>{convertDate(visitor.hora_salida)}</ThemedText>
           </ThemedView>
         )}
+
+        <ThemedView style={styles.visitorDetailMain}>
+          <ThemedText style={styles.visitorLabelMain}>Creado:</ThemedText>
+          <ThemedText style={styles.visitorValueMain}>
+            {visitor.created_at ? convertDate(visitor.created_at) : '—'}
+          </ThemedText>
+        </ThemedView>
 
         <ThemedView style={styles.visitorDetailMain}>
           <ThemedText style={styles.visitorLabelMain}>Razón:</ThemedText>
@@ -1927,13 +2160,16 @@ export default function VisitorsScreen() {
                     resizeMode="contain"
                   />
                 ) : (
-                  apiUrl && (
-                    <Image
-                      source={{ uri: `${apiUrl}/api/uploads/visitors/${visitor.id}/cedula?name=${visitor.foto_cedula}` }}
-                      style={styles.fotoCedulaImage}
-                      resizeMode="contain"
-                    />
-                  )
+                  (() => {
+                    const cedulaUri = getVisitorCedulaImageUrl(visitor.id, visitor.foto_cedula);
+                    return cedulaUri ? (
+                      <Image
+                        source={{ uri: cedulaUri }}
+                        style={styles.fotoCedulaImage}
+                        resizeMode="contain"
+                      />
+                    ) : null;
+                  })()
                 )}
               </ThemedView>
             )}
@@ -2030,7 +2266,7 @@ export default function VisitorsScreen() {
                   />
                 </TouchableOpacity>
 
-                {isFiltersExpanded && (
+                {isFiltersExpanded ? (
                   <TouchableOpacity
                     style={styles.resetFiltersButton}
                     onPress={resetAllFilters}
@@ -2038,11 +2274,11 @@ export default function VisitorsScreen() {
                     <Ionicons name="refresh" size={16} color="#FF3B30" />
                     <ThemedText style={styles.resetFiltersText}>Reiniciar</ThemedText>
                   </TouchableOpacity>
-                )}
+                ) : null}
               </ThemedView>
 
               {/* Filter Content */}
-              {isFiltersExpanded && (
+              {isFiltersExpanded ? (
                 <ThemedView style={styles.filtersContent}>
                   <ThemedView style={styles.filterGroupSearch}>
                     <ThemedText style={styles.filterLabel}>Buscar por nombre, cédula, razón, autorización u observaciones:</ThemedText>
@@ -2069,19 +2305,41 @@ export default function VisitorsScreen() {
                       </Picker>
                     </ThemedView>
                   </ThemedView>
+
+                  <ThemedView style={styles.filterGroupSearch}>
+                    <ThemedText style={styles.filterLabel}>Desde (DD-MM-YYYY):</ThemedText>
+                    <TextInput
+                      style={styles.searchInput}
+                      value={filterDesde}
+                      onChangeText={setFilterDesde}
+                      placeholder="DD-MM-YYYY"
+                      placeholderTextColor="#999"
+                    />
+                  </ThemedView>
+
+                  <ThemedView style={styles.filterGroupSearch}>
+                    <ThemedText style={styles.filterLabel}>Hasta (DD-MM-YYYY):</ThemedText>
+                    <TextInput
+                      style={styles.searchInput}
+                      value={filterHasta}
+                      onChangeText={setFilterHasta}
+                      placeholder="DD-MM-YYYY"
+                      placeholderTextColor="#999"
+                    />
+                  </ThemedView>
                 </ThemedView>
-              )}
+              ) : null}
             </ThemedView>
 
             {/* Botón crear */}
-            {!isCreating && !editingVisitor && (
+            {!isCreating && !editingVisitor ? (
               <TouchableOpacity
                 style={styles.createButton}
                 onPress={startCreating}
               >
                 <Ionicons name="add" size={24} color="#FFFFFF" />
               </TouchableOpacity>
-            )}
+            ) : null}
 
             {/* Formulario de creación */}
             {isCreating && renderVisitorForm(newVisitor, false)}
@@ -2090,7 +2348,7 @@ export default function VisitorsScreen() {
             {editingVisitor && renderVisitorForm(editingVisitor, true)}
 
             {/* Lista de visitantes */}
-            {!isCreating && !editingVisitor && (
+            {!isCreating && !editingVisitor ? (
               <ThemedView style={styles.visitorsList}>
                 {filteredVisitors.length === 0 ? (
                   <ThemedView style={styles.emptyContainer}>
@@ -2101,7 +2359,7 @@ export default function VisitorsScreen() {
                   filteredVisitors.map(visitor => renderVisitorItem(visitor))
                 )}
               </ThemedView>
-            )}
+            ) : null}
           </ThemedView>
         </ScrollView>
       )}
@@ -2845,6 +3103,22 @@ const styles = StyleSheet.create({
     height: 200,
     borderRadius: 8,
     backgroundColor: '#F9F9F9',
+  },
+  dateButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 12,
+    backgroundColor: '#fff',
+    marginBottom: 6,
+  },
+  dateButtonText: {
+    color: '#000',
+    fontWeight: '700',
   },
   cameraContainer: {
     flex: 1,

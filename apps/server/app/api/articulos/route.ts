@@ -1,12 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../utils/verifyToken";
-import { prisma } from "../../../utils/prismaClient";
+import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 
 export async function GET(req: NextRequest) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
-        const articulos = await prisma.n_articulo_corpo_puesto.findMany();
+        const articulos = await callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "n_articulo_corpo_puesto", operation: "findMany" }
+        });
         const articulos_return: { id: number, nombre: string }[] = [];
         for (const articulo of articulos) {
             articulos_return.push({ id: articulo.id, nombre: articulo.nombre });

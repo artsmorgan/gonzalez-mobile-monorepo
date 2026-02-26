@@ -1,44 +1,42 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../../../utils/verifyToken";
-import { prisma } from "../../../../../utils/prismaClient";
+import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
-import fs from "fs";
-import path from "path";
-import { v4 as uuidv4 } from "uuid";
 import { sendNotificationByRole } from "../../../../../utils/sendNotification";
+import { uploadDynamicFiles } from "../../../../../utils/callDynamicFilesApi";
 
 export const runtime = "nodejs";
 
-function normalizeBase64(b64: string): string {
-    if (!b64) return "";
-    const idx = b64.indexOf("base64,");
-    if (idx !== -1) return b64.slice(idx + "base64,".length);
-    return b64;
-}
-
-function processMaintenanceImage(base64Data: string, vehiculoId: number, prefix: string): string {
-    if (!base64Data || base64Data.trim().length === 0) return "";
-
-    try {
-        const normalized = normalizeBase64(base64Data);
-        if (!normalized) return "";
-
-        const buffer = Buffer.from(normalized, "base64");
-        const dir = path.join(process.cwd(), "public", "uploads", "corporate-vehicles", `${vehiculoId}`, "maintenances");
-
-        if (!fs.existsSync(dir)) {
-            fs.mkdirSync(dir, { recursive: true });
-        }
-
-        const fileName = `${prefix}_${uuidv4()}.jpg`;
-        const filePath = path.join(dir, fileName);
-        fs.writeFileSync(filePath, buffer);
-
-        return fileName;
-    } catch (error) {
-        console.error(`Error processing ${prefix} image:`, error);
-        return "";
+async function processMaintenanceImages(
+    req: NextRequest,
+    vehiculoId: number,
+    imagenAntes?: string,
+    imagenDespues?: string
+): Promise<{ imagenAntesFileName: string; imagenDespuesFileName: string }> {
+    const result = { imagenAntesFileName: "", imagenDespuesFileName: "" };
+    const filesToUpload: { type: string; extension: string; file_base64: string }[] = [];
+    if (imagenAntes && imagenAntes.trim().length > 0) {
+        filesToUpload.push({ type: "image", extension: "jpg", file_base64: imagenAntes });
     }
+    if (imagenDespues && imagenDespues.trim().length > 0) {
+        filesToUpload.push({ type: "image", extension: "jpg", file_base64: imagenDespues });
+    }
+    if (filesToUpload.length === 0) return result;
+
+    const uploadResp = await uploadDynamicFiles({
+        req,
+        folderPath: `corporate-vehicles/${vehiculoId}/maintenances`,
+        files: filesToUpload,
+    });
+    const uploaded = Array.isArray(uploadResp?.files) ? uploadResp.files : [];
+    let idx = 0;
+    if (imagenAntes && imagenAntes.trim().length > 0) {
+        result.imagenAntesFileName = uploaded[idx++]?.name || "";
+    }
+    if (imagenDespues && imagenDespues.trim().length > 0) {
+        result.imagenDespuesFileName = uploaded[idx++]?.name || "";
+    }
+    return result;
 }
 
 export async function GET(
@@ -46,7 +44,7 @@ export async function GET(
     context: { params: Promise<{ id: string }> }
 ) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         const { id } = await context.params;
@@ -55,12 +53,19 @@ export async function GET(
             return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
         }
 
-        const mantenimientos = await prisma.c_mantenimiento_vehiculos_corporativos.findMany({
-            where: { vehiculo_id: vehiculoId },
-            orderBy: { id: "desc" },
+        const mantenimientos = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_mantenimiento_vehiculos_corporativos",
+                operation: "findMany",
+                where: { vehiculo_id: vehiculoId },
+                orderBy: { id: "desc" },
+            },
         });
+        const mantenimientosArray = Array.isArray(mantenimientos) ? mantenimientos : [];
 
-        return NextResponse.json({ status: true, data: mantenimientos }, { status: 200 });
+        return NextResponse.json({ status: true, data: mantenimientosArray }, { status: 200 });
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error("Error in GET /api/corporate-vehicles/[id]/maintenances:", errorMessage);
@@ -73,7 +78,7 @@ export async function POST(
     context: { params: Promise<{ id: string }> }
 ) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         const { id } = await context.params;
@@ -98,75 +103,114 @@ export async function POST(
 
         const created_by = parseInt(String((payload as any)?.id ?? 0)) || 0;
 
-        // Procesar imágenes
-        const imagenAntesFileName = imagen_antes ? processMaintenanceImage(imagen_antes, vehiculoId, "antes") : "";
-        const imagenDespuesFileName = imagen_despues ? processMaintenanceImage(imagen_despues, vehiculoId, "despues") : "";
+        const { imagenAntesFileName, imagenDespuesFileName } = await processMaintenanceImages(req, vehiculoId, imagen_antes, imagen_despues);
 
         const createdAt = toZonedTime(new Date(), "America/Costa_Rica");
-        const created = await prisma.c_mantenimiento_vehiculos_corporativos.create({
+        const fechaValue = fecha ? new Date(fecha) : createdAt;
+        const created = await callDynamicPrisma({
+            req,
             data: {
-                vehiculo_id: vehiculoId,
-                fecha: fecha ? new Date(fecha) : createdAt,
-                imagen_antes: imagenAntesFileName || String(imagen_antes ?? ""),
-                tipo: String(tipo ?? ""),
-                mantenimiento: String(mantenimiento ?? ""),
-                diagnostico: String(diagnostico ?? ""),
-                kilometraje_siguiente_revision: Number(kilometraje_siguiente_revision ?? 0),
-                imagen_despues: imagenDespuesFileName || String(imagen_despues ?? ""),
-                nombre_mecanico: String(nombre_mecanico ?? ""),
-                firma_mecanico: String(firma_mecanico ?? ""),
-                firma_responsable: String(firma_responsable ?? ""),
-                created_by,
-                created_at: createdAt,
+                action: "POST",
+                table: "c_mantenimiento_vehiculos_corporativos",
+                operation: "create",
+                data: {
+                    vehiculo_id: vehiculoId,
+                    fecha: fechaValue.toISOString(),
+                    imagen_antes: imagenAntesFileName || String(imagen_antes ?? ""),
+                    tipo: String(tipo ?? ""),
+                    mantenimiento: String(mantenimiento ?? ""),
+                    diagnostico: String(diagnostico ?? ""),
+                    kilometraje_siguiente_revision: Number(kilometraje_siguiente_revision ?? 0),
+                    imagen_despues: imagenDespuesFileName || String(imagen_despues ?? ""),
+                    nombre_mecanico: String(nombre_mecanico ?? ""),
+                    firma_mecanico: String(firma_mecanico ?? ""),
+                    firma_responsable: String(firma_responsable ?? ""),
+                    created_by,
+                    created_at: createdAt.toISOString(),
+                },
             },
         });
+        const createdObj = created as any;
 
         // Registrar cambio de creación
-        await prisma.c_cambios_apps_modules.create({
+        await callDynamicPrisma({
+            req,
             data: {
-                nombre_tabla: "c_mantenimiento_vehiculos_corporativos",
-                registro_id: created.id,
-                cambios: JSON.stringify([{
-                    prop: "__created__",
-                    before: null,
-                    after: {
-                        id: created.id,
-                        vehiculo_id: created.vehiculo_id,
-                        fecha: created.fecha.toISOString(),
-                        tipo: created.tipo,
-                        mantenimiento: created.mantenimiento,
-                        diagnostico: created.diagnostico,
-                        kilometraje_siguiente_revision: created.kilometraje_siguiente_revision,
-                        nombre_mecanico: created.nombre_mecanico,
-                    },
-                }]),
-                created_at: createdAt,
-                created_by,
+                action: "POST",
+                table: "c_cambios_apps_modules",
+                operation: "create",
+                data: {
+                    nombre_tabla: "c_mantenimiento_vehiculos_corporativos",
+                    registro_id: createdObj.id,
+                    cambios: JSON.stringify([{
+                        prop: "__created__",
+                        before: null,
+                        after: {
+                            id: createdObj.id,
+                            vehiculo_id: createdObj.vehiculo_id,
+                            fecha: fechaValue.toISOString(),
+                            tipo: createdObj.tipo,
+                            mantenimiento: createdObj.mantenimiento,
+                            diagnostico: createdObj.diagnostico,
+                            kilometraje_siguiente_revision: createdObj.kilometraje_siguiente_revision,
+                            nombre_mecanico: createdObj.nombre_mecanico,
+                        },
+                    }]),
+                    created_at: createdAt.toISOString(),
+                    created_by,
+                },
             },
         });
 
-        if (created) {
-            const vehiculo = await prisma.c_vehiculos_corporativos.findUnique({ where: { id: created.vehiculo_id } });
+        if (createdObj) {
+            const vehiculo = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "c_vehiculos_corporativos",
+                    operation: "findUnique",
+                    where: { id: createdObj.vehiculo_id },
+                },
+            });
             if (vehiculo) {
-                let vehiculoPlaca = vehiculo.placa;
+                const vehiculoObj = vehiculo as any;
+                let vehiculoPlaca = vehiculoObj.placa;
                 let sucursalNombre = "Desconocida";
-                if (vehiculo.sucursal_id) {
-                    const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: vehiculo.sucursal_id } });
+                if (vehiculoObj.sucursal_id) {
+                    const sucursal = await callDynamicPrisma({
+                        req,
+                        data: {
+                            action: "GET",
+                            table: "e_estructura_sucursal",
+                            operation: "findUnique",
+                            where: { id: vehiculoObj.sucursal_id },
+                        },
+                    });
                     if (sucursal) {
-                        sucursalNombre = sucursal.nombre;
+                        const sucursalObj = sucursal as any;
+                        sucursalNombre = sucursalObj.nombre;
                     }
                 }
 
                 let empNombre = "Desconocido";
                 if (Number(payload?.id ?? "0")) {
-                    const empleado = await prisma.c_empleado.findUnique({ where: { id: Number(payload?.id ?? "0") } });
+                    const empleado = await callDynamicPrisma({
+                        req,
+                        data: {
+                            action: "GET",
+                            table: "c_empleado",
+                            operation: "findUnique",
+                            where: { id: Number(payload?.id ?? "0") },
+                        },
+                    });
                     if (empleado) {
-                        empNombre = empleado.nombre + " " + empleado.primer_apellido + " " + empleado.segundo_apellido;
+                        const empleadoObj = empleado as any;
+                        empNombre = empleadoObj.nombre + " " + empleadoObj.primer_apellido + " " + empleadoObj.segundo_apellido;
                     }
                 }
-                let fechaRegistro = created.fecha.toISOString().split("T")[0];
+                let fechaRegistro = fechaValue.toISOString().split("T")[0];
                 const descriptionNotificacion = "El empleado " + empNombre + " ha registrado un mantenimiento del vehículo con la placa " + vehiculoPlaca + " en la sucursal " + sucursalNombre + " el día " + fechaRegistro;
-                sendNotificationByRole(vehiculo.sucursal_id, [Number(payload?.id ?? "0")], "Mantenimiento de vehículo corporativo registrado", descriptionNotificacion, ["ADMINISTRATIVO", "SUPERVISOR"]);
+                await sendNotificationByRole(req, vehiculoObj.sucursal_id, [Number(payload?.id ?? "0")], "Mantenimiento de vehículo corporativo registrado", descriptionNotificacion, ["ADMINISTRATIVO", "SUPERVISOR"]);
             }
         }
         return NextResponse.json({ status: true, data: created }, { status: 201 });

@@ -383,6 +383,7 @@ export const createIncidentContribution = async ({
         file_base64: typeof f.file_base64 === 'string' ? normalizeBase64(f.file_base64) : f.file_base64,
       }));
     }
+    // firma_aporte_tercero se envía tal cual (con prefijo data:image/png;base64,), igual que firma_empleado_manual en StaffEvaluationsScreen
 
     const response = await authedFetch({
       url: `${apiUrl}/api/incidents/${incidentId}/contributions`,
@@ -427,6 +428,7 @@ export const updateIncidentContribution = async ({
         file_base64: typeof f.file_base64 === 'string' ? normalizeBase64(f.file_base64) : f.file_base64,
       }));
     }
+    // firma_aporte_tercero se envía tal cual (con prefijo data:image/png;base64,), igual que firma_empleado_manual en StaffEvaluationsScreen
 
     const response = await authedFetch({
       url: `${apiUrl}/api/incidents/${incidentId}/contributions/${contributionId}`,

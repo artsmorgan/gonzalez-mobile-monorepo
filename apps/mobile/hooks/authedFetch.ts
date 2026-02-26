@@ -7,11 +7,16 @@ type AuthedFetchArgs = {
     logout: () => Promise<any>;
 };
 
+// Mutex para asegurar que solo una ejecución ocurra a la vez
+// Usamos una promesa que se resuelve cuando la ejecución actual termina
+let executionQueue: Promise<Response | null> = Promise.resolve(null);
+
 /**
  * Wrapper reutilizable para `fetch` autenticado:
  * - Hace preflight (`getValidAccessTokenOrLogout`) antes del request.
  * - Inyecta `Authorization: Bearer <token>` y `ngrok-skip-browser-warning`.
  * - Si la respuesta es 401/403 -> logout inmediato (sin retry).
+ * - Solo permite una ejecución a la vez (mutex).
  *
  * Retorna `Response` o `null` si se deslogueó / tokens inválidos.
  */
@@ -21,23 +26,36 @@ export default async function authedFetch({
     refreshAccessToken,
     logout,
 }: AuthedFetchArgs): Promise<Response | null> {
-    const token = await getValidAccessTokenOrLogout({ refreshAccessToken, logout });
-    if (!token) return null;
+    // Esperar a que la ejecución anterior termine
+    await executionQueue;
 
-    const headers: any = {
-        ...((init?.headers as any) ?? {}),
-        Authorization: `Bearer ${token}`,
-        'ngrok-skip-browser-warning': '69420',
-    };
+    // Crear nueva ejecución y agregarla a la cola
+    executionQueue = (async () => {
+        try {
+            const token = await getValidAccessTokenOrLogout({ refreshAccessToken, logout });
+            if (!token) return null;
 
-    const response = await fetch(url, { ...(init ?? {}), headers });
+            const headers: any = {
+                ...((init?.headers as any) ?? {}),
+                Authorization: `Bearer ${token}`,
+                'ngrok-skip-browser-warning': '69420',
+            };
 
-    if (response.status === 401 || response.status === 403) {
-        await logout();
-        return null;
-    }
+            const response = await fetch(url, { ...(init ?? {}), headers });
 
-    return response;
+            if (response.status === 401 || response.status === 403) {
+                await logout();
+                return null;
+            }
+
+            return response;
+        } catch (error) {
+            // En caso de error, también retornar null
+            return null;
+        }
+    })();
+
+    return executionQueue;
 }
 
 

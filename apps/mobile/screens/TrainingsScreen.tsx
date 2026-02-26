@@ -117,7 +117,7 @@ interface Training {
 }
 
 export default function TrainingsScreen() {
-  const { employee, refreshAccessToken, logout } = useAuth();
+  const { employee, refreshAccessToken, logout, accessToken } = useAuth();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const navigation = useNavigation<TrainingsScreenNavigationProp>();
 
@@ -1858,7 +1858,14 @@ export default function TrainingsScreen() {
 const TrainingImageComponent: React.FC<{ trainingId: number }> = ({ trainingId }) => {
   const [imageBase64, setImageBase64] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const { refreshAccessToken, logout } = useAuth();
+  const { refreshAccessToken, logout, accessToken } = useAuth();
+  const appendTokenToUrl = (url: string) => {
+    if (!url) return '';
+    if (!accessToken || accessToken.trim().length === 0) return url;
+    if (/[?&]token=/.test(url)) return url;
+    const sep = url.includes('?') ? '&' : '?';
+    return `${url}${sep}token=${encodeURIComponent(accessToken)}`;
+  };
 
   useEffect(() => {
     const fetchImage = async () => {
@@ -1866,7 +1873,7 @@ const TrainingImageComponent: React.FC<{ trainingId: number }> = ({ trainingId }
         const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
         if (!apiUrl) return;
         const response = await authedFetch({
-          url: `${apiUrl}/api/training/${trainingId}/get-image`,
+          url: appendTokenToUrl(`${apiUrl}/api/training/${trainingId}/get-image`),
           init: {
             method: 'GET',
           },

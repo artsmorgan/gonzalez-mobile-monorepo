@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../../utils/verifyToken";
+import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
 import { prisma } from "../../../../utils/prismaClient";
 
 export async function GET(request: NextRequest) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(request);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(request);
 
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 

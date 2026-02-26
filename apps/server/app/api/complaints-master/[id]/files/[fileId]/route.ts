@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "../../../../../../utils/prismaClient";
+import { verifyAccessTokenByApi } from "../../../../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../../../../utils/callDynamicPrisma";
 import fs from "fs";
 import path from "path";
 
@@ -13,8 +14,7 @@ export async function DELETE(
     // Nota: seguimos el patrón de incidentes/job-manuals donde el serving de archivos no requiere auth,
     // pero las mutaciones sí requieren auth normalmente. Aquí mantenemos auth (por seguridad).
     // Si necesitas sin-auth también para delete, lo ajustamos.
-    const { verifyAccessToken } = await import("../../../../../../utils/verifyToken");
-    const { valid, expired, payload, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
     if (!valid) return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
 
     const { id, fileId } = await context.params;
@@ -24,15 +24,30 @@ export async function DELETE(
       return NextResponse.json({ status: false, message: "IDs no especificados" }, { status: 200 });
     }
 
-    const anex = await prisma.c_anexos_quejas.findFirst({
-      where: { id: anexId, queja_id: complaintId },
+    const anex = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "c_anexos_quejas",
+        operation: "findFirst",
+        where: { id: anexId, queja_id: complaintId },
+      },
     });
     if (!anex) return NextResponse.json({ status: false, message: "Archivo no encontrado" }, { status: 200 });
 
-    await prisma.c_anexos_quejas.delete({ where: { id: anexId } });
+    const anexObj = anex as any;
+    await callDynamicPrisma({
+      req,
+      data: {
+        action: "DELETE",
+        table: "c_anexos_quejas",
+        operation: "delete",
+        where: { id: anexId },
+      },
+    });
 
     const dir = path.join(process.cwd(), "public", "uploads", "complaints-master", `${complaintId}`);
-    const filePath = path.join(dir, anex.name);
+    const filePath = path.join(dir, anexObj.name);
     if (fs.existsSync(filePath)) {
       try {
         fs.unlinkSync(filePath);

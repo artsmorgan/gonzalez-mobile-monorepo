@@ -124,16 +124,22 @@ interface FirmaData {
   };
 }
 
-const buildComplaintFileUrl = (complaintId: string | number, file: ComplaintFile) => {
+const buildComplaintFileUrl = (complaintId: string | number, file: ComplaintFile, accessToken?: string | null) => {
   const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
   if (!apiUrl) return '';
   const idNum = typeof complaintId === 'number' ? complaintId : parseInt(String(complaintId), 10);
   if (!idNum) return '';
+  const appendTokenToUrl = (url: string) => {
+    if (!accessToken || accessToken.trim().length === 0) return url;
+    if (/[?&]token=/.test(url)) return url;
+    const sep = url.includes('?') ? '&' : '?';
+    return `${url}${sep}token=${encodeURIComponent(accessToken)}`;
+  };
 
-  if (file.type === 'image') return `${apiUrl}/api/complaints-master/${idNum}/get-image/${encodeURIComponent(file.name)}`;
-  if (file.type === 'audio') return `${apiUrl}/api/complaints-master/${idNum}/get-audio/${encodeURIComponent(file.name)}`;
-  if (file.type === 'video') return `${apiUrl}/api/complaints-master/${idNum}/get-video/${encodeURIComponent(file.name)}`;
-  return `${apiUrl}/api/complaints-master/${idNum}/get-file/${encodeURIComponent(file.name)}`;
+  if (file.type === 'image') return appendTokenToUrl(`${apiUrl}/api/complaints-master/${idNum}/get-image/${encodeURIComponent(file.name)}`);
+  if (file.type === 'audio') return appendTokenToUrl(`${apiUrl}/api/complaints-master/${idNum}/get-audio/${encodeURIComponent(file.name)}`);
+  if (file.type === 'video') return appendTokenToUrl(`${apiUrl}/api/complaints-master/${idNum}/get-video/${encodeURIComponent(file.name)}`);
+  return appendTokenToUrl(`${apiUrl}/api/complaints-master/${idNum}/get-file/${encodeURIComponent(file.name)}`);
 };
 
 const getComplaintFileDisplayName = (file: ComplaintFile) => {
@@ -142,7 +148,7 @@ const getComplaintFileDisplayName = (file: ComplaintFile) => {
 };
 
 export default function ComplaintsMasterScreen() {
-  const { employee, refreshAccessToken, logout } = useAuth();
+  const { employee, refreshAccessToken, logout, accessToken } = useAuth();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const navigation = useNavigation<ComplaintsMasterScreenNavigationProp>();
   const { scanQR, QRScannerComponent } = useQRScanner();
@@ -155,6 +161,8 @@ export default function ComplaintsMasterScreen() {
 
   // Editing state
   const [editingRecord, setEditingRecord] = useState<EditingComplaint | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitResponse, setSubmitResponse] = useState<{ type: 'success' | 'error', message: string } | null>(null);
 
   // Creating state
   const [isCreating, setIsCreating] = useState(false);
@@ -415,7 +423,7 @@ export default function ComplaintsMasterScreen() {
       const nextDocs: LocalFile[] = [];
 
       for (const f of existingFiles) {
-        const url = buildComplaintFileUrl(complaintId, f);
+        const url = buildComplaintFileUrl(complaintId, f, accessToken);
         if (!url) continue;
 
         const resp = await fetch(url);
@@ -913,252 +921,248 @@ export default function ComplaintsMasterScreen() {
   const saveComplaint = async () => {
     const currentMarca = await AsyncStorage.getItem('current_marca');
     if (!currentMarca) {
-      Alert.alert('Error', 'No se encontró la marca actual');
+      setSubmitResponse({ type: 'error', message: 'No se encontró la marca actual' });
       return;
     }
 
-    const currentMarcaData = JSON.parse(currentMarca);
+    setIsSubmitting(true);
+    setSubmitResponse(null);
 
-    Alert.alert(
-      'Confirmar',
-      '¿Estás seguro de que deseas guardar esta queja?',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Confirmar',
-          onPress: async () => {
-            try {
-              if (!firmaResponsable) {
-                Alert.alert('Error', 'La firma del responsable es requerida');
-                return;
-              }
+    try {
+      const currentMarcaData = JSON.parse(currentMarca);
 
-              const requestData = {
-                marca_id: currentMarcaData.id,
-                sociedad: sociedad.trim(),
-                nombre_realiza_queja: nombreRealizaQueja.trim(),
-                cliente: cliente.trim(),
-                empresa_presenta_queja: empresaPresentaQueja.trim(),
-                persona_presenta_queja: personaPresentaQueja.trim(),
-                medio_recepcion_queja: medioRecepcionQueja.trim(),
-                tipo_queja: tipoQueja.trim(),
-                ubicacion: ubicacion.trim(),
-                nivel_queja: nivelQueja.trim(),
-                fecha_queja: fechaQueja.trim(),
-                motivo_queja: motivoQueja.trim(),
-                descripcion_queja: descripcionQueja.trim(),
-                fecha_inicio: fechaInicio.trim(),
-                fecha_revision: fechaRevision.trim(),
-                resolucion_queja: resolucionQueja.trim(),
-                estado: estado.trim(),
-                accion_correctiva_preventiva: accionCorrectivaPreventiva.trim(),
-                firma_responsable: firmaResponsable
-                  ? btoa(`${firmaResponsable.sessionId}:${firmaResponsable.empleadoId}:${firmaResponsable.latitud}:${firmaResponsable.longitud}:${firmaResponsable.timestamp}`)
-                  : '',
-                archivos: [
-                  ...imageFiles.map(f => ({ type: 'image', extension: f.extension, original_name: f.name, file_base64: f.base64 })),
-                  ...audioFiles.map(f => ({ type: 'audio', extension: f.extension, original_name: f.name, file_base64: f.base64 })),
-                  ...videoFiles.map(f => ({ type: 'video', extension: f.extension, original_name: f.name, file_base64: f.base64 })),
-                  ...documentFiles.map(f => ({ type: 'document', extension: f.extension, original_name: f.name, file_base64: f.base64 })),
-                ],
-              };
+      if (!firmaResponsable) {
+        setSubmitResponse({ type: 'error', message: 'La firma del responsable es requerida' });
+        setIsSubmitting(false);
+        return;
+      }
 
-              const isConnected = await getConnectionStatus();
+      const requestData = {
+        marca_id: currentMarcaData.id,
+        sociedad: sociedad.trim(),
+        nombre_realiza_queja: nombreRealizaQueja.trim(),
+        cliente: cliente.trim(),
+        empresa_presenta_queja: empresaPresentaQueja.trim(),
+        persona_presenta_queja: personaPresentaQueja.trim(),
+        medio_recepcion_queja: medioRecepcionQueja.trim(),
+        tipo_queja: tipoQueja.trim(),
+        ubicacion: ubicacion.trim(),
+        nivel_queja: nivelQueja.trim(),
+        fecha_queja: fechaQueja.trim(),
+        motivo_queja: motivoQueja.trim(),
+        descripcion_queja: descripcionQueja.trim(),
+        fecha_inicio: fechaInicio.trim(),
+        fecha_revision: fechaRevision.trim(),
+        resolucion_queja: resolucionQueja.trim(),
+        estado: estado.trim(),
+        accion_correctiva_preventiva: accionCorrectivaPreventiva.trim(),
+        firma_responsable: firmaResponsable
+          ? btoa(`${firmaResponsable.sessionId}:${firmaResponsable.empleadoId}:${firmaResponsable.latitud}:${firmaResponsable.longitud}:${firmaResponsable.timestamp}`)
+          : '',
+        archivos: [
+          ...imageFiles.map(f => ({ type: 'image', extension: f.extension, original_name: f.name, file_base64: f.base64 })),
+          ...audioFiles.map(f => ({ type: 'audio', extension: f.extension, original_name: f.name, file_base64: f.base64 })),
+          ...videoFiles.map(f => ({ type: 'video', extension: f.extension, original_name: f.name, file_base64: f.base64 })),
+          ...documentFiles.map(f => ({ type: 'document', extension: f.extension, original_name: f.name, file_base64: f.base64 })),
+        ],
+      };
 
-              if (isConnected) {
-                const result = await createComplaintsMaster({
-                  requestData,
-                  refreshAccessToken,
-                  logout,
-                });
+      const isConnected = await getConnectionStatus();
 
-                if (result.status) {
-                  Alert.alert('Éxito', 'Queja guardada correctamente');
-                  cancelCreating();
-                  fetchComplaints();
-                } else {
-                  Alert.alert('Error', result.message || 'Error al guardar la queja');
-                }
-              } else {
-                const localId = generateRandomId();
+      if (isConnected) {
+        const result = await createComplaintsMaster({
+          requestData,
+          refreshAccessToken,
+          logout,
+        });
 
-                const actionsStr = await AsyncStorage.getItem('evaluations_actions');
-                const actions = actionsStr ? JSON.parse(actionsStr) : [];
-                actions.push({
-                  id: localId,
-                  action: 'create',
-                  type: 'complaints_master',
-                  payload: requestData,
-                  synced: false,
-                });
-                await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+        if (result.status) {
+          setSubmitResponse({ type: 'success', message: result.message || 'Queja guardada correctamente' });
+          setTimeout(() => {
+            cancelCreating();
+            fetchComplaints();
+          }, 2000);
+        } else {
+          setSubmitResponse({ type: 'error', message: result.message || 'Error al guardar la queja' });
+        }
+      } else {
+        const localId = generateRandomId();
 
-                const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                const cache = cacheStr ? JSON.parse(cacheStr) : [];
+        const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+        const actions = actionsStr ? JSON.parse(actionsStr) : [];
+        actions.push({
+          id: localId,
+          action: 'create',
+          type: 'complaints_master',
+          payload: requestData,
+          synced: false,
+        });
+        await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
 
-                const newRecordCache: Complaint = {
-                  id: '',
-                  id_local: localId,
-                  files: [],
-                  sociedad: sociedad.trim() || null,
-                  nombre_realiza_queja: nombreRealizaQueja.trim() || null,
-                  cliente: cliente.trim() || null,
-                  empresa_presenta_queja: empresaPresentaQueja.trim() || null,
-                  persona_presenta_queja: personaPresentaQueja.trim() || null,
-                  medio_recepcion_queja: medioRecepcionQueja.trim() || null,
-                  tipo_queja: tipoQueja.trim() || null,
-                  ubicacion: ubicacion.trim() || null,
-                  nivel_queja: nivelQueja.trim() || null,
-                  fecha_queja: fechaQueja.trim() || null,
-                  motivo_queja: motivoQueja.trim() || null,
-                  descripcion_queja: descripcionQueja.trim() || null,
-                  fecha_inicio: fechaInicio.trim() || null,
-                  fecha_revision: fechaRevision.trim() || null,
-                  resolucion_queja: resolucionQueja.trim() || null,
-                  estado: estado.trim() || null,
-                  accion_correctiva_preventiva: accionCorrectivaPreventiva.trim() || null,
-                  firma_responsable: requestData.firma_responsable || null,
-                  created_at: new Date().toISOString(),
-                  synced: false,
-                };
+        const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+        const cache = cacheStr ? JSON.parse(cacheStr) : [];
 
-                cache.push({ ...newRecordCache, type: 'complaints_master' });
-                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(cache));
+        const newRecordCache: Complaint = {
+          id: '',
+          id_local: localId,
+          files: [],
+          sociedad: sociedad.trim() || null,
+          nombre_realiza_queja: nombreRealizaQueja.trim() || null,
+          cliente: cliente.trim() || null,
+          empresa_presenta_queja: empresaPresentaQueja.trim() || null,
+          persona_presenta_queja: personaPresentaQueja.trim() || null,
+          medio_recepcion_queja: medioRecepcionQueja.trim() || null,
+          tipo_queja: tipoQueja.trim() || null,
+          ubicacion: ubicacion.trim() || null,
+          nivel_queja: nivelQueja.trim() || null,
+          fecha_queja: fechaQueja.trim() || null,
+          motivo_queja: motivoQueja.trim() || null,
+          descripcion_queja: descripcionQueja.trim() || null,
+          fecha_inicio: fechaInicio.trim() || null,
+          fecha_revision: fechaRevision.trim() || null,
+          resolucion_queja: resolucionQueja.trim() || null,
+          estado: estado.trim() || null,
+          accion_correctiva_preventiva: accionCorrectivaPreventiva.trim() || null,
+          firma_responsable: requestData.firma_responsable || null,
+          created_at: new Date().toISOString(),
+          synced: false,
+        };
 
-                Alert.alert('Modo Offline', 'Queja registrada localmente. Se sincronizará cuando haya conexión.');
-                cancelCreating();
-                fetchComplaints();
-              }
-            } catch (err) {
-              console.error('Error saving complaint:', err);
-              Alert.alert('Error', 'No se pudo guardar la queja');
-            }
-          },
-        },
-      ]
-    );
+        cache.push({ ...newRecordCache, type: 'complaints_master' });
+        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(cache));
+
+        setSubmitResponse({ type: 'success', message: 'Queja registrada localmente. Se sincronizará cuando haya conexión.' });
+        setTimeout(() => {
+          cancelCreating();
+          fetchComplaints();
+        }, 2000);
+      }
+    } catch (err) {
+      console.error('Error saving complaint:', err);
+      setSubmitResponse({ type: 'error', message: 'No se pudo guardar la queja' });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const updateComplaintHandler = async () => {
     if (!editingRecord) return;
 
-    Alert.alert(
-      'Confirmar',
-      '¿Estás seguro de que deseas actualizar esta queja?',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Confirmar',
-          onPress: async () => {
-            try {
-              if (!firmaResponsable && (!editingRecord.firma_responsable || editingRecord.firma_responsable.trim().length === 0)) {
-                Alert.alert('Error', 'La firma del responsable es requerida');
-                return;
-              }
+    setIsSubmitting(true);
+    setSubmitResponse(null);
 
-              const requestData = {
-                sociedad: sociedad.trim(),
-                nombre_realiza_queja: nombreRealizaQueja.trim(),
-                cliente: cliente.trim(),
-                empresa_presenta_queja: empresaPresentaQueja.trim(),
-                persona_presenta_queja: personaPresentaQueja.trim(),
-                medio_recepcion_queja: medioRecepcionQueja.trim(),
-                tipo_queja: tipoQueja.trim(),
-                ubicacion: ubicacion.trim(),
-                nivel_queja: nivelQueja.trim(),
-                fecha_queja: fechaQueja.trim(),
-                motivo_queja: motivoQueja.trim(),
-                descripcion_queja: descripcionQueja.trim(),
-                fecha_inicio: fechaInicio.trim(),
-                fecha_revision: fechaRevision.trim(),
-                resolucion_queja: resolucionQueja.trim(),
-                estado: estado.trim(),
-                accion_correctiva_preventiva: accionCorrectivaPreventiva.trim(),
-                firma_responsable: firmaResponsable
-                  ? btoa(`${firmaResponsable.sessionId}:${firmaResponsable.empleadoId}:${firmaResponsable.latitud}:${firmaResponsable.longitud}:${firmaResponsable.timestamp}`)
-                  : (editingRecord.firma_responsable || ''),
-                archivos: [
-                  ...imageFiles.map(f => ({ type: 'image', extension: f.extension, original_name: f.name, file_base64: f.base64 })),
-                  ...audioFiles.map(f => ({ type: 'audio', extension: f.extension, original_name: f.name, file_base64: f.base64 })),
-                  ...videoFiles.map(f => ({ type: 'video', extension: f.extension, original_name: f.name, file_base64: f.base64 })),
-                  ...documentFiles.map(f => ({ type: 'document', extension: f.extension, original_name: f.name, file_base64: f.base64 })),
-                ],
+    try {
+      if (!firmaResponsable && (!editingRecord.firma_responsable || editingRecord.firma_responsable.trim().length === 0)) {
+        setSubmitResponse({ type: 'error', message: 'La firma del responsable es requerida' });
+        setIsSubmitting(false);
+        return;
+      }
+
+      const requestData = {
+        sociedad: sociedad.trim(),
+        nombre_realiza_queja: nombreRealizaQueja.trim(),
+        cliente: cliente.trim(),
+        empresa_presenta_queja: empresaPresentaQueja.trim(),
+        persona_presenta_queja: personaPresentaQueja.trim(),
+        medio_recepcion_queja: medioRecepcionQueja.trim(),
+        tipo_queja: tipoQueja.trim(),
+        ubicacion: ubicacion.trim(),
+        nivel_queja: nivelQueja.trim(),
+        fecha_queja: fechaQueja.trim(),
+        motivo_queja: motivoQueja.trim(),
+        descripcion_queja: descripcionQueja.trim(),
+        fecha_inicio: fechaInicio.trim(),
+        fecha_revision: fechaRevision.trim(),
+        resolucion_queja: resolucionQueja.trim(),
+        estado: estado.trim(),
+        accion_correctiva_preventiva: accionCorrectivaPreventiva.trim(),
+        firma_responsable: firmaResponsable
+          ? btoa(`${firmaResponsable.sessionId}:${firmaResponsable.empleadoId}:${firmaResponsable.latitud}:${firmaResponsable.longitud}:${firmaResponsable.timestamp}`)
+          : (editingRecord.firma_responsable || ''),
+        archivos: [
+          ...imageFiles.map(f => ({ type: 'image', extension: f.extension, original_name: f.name, file_base64: f.base64 })),
+          ...audioFiles.map(f => ({ type: 'audio', extension: f.extension, original_name: f.name, file_base64: f.base64 })),
+          ...videoFiles.map(f => ({ type: 'video', extension: f.extension, original_name: f.name, file_base64: f.base64 })),
+          ...documentFiles.map(f => ({ type: 'document', extension: f.extension, original_name: f.name, file_base64: f.base64 })),
+        ],
+      };
+
+      const isConnected = await getConnectionStatus();
+      const recordId = editingRecord.id || editingRecord.id_local;
+
+      if (isConnected && editingRecord.id && !String(editingRecord.id).startsWith('local-')) {
+        const result = await updateComplaintsMaster({
+          id: String(editingRecord.id),
+          requestData,
+          refreshAccessToken,
+          logout,
+        });
+
+        if (result.status) {
+          setSubmitResponse({ type: 'success', message: result.message || 'Queja actualizada correctamente' });
+          setTimeout(() => {
+            cancelEditing();
+            fetchComplaints();
+          }, 2000);
+        } else {
+          setSubmitResponse({ type: 'error', message: result.message || 'Error al actualizar la queja' });
+        }
+      } else {
+        const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+        const actions = actionsStr ? JSON.parse(actionsStr) : [];
+        actions.push({
+          id: recordId,
+          action: 'update',
+          type: 'complaints_master',
+          payload: requestData,
+          synced: false,
+        });
+        await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+
+        const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+        if (cacheStr) {
+          const cache = JSON.parse(cacheStr);
+          const updatedCache = cache.map((item: any) => {
+            if ((item.id === recordId || item.id_local === recordId) && item.type === 'complaints_master') {
+              return {
+                ...item,
+                sociedad: sociedad.trim() || null,
+                nombre_realiza_queja: nombreRealizaQueja.trim() || null,
+                cliente: cliente.trim() || null,
+                empresa_presenta_queja: empresaPresentaQueja.trim() || null,
+                persona_presenta_queja: personaPresentaQueja.trim() || null,
+                medio_recepcion_queja: medioRecepcionQueja.trim() || null,
+                tipo_queja: tipoQueja.trim() || null,
+                ubicacion: ubicacion.trim() || null,
+                nivel_queja: nivelQueja.trim() || null,
+                fecha_queja: fechaQueja.trim() || null,
+                motivo_queja: motivoQueja.trim() || null,
+                descripcion_queja: descripcionQueja.trim() || null,
+                fecha_inicio: fechaInicio.trim() || null,
+                fecha_revision: fechaRevision.trim() || null,
+                resolucion_queja: resolucionQueja.trim() || null,
+                estado: estado.trim() || null,
+                accion_correctiva_preventiva: accionCorrectivaPreventiva.trim() || null,
+                firma_responsable: requestData.firma_responsable || item.firma_responsable,
               };
-
-              const isConnected = await getConnectionStatus();
-              const recordId = editingRecord.id || editingRecord.id_local;
-
-              if (isConnected && editingRecord.id && !String(editingRecord.id).startsWith('local-')) {
-                const result = await updateComplaintsMaster({
-                  id: String(editingRecord.id),
-                  requestData,
-                  refreshAccessToken,
-                  logout,
-                });
-
-                if (result.status) {
-                  Alert.alert('Éxito', 'Queja actualizada correctamente');
-                  cancelEditing();
-                  fetchComplaints();
-                } else {
-                  Alert.alert('Error', result.message || 'Error al actualizar la queja');
-                }
-              } else {
-                const actionsStr = await AsyncStorage.getItem('evaluations_actions');
-                const actions = actionsStr ? JSON.parse(actionsStr) : [];
-                actions.push({
-                  id: recordId,
-                  action: 'update',
-                  type: 'complaints_master',
-                  payload: requestData,
-                  synced: false,
-                });
-                await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
-
-                const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                if (cacheStr) {
-                  const cache = JSON.parse(cacheStr);
-                  const updatedCache = cache.map((item: any) => {
-                    if ((item.id === recordId || item.id_local === recordId) && item.type === 'complaints_master') {
-                      return {
-                        ...item,
-                        sociedad: sociedad.trim() || null,
-                        nombre_realiza_queja: nombreRealizaQueja.trim() || null,
-                        cliente: cliente.trim() || null,
-                        empresa_presenta_queja: empresaPresentaQueja.trim() || null,
-                        persona_presenta_queja: personaPresentaQueja.trim() || null,
-                        medio_recepcion_queja: medioRecepcionQueja.trim() || null,
-                        tipo_queja: tipoQueja.trim() || null,
-                        ubicacion: ubicacion.trim() || null,
-                        nivel_queja: nivelQueja.trim() || null,
-                        fecha_queja: fechaQueja.trim() || null,
-                        motivo_queja: motivoQueja.trim() || null,
-                        descripcion_queja: descripcionQueja.trim() || null,
-                        fecha_inicio: fechaInicio.trim() || null,
-                        fecha_revision: fechaRevision.trim() || null,
-                        resolucion_queja: resolucionQueja.trim() || null,
-                        estado: estado.trim() || null,
-                        accion_correctiva_preventiva: accionCorrectivaPreventiva.trim() || null,
-                        firma_responsable: requestData.firma_responsable || item.firma_responsable,
-                      };
-                    }
-                    return item;
-                  });
-                  await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                }
-
-                Alert.alert('Modo Offline', 'Queja actualizada localmente. Se sincronizará cuando haya conexión.');
-                cancelEditing();
-                fetchComplaints();
-              }
-            } catch (err) {
-              console.error('Error updating complaint:', err);
-              Alert.alert('Error', 'No se pudo actualizar la queja');
             }
-          },
-        },
-      ]
-    );
+            return item;
+          });
+          await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+        }
+
+        setSubmitResponse({ type: 'success', message: 'Queja actualizada localmente. Se sincronizará cuando haya conexión.' });
+        setTimeout(() => {
+          cancelEditing();
+          fetchComplaints();
+        }, 2000);
+      }
+    } catch (err) {
+      console.error('Error updating complaint:', err);
+      setSubmitResponse({ type: 'error', message: 'No se pudo actualizar la queja' });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const deleteComplaintHandler = async (record: Complaint) => {
@@ -1247,9 +1251,9 @@ export default function ComplaintsMasterScreen() {
           />
         </ThemedView>
 
-        {/* Nombre de quien realiza la queja */}
+        {/* Nombre de quien recibe la queja */}
         <ThemedView style={styles.formGroup}>
-          <ThemedText style={styles.formLabel}>Nombre de quien realiza la queja</ThemedText>
+          <ThemedText style={styles.formLabel}>Nombre de quien recibe la queja</ThemedText>
           <TextInput
             style={styles.formInput}
             placeholder="Nombre completo"
@@ -1430,9 +1434,9 @@ export default function ComplaintsMasterScreen() {
           )}
         </ThemedView>
 
-        {/* Fecha de revision */}
+        {/* Fecha de resolución */}
         <ThemedView style={styles.formGroup}>
-          <ThemedText style={styles.formLabel}>Fecha de revision</ThemedText>
+          <ThemedText style={styles.formLabel}>Fecha de resolución</ThemedText>
           <TouchableOpacity
             style={styles.dateButton}
             onPress={() => setShowDatePickerRevision(true)}
@@ -1479,8 +1483,8 @@ export default function ComplaintsMasterScreen() {
               <Picker.Item label="Seleccionar" value="" />
               <Picker.Item label="Pendiente" value="Pendiente" />
               <Picker.Item label="En proceso" value="En proceso" />
-              <Picker.Item label="Cumplio" value="Cumplio" />
-              <Picker.Item label="No cumplio" value="No cumplio" />
+              <Picker.Item label="Resuelto" value="Resuelto" />
+              <Picker.Item label="Descartada" value="Descartada" />
             </Picker>
           </ThemedView>
         </ThemedView>
@@ -1503,6 +1507,7 @@ export default function ComplaintsMasterScreen() {
             complaintId={editingRecord.id || editingRecord.id_local}
             files={editingRecord.files}
             onDeleteFile={deleteAttachedFile}
+            accessToken={accessToken}
           />
         )}
 
@@ -1634,12 +1639,20 @@ export default function ComplaintsMasterScreen() {
           >
             <Ionicons name="close" size={24} color="#FFFFFF" />
           </TouchableOpacity>
+          {submitResponse && (
+            <ThemedView style={[styles.responseContainer, submitResponse.type === 'success' ? styles.responseSuccess : styles.responseError]}>
+              <ThemedText style={styles.responseText}>
+                {submitResponse.type === 'success' ? '✓ ' : '✗ '}
+                {submitResponse.message}
+              </ThemedText>
+            </ThemedView>
+          )}
           <TouchableOpacity
-            style={[styles.actionButton, styles.saveButton]}
+            style={[styles.actionButton, styles.saveButton, (isSubmitting || isPreloadingEditFiles) && styles.buttonDisabled]}
             onPress={isEditing ? updateComplaintHandler : saveComplaint}
-            disabled={isPreloadingEditFiles}
+            disabled={isSubmitting || isPreloadingEditFiles}
           >
-            {isPreloadingEditFiles ? (
+            {(isSubmitting || isPreloadingEditFiles) ? (
               <ActivityIndicator size="small" color="#FFFFFF" />
             ) : (
               <Ionicons name="checkmark" size={24} color="#FFFFFF" />
@@ -1764,7 +1777,7 @@ export default function ComplaintsMasterScreen() {
                     {record.fecha_inicio || 'No especificado'}
                   </ThemedText>
                   <ThemedText style={styles.detailText}>
-                    <ThemedText style={styles.detailLabel}>Fecha de revision: </ThemedText>
+                    <ThemedText style={styles.detailLabel}>Fecha de resolución: </ThemedText>
                     {record.fecha_revision || 'No especificado'}
                   </ThemedText>
                   {record.resolucion_queja && (
@@ -1785,7 +1798,7 @@ export default function ComplaintsMasterScreen() {
                   )}
 
                   {Array.isArray(record.files) && record.files.length > 0 && (
-                    <ComplaintFilesViewer complaintId={record.id || record.id_local} files={record.files} />
+                    <ComplaintFilesViewer complaintId={record.id || record.id_local} files={record.files} accessToken={accessToken} />
                   )}
                   <ThemedText style={styles.detailText}>
                     <ThemedText style={styles.detailLabel}>Fecha: </ThemedText>
@@ -2118,6 +2131,28 @@ const styles = StyleSheet.create({
   },
   saveButton: {
     backgroundColor: '#007AFF',
+  },
+  buttonDisabled: {
+    opacity: 0.6,
+  },
+  responseContainer: {
+    padding: 12,
+    borderRadius: 6,
+    marginBottom: 12,
+  },
+  responseSuccess: {
+    backgroundColor: '#D4EDDA',
+    borderWidth: 1,
+    borderColor: '#C3E6CB',
+  },
+  responseError: {
+    backgroundColor: '#F8D7DA',
+    borderWidth: 1,
+    borderColor: '#F5C6CB',
+  },
+  responseText: {
+    fontSize: 14,
+    fontWeight: '600',
   },
   actionButtonText: {
     color: '#FFFFFF',
@@ -2535,10 +2570,12 @@ const styles = StyleSheet.create({
 function ComplaintFilesViewer({
   complaintId,
   files,
+  accessToken,
   onDeleteFile,
 }: {
   complaintId: string | number;
   files: ComplaintFile[];
+  accessToken?: string | null;
   onDeleteFile?: (file: ComplaintFile) => void;
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
@@ -2574,7 +2611,7 @@ function ComplaintFilesViewer({
               {imageFiles.map(file => (
                 <ThemedView key={file.id} style={{ backgroundColor: 'transparent' }}>
                   <ComplaintImageViewer
-                    imageUrl={buildComplaintFileUrl(complaintId, file)}
+                    imageUrl={buildComplaintFileUrl(complaintId, file, accessToken)}
                     onDeleteFile={onDeleteFile ? () => onDeleteFile(file) : undefined}
                   />
                 </ThemedView>
@@ -2588,7 +2625,7 @@ function ComplaintFilesViewer({
               {audioFiles.map(file => (
                 <ThemedView key={file.id} style={{ backgroundColor: 'transparent' }}>
                   <ComplaintAudioPlayer
-                    sourceUrl={buildComplaintFileUrl(complaintId, file)}
+                    sourceUrl={buildComplaintFileUrl(complaintId, file, accessToken)}
                     label={getComplaintFileDisplayName(file)}
                     onDeleteFile={onDeleteFile ? () => onDeleteFile(file) : undefined}
                   />
@@ -2603,7 +2640,7 @@ function ComplaintFilesViewer({
               {videoFiles.map(file => (
                 <ThemedView key={file.id} style={{ backgroundColor: 'transparent' }}>
                   <ComplaintVideoPlayer
-                    sourceUrl={buildComplaintFileUrl(complaintId, file)}
+                    sourceUrl={buildComplaintFileUrl(complaintId, file, accessToken)}
                     onDeleteFile={onDeleteFile ? () => onDeleteFile(file) : undefined}
                   />
                 </ThemedView>
@@ -2619,7 +2656,7 @@ function ComplaintFilesViewer({
                   key={file.id}
                   style={styles.documentRow}
                   onPress={() => {
-                    const url = buildComplaintFileUrl(complaintId, file);
+                    const url = buildComplaintFileUrl(complaintId, file, accessToken);
                     if (url) Linking.openURL(url);
                     else Alert.alert('Error', 'URL inválida para descargar el archivo');
                   }}

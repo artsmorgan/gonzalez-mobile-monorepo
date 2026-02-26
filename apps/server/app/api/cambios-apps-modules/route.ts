@@ -1,11 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../utils/verifyToken";
-import { prisma } from "../../../utils/prismaClient";
+import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
+import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 
 export async function GET(req: NextRequest) {
     try {
-        const { valid, expired, message } = verifyAccessToken(req);
+        const { valid, expired, message } = await verifyAccessTokenByApi(req);
         if (!valid) {
             return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
         }
@@ -24,29 +24,55 @@ export async function GET(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Registro inválido" }, { status: 200 });
         }
 
-        const rows = await prisma.c_cambios_apps_modules.findMany({
-            where: { nombre_tabla: tabla, registro_id },
-            orderBy: { id: "desc" },
-            take: 200,
+        type CambioRow = {
+            created_by: number;
+            [key: string]: any;
+        };
+        type EmpleadoRow = {
+            id: number;
+            nombre: string | null;
+            primer_apellido: string | null;
+            segundo_apellido: string | null;
+            cedula: string | null;
+        };
+
+        const rows = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_cambios_apps_modules",
+                operation: "findMany",
+                where: { nombre_tabla: tabla, registro_id },
+                orderBy: { id: "desc" },
+                take: 200,
+            }
         });
 
         // Obtener IDs únicos de empleados
-        const empleadoIds = Array.from(new Set(rows.map((r) => r.created_by).filter((id) => id > 0)));
+        const typedRows: CambioRow[] = Array.isArray(rows) ? rows : [];
+        const empleadoIds = Array.from(new Set(typedRows.map((r: CambioRow) => r.created_by).filter((id: number) => id > 0)));
         const empleadosMap = new Map<number, { nombre: string; primer_apellido: string; segundo_apellido: string | null; cedula: string }>();
 
         if (empleadoIds.length > 0) {
-            const empleados = await prisma.c_empleado.findMany({
-                where: { id: { in: empleadoIds } },
-                select: {
-                    id: true,
-                    nombre: true,
-                    primer_apellido: true,
-                    segundo_apellido: true,
-                    cedula: true,
-                },
+            const empleados = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "c_empleado",
+                    operation: "findMany",
+                    where: { id: { in: empleadoIds } },
+                    select: {
+                        id: true,
+                        nombre: true,
+                        primer_apellido: true,
+                        segundo_apellido: true,
+                        cedula: true,
+                    },
+                }
             });
 
-            empleados.forEach((emp) => {
+            const typedEmpleados: EmpleadoRow[] = Array.isArray(empleados) ? empleados : [];
+            typedEmpleados.forEach((emp: EmpleadoRow) => {
                 empleadosMap.set(emp.id, {
                     nombre: emp.nombre || "",
                     primer_apellido: emp.primer_apellido || "",
@@ -56,7 +82,7 @@ export async function GET(req: NextRequest) {
             });
         }
 
-        const dataWithEmpleado = rows.map((row) => {
+        const dataWithEmpleado = typedRows.map((row: CambioRow) => {
             const empleado = empleadosMap.get(row.created_by);
             return {
                 ...row,

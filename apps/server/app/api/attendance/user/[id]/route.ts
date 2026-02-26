@@ -1,12 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../../../utils/verifyToken";
 import { toZonedTime, format } from "date-fns-tz";
-import { prisma } from "../../../../../utils/prismaClient";
-import { getUserMarca } from "../../../../../utils/getUserMarca";
+import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
+import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
 
         if (!valid) {
             return NextResponse.json(
@@ -26,47 +25,187 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             return NextResponse.json({ status: false, message: "Latitude y longitude no especificadas" }, { status: 200 });
         }
 
-        const empleado = await prisma.c_empleado.findUnique({ where: { id } });
+        const empleado = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_empleado",
+                operation: "findUnique",
+                where: { id }
+            }
+        });
         if (!empleado) {
             return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 200 });
         }
 
-        const marcaDia = await getUserMarca(empleado.id);
+        const now = toZonedTime(new Date(), "America/Costa_Rica");
+        const nowPlus15 = new Date(now.getTime() + 15 * 60 * 1000);
+        const currentDate = new Date(now.toISOString().split("T")[0]);
+        const currentTime = new Date("1970-01-01 " + now.toTimeString().slice(0, 8));
+
+        const proximo = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_marca_dia",
+                operation: "findFirst",
+                where: {
+                    empleadoFijo_id: empleado.id,
+                    OR: [
+                        {
+                            fecha: {
+                                gt: now,
+                            },
+                        },
+                        {
+                            fecha: {
+                                equals: currentDate,
+                            },
+                            hora_inicio: {
+                                gte: currentTime,
+                            },
+                        },
+                    ],
+                },
+                orderBy: [
+                    { fecha: "asc" },
+                    { hora_inicio: "asc" },
+                ],
+            }
+        });
+
+        let marcaDia = null;
+        if (proximo) {
+            const proximoDateTime = new Date(`${proximo.fecha}T${proximo.hora_inicio}`);
+            if (proximoDateTime <= nowPlus15) {
+                marcaDia = proximo;
+            }
+        }
+
+        if (!marcaDia) {
+            marcaDia = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "c_marca_dia",
+                    operation: "findFirst",
+                    where: {
+                        empleadoFijo_id: empleado.id,
+                        OR: [
+                            {
+                                fecha: {
+                                    lt: now,
+                                },
+                            },
+                            {
+                                fecha: {
+                                    equals: currentDate,
+                                },
+                                hora_inicio: {
+                                    lt: currentTime,
+                                },
+                            },
+                        ],
+                    },
+                    orderBy: [
+                        { fecha: "desc" },
+                        { hora_inicio: "desc" },
+                    ],
+                }
+            });
+        }
+
         if (!marcaDia) {
             return NextResponse.json({ status: false, message: "No se encontró la marca del dia" }, { status: 200 });
         }
 
-        const empresa = await prisma.e_estructura_empresa.findUnique({ where: { id: marcaDia.empresa_id } });
+        const empresa = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "e_estructura_empresa",
+                operation: "findUnique",
+                where: { id: marcaDia.empresa_id }
+            }
+        });
         if (!empresa) {
             return NextResponse.json({ status: false, message: "Empresa no encontrada" }, { status: 200 });
         }
 
-        const cliente = await prisma.e_estructura_cliente.findUnique({ where: { id: marcaDia.cliente_id } });
+        const cliente = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "e_estructura_cliente",
+                operation: "findUnique",
+                where: { id: marcaDia.cliente_id }
+            }
+        });
         if (!cliente) {
             return NextResponse.json({ status: false, message: "Cliente no encontrado" }, { status: 200 });
         }
 
-        const contrato = await prisma.e_estructura_contrato.findUnique({ where: { id: marcaDia.contrato_id } });
+        const contrato = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "e_estructura_contrato",
+                operation: "findUnique",
+                where: { id: marcaDia.contrato_id }
+            }
+        });
         if (!contrato) {
             return NextResponse.json({ status: false, message: "Contrato no encontrado" }, { status: 200 });
         }
 
-        const corpo = await prisma.e_estructura_sucursal.findUnique({ where: { id: marcaDia.corpo_id } });
+        const corpo = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "e_estructura_sucursal",
+                operation: "findUnique",
+                where: { id: marcaDia.corpo_id }
+            }
+        });
         if (!corpo) {
             return NextResponse.json({ status: false, message: "Corpo no encontrado" }, { status: 200 });
         }
 
-        const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: marcaDia.puesto_id } });
+        const puesto = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "e_estructura_puesto",
+                operation: "findUnique",
+                where: { id: marcaDia.puesto_id }
+            }
+        });
         if (!puesto) {
             return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
         }
 
-        const plaza = await prisma.e_estructura_plazas.findUnique({ where: { id: marcaDia.plaza_id } });
+        const plaza = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "e_estructura_plazas",
+                operation: "findUnique",
+                where: { id: marcaDia.plaza_id }
+            }
+        });
         if (!plaza) {
             return NextResponse.json({ status: false, message: "Plaza no encontrada" }, { status: 200 });
         }
 
-        const horario = await prisma.c_horario.findUnique({ where: { id: marcaDia.horario_id } });
+        const horario = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_horario",
+                operation: "findUnique",
+                where: { id: marcaDia.horario_id }
+            }
+        });
         if (!horario) {
             return NextResponse.json({ status: false, message: "Horario no encontrado" }, { status: 200 });
         }
@@ -81,10 +220,12 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         let next_time = null;
         if (marcaDia.hora_inicio && marcaDia.hora_fin) {
 
+            const horaInicioMarca = new Date(marcaDia.hora_inicio);
+            const horaFinMarca = new Date(marcaDia.hora_fin);
             const hora_inicio = toZonedTime(new Date(), "America/Costa_Rica");
-            hora_inicio.setHours(marcaDia.hora_inicio.getHours(), marcaDia.hora_inicio.getMinutes(), marcaDia.hora_inicio.getSeconds(), 0);
+            hora_inicio.setHours(horaInicioMarca.getHours(), horaInicioMarca.getMinutes(), horaInicioMarca.getSeconds(), 0);
             const hora_fin = toZonedTime(new Date(), "America/Costa_Rica");
-            hora_fin.setHours(marcaDia.hora_fin.getHours(), marcaDia.hora_fin.getMinutes(), marcaDia.hora_fin.getSeconds(), 0);
+            hora_fin.setHours(horaFinMarca.getHours(), horaFinMarca.getMinutes(), horaFinMarca.getSeconds(), 0);
 
             if (toZonedTime(new Date(), "America/Costa_Rica") > hora_fin && marcaDia.hora_entrada_digitada == null) {
                 return NextResponse.json({ status: false, absent: true, message: "No has marcado la entrada y has sido declarado como ausente" }, { status: 200 });
@@ -105,10 +246,16 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             return NextResponse.json({ status: false, message: "Horario de entrada y salida no configurado" }, { status: 200 });
         }
 
-        const empleado_plaza = await prisma.c_empleado_plaza.findFirst({
-            where: {
-                empleado_id: empleado.id,
-                plaza_id: marcaDia.plaza_id
+        const empleado_plaza = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_empleado_plaza",
+                operation: "findFirst",
+                where: {
+                    empleado_id: empleado.id,
+                    plaza_id: marcaDia.plaza_id
+                }
             }
         });
 
@@ -118,9 +265,15 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         };
 
         if (empleado_plaza && empleado_plaza.plaza_id && empleado_plaza.division_id) {
-            const division = await prisma.n_division.findFirst({
-                where: {
-                    id: empleado_plaza.division_id
+            const division = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "n_division",
+                    operation: "findFirst",
+                    where: {
+                        id: empleado_plaza.division_id
+                    }
                 }
             });
 
@@ -130,16 +283,28 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             }
 
             if (plaza.categoriaSalarial_id) {
-                const categoria_salarial = await prisma.pg_categoria_salarial.findFirst({
-                    where: {
-                        id: plaza.categoriaSalarial_id
+                const categoria_salarial = await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "GET",
+                        table: "pg_categoria_salarial",
+                        operation: "findFirst",
+                        where: {
+                            id: plaza.categoriaSalarial_id
+                        }
                     }
                 });
 
                 if (categoria_salarial && categoria_salarial.categoriaEmpleado_id) {
-                    const categoria_empleado = await prisma.pg_categoria_empleado.findFirst({
-                        where: {
-                            id: categoria_salarial.categoriaEmpleado_id
+                    const categoria_empleado = await callDynamicPrisma({
+                        req,
+                        data: {
+                            action: "GET",
+                            table: "pg_categoria_empleado",
+                            operation: "findFirst",
+                            where: {
+                                id: categoria_salarial.categoriaEmpleado_id
+                            }
                         }
                     });
 
@@ -152,6 +317,9 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                             case "MIS":
                                 role = "OPERATIVO";
                                 break;
+                            case "OFC":
+                                role = "OPERATIVO";
+                                break;
                             case "ADM":
                                 role = "ADMINISTRATIVO";
                                 break;
@@ -160,9 +328,6 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                                 break;
                             case "SUP":
                                 role = "SUPERVISOR";
-                                break;
-                            case "OFC":
-                                role = "OPERATIVO";
                                 break;
                         }
 
@@ -206,7 +371,11 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             puesto: {
                 id: puesto.id,
                 nombre: puesto.nombre,
-                tiene_relevo: puesto.tiene_relevo ?? false
+                tiene_relevo: puesto.tiene_relevo ?? false,
+                ubicacion: {
+                    lat: puesto.coordenadas_gpslat ? parseFloat(puesto.coordenadas_gpslat) : null,
+                    lng: puesto.coordenadas_gpslng ? parseFloat(puesto.coordenadas_gpslng) : null
+                }
             },
             plaza: {
                 id: plaza.id,

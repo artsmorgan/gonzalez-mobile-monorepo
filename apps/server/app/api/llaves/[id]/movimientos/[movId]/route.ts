@@ -1,8 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../../../../utils/verifyToken";
-import { prisma } from "../../../../../../utils/prismaClient";
-import { getUserMarca } from "../../../../../../utils/getUserMarca";
+import { verifyAccessTokenByApi } from "../../../../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
 
 function parseDateOnly(value: any): Date | null {
@@ -21,29 +20,47 @@ function parseTimeOnly(value: any): Date | null {
   return d;
 }
 
-async function getMarcaDiaOrFail(marcaId: number) {
-  const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: marcaId } });
+async function getMarcaDiaOrFail(req: NextRequest, marcaId: number) {
+  const marcaDia = await callDynamicPrisma({
+    req,
+    data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: marcaId } }
+  });
   if (!marcaDia) return { ok: false as const, marcaDia: null, message: "Marca no encontrada" };
   if (!marcaDia.empleadoFijo_id) return { ok: false as const, marcaDia: null, message: "Empleado no encontrado" };
 
-  const lastMarca = await getUserMarca(marcaDia.empleadoFijo_id);
+  const lastMarca = await callDynamicPrisma({
+    req,
+    data: {
+      action: "GET",
+      table: "c_marca_dia",
+      operation: "findFirst",
+      where: { empleadoFijo_id: marcaDia.empleadoFijo_id },
+      orderBy: [{ fecha: "desc" }, { hora_inicio: "desc" }]
+    }
+  });
   if (!lastMarca) return { ok: false as const, marcaDia: null, message: "No se encontró la última marca" };
   if (marcaDia.id !== lastMarca.id) return { ok: false as const, marcaDia: null, message: "Hay una nueva marca más reciente" };
   return { ok: true as const, marcaDia, message: "" };
 }
 
-async function validateOwnership(llaveId: number, movId: number, marcaId: number) {
-  const marcaRes = await getMarcaDiaOrFail(marcaId);
+async function validateOwnership(req: NextRequest, llaveId: number, movId: number, marcaId: number) {
+  const marcaRes = await getMarcaDiaOrFail(req, marcaId);
   if (!marcaRes.ok) return { ok: false as const, marcaDia: null, llave: null, mov: null, message: marcaRes.message };
   const marcaDia = marcaRes.marcaDia!;
 
-  const llave = await prisma.e_llave.findUnique({ where: { id: llaveId } });
+  const llave = await callDynamicPrisma({
+    req,
+    data: { action: "GET", table: "e_llave", operation: "findUnique", where: { id: llaveId } }
+  });
   if (!llave) return { ok: false as const, marcaDia: null, llave: null, mov: null, message: "Llave no encontrada" };
   if (llave.cliente_id !== marcaDia.cliente_id || llave.corpo_id !== marcaDia.corpo_id) {
     return { ok: false as const, marcaDia: null, llave: null, mov: null, message: "No autorizado" };
   }
 
-  const mov = await prisma.e_movimiento_llave.findUnique({ where: { id: movId } });
+  const mov = await callDynamicPrisma({
+    req,
+    data: { action: "GET", table: "e_movimiento_llave", operation: "findUnique", where: { id: movId } }
+  });
   if (!mov || mov.llave_id !== llaveId) {
     return { ok: false as const, marcaDia: null, llave: null, mov: null, message: "Movimiento no encontrado" };
   }
@@ -53,7 +70,7 @@ async function validateOwnership(llaveId: number, movId: number, marcaId: number
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string; movId: string }> }) {
   try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
     if (!valid) return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
 
     const resolvedParams = await context.params;
@@ -68,8 +85,6 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       nombre_persona_entrega,
       departamento,
       telefono,
-      entrega,
-      recibe,
       fecha,
       hora,
       firma_entrega,
@@ -79,7 +94,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
     if (!marca_id) return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
 
-    const own = await validateOwnership(llaveId, movId, parseInt(String(marca_id)));
+    const own = await validateOwnership(req, llaveId, movId, parseInt(String(marca_id)));
     if (!own.ok) return NextResponse.json({ status: false, message: own.message }, { status: 200 });
 
     const fechaDate = fecha ? parseDateOnly(fecha) : null;
@@ -104,8 +119,6 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       nombre_persona_entrega: typeof nombre_persona_entrega === "string" ? nombre_persona_entrega : own.mov!.nombre_persona_entrega,
       departamento: typeof departamento === "string" ? departamento : own.mov!.departamento,
       telefono: typeof telefono === "string" ? telefono : own.mov!.telefono,
-      entrega: typeof entrega === "string" ? entrega : own.mov!.entrega,
-      recibe: typeof recibe === "string" ? recibe : own.mov!.recibe,
       fecha: fechaDate ?? own.mov!.fecha,
       hora: horaDate ?? own.mov!.hora,
       firma_entrega: typeof firma_entrega === "string" ? firma_entrega : own.mov!.firma_entrega,
@@ -127,23 +140,43 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       }
     }
 
-    await prisma.e_movimiento_llave.update({
-      where: { id: movId },
-      data: updateData,
+    // Convertir fechas a ISO strings para la API dinámica
+    const updateDataForApi: any = {};
+    for (const [k, v] of Object.entries(updateData)) {
+      if (v instanceof Date) {
+        updateDataForApi[k] = v.toISOString();
+      } else {
+        updateDataForApi[k] = v;
+      }
+    }
+
+    await callDynamicPrisma({
+      req,
+      data: {
+        action: "UPDATE",
+        table: "e_movimiento_llave",
+        where: { id: movId },
+        data: updateDataForApi
+      }
     });
 
     // Registrar cambios si hay alguno
     if (cambiosArr.length > 0) {
       const createdBy = parseInt(String((payload as any)?.id ?? 0)) || 0;
       const createdAt = toZonedTime(new Date(), "America/Costa_Rica") as Date;
-      await prisma.c_cambios_apps_modules.create({
+      await callDynamicPrisma({
+        req,
         data: {
-          nombre_tabla: "e_movimiento_llave",
-          registro_id: movId,
-          cambios: JSON.stringify(cambiosArr),
-          created_at: createdAt,
-          created_by: createdBy,
-        },
+          action: "POST",
+          table: "c_cambios_apps_modules",
+          data: {
+            nombre_tabla: "e_movimiento_llave",
+            registro_id: movId,
+            cambios: JSON.stringify(cambiosArr),
+            created_at: createdAt.toISOString(),
+            created_by: createdBy,
+          }
+        }
       });
     }
 
@@ -157,7 +190,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
 export async function DELETE(req: NextRequest, context: { params: Promise<{ id: string; movId: string }> }) {
   try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
     if (!valid) return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
 
     const resolvedParams = await context.params;
@@ -168,38 +201,46 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
     const marcaIdStr = req.nextUrl.searchParams.get("m");
     if (!marcaIdStr) return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
 
-    const own = await validateOwnership(llaveId, movId, parseInt(marcaIdStr));
+    const own = await validateOwnership(req, llaveId, movId, parseInt(marcaIdStr));
     if (!own.ok) return NextResponse.json({ status: false, message: own.message }, { status: 200 });
 
     // Registrar cambio de eliminación antes de eliminar
     const createdBy = parseInt(String((payload as any)?.id ?? 0)) || 0;
     const createdAt = toZonedTime(new Date(), "America/Costa_Rica") as Date;
-    await prisma.c_cambios_apps_modules.create({
+    const fechaMov = own.mov!.fecha instanceof Date ? own.mov!.fecha.toISOString() : own.mov!.fecha;
+    const horaMov = own.mov!.hora instanceof Date ? own.mov!.hora.toISOString() : own.mov!.hora;
+    await callDynamicPrisma({
+      req,
       data: {
-        nombre_tabla: "e_movimiento_llave",
-        registro_id: movId,
-        cambios: JSON.stringify([{
-          prop: "__deleted__",
-          before: {
-            id: own.mov!.id,
-            llave_id: own.mov!.llave_id,
-            nombre_persona_recibe: own.mov!.nombre_persona_recibe,
-            nombre_persona_entrega: own.mov!.nombre_persona_entrega,
-            departamento: own.mov!.departamento,
-            telefono: own.mov!.telefono,
-            entrega: own.mov!.entrega,
-            recibe: own.mov!.recibe,
-            fecha: own.mov!.fecha.toISOString(),
-            hora: own.mov!.hora.toISOString(),
-          },
-          after: null,
-        }]),
-        created_at: createdAt,
-        created_by: createdBy,
-      },
+        action: "POST",
+        table: "c_cambios_apps_modules",
+        data: {
+          nombre_tabla: "e_movimiento_llave",
+          registro_id: movId,
+          cambios: JSON.stringify([{
+            prop: "__deleted__",
+            before: {
+              id: own.mov!.id,
+              llave_id: own.mov!.llave_id,
+              nombre_persona_recibe: own.mov!.nombre_persona_recibe,
+              nombre_persona_entrega: own.mov!.nombre_persona_entrega,
+              departamento: own.mov!.departamento,
+              telefono: own.mov!.telefono,
+              fecha: fechaMov,
+              hora: horaMov,
+            },
+            after: null,
+          }]),
+          created_at: createdAt.toISOString(),
+          created_by: createdBy,
+        }
+      }
     });
 
-    await prisma.e_movimiento_llave.delete({ where: { id: movId } });
+    await callDynamicPrisma({
+      req,
+      data: { action: "DELETE", table: "e_movimiento_llave", where: { id: movId } }
+    });
     return NextResponse.json({ status: true, message: "Movimiento eliminado correctamente" }, { status: 200 });
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";

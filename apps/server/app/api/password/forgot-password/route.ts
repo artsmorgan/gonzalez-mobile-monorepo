@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { transporter } from '../../../../transporter';
 import { toZonedTime } from 'date-fns-tz';
-
-import { prisma } from "../../../../utils/prismaClient";
+import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 
 export async function POST(request: NextRequest) {
     try {
@@ -17,9 +16,16 @@ export async function POST(request: NextRequest) {
         }
 
         // Buscar el empleado por cédula
-        const empleado = await prisma.c_empleado.findFirst({
-            where: {
-                cedula: cedula
+        const empleado = await callDynamicPrisma({
+            req: request,
+            shouldVerifyAccessToken: false,
+            data: {
+                action: "GET",
+                table: "c_empleado",
+                operation: "findFirst",
+                where: {
+                    cedula: cedula
+                }
             }
         });
 
@@ -46,7 +52,16 @@ export async function POST(request: NextRequest) {
                 const indice = Math.floor(Math.random() * caracteres.length);
                 token += caracteres[indice];
             }
-            const exists_token = await prisma.a_recovery_password_token.findFirst({ where: { token: token } });
+            const exists_token = await callDynamicPrisma({
+                req: request,
+                shouldVerifyAccessToken: false,
+                data: {
+                    action: "GET",
+                    table: "a_recovery_password_token",
+                    operation: "findFirst",
+                    where: { token: token }
+                }
+            });
             if (!exists_token) {
                 exists = false;
             }
@@ -56,12 +71,19 @@ export async function POST(request: NextRequest) {
         }
 
         // Agregar un registro en la tabla a_recovery_password_token para el empleado
-        await prisma.a_recovery_password_token.create({
+        await callDynamicPrisma({
+            req: request,
+            shouldVerifyAccessToken: false,
             data: {
-                token: token,
-                empleadoId: empleado.id,
-                expira_en: 900000,
-                creacion: toZonedTime(new Date(), "America/Costa_Rica")
+                action: "POST",
+                table: "a_recovery_password_token",
+                data: {
+                    token: token,
+                    empleadoId: empleado.id,
+                    expira_en: 900000,
+                    creacion: toZonedTime(new Date(), "America/Costa_Rica").toISOString()
+                },
+                returning: false
             }
         });
 

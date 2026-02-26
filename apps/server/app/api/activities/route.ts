@@ -1,10 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
-import { verifyAccessToken } from "../../../utils/verifyToken";
-import { toZonedTime } from "date-fns-tz";
+import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { sendNotificationByPlaza } from "../../../utils/sendNotification";
-
-const prisma = new PrismaClient();
+import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 
 export async function GET(req: NextRequest) {
     try {
@@ -17,7 +14,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
 
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
@@ -37,88 +34,70 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 200 });
         }
 
-        const marca = await prisma.c_marca_dia.findUnique({ where: { id: marca_id } });
+        const marca = await callDynamicPrisma({ req, data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: marca_id } } });
         if (!marca) {
             return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
         }
 
-        const empresa = await prisma.e_estructura_empresa.findUnique({ where: { id: marca.empresa_id } });
-        if (!empresa) {
-            return NextResponse.json({ status: false, message: "Empresa no encontrada" }, { status: 200 });
-        }
-
-        const cliente = await prisma.e_estructura_cliente.findUnique({ where: { id: marca.cliente_id } });
-        if (!cliente) {
-            return NextResponse.json({ status: false, message: "Cliente no encontrada" }, { status: 200 });
-        }
-
-        const contrato = await prisma.e_estructura_contrato.findUnique({ where: { id: marca.contrato_id } });
-        if (!contrato) {
-            return NextResponse.json({ status: false, message: "Contrato no encontrada" }, { status: 200 });
-        }
-
-        const corpo = await prisma.e_estructura_sucursal.findUnique({ where: { id: marca.corpo_id } });
-        if (!corpo) {
-            return NextResponse.json({ status: false, message: "Corpo no encontrada" }, { status: 200 });
-        }
-
-        const actividad_corpo = await prisma.e_actividad_corpo.create({
+        const actividad = await callDynamicPrisma({
+            req,
             data: {
-                empresa_id: empresa.id,
-                cliente_id: cliente.id,
-                contrato_id: contrato.id,
-                corpo_id: corpo.id,
-                puesto_id: null,
-                plaza_id: null,
-                nombre_actividad: nombre_actividad,
-                fecha_inicio: new Date(fecha_inicio),
-                frecuencia: frecuencia,
-                es_revision_equipo: es_revision_equipo,
-                descripcion_actividad: descripcion_actividad,
-                reglas: reglas,
-                firma_responsable: firma_responsable,
+                action: "POST",
+                table: "e_actividades",
+                data: {
+                    nombre_actividad: nombre_actividad,
+                    fecha_inicio: new Date(fecha_inicio).toISOString(),
+                    frecuencia: frecuencia,
+                    es_revision_equipo: es_revision_equipo,
+                    descripcion_actividad: descripcion_actividad,
+                    firma_responsable: firma_responsable,
+                }
             }
         });
 
-        if (actividad_corpo) {
+        if (actividad) {
             const plazas_ids: number[] = [];
-            const puestos_plazas_parse = JSON.parse(puestos_plazas);
+            const puestos_plazas_parse = Array.isArray(JSON.parse(puestos_plazas || "[]")) ? JSON.parse(puestos_plazas || "[]") : [];
+            const uniquePuestoIds = Array.from(
+                new Set(
+                    puestos_plazas_parse
+                        .map((p: any) => Number(p?.puesto_id))
+                        .filter((v: number) => Number.isFinite(v) && v > 0)
+                )
+            );
+
+            for (const puestoId of uniquePuestoIds) {
+                await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "POST",
+                        table: "e_actividades_puesto",
+                        data: { actividad_id: actividad.id, puesto_id: puestoId },
+                    },
+                });
+            }
+
             for (const puesto of puestos_plazas_parse) {
-                console.log("puesto", puesto);
-                const ps = await prisma.e_estructura_puesto.findUnique({ where: { id: puesto.puesto_id } });
-                if (ps) {
-                    if (puesto.plazas.length > 0) {
-                        for (const plaza of puesto.plazas) {
-                            const pl = await prisma.e_estructura_plazas.findUnique({ where: { id: plaza.plaza_id } });
-                            if (pl) {
-                                // Verificar si la plaza ya existe en el array de plazas_ids
-                                if (!plazas_ids.includes(pl.id)) plazas_ids.push(pl.id);
-                                await prisma.e_actividad_puesto_plaza.create({
-                                    data: {
-                                        actividadCorpo_id: actividad_corpo.id,
-                                        puesto_id: ps.id,
-                                        plaza_id: pl.id,
-                                    }
-                                });
-                            }
-                        }
+                const puesto_id = Number(puesto?.puesto_id || 0);
+                if (!puesto_id) continue;
+                if (Array.isArray(puesto?.plazas) && puesto.plazas.length > 0) {
+                    for (const plaza of puesto.plazas) {
+                        const plaza_id = Number(plaza?.plaza_id || 0);
+                        if (plaza_id && !plazas_ids.includes(plaza_id)) plazas_ids.push(plaza_id);
                     }
-                    else {
-                        await prisma.e_actividad_puesto_plaza.create({
-                            data: {
-                                actividadCorpo_id: actividad_corpo.id,
-                                puesto_id: ps.id,
-                            }
-                        });
-                        const plzs = await prisma.e_estructura_plazas.findMany({ where: { puesto_id: ps.id } });
-                        for (const plz of plzs) {
-                            if (!plazas_ids.includes(plz.id)) plazas_ids.push(plz.id);
-                        }
+                } else {
+                    const plzs = await callDynamicPrisma({
+                        req,
+                        data: { action: "GET", table: "e_estructura_plazas", operation: "findMany", where: { puesto_id } },
+                    });
+                    for (const plz of Array.isArray(plzs) ? plzs : []) {
+                        if (plz?.id && !plazas_ids.includes(plz.id)) plazas_ids.push(plz.id);
                     }
                 }
             }
+
             const frecuencia_parse = JSON.parse(frecuencia);
-            await sendNotificationByPlaza(marca_id, "Actividad asignada", `Se te ha asignado la actividad ${nombre_actividad}, la cual deberá realizarse "${frecuencia_parse.title}"`, plazas_ids);
+            await sendNotificationByPlaza(req, marca_id, "Actividad asignada", `Se te ha asignado la actividad ${nombre_actividad}, la cual deberá realizarse "${frecuencia_parse.title}"`, plazas_ids);
         }
 
         return NextResponse.json({ status: true, message: "Actividad creada correctamente" }, { status: 200 });

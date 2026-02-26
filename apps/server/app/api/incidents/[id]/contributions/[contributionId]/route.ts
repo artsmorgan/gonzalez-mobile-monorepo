@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../../../../utils/verifyToken";
-import { prisma } from "../../../../../../utils/prismaClient";
+import { verifyAccessTokenByApi } from "../../../../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../../../../utils/callDynamicPrisma";
 import fs from "fs";
 import path from "path";
-import { v4 as uuidv4 } from "uuid";
+import { uploadDynamicFiles } from "../../../../../../utils/callDynamicFilesApi";
 
 export const runtime = "nodejs";
 
@@ -28,16 +28,9 @@ function safeParseJson<T>(value: any, fallback: T): T {
   }
 }
 
-function normalizeBase64(b64: string): string {
-  if (!b64) return "";
-  const idx = b64.indexOf("base64,");
-  if (idx !== -1) return b64.slice(idx + "base64,".length);
-  return b64;
-}
-
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string; contributionId: string }> }) {
   try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
     if (!valid) return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
 
     const { id, contributionId } = await context.params;
@@ -50,20 +43,43 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     const empleadoId = parseInt(String((payload as any)?.id ?? (payload as any)?.empleado_id ?? "0"), 10);
     if (!empleadoId) return NextResponse.json({ status: false, message: "Empleado no identificado" }, { status: 200 });
 
-    const aporte = await prisma.c_contribucion_incidente.findFirst({
-      where: { id: aporteId, incidente_id: incidentId },
+    const aporte = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "c_contribucion_incidente",
+        operation: "findFirst",
+        where: { id: aporteId, incidente_id: incidentId }
+      }
     });
     if (!aporte) return NextResponse.json({ status: false, message: "Aporte no encontrado" }, { status: 200 });
 
     const body = await req.json();
-    const { aporte: aporteText, archivos } = body ?? {};
+    const { aporte: aporteText, archivos, nombre_aporte, firma_aporte_tercero } = body ?? {};
 
-    if (typeof aporteText === "string") {
-      await prisma.c_contribucion_incidente.update({
-        where: { id: aporteId },
+    if (
+      typeof aporteText === "string" ||
+      typeof nombre_aporte === "string" ||
+      nombre_aporte === null ||
+      typeof firma_aporte_tercero === "string" ||
+      firma_aporte_tercero === null
+    ) {
+      await callDynamicPrisma({
+        req,
         data: {
-          aporte: aporteText,
-        },
+          action: "UPDATE",
+          table: "c_contribucion_incidente",
+          where: { id: aporteId },
+          data: {
+            ...(typeof aporteText === "string" ? { aporte: aporteText } : {}),
+            ...(typeof nombre_aporte === "string" || nombre_aporte === null
+              ? { nombre_aporte: typeof nombre_aporte === "string" && nombre_aporte.trim().length > 0 ? nombre_aporte.trim() : null }
+              : {}),
+            ...(typeof firma_aporte_tercero === "string" || firma_aporte_tercero === null
+              ? { firma_aporte_tercero: typeof firma_aporte_tercero === "string" && firma_aporte_tercero.trim().length > 0 ? firma_aporte_tercero.trim() : null }
+              : {}),
+          }
+        }
       });
     }
 
@@ -73,34 +89,33 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     }
 
     if (filesParsed.length > 0) {
-      const dir = path.join(process.cwd(), "public", "uploads", "incidents", `${incidentId}`, "aportes", `${aporteId}`);
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      const uploadResp = await uploadDynamicFiles({
+        req,
+        folderPath: `incidents/${incidentId}/aportes/${aporteId}`,
+        files: filesParsed
+          .filter((f) => f?.file_base64 && f?.extension && f?.type)
+          .map((f) => ({
+            type: f.type,
+            extension: f.extension,
+            original_name: f.original_name,
+            file_base64: f.file_base64,
+          })),
+      });
 
-      for (const f of filesParsed) {
-        if (!f?.file_base64 || !f?.extension || !f?.type) continue;
-        let buffer: Buffer;
-        try {
-          buffer = Buffer.from(normalizeBase64(String(f.file_base64)), "base64");
-        } catch {
-          continue;
-        }
-
-        const ext = String(f.extension).replace(".", "").trim() || "dat";
-        const fileName = `${uuidv4()}.${ext}`;
-        fs.writeFileSync(path.join(dir, fileName), buffer);
-
-        const originalName =
-          (typeof f.original_name === "string" && f.original_name.trim().length > 0)
-            ? f.original_name.trim()
-            : fileName;
-
-        await prisma.c_archivos_aporte_incidente.create({
+      const uploadedFiles = Array.isArray(uploadResp?.files) ? uploadResp.files : [];
+      for (const uploaded of uploadedFiles) {
+        await callDynamicPrisma({
+          req,
           data: {
-            name: fileName,
-            original_name: originalName,
-            type: String(f.type),
-            extension: ext,
-            contribucion_id: aporteId,
+            action: "POST",
+            table: "c_archivos_aporte_incidente",
+            data: {
+              name: uploaded.name,
+              original_name: uploaded.original_name || uploaded.name,
+              type: uploaded.type,
+              extension: uploaded.extension,
+              contribucion_id: aporteId,
+            },
           },
         });
       }
@@ -116,7 +131,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
 export async function DELETE(req: NextRequest, context: { params: Promise<{ id: string; contributionId: string }> }) {
   try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
     if (!valid) return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
 
     const { id, contributionId } = await context.params;
@@ -126,13 +141,22 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
       return NextResponse.json({ status: false, message: "IDs no especificados" }, { status: 200 });
     }
 
-    const aporte = await prisma.c_contribucion_incidente.findFirst({
-      where: { id: aporteId, incidente_id: incidentId },
-      include: { c_archivos_aporte_incidente: true },
+    const aporte = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "c_contribucion_incidente",
+        operation: "findFirst",
+        where: { id: aporteId, incidente_id: incidentId },
+        include: { c_archivos_aporte_incidente: true }
+      }
     });
     if (!aporte) return NextResponse.json({ status: false, message: "Aporte no encontrado" }, { status: 200 });
 
-    await prisma.c_contribucion_incidente.delete({ where: { id: aporteId } });
+    await callDynamicPrisma({
+      req,
+      data: { action: "DELETE", table: "c_contribucion_incidente", where: { id: aporteId } }
+    });
 
     const dir = path.join(process.cwd(), "public", "uploads", "incidents", `${incidentId}`, "aportes", `${aporteId}`);
     if (fs.existsSync(dir)) {

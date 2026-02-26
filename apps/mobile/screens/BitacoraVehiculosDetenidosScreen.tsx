@@ -453,6 +453,8 @@ export default function BitacoraVehiculosDetenidosScreen() {
 
   const [isCreating, setIsCreating] = useState(false);
   const [editing, setEditing] = useState<BitacoraVehiculoDetenidoItem | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitResponse, setSubmitResponse] = useState<{ type: 'success' | 'error', message: string } | null>(null);
 
   const [tipo, setTipo] = useState<TipoBitacora>('Vehículo');
   const tipoRef = useRef<TipoBitacora>('Vehículo');
@@ -1617,6 +1619,9 @@ export default function BitacoraVehiculosDetenidosScreen() {
     if (!employee) return;
     if (!validateForm()) return;
 
+    setIsSubmitting(true);
+    setSubmitResponse(null);
+
     try {
       const requestData = await buildPayload();
       const isConnected = await getConnectionStatus();
@@ -1641,10 +1646,12 @@ export default function BitacoraVehiculosDetenidosScreen() {
             });
           }
 
-          await fetchBitacoras();
-          setIsCreating(false);
-          Alert.alert('Éxito', 'Bitácora creada correctamente');
-          if (returnTo) navigation.goBack();
+          setSubmitResponse({ type: 'success', message: res.message || 'Bitácora creada correctamente' });
+          setTimeout(async () => {
+            await fetchBitacoras();
+            setIsCreating(false);
+            if (returnTo) navigation.goBack();
+          }, 2000);
           return;
         }
 
@@ -1692,9 +1699,11 @@ export default function BitacoraVehiculosDetenidosScreen() {
         const updatedCache = [localItem, ...cache.filter((b: any) => b.id_local !== id_local)];
         await AsyncStorage.setItem('bitacora_vehiculo_detenido_cache', JSON.stringify(updatedCache));
         setBitacoras(updatedCache);
-        setIsCreating(false);
-        Alert.alert('Modo offline', 'Bitácora guardada localmente. Se sincronizará cuando haya conexión.');
-        if (returnTo) navigation.goBack();
+        setSubmitResponse({ type: 'success', message: 'Bitácora guardada localmente. Se sincronizará cuando haya conexión.' });
+        setTimeout(() => {
+          setIsCreating(false);
+          if (returnTo) navigation.goBack();
+        }, 2000);
         return;
       }
 
@@ -1707,10 +1716,12 @@ export default function BitacoraVehiculosDetenidosScreen() {
           logout,
         });
         if (!res.status) throw new Error(res.message || 'No se pudo actualizar');
-        await fetchBitacoras();
-        setIsCreating(false);
-        Alert.alert('Éxito', 'Bitácora actualizada correctamente');
-        if (returnTo) navigation.goBack();
+        setSubmitResponse({ type: 'success', message: res.message || 'Bitácora actualizada correctamente' });
+        setTimeout(async () => {
+          await fetchBitacoras();
+          setIsCreating(false);
+          if (returnTo) navigation.goBack();
+        }, 2000);
         return;
       }
 
@@ -1725,11 +1736,15 @@ export default function BitacoraVehiculosDetenidosScreen() {
       const updatedCache = cache.map((b: any) => (b.id === editing.id ? { ...b, ...requestData } : b));
       await AsyncStorage.setItem('bitacora_vehiculo_detenido_cache', JSON.stringify(updatedCache));
       setBitacoras(updatedCache);
-      setIsCreating(false);
-      Alert.alert('Modo offline', 'Cambios guardados localmente. Se sincronizarán cuando haya conexión.');
-      if (returnTo) navigation.goBack();
+      setSubmitResponse({ type: 'success', message: 'Cambios guardados localmente. Se sincronizarán cuando haya conexión.' });
+      setTimeout(() => {
+        setIsCreating(false);
+        if (returnTo) navigation.goBack();
+      }, 2000);
     } catch (e: any) {
-      Alert.alert('Error', e.message || 'No se pudo guardar');
+      setSubmitResponse({ type: 'error', message: e.message || 'No se pudo guardar' });
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -1845,7 +1860,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
   if (isLoading) {
     return (
       <ThemedView style={styles.container}>
-        <AppHeader onMenuPress={handleMenuPress} title="Vehículos detenidos" />
+        <AppHeader onMenuPress={handleMenuPress} title="Revisión de vehículos" />
         <ThemedView style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#007AFF" />
           <ThemedText style={styles.loadingText}>Cargando...</ThemedText>
@@ -1859,7 +1874,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
   if (!hasCurrentMarca && !isPrefillMode) {
     return (
       <ThemedView style={styles.container}>
-        <AppHeader onMenuPress={handleMenuPress} title="Vehículos detenidos" />
+        <AppHeader onMenuPress={handleMenuPress} title="Revisión de vehículos" />
         <ThemedView style={styles.loadingContainer}>
           <ThemedText style={styles.errorText}>Debes tener una marca activa para usar este módulo.</ThemedText>
         </ThemedView>
@@ -1871,17 +1886,17 @@ export default function BitacoraVehiculosDetenidosScreen() {
 
   return (
     <ThemedView style={styles.container}>
-      <AppHeader onMenuPress={handleMenuPress} title="Vehículos detenidos" />
+      <AppHeader onMenuPress={handleMenuPress} title="Revisión de vehículos" />
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
         <ThemedView style={styles.content}>
           {error ? <ThemedText style={styles.errorText}>{error}</ThemedText> : null}
 
           <ThemedView style={styles.titleContainer}>
             <ThemedText type="title" style={styles.title}>
-              <Ionicons name="car-sport" size={22} color="#000000" /> Bitácora de vehículos detenidos
+              <Ionicons name="car-sport" size={22} color="#000000" /> Revisión de vehículos
             </ThemedText>
             <ThemedText style={styles.subtitle}>
-              Gestiona los registros de vehículos detenidos
+              Gestiona los registros de revisión de vehículos
             </ThemedText>
           </ThemedView>
 
@@ -2424,14 +2439,36 @@ export default function BitacoraVehiculosDetenidosScreen() {
                 </ThemedView>
               )}
 
+              {submitResponse && (
+                <ThemedView style={[styles.responseContainer, submitResponse.type === 'success' ? styles.responseSuccess : styles.responseError]}>
+                  <ThemedText style={styles.responseText}>
+                    {submitResponse.type === 'success' ? '✓ ' : '✗ '}
+                    {submitResponse.message}
+                  </ThemedText>
+                </ThemedView>
+              )}
               <ThemedView style={styles.formActions}>
-                <TouchableOpacity style={[styles.formActionButton, styles.formActionCancel]} onPress={cancelCreating}>
+                <TouchableOpacity 
+                  style={[styles.formActionButton, styles.formActionCancel]} 
+                  onPress={cancelCreating}
+                  disabled={isSubmitting}
+                >
                   <Ionicons name="close" size={18} color="#000" />
                   <ThemedText style={styles.formActionCancelText}>Cancelar</ThemedText>
                 </TouchableOpacity>
-                <TouchableOpacity style={[styles.formActionButton, styles.formActionSave]} onPress={handleSave}>
-                  <Ionicons name="save" size={18} color="#fff" />
-                  <ThemedText style={styles.formActionSaveText}>Guardar</ThemedText>
+                <TouchableOpacity 
+                  style={[styles.formActionButton, styles.formActionSave, isSubmitting && styles.buttonDisabled]} 
+                  onPress={handleSave}
+                  disabled={isSubmitting}
+                >
+                  {isSubmitting ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <>
+                      <Ionicons name="save" size={18} color="#fff" />
+                      <ThemedText style={styles.formActionSaveText}>Guardar</ThemedText>
+                    </>
+                  )}
                 </TouchableOpacity>
               </ThemedView>
             </ThemedView>
@@ -2952,6 +2989,28 @@ const styles = StyleSheet.create({
     backgroundColor: '#007AFF',
   },
   formActionSaveText: { color: '#fff', fontWeight: '800' },
+  buttonDisabled: {
+    opacity: 0.6,
+  },
+  responseContainer: {
+    padding: 12,
+    borderRadius: 6,
+    marginBottom: 12,
+  },
+  responseSuccess: {
+    backgroundColor: '#D4EDDA',
+    borderWidth: 1,
+    borderColor: '#C3E6CB',
+  },
+  responseError: {
+    backgroundColor: '#F8D7DA',
+    borderWidth: 1,
+    borderColor: '#F5C6CB',
+  },
+  responseText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
 
   listContainer: {},
   emptyContainer: { padding: 24, alignItems: 'center' },

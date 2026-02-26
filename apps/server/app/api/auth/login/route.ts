@@ -2,7 +2,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import { toZonedTime } from 'date-fns-tz';
-import { prisma } from '../../../../utils/prismaClient';
+import { callDynamicPrisma } from '../../../../utils/callDynamicPrisma';
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const dotenv = require('dotenv');
@@ -25,13 +25,27 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        const empleado = await prisma.c_empleado.findFirst({
-            where: { cedula: cedula }
+        const empleado = await callDynamicPrisma({
+            req: request,
+            shouldVerifyAccessToken: false,
+            data: {
+                action: "GET",
+                table: "c_empleado",
+                operation: "findFirst",
+                where: { cedula: cedula }
+            }
         });
 
-        if (!empleado || !empleado.password) {
+        if (!empleado) {
             return NextResponse.json(
-                { status: false, message: "Empleado o contraseña inválidos" },
+                { status: false, message: "Empleado inválido" },
+                { status: 401 }
+            );
+        }
+
+        if (!empleado.password) {
+            return NextResponse.json(
+                { status: false, message: "Contraseña inválida" },
                 { status: 401 }
             );
         }
@@ -50,7 +64,8 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        if (empleado.password_expires_at && empleado.password_expires_at < toZonedTime(new Date(), "America/Costa_Rica")) {
+        const passwordExpiresAt = empleado.password_expires_at ? new Date(empleado.password_expires_at) : null;
+        if (passwordExpiresAt && passwordExpiresAt < toZonedTime(new Date(), "America/Costa_Rica")) {
             return NextResponse.json(
                 { status: false, passwordExpired: true, message: "Contraseña expirada, debe cambiarla" },
                 { status: 401 }
@@ -61,7 +76,7 @@ export async function POST(request: NextRequest) {
 
         if (!passwordMatch) {
             return NextResponse.json(
-                { status: false, message: "Usuario o contraseña inválidos" },
+                { status: false, message: "La contraseña es incorrecta" },
                 { status: 401 }
             );
         }
@@ -86,39 +101,68 @@ export async function POST(request: NextRequest) {
 
         const now = toZonedTime(new Date(), "America/Costa_Rica");
 
-        await prisma.$transaction(async (tx) => {
-            await tx.refresh_token.updateMany({
+        await callDynamicPrisma({
+            req: request,
+            shouldVerifyAccessToken: false,
+            data: {
+                action: "UPDATE",
+                table: "refresh_token",
+                operation: "updateMany",
+                many: true,
                 where: { empleadoId: empleado.id },
                 data: { revoked: true },
-            });
+                returning: false
+            }
+        });
 
-            await tx.refresh_token.create({
+        await callDynamicPrisma({
+            req: request,
+            shouldVerifyAccessToken: false,
+            data: {
+                action: "POST",
+                table: "refresh_token",
                 data: {
                     token: hashToken(refreshToken),
                     empleadoId: empleado.id,
                     sessionId,
-                    createdAt: now,
-                    expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+                    createdAt: now.toISOString(),
+                    expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
                 },
-            });
+                returning: false
+            }
         });
 
-        const empleado_plaza = await prisma.c_empleado_plaza.findMany({
-            where: {
-                empleado_id: empleado.id
+        const empleado_plaza = await callDynamicPrisma({
+            req: request,
+            shouldVerifyAccessToken: false,
+            data: {
+                action: "GET",
+                table: "c_empleado_plaza",
+                operation: "findMany",
+                where: {
+                    empleado_id: empleado.id
+                }
             }
         });
 
         const roles: { role: { name: string, id: number }, division: { id: number, name: string } }[] = [];
-        for (const item of empleado_plaza) {
+        const empleadoPlazaArray = Array.isArray(empleado_plaza) ? empleado_plaza : [];
+        for (const item of empleadoPlazaArray) {
 
             if (!item.plaza_id || !item.division_id) {
                 continue;
             }
 
-            const division = await prisma.n_division.findFirst({
-                where: {
-                    id: item.division_id
+            const division = await callDynamicPrisma({
+                req: request,
+                shouldVerifyAccessToken: false,
+                data: {
+                    action: "GET",
+                    table: "n_division",
+                    operation: "findFirst",
+                    where: {
+                        id: item.division_id
+                    }
                 }
             });
 
@@ -126,9 +170,16 @@ export async function POST(request: NextRequest) {
                 continue;
             }
 
-            const plaza = await prisma.e_estructura_plazas.findFirst({
-                where: {
-                    id: item.plaza_id
+            const plaza = await callDynamicPrisma({
+                req: request,
+                shouldVerifyAccessToken: false,
+                data: {
+                    action: "GET",
+                    table: "e_estructura_plazas",
+                    operation: "findFirst",
+                    where: {
+                        id: item.plaza_id
+                    }
                 }
             });
 
@@ -136,9 +187,16 @@ export async function POST(request: NextRequest) {
                 continue;
             }
 
-            const categoria_salarial = await prisma.pg_categoria_salarial.findFirst({
-                where: {
-                    id: plaza.categoriaSalarial_id
+            const categoria_salarial = await callDynamicPrisma({
+                req: request,
+                shouldVerifyAccessToken: false,
+                data: {
+                    action: "GET",
+                    table: "pg_categoria_salarial",
+                    operation: "findFirst",
+                    where: {
+                        id: plaza.categoriaSalarial_id
+                    }
                 }
             });
 
@@ -146,9 +204,16 @@ export async function POST(request: NextRequest) {
                 continue;
             }
 
-            const categoria_empleado = await prisma.pg_categoria_empleado.findFirst({
-                where: {
-                    id: categoria_salarial.categoriaEmpleado_id
+            const categoria_empleado = await callDynamicPrisma({
+                req: request,
+                shouldVerifyAccessToken: false,
+                data: {
+                    action: "GET",
+                    table: "pg_categoria_empleado",
+                    operation: "findFirst",
+                    where: {
+                        id: categoria_salarial.categoriaEmpleado_id
+                    }
                 }
             });
 

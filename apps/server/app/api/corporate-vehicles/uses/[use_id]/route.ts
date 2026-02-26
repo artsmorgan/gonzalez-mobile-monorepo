@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../../../utils/verifyToken";
-import { prisma } from "../../../../../utils/prismaClient";
+import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
 
 export const runtime = "nodejs";
@@ -10,7 +10,7 @@ export async function GET(
   context: { params: Promise<{ use_id: string }> }
 ) {
   try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
     if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
     const { use_id } = await context.params;
@@ -19,21 +19,38 @@ export async function GET(
       return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
     }
 
-    const uso = await prisma.c_usos_vehiculos_corporativos.findUnique({ where: { id: usoId } });
+    const uso = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "c_usos_vehiculos_corporativos",
+        operation: "findUnique",
+        where: { id: usoId },
+      },
+    });
     if (!uso) {
       return NextResponse.json({ status: false, message: "Uso no encontrado" }, { status: 404 });
     }
 
+    const usoObj = uso as any;
     // Adjuntar bitácora si existe
     let bitacora = null;
-    if (uso.bitacora_id) {
-      bitacora = await prisma.c_bitacora_vehiculo_detenido.findUnique({ where: { id: uso.bitacora_id } });
+    if (usoObj.bitacora_id) {
+      bitacora = await callDynamicPrisma({
+        req,
+        data: {
+          action: "GET",
+          table: "c_bitacora_vehiculo_detenido",
+          operation: "findUnique",
+          where: { id: usoObj.bitacora_id },
+        },
+      });
     }
 
     return NextResponse.json({
       status: true,
       data: {
-        ...uso,
+        ...usoObj,
         bitacora: bitacora,
       },
     }, { status: 200 });
@@ -49,7 +66,7 @@ export async function PUT(
   context: { params: Promise<{ use_id: string }> }
 ) {
   try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
     if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
     const { use_id } = await context.params;
@@ -58,15 +75,27 @@ export async function PUT(
       return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
     }
 
-    const existing = await prisma.c_usos_vehiculos_corporativos.findUnique({ where: { id: usoId } });
+    const existing = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "c_usos_vehiculos_corporativos",
+        operation: "findUnique",
+        where: { id: usoId },
+      },
+    });
     if (!existing) {
       return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
     }
+    const existingObj = existing as any;
 
     const body = await req.json();
     const {
       nombre_conductor,
+      codigo_conductor,
       fecha,
+      inicio,
+      fin,
       hora_inicio,
       hora_fin,
       combustible_inicio,
@@ -74,24 +103,55 @@ export async function PUT(
       km_inicio,
       km_fin,
       motivo,
+      firma_conductor,
       firma_responsable,
       // bitacora_id: ignorado por solicitud
     } = body || {};
 
+    const fechaExisting = existingObj.fecha instanceof Date ? existingObj.fecha : (typeof existingObj.fecha === 'string' ? new Date(existingObj.fecha) : new Date());
+    const inicioExisting = existingObj.inicio instanceof Date
+      ? existingObj.inicio
+      : (typeof existingObj.inicio === 'string'
+          ? new Date(existingObj.inicio)
+          : (typeof existingObj.hora_inicio === 'string' ? new Date(existingObj.hora_inicio) : new Date()));
+    const finExisting = existingObj.fin instanceof Date
+      ? existingObj.fin
+      : (typeof existingObj.fin === 'string'
+          ? new Date(existingObj.fin)
+          : (typeof existingObj.hora_fin === 'string' ? new Date(existingObj.hora_fin) : new Date()));
+
     const updateData: any = {
-      nombre_conductor: nombre_conductor !== undefined ? String(nombre_conductor ?? "") : existing.nombre_conductor,
-      fecha: fecha !== undefined ? (fecha ? new Date(fecha) : new Date()) : existing.fecha,
-      hora_inicio: hora_inicio !== undefined ? (hora_inicio ? new Date(hora_inicio) : new Date()) : existing.hora_inicio,
-      hora_fin: hora_fin !== undefined ? (hora_fin ? new Date(hora_fin) : new Date()) : existing.hora_fin,
+      nombre_conductor: nombre_conductor !== undefined ? String(nombre_conductor ?? "") : existingObj.nombre_conductor,
+      codigo_conductor: codigo_conductor !== undefined ? String(codigo_conductor ?? "") : existingObj.codigo_conductor,
+      fecha: fecha !== undefined ? (fecha ? new Date(fecha) : new Date()) : fechaExisting,
+      inicio: inicio !== undefined
+        ? (inicio ? new Date(inicio) : new Date())
+        : (hora_inicio !== undefined ? (hora_inicio ? new Date(hora_inicio) : new Date()) : inicioExisting),
+      fin: fin !== undefined
+        ? (fin ? new Date(fin) : new Date())
+        : (hora_fin !== undefined ? (hora_fin ? new Date(hora_fin) : new Date()) : finExisting),
       combustible_inicio:
-        combustible_inicio !== undefined ? Number(combustible_inicio ?? 0) : existing.combustible_inicio,
-      combustible_fin: combustible_fin !== undefined ? Number(combustible_fin ?? 0) : existing.combustible_fin,
-      km_inicio: km_inicio !== undefined ? Number(km_inicio ?? 0) : existing.km_inicio,
-      km_fin: km_fin !== undefined ? Number(km_fin ?? 0) : existing.km_fin,
-      motivo: motivo !== undefined ? String(motivo ?? "") : existing.motivo,
+        combustible_inicio !== undefined ? String(combustible_inicio ?? "") : existingObj.combustible_inicio,
+      combustible_fin: combustible_fin !== undefined ? String(combustible_fin ?? "") : existingObj.combustible_fin,
+      km_inicio: km_inicio !== undefined ? Number(km_inicio ?? 0) : existingObj.km_inicio,
+      km_fin: km_fin !== undefined ? Number(km_fin ?? 0) : existingObj.km_fin,
+      motivo: motivo !== undefined ? String(motivo ?? "") : existingObj.motivo,
+      firma_conductor:
+        firma_conductor !== undefined ? String(firma_conductor ?? "") : existingObj.firma_conductor,
       firma_responsable:
-        firma_responsable !== undefined ? String(firma_responsable ?? "") : existing.firma_responsable,
+        firma_responsable !== undefined ? String(firma_responsable ?? "") : existingObj.firma_responsable,
     };
+
+    // Convertir fechas a ISO strings para callDynamicPrisma
+    if (updateData.fecha instanceof Date) {
+      updateData.fecha = updateData.fecha.toISOString();
+    }
+    if (updateData.inicio instanceof Date) {
+      updateData.inicio = updateData.inicio.toISOString();
+    }
+    if (updateData.fin instanceof Date) {
+      updateData.fin = updateData.fin.toISOString();
+    }
 
     // Registrar cambios (solo campos actualizados, excluyendo firmas)
     const eq = (a: any, b: any) => {
@@ -105,33 +165,47 @@ export async function PUT(
 
     const cambiosArr: Array<{ prop: string; before: any; after: any }> = [];
     for (const [k, v] of Object.entries(updateData)) {
-      if (k === "firma_responsable") continue; // Excluir firmas
+      if (k === "firma_responsable" || k === "firma_conductor") continue; // Excluir firmas
 
-      const before = (existing as any)[k];
+      const before = existingObj[k];
       const after = v;
       if (!eq(before, after)) {
+        const beforeValue = before instanceof Date ? before.toISOString() : (typeof before === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(before) ? before : before);
+        const afterValue = after instanceof Date ? after.toISOString() : (typeof after === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(after) ? after : after);
         cambiosArr.push({
           prop: k,
-          before: before instanceof Date ? before.toISOString() : before,
-          after: after instanceof Date ? after.toISOString() : after,
+          before: beforeValue,
+          after: afterValue,
         });
       }
     }
 
-    const updated = await prisma.c_usos_vehiculos_corporativos.update({
-      where: { id: usoId },
-      data: updateData,
+    const updated = await callDynamicPrisma({
+      req,
+      data: {
+        action: "UPDATE",
+        table: "c_usos_vehiculos_corporativos",
+        operation: "update",
+        where: { id: usoId },
+        data: updateData,
+      },
     });
 
     if (cambiosArr.length > 0) {
       const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
-      await prisma.c_cambios_apps_modules.create({
+      await callDynamicPrisma({
+        req,
         data: {
-          nombre_tabla: "c_usos_vehiculos_corporativos",
-          registro_id: usoId,
-          cambios: JSON.stringify(cambiosArr),
-          created_at: toZonedTime(new Date(), "America/Costa_Rica"),
-          created_by: createdBy,
+          action: "POST",
+          table: "c_cambios_apps_modules",
+          operation: "create",
+          data: {
+            nombre_tabla: "c_usos_vehiculos_corporativos",
+            registro_id: usoId,
+            cambios: JSON.stringify(cambiosArr),
+            created_at: toZonedTime(new Date(), "America/Costa_Rica").toISOString(),
+            created_by: createdBy,
+          },
         },
       });
     }
@@ -149,7 +223,7 @@ export async function DELETE(
   context: { params: Promise<{ use_id: string }> }
 ) {
   try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
     if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
     const { use_id } = await context.params;
@@ -158,41 +232,73 @@ export async function DELETE(
       return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
     }
 
-    const existing = await prisma.c_usos_vehiculos_corporativos.findUnique({ where: { id: usoId } });
+    const existing = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "c_usos_vehiculos_corporativos",
+        operation: "findUnique",
+        where: { id: usoId },
+      },
+    });
     if (!existing) {
       return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
     }
 
+    const existingObj = existing as any;
     // Registrar cambio de eliminación antes de eliminar
     const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
     const createdAt = toZonedTime(new Date(), "America/Costa_Rica");
-    await prisma.c_cambios_apps_modules.create({
+    const fechaValue = existingObj.fecha instanceof Date ? existingObj.fecha.toISOString() : (typeof existingObj.fecha === 'string' ? existingObj.fecha : null);
+    const inicioValue = existingObj.inicio instanceof Date
+      ? existingObj.inicio.toISOString()
+      : (typeof existingObj.inicio === 'string' ? existingObj.inicio : (typeof existingObj.hora_inicio === 'string' ? existingObj.hora_inicio : null));
+    const finValue = existingObj.fin instanceof Date
+      ? existingObj.fin.toISOString()
+      : (typeof existingObj.fin === 'string' ? existingObj.fin : (typeof existingObj.hora_fin === 'string' ? existingObj.hora_fin : null));
+    await callDynamicPrisma({
+      req,
       data: {
-        nombre_tabla: "c_usos_vehiculos_corporativos",
-        registro_id: usoId,
-        cambios: JSON.stringify([{
-          prop: "__deleted__",
-          before: {
-            id: existing.id,
-            vehiculo_id: existing.vehiculo_id,
-            nombre_conductor: existing.nombre_conductor,
-            fecha: existing.fecha.toISOString(),
-            hora_inicio: existing.hora_inicio.toISOString(),
-            hora_fin: existing.hora_fin.toISOString(),
-            combustible_inicio: existing.combustible_inicio,
-            combustible_fin: existing.combustible_fin,
-            km_inicio: existing.km_inicio,
-            km_fin: existing.km_fin,
-            motivo: existing.motivo,
-          },
-          after: null,
-        }]),
-        created_at: createdAt,
-        created_by: createdBy,
+        action: "POST",
+        table: "c_cambios_apps_modules",
+        operation: "create",
+        data: {
+          nombre_tabla: "c_usos_vehiculos_corporativos",
+          registro_id: usoId,
+          cambios: JSON.stringify([{
+            prop: "__deleted__",
+            before: {
+              id: existingObj.id,
+              vehiculo_id: existingObj.vehiculo_id,
+              nombre_conductor: existingObj.nombre_conductor,
+              codigo_conductor: existingObj.codigo_conductor,
+              fecha: fechaValue,
+              inicio: inicioValue,
+              fin: finValue,
+              combustible_inicio: existingObj.combustible_inicio,
+              combustible_fin: existingObj.combustible_fin,
+              km_inicio: existingObj.km_inicio,
+              km_fin: existingObj.km_fin,
+              motivo: existingObj.motivo,
+              firma_conductor: existingObj.firma_conductor,
+            },
+            after: null,
+          }]),
+          created_at: createdAt.toISOString(),
+          created_by: createdBy,
+        },
       },
     });
 
-    await prisma.c_usos_vehiculos_corporativos.delete({ where: { id: usoId } });
+    await callDynamicPrisma({
+      req,
+      data: {
+        action: "DELETE",
+        table: "c_usos_vehiculos_corporativos",
+        operation: "delete",
+        where: { id: usoId },
+      },
+    });
 
     return NextResponse.json({ status: true, message: "Uso eliminado correctamente" }, { status: 200 });
   } catch (error: unknown) {

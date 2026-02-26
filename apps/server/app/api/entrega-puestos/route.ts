@@ -1,14 +1,56 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../utils/verifyToken";
+import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { toZonedTime, format } from "date-fns-tz";
-import { prisma } from "../../../utils/prismaClient";
-import { getUserMarca } from "../../../utils/getUserMarca";
+import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
 import { createReport } from "../../../utils/createReporteArticuloMantenimiento";
 
+// Función auxiliar para convertir hora a formato Time
+function parseTimeValue(timeValue: any): Date | null {
+    if (!timeValue) return null;
+    if (timeValue instanceof Date) return timeValue;
+    const timeStr = String(timeValue);
+    // Si es un string ISO completo, extraer solo la parte de tiempo
+    if (timeStr.includes("T")) {
+        const timePart = timeStr.split("T")[1]?.split(".")[0] || timeStr.split("T")[1]?.split("Z")[0];
+        if (timePart) {
+            return new Date(`1970-01-01T${timePart}`);
+        }
+    }
+    // Si es solo tiempo (HH:MM:SS o HH:MM)
+    if (timeStr.match(/^\d{1,2}:\d{2}(:\d{2})?$/)) {
+        return new Date(`1970-01-01T${timeStr}`);
+    }
+    // Intentar parsear como fecha completa
+    const parsed = new Date(timeStr);
+    return isNaN(parsed.getTime()) ? null : parsed;
+}
+
+// Función auxiliar para parsear fecha del body (puede venir como DD-MM-YYYY o YYYY-MM-DD)
+function parseDateValue(dateValue: any): Date | null {
+    if (!dateValue) return null;
+    if (dateValue instanceof Date) return dateValue;
+    const dateStr = String(dateValue).trim();
+    // Si es un string ISO completo, parsearlo directamente
+    if (dateStr.includes("T") || dateStr.includes("Z")) {
+        const parsed = new Date(dateStr);
+        return isNaN(parsed.getTime()) ? null : parsed;
+    }
+    // Si viene como DD-MM-YYYY, convertir a YYYY-MM-DD
+    if (dateStr.match(/^\d{2}-\d{2}-\d{4}$/)) {
+        const parts = dateStr.split("-");
+        const converted = `${parts[2]}-${parts[1]}-${parts[0]}`;
+        const parsed = new Date(converted);
+        return isNaN(parsed.getTime()) ? null : parsed;
+    }
+    // Intentar parsear directamente (YYYY-MM-DD o formato estándar)
+    const parsed = new Date(dateStr);
+    return isNaN(parsed.getTime()) ? null : parsed;
+}
+
 export async function GET(req: NextRequest) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(req);
+        const { valid, expired, message } = await verifyAccessTokenByApi(req);
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         const params = req.nextUrl.searchParams;
@@ -18,8 +60,16 @@ export async function GET(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
         }
 
-        const marca = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(marcaId) } });
-        if (!marca) {
+        const marca = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_marca_dia",
+                operation: "findUnique",
+                where: { id: parseInt(marcaId) },
+            },
+        });
+        if (!marca || !marca.id) {
             return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
         }
 
@@ -36,79 +86,125 @@ export async function GET(req: NextRequest) {
                 marcaFechaHoraFin = new Date(`${marca.fecha.getDate() + 1}T${marca.hora_fin}`);
             }*/
 
-            const entregaPuestos = await prisma.e_registro_entrega_puesto.findMany({ where: { created_at: { lte: marcaFechaHoraFin, gte: marcaFechaHoraInicio }, created_by: marca.empleadoFijo_id } });
-            if (entregaPuestos.length > 0) {
+            const entregaPuestos = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "e_registro_entrega_puesto",
+                    operation: "findMany",
+                    where: { created_at: { lte: marcaFechaHoraFin instanceof Date ? marcaFechaHoraFin.toISOString() : marcaFechaHoraFin, gte: marcaFechaHoraInicio instanceof Date ? marcaFechaHoraInicio.toISOString() : marcaFechaHoraInicio }, created_by: marca.empleadoFijo_id },
+                },
+            });
+            const entregaPuestosArray = Array.isArray(entregaPuestos) ? entregaPuestos : [];
+            if (entregaPuestosArray.length > 0) {
                 return NextResponse.json({ status: false, message: "Ya has registrado la entrega de puesto para este turno" }, { status: 200 });
             }
         }
 
         // Construir la fecha de la marca actual para comparación
-        const marcaFecha = new Date(marca.fecha);
+        const marcaFecha = marca.fecha instanceof Date ? marca.fecha : new Date(marca.fecha);
+        if (isNaN(marcaFecha.getTime())) {
+            return NextResponse.json({ status: false, message: "Fecha de marca inválida" }, { status: 400 });
+        }
         const marcaFechaStr = marcaFecha.toISOString().split("T")[0];
 
         // Construir la hora_inicio de la marca actual para comparación (formato Time)
-        const marcaHoraInicioTime = marca.hora_inicio ? new Date("1970-01-01 " + marca.hora_inicio.toTimeString().slice(0, 8)) : null;
+        const marcaHoraInicioTime = parseTimeValue(marca.hora_inicio);
 
         // Construir la hora_fin de la marca actual para comparación (formato Time)
-        const marcaHoraFinTime = marca.hora_fin ? new Date("1970-01-01 " + marca.hora_fin.toTimeString().slice(0, 8)) : null;
+        const marcaHoraFinTime = parseTimeValue(marca.hora_fin);
 
         // Buscar registro anterior con empleadoFijo_id diferente
         // Un registro es anterior si:
         // 1. La fecha es anterior, O
         // 2. La fecha es igual pero hora_inicio es anterior
-        const marcaAnterior = await prisma.c_marca_dia.findFirst({
-            where: {
-                puesto_id: marca.puesto_id,
-                OR: [
-                    // Fecha anterior
-                    {
-                        fecha: {
-                            lt: marca.fecha,
+        const marcaFechaISO = marcaFecha.toISOString();
+        const marcaHoraInicioISO = marcaHoraInicioTime ? marcaHoraInicioTime.toISOString() : null;
+
+        const marcaAnterior = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_marca_dia",
+                operation: "findFirst",
+                where: {
+                    puesto_id: marca.puesto_id,
+                    OR: [
+                        // Fecha anterior
+                        {
+                            fecha: {
+                                lt: marcaFechaISO,
+                            },
                         },
-                    },
-                    // Misma fecha pero hora_inicio anterior
-                    {
-                        fecha: {
-                            equals: marca.fecha,
+                        // Misma fecha pero hora_inicio anterior
+                        marcaHoraInicioISO ? {
+                            fecha: {
+                                equals: marcaFechaISO,
+                            },
+                            hora_inicio: {
+                                lt: marcaHoraInicioISO,
+                            },
+                        } : {
+                            fecha: {
+                                equals: marcaFechaISO,
+                            },
                         },
-                        hora_inicio: {
-                            lt: marca.hora_inicio,
-                        },
-                    },
+                    ],
+                },
+                orderBy: [
+                    { fecha: "desc" },
+                    { hora_inicio: "desc" },
                 ],
             },
-            orderBy: [
-                { fecha: "desc" },
-                { hora_inicio: "desc" },
-            ],
         });
 
-        if (!marcaAnterior) {
+        if (!marcaAnterior || !marcaAnterior.id) {
             return NextResponse.json({ status: false, message: "No se encontró el registro anterior" }, { status: 200 });
         }
 
         let previous_employee = { id: 0, nombre: "Desconocido" };
         if (marcaAnterior.empleadoFijo_id) {
-            const empleado_bd = await prisma.c_empleado.findUnique({ where: { id: marcaAnterior.empleadoFijo_id } });
-            if (empleado_bd) {
+            const empleado_bd = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "c_empleado",
+                    operation: "findUnique",
+                    where: { id: marcaAnterior.empleadoFijo_id },
+                },
+            });
+            if (empleado_bd && empleado_bd.id) {
                 previous_employee = {
                     id: empleado_bd.id,
-                    nombre: empleado_bd.nombre + " " + empleado_bd.primer_apellido + " " + empleado_bd.segundo_apellido,
+                    nombre: (empleado_bd.nombre || "") + " " + (empleado_bd.primer_apellido || "") + " " + (empleado_bd.segundo_apellido || ""),
                 };
             }
         }
 
-        const dateInicioString = marcaAnterior.fecha.toISOString().split("T")[0];
-        const timeInicioString = marcaAnterior.hora_inicio ? marcaAnterior.hora_inicio.toTimeString().slice(0, 8) : "00:00:00";
+        const marcaAnteriorFecha = marcaAnterior.fecha instanceof Date ? marcaAnterior.fecha : new Date(marcaAnterior.fecha);
+        if (isNaN(marcaAnteriorFecha.getTime())) {
+            return NextResponse.json({ status: false, message: "Fecha de marca anterior inválida" }, { status: 400 });
+        }
+        const marcaAnteriorHoraInicio = parseTimeValue(marcaAnterior.hora_inicio);
+        const marcaAnteriorHoraFin = parseTimeValue(marcaAnterior.hora_fin);
 
-        const dateFinString = marcaAnterior.fecha.toISOString().split("T")[0];
-        const timeFinString = marcaAnterior.hora_fin ? marcaAnterior.hora_fin.toTimeString().slice(0, 8) : "23:59:59";
+        const dateInicioString = marcaAnteriorFecha.toISOString().split("T")[0];
+        const timeInicioString = marcaAnteriorHoraInicio ? marcaAnteriorHoraInicio.toTimeString().slice(0, 8) : "00:00:00";
 
-        const fechaHoraInicio = new Date(`${dateInicioString}T${timeInicioString}`); // En su estado actual, resulta en Invalid Date
+        const dateFinString = marcaAnteriorFecha.toISOString().split("T")[0];
+        const timeFinString = marcaAnteriorHoraFin ? marcaAnteriorHoraFin.toTimeString().slice(0, 8) : "23:59:59";
+
+        const fechaHoraInicio = new Date(`${dateInicioString}T${timeInicioString}`);
+        if (isNaN(fechaHoraInicio.getTime())) {
+            return NextResponse.json({ status: false, message: "Fecha/hora de inicio inválida" }, { status: 400 });
+        }
         let fechaHoraFin = new Date(`${dateFinString}T${timeFinString}`);
+        if (isNaN(fechaHoraFin.getTime())) {
+            return NextResponse.json({ status: false, message: "Fecha/hora de fin inválida" }, { status: 400 });
+        }
 
         if (fechaHoraInicio < fechaHoraFin) { // Si hora_inicio es menor a hora_fin, entonces la fecha de fin es el día siguiente
-            const newDateFinString = marcaAnterior.fecha.toISOString().split("T")[0].split("-");
+            const newDateFinString = marcaAnteriorFecha.toISOString().split("T")[0].split("-");
             newDateFinString[2] = (Number(newDateFinString[2]) + 1).toString().padStart(2, '0');
             fechaHoraFin = new Date(`${newDateFinString[0]}-${newDateFinString[1]}-${newDateFinString[2]}T${timeFinString}`);
         }
@@ -116,27 +212,41 @@ export async function GET(req: NextRequest) {
         const notas_return: { id: number, titulo: string, description: string, categoria: string | null, empleado: string, updated_at: Date }[] = [];
 
         // Obtener notas del puesto solicitado y filtrar por relevancia alta
-        const all_notas = await prisma.c_puesto_notas.findMany({
-            where: { puesto_id: marcaAnterior.puesto_id, relevancia: "Alta" }
+        const all_notas = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_puesto_notas",
+                operation: "findMany",
+                where: { puesto_id: marcaAnterior.puesto_id, relevancia: "Alta" },
+            },
         });
 
-        if (all_notas.length > 0) {
-            const notaIds = all_notas.map((nota) => nota.id);
+        const allNotasArray = Array.isArray(all_notas) ? all_notas : [];
+        if (allNotasArray.length > 0) {
+            const notaIds = allNotasArray.map((nota: any) => nota.id);
 
             // La bitácora de cambios de notas ahora se obtiene desde c_cambios_apps_modules
             // usando el registro_id de la nota y la tabla a la que pertenece.
-            const cambiosNotas = await prisma.c_cambios_apps_modules.findMany({
-                where: {
-                    nombre_tabla: "c_puesto_notas",
-                    registro_id: { in: notaIds },
-                    created_at: { lte: fechaHoraFin, gte: fechaHoraInicio },
+            const cambiosNotas = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "c_cambios_apps_modules",
+                    operation: "findMany",
+                    where: {
+                        nombre_tabla: "c_puesto_notas",
+                        registro_id: { in: notaIds },
+                        created_at: { lte: fechaHoraFin.toISOString(), gte: fechaHoraInicio.toISOString() },
+                    },
+                    orderBy: { created_at: "desc" },
                 },
-                orderBy: { created_at: "desc" },
             });
 
             // Quedarse con el último cambio por nota dentro del lapso
-            const latestCambioByNotaId = new Map<number, typeof cambiosNotas[number]>();
-            for (const cambio of cambiosNotas) {
+            const cambiosNotasArray = Array.isArray(cambiosNotas) ? cambiosNotas : [];
+            const latestCambioByNotaId = new Map<number, any>();
+            for (const cambio of cambiosNotasArray) {
                 if (!latestCambioByNotaId.has(cambio.registro_id)) {
                     latestCambioByNotaId.set(cambio.registro_id, cambio);
                 }
@@ -144,8 +254,8 @@ export async function GET(req: NextRequest) {
 
             const changedNotaIds = Array.from(latestCambioByNotaId.keys());
             if (changedNotaIds.length > 0) {
-                const notasMap = new Map<number, typeof all_notas[number]>(
-                    all_notas.map((nota) => [nota.id, nota])
+                const notasMap = new Map<number, any>(
+                    allNotasArray.map((nota: any) => [nota.id, nota])
                 );
 
                 const empleadoIds = Array.from(
@@ -157,18 +267,25 @@ export async function GET(req: NextRequest) {
                 );
 
                 const empleados = empleadoIds.length > 0
-                    ? await prisma.c_empleado.findMany({
-                        where: { id: { in: empleadoIds } },
-                        select: {
-                            id: true,
-                            nombre: true,
-                            primer_apellido: true,
-                            segundo_apellido: true,
+                    ? await callDynamicPrisma({
+                        req,
+                        data: {
+                            action: "GET",
+                            table: "c_empleado",
+                            operation: "findMany",
+                            where: { id: { in: empleadoIds } },
+                            select: {
+                                id: true,
+                                nombre: true,
+                                primer_apellido: true,
+                                segundo_apellido: true,
+                            },
                         },
                     })
                     : [];
-                const empleadosMap = new Map<number, typeof empleados[number]>(
-                    empleados.map((empleado) => [empleado.id, empleado])
+                const empleadosArray = Array.isArray(empleados) ? empleados : [];
+                const empleadosMap = new Map<number, any>(
+                    empleadosArray.map((empleado: any) => [empleado.id, empleado])
                 );
 
                 const categoriaIds = Array.from(
@@ -179,13 +296,20 @@ export async function GET(req: NextRequest) {
                     )
                 );
                 const categorias = categoriaIds.length > 0
-                    ? await prisma.n_novedades_categoria.findMany({
-                        where: { id: { in: categoriaIds } },
-                        select: { id: true, nombre: true },
+                    ? await callDynamicPrisma({
+                        req,
+                        data: {
+                            action: "GET",
+                            table: "n_novedades_categoria",
+                            operation: "findMany",
+                            where: { id: { in: categoriaIds } },
+                            select: { id: true, nombre: true },
+                        },
                     })
                     : [];
+                const categoriasArray = Array.isArray(categorias) ? categorias : [];
                 const categoriasMap = new Map<number, string>(
-                    categorias.map((categoria) => [categoria.id, categoria.nombre])
+                    categoriasArray.map((categoria: any) => [categoria.id, categoria.nombre])
                 );
 
                 for (const notaId of changedNotaIds) {
@@ -194,15 +318,16 @@ export async function GET(req: NextRequest) {
                     if (!nota || !cambio) continue;
 
                     const empleado = empleadosMap.get(cambio.created_by);
+                    const cambioCreatedAt = cambio.created_at instanceof Date ? cambio.created_at : new Date(cambio.created_at);
                     notas_return.push({
                         id: nota.id,
                         titulo: nota.titulo,
                         description: nota.description,
                         categoria: nota.categoria_id ? (categoriasMap.get(nota.categoria_id) || null) : null,
                         empleado: empleado
-                            ? `${empleado.nombre} ${empleado.primer_apellido} ${empleado.segundo_apellido || ""}`.trim()
+                            ? `${empleado.nombre || ""} ${empleado.primer_apellido || ""} ${empleado.segundo_apellido || ""}`.trim()
                             : "Desconocido",
-                        updated_at: cambio.created_at,
+                        updated_at: cambioCreatedAt,
                     });
                 }
 
@@ -210,13 +335,30 @@ export async function GET(req: NextRequest) {
             }
         }
 
-        const incidentes = await prisma.c_incidente.findMany({ where: { corpo_id: marcaAnterior.corpo_id, created_at: { lte: fechaHoraFin, gte: fechaHoraInicio } } });
+        const incidentes = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_incidente",
+                operation: "findMany",
+                where: { corpo_id: marcaAnterior.corpo_id, created_at: { lte: fechaHoraFin.toISOString(), gte: fechaHoraInicio.toISOString() } },
+            },
+        });
+        const incidentesArray = Array.isArray(incidentes) ? incidentes : [];
         const incidentes_return: { id: number, clasificacion: string, description: string, involucrados: string, estado: boolean, responsable: string }[] = [];
-        for (const incidente of incidentes) {
-            const clasificacion = await prisma.n_clasificacion_incidente.findUnique({ where: { id: incidente.clasificacion } });
+        for (const incidente of incidentesArray) {
+            const clasificacion = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "n_clasificacion_incidente",
+                    operation: "findUnique",
+                    where: { id: incidente.clasificacion },
+                },
+            });
             incidentes_return.push({
                 id: incidente.id,
-                clasificacion: clasificacion ? clasificacion.nombre : "Desconocido",
+                clasificacion: clasificacion && clasificacion.id ? clasificacion.nombre : "Desconocido",
                 description: incidente.descripcion,
                 involucrados: incidente.involucrados,
                 estado: incidente.estado,
@@ -224,21 +366,54 @@ export async function GET(req: NextRequest) {
             });
         }
 
-        const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: marcaAnterior.puesto_id } });
-        if (!puesto) {
+        const puesto = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "e_estructura_puesto",
+                operation: "findUnique",
+                where: { id: marcaAnterior.puesto_id },
+            },
+        });
+        if (!puesto || !puesto.id) {
             return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
         }
 
         const articulos_return: { id: number, tipo: string, nombre: string, marca: string, serie: string, cantidad: number }[] = [];
 
         if (puesto.comboArticulosCP_id) {
-            const combo_articulo_cp = await prisma.e_estructura_combo_articulo_cp.findUnique({ where: { id: puesto.comboArticulosCP_id } });
-            if (combo_articulo_cp) {
-                const articulos_combo_articulo_cp = await prisma.e_estructura_articulo_corpo_puesto_plan.findMany({ where: { combo_id: combo_articulo_cp.id } });
-                for (const articulo of articulos_combo_articulo_cp) {
+            const combo_articulo_cp = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "e_estructura_combo_articulo_cp",
+                    operation: "findUnique",
+                    where: { id: puesto.comboArticulosCP_id },
+                },
+            });
+            if (combo_articulo_cp && combo_articulo_cp.id) {
+                const articulos_combo_articulo_cp = await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "GET",
+                        table: "e_estructura_articulo_corpo_puesto_plan",
+                        operation: "findMany",
+                        where: { combo_id: combo_articulo_cp.id },
+                    },
+                });
+                const articulosComboArray = Array.isArray(articulos_combo_articulo_cp) ? articulos_combo_articulo_cp : [];
+                for (const articulo of articulosComboArray) {
                     let art_bd = null;
                     if (articulo.articuloCP_id) {
-                        art_bd = await prisma.n_articulo_corpo_puesto.findUnique({ where: { id: articulo.articuloCP_id } });
+                        art_bd = await callDynamicPrisma({
+                            req,
+                            data: {
+                                action: "GET",
+                                table: "n_articulo_corpo_puesto",
+                                operation: "findUnique",
+                                where: { id: articulo.articuloCP_id },
+                            },
+                        });
                     }
                     articulos_return.push({
                         id: articulo.id,
@@ -252,12 +427,28 @@ export async function GET(req: NextRequest) {
             }
         }
 
-        const articulos_puesto_plan = await prisma.e_estructura_articulo_corpo_puesto_plan.findMany({ where: { puesto_id: marcaAnterior.puesto_id, id: { notIn: articulos_return.map(articulo => articulo.id) } } });
-        console.log("articulos_puesto_plan", articulos_puesto_plan);
-        for (const articulo of articulos_puesto_plan) {
+        const articulos_puesto_plan = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "e_estructura_articulo_corpo_puesto_plan",
+                operation: "findMany",
+                where: { puesto_id: marcaAnterior.puesto_id, id: { notIn: articulos_return.map((articulo: any) => articulo.id) } },
+            },
+        });
+        const articulosPlanArray = Array.isArray(articulos_puesto_plan) ? articulos_puesto_plan : [];
+        for (const articulo of articulosPlanArray) {
             let art_bd = null;
             if (articulo.articuloCP_id) {
-                art_bd = await prisma.n_articulo_corpo_puesto.findUnique({ where: { id: articulo.articuloCP_id } });
+                art_bd = await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "GET",
+                        table: "n_articulo_corpo_puesto",
+                        operation: "findUnique",
+                        where: { id: articulo.articuloCP_id },
+                    },
+                });
             }
             articulos_return.push({
                 id: articulo.id,
@@ -269,11 +460,28 @@ export async function GET(req: NextRequest) {
             });
         }
 
-        const articulos_puesto_entrega = await prisma.e_estructura_articulo_corpo_puesto_entrega.findMany({ where: { puesto_id: marcaAnterior.puesto_id } });
-        for (const articulo of articulos_puesto_entrega) {
+        const articulos_puesto_entrega = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "e_estructura_articulo_corpo_puesto_entrega",
+                operation: "findMany",
+                where: { puesto_id: marcaAnterior.puesto_id },
+            },
+        });
+        const articulosEntregaArray = Array.isArray(articulos_puesto_entrega) ? articulos_puesto_entrega : [];
+        for (const articulo of articulosEntregaArray) {
             let art_bd = null;
             if (articulo.nomencladorArticuloCP_id) {
-                art_bd = await prisma.n_articulo_corpo_puesto.findUnique({ where: { id: articulo.nomencladorArticuloCP_id } });
+                art_bd = await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "GET",
+                        table: "n_articulo_corpo_puesto",
+                        operation: "findUnique",
+                        where: { id: articulo.nomencladorArticuloCP_id },
+                    },
+                });
             }
             articulos_return.push({
                 id: articulo.id,
@@ -294,25 +502,32 @@ export async function GET(req: NextRequest) {
             if (planIds.length) or.push({ articulo_plan_id: { in: planIds } });
             if (asignadoIds.length) or.push({ articulo_asignado_id: { in: asignadoIds } });
 
-            const mantenimientos = await prisma.c_articulo_mantenimiento.findMany({
-                where: { OR: or },
-                orderBy: { id: "desc" },
-                select: {
-                    id: true,
-                    articulo_plan_id: true,
-                    articulo_asignado_id: true,
-                    estado: true,
-                    cantidad_necesaria: true,
-                    cantidad_real: true,
-                    observaciones: true,
-                    fecha_solucion: true,
-                    mant_armas_form: true,
+            const mantenimientos = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "c_articulo_mantenimiento",
+                    operation: "findMany",
+                    where: { OR: or },
+                    orderBy: { id: "desc" },
+                    select: {
+                        id: true,
+                        articulo_plan_id: true,
+                        articulo_asignado_id: true,
+                        estado: true,
+                        cantidad_necesaria: true,
+                        cantidad_real: true,
+                        observaciones: true,
+                        fecha_solucion: true,
+                        mant_armas_form: true,
+                    },
                 },
             });
 
+            const mantenimientosArray = Array.isArray(mantenimientos) ? mantenimientos : [];
             const latestByPlanId = new Map<number, any>();
             const latestByAsignadoId = new Map<number, any>();
-            for (const m of mantenimientos) {
+            for (const m of mantenimientosArray) {
                 if (m.articulo_plan_id && !latestByPlanId.has(m.articulo_plan_id)) latestByPlanId.set(m.articulo_plan_id, m);
                 if (m.articulo_asignado_id && !latestByAsignadoId.has(m.articulo_asignado_id)) latestByAsignadoId.set(m.articulo_asignado_id, m);
             }
@@ -352,7 +567,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         const body = await req.json();
@@ -375,11 +590,23 @@ export async function POST(req: NextRequest) {
             turno_recibe,
             articulos_puesto,
             observaciones,
+            firma_recibe,
+            firma_entrega,
             firma_responsable,
             marca_id,
         } = body;
 
-        if (!cliente_id || !corpo_id || !puesto_id || !oficial_entrega || !oficial_recibe || !firma_responsable || !division) {
+        const firmaRecibeFinal = typeof firma_recibe === "string" && firma_recibe.trim().length > 0
+            ? firma_recibe.trim()
+            : (typeof firma_responsable === "string" ? firma_responsable.trim() : "");
+        const firmaEntregaFinal = typeof firma_entrega === "string" && firma_entrega.trim().length > 0
+            ? firma_entrega.trim()
+            : null;
+        const firmaResponsableFinal = typeof firma_responsable === "string" && firma_responsable.trim().length > 0
+            ? firma_responsable.trim()
+            : firmaRecibeFinal;
+
+        if (!cliente_id || !corpo_id || !puesto_id || !oficial_entrega || !oficial_recibe || !firmaRecibeFinal || !division) {
             return NextResponse.json({ status: false, message: "Faltan campos requeridos" }, { status: 400 });
         }
 
@@ -391,30 +618,58 @@ export async function POST(req: NextRequest) {
 
         // Validar que no exista ya un registro para este turno
         if (marca_id) {
-            const marca = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(marca_id) } });
-            if (marca && marca.empleadoFijo_id) {
-                const dateInicioString = marca.fecha.toISOString().split("T")[0];
-                const timeInicioString = marca.hora_inicio ? marca.hora_inicio.toTimeString().slice(0, 8) : "00:00:00";
+            const marca = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "c_marca_dia",
+                    operation: "findUnique",
+                    where: { id: parseInt(marca_id) },
+                },
+            });
+            if (marca && marca.id && marca.empleadoFijo_id) {
+                const marcaFecha = marca.fecha instanceof Date ? marca.fecha : new Date(marca.fecha);
+                if (isNaN(marcaFecha.getTime())) {
+                    return NextResponse.json({ status: false, message: "Fecha de marca inválida" }, { status: 400 });
+                }
+                const marcaHoraInicio = parseTimeValue(marca.hora_inicio);
+                const marcaHoraFin = parseTimeValue(marca.hora_fin);
 
-                const dateFinString = marca.fecha.toISOString().split("T")[0];
-                const timeFinString = marca.hora_fin ? marca.hora_fin.toTimeString().slice(0, 8) : "23:59:59";
+                const dateInicioString = marcaFecha.toISOString().split("T")[0];
+                const timeInicioString = marcaHoraInicio ? marcaHoraInicio.toTimeString().slice(0, 8) : "00:00:00";
 
-                const marcaFechaHoraInicio = new Date(`${dateInicioString}T${timeInicioString}`); // En su estado actual, resulta en Invalid Date
+                const dateFinString = marcaFecha.toISOString().split("T")[0];
+                const timeFinString = marcaHoraFin ? marcaHoraFin.toTimeString().slice(0, 8) : "23:59:59";
+
+                const marcaFechaHoraInicio = new Date(`${dateInicioString}T${timeInicioString}`);
+                if (isNaN(marcaFechaHoraInicio.getTime())) {
+                    return NextResponse.json({ status: false, message: "Fecha/hora de inicio inválida" }, { status: 400 });
+                }
                 let marcaFechaHoraFin = new Date(`${dateFinString}T${timeFinString}`);
+                if (isNaN(marcaFechaHoraFin.getTime())) {
+                    return NextResponse.json({ status: false, message: "Fecha/hora de fin inválida" }, { status: 400 });
+                }
 
                 if (marcaFechaHoraInicio < marcaFechaHoraFin) { // Si hora_inicio es menor a hora_fin, entonces la fecha de fin es el día siguiente
-                    const newDateFinString = marca.fecha.toISOString().split("T")[0].split("-");
+                    const newDateFinString = marcaFecha.toISOString().split("T")[0].split("-");
                     newDateFinString[2] = (Number(newDateFinString[2]) + 1).toString().padStart(2, '0');
                     marcaFechaHoraFin = new Date(`${newDateFinString[0]}-${newDateFinString[1]}-${newDateFinString[2]}T${timeFinString}`);
                 }
 
-                const entregaPuestos = await prisma.e_registro_entrega_puesto.findMany({
-                    where: {
-                        created_at: { lte: marcaFechaHoraFin, gte: marcaFechaHoraInicio },
-                        created_by: marca.empleadoFijo_id
-                    }
+                const entregaPuestos = await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "GET",
+                        table: "e_registro_entrega_puesto",
+                        operation: "findMany",
+                        where: {
+                            created_at: { lte: marcaFechaHoraFin.toISOString(), gte: marcaFechaHoraInicio.toISOString() },
+                            created_by: marca.empleadoFijo_id
+                        },
+                    },
                 });
-                if (entregaPuestos.length > 0) {
+                const entregaPuestosArray = Array.isArray(entregaPuestos) ? entregaPuestos : [];
+                if (entregaPuestosArray.length > 0) {
                     return NextResponse.json({ status: false, message: "Ya has registrado la entrega de puesto para este turno" }, { status: 200 });
                 }
             }
@@ -422,49 +677,185 @@ export async function POST(req: NextRequest) {
 
         const now = toZonedTime(new Date(), 'America/Costa_Rica');
 
+        // Parsear fechas y horas del body
+        const fechaEntradaEntregaParsed = parseDateValue(fecha_entrada_entrega);
+        const fechaSalidaEntregaParsed = parseDateValue(fecha_salida_entrega);
+        const horaEntradaEntregaParsed = parseTimeValue(hora_entrada_entrega);
+        const horaSalidaEntregaParsed = parseTimeValue(hora_salida_entrega);
+        const fechaEntradaRecibeParsed = parseDateValue(fecha_entrada_recibe);
+        const fechaSalidaRecibeParsed = parseDateValue(fecha_salida_recibe);
+        const horaEntradaRecibeParsed = parseTimeValue(hora_entrada_recibe);
+        const horaSalidaRecibeParsed = parseTimeValue(hora_salida_recibe);
+
+        // Validar que todas las fechas y horas sean válidas
+        if (!fechaEntradaEntregaParsed || !fechaSalidaEntregaParsed || !horaEntradaEntregaParsed || !horaSalidaEntregaParsed ||
+            !fechaEntradaRecibeParsed || !fechaSalidaRecibeParsed || !horaEntradaRecibeParsed || !horaSalidaRecibeParsed) {
+            return NextResponse.json({
+                status: false,
+                message: "Una o más fechas u horas son inválidas. Verifique el formato de los datos enviados."
+            }, { status: 400 });
+        }
+
+        // Convertir a ISO strings
+        const fechaEntradaEntregaISO = fechaEntradaEntregaParsed.toISOString();
+        const fechaSalidaEntregaISO = fechaSalidaEntregaParsed.toISOString();
+        const horaEntradaEntregaISO = horaEntradaEntregaParsed.toISOString();
+        const horaSalidaEntregaISO = horaSalidaEntregaParsed.toISOString();
+        const fechaEntradaRecibeISO = fechaEntradaRecibeParsed.toISOString();
+        const fechaSalidaRecibeISO = fechaSalidaRecibeParsed.toISOString();
+        const horaEntradaRecibeISO = horaEntradaRecibeParsed.toISOString();
+        const horaSalidaRecibeISO = horaSalidaRecibeParsed.toISOString();
+
+        // Validar que todas las fechas y horas sean válidas
+        if (!fechaEntradaEntregaISO || !fechaSalidaEntregaISO || !horaEntradaEntregaISO || !horaSalidaEntregaISO ||
+            !fechaEntradaRecibeISO || !fechaSalidaRecibeISO || !horaEntradaRecibeISO || !horaSalidaRecibeISO) {
+            return NextResponse.json({
+                status: false,
+                message: "Una o más fechas u horas son inválidas. Verifique el formato de los datos enviados."
+            }, { status: 400 });
+        }
+
         // Crear el registro
-        const nuevoRegistro = await prisma.e_registro_entrega_puesto.create({
+        const nuevoRegistro = await callDynamicPrisma({
+            req,
             data: {
-                cliente_id: parseInt(cliente_id),
-                corpo_id: parseInt(corpo_id),
-                puesto_id: parseInt(puesto_id),
-                oficial_entrega,
-                fecha_entrada_entrega: new Date(fecha_entrada_entrega),
-                fecha_salida_entrega: new Date(fecha_salida_entrega),
-                hora_entrada_entrega: new Date(`${hora_entrada_entrega}`),
-                hora_salida_entrega: new Date(`${hora_salida_entrega}`),
-                turno_entrega,
-                oficial_recibe,
-                fecha_entrada_recibe: new Date(fecha_entrada_recibe),
-                fecha_salida_recibe: new Date(fecha_salida_recibe),
-                hora_entrada_recibe: new Date(`${hora_entrada_recibe}`),
-                hora_salida_recibe: new Date(`${hora_salida_recibe}`),
-                turno_recibe,
-                articulos_puesto: articulos_puesto || '',
-                observaciones: observaciones || '',
-                firma_responsable,
-                created_at: now,
-                created_by: empleadoId,
+                action: "POST",
+                table: "e_registro_entrega_puesto",
+                data: {
+                    cliente_id: parseInt(cliente_id),
+                    corpo_id: parseInt(corpo_id),
+                    puesto_id: parseInt(puesto_id),
+                    oficial_entrega,
+                    fecha_entrada_entrega: fechaEntradaEntregaISO,
+                    fecha_salida_entrega: fechaSalidaEntregaISO,
+                    hora_entrada_entrega: horaEntradaEntregaISO,
+                    hora_salida_entrega: horaSalidaEntregaISO,
+                    turno_entrega,
+                    oficial_recibe,
+                    fecha_entrada_recibe: fechaEntradaRecibeISO,
+                    fecha_salida_recibe: fechaSalidaRecibeISO,
+                    hora_entrada_recibe: horaEntradaRecibeISO,
+                    hora_salida_recibe: horaSalidaRecibeISO,
+                    turno_recibe,
+                    articulos_puesto: articulos_puesto || '',
+                    observaciones: observaciones || '',
+                    firma_recibe: firmaRecibeFinal,
+                    firma_entrega: firmaEntregaFinal,
+                    firma_responsable: firmaResponsableFinal,
+                    created_at: now.toISOString(),
+                    created_by: empleadoId,
+                },
             },
         });
 
         if (nuevoRegistro) {
+            if (marca_id) {
+                const marca = await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "GET",
+                        table: "c_marca_dia",
+                        operation: "findUnique",
+                        where: { id: Number(marca_id) },
+                    },
+                });
+                if (marca?.plaza_id && marca?.puesto_id) {
+                    const actividadesPuesto = await callDynamicPrisma({
+                        req,
+                        data: {
+                            action: "GET",
+                            table: "e_actividades_puesto",
+                            operation: "findMany",
+                            where: { puesto_id: marca.puesto_id },
+                        },
+                    });
+                    const actividadIds = Array.from(
+                        new Set(
+                            (Array.isArray(actividadesPuesto) ? actividadesPuesto : [])
+                                .map((x: any) => Number(x.actividad_id))
+                                .filter(Boolean)
+                        )
+                    );
+                    if (actividadIds.length > 0) {
+                        const actividades = await callDynamicPrisma({
+                            req,
+                            data: {
+                                action: "GET",
+                                table: "e_actividades",
+                                operation: "findMany",
+                                where: { id: { in: actividadIds }, es_revision_equipo: true },
+                                select: { id: true },
+                            },
+                        });
+                        const revisionActividadIds = new Set((Array.isArray(actividades) ? actividades : []).map((a: any) => Number(a.id)));
+                        const actividadPuestoIds = (Array.isArray(actividadesPuesto) ? actividadesPuesto : [])
+                            .filter((x: any) => revisionActividadIds.has(Number(x.actividad_id)))
+                            .map((x: any) => Number(x.id));
+                        if (actividadPuestoIds.length > 0) {
+                            await callDynamicPrisma({
+                                req,
+                                data: {
+                                    action: "UPDATE",
+                                    table: "e_actividades_puesto_plaza",
+                                    operation: "updateMany",
+                                    many: true,
+                                    where: {
+                                        plaza_id: marca.plaza_id,
+                                        actividad_puesto_id: { in: actividadPuestoIds },
+                                        marcada: false,
+                                    },
+                                    data: {
+                                        marcada: true,
+                                        updated_at: now.toISOString(),
+                                    },
+                                    returning: false,
+                                },
+                            });
+                        }
+                    }
+                }
+            }
+
             let location = "";
             if (puesto_id) {
-                const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: puesto_id } });
-                if (puesto) {
-                    location = `para el puesto "${puesto.nombre}"`;
-                    const cliente = await prisma.e_estructura_cliente.findUnique({ where: { id: cliente_id } });
-                    if (cliente) {
-                        location += ` del cliente "${cliente.nombre}"`;
+                const puesto = await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "GET",
+                        table: "e_estructura_puesto",
+                        operation: "findUnique",
+                        where: { id: puesto_id },
+                    },
+                });
+                if (puesto && puesto.id) {
+                    location = `para el puesto "${puesto.nombre || ""}"`;
+                    const cliente = await callDynamicPrisma({
+                        req,
+                        data: {
+                            action: "GET",
+                            table: "e_estructura_cliente",
+                            operation: "findUnique",
+                            where: { id: cliente_id },
+                        },
+                    });
+                    if (cliente && cliente.id) {
+                        location += ` del cliente "${cliente.nombre || ""}"`;
                     }
                 }
             }
 
             let employee = "Desconocido";
-            const empleado = await prisma.c_empleado.findUnique({ where: { id: empleadoId } });
-            if (empleado) {
-                employee = `${empleado.nombre} ${empleado.primer_apellido} ${empleado.segundo_apellido}`;
+            const empleado = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "c_empleado",
+                    operation: "findUnique",
+                    where: { id: empleadoId },
+                },
+            });
+            if (empleado && empleado.id) {
+                employee = `${empleado.nombre || ""} ${empleado.primer_apellido || ""} ${empleado.segundo_apellido || ""}`;
             }
 
             let articulos_desc = ".";
@@ -482,16 +873,34 @@ export async function POST(req: NextRequest) {
 
                     let was_good = false;
                     if (articulo.tipo == "Plan") {
-                        const last_mantenimiento = await prisma.c_articulo_mantenimiento.findFirst({ where: { articulo_plan_id: articulo.id }, orderBy: { fecha_solucion: "desc" } });
-                        if (last_mantenimiento) {
+                        const last_mantenimiento = await callDynamicPrisma({
+                            req,
+                            data: {
+                                action: "GET",
+                                table: "c_articulo_mantenimiento",
+                                operation: "findFirst",
+                                where: { articulo_plan_id: articulo.id },
+                                orderBy: { fecha_solucion: "desc" },
+                            },
+                        });
+                        if (last_mantenimiento && last_mantenimiento.id) {
                             if (last_mantenimiento.estado == "Bueno") {
                                 was_good = true;
                             }
                         }
                     }
                     else {
-                        const last_mantenimiento = await prisma.c_articulo_mantenimiento.findFirst({ where: { articulo_asignado_id: articulo.id }, orderBy: { fecha_solucion: "desc" } });
-                        if (last_mantenimiento) {
+                        const last_mantenimiento = await callDynamicPrisma({
+                            req,
+                            data: {
+                                action: "GET",
+                                table: "c_articulo_mantenimiento",
+                                operation: "findFirst",
+                                where: { articulo_asignado_id: articulo.id },
+                                orderBy: { fecha_solucion: "desc" },
+                            },
+                        });
+                        if (last_mantenimiento && last_mantenimiento.id) {
                             if (last_mantenimiento.estado == "Bueno") {
                                 was_good = true;
                             }
@@ -525,9 +934,11 @@ export async function POST(req: NextRequest) {
             }
 
             if (send_notification) {
-                const description = `El usuario ${employee} ha registrado una entrega de puesto${location} (Ocupado anteriormente por ${oficial_entrega}) el día ${fecha_entrada_entrega.split("T")[0]} a las ${hora_entrada_entrega.split("T")[1].split(".")[0]}${articulos_desc}`;
-                sendNotificationByRole(nuevoRegistro.corpo_id, [], "Registro de entrega de puesto creado", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
-                createReport(articulos_reporte);
+                const fechaEntradaFormatted = fecha_entrada_entrega.includes("T") ? fecha_entrada_entrega.split("T")[0] : fecha_entrada_entrega;
+                const horaEntradaFormatted = hora_entrada_entrega.includes("T") ? hora_entrada_entrega.split("T")[1].split(".")[0] : hora_entrada_entrega;
+                const description = `El usuario ${employee} ha registrado una entrega de puesto${location} (Ocupado anteriormente por ${oficial_entrega}) el día ${fechaEntradaFormatted} a las ${horaEntradaFormatted}${articulos_desc}`;
+                await sendNotificationByRole(req, nuevoRegistro.corpo_id, [], "Registro de entrega de puesto creado", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+                await createReport(req, articulos_reporte);
             }
         }
 

@@ -1,10 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
+import { fetchDynamicFile } from '../../../../../../utils/callDynamicFilesApi';
+import { callDynamicPrisma } from '../../../../../../utils/callDynamicPrisma';
 
 export const runtime = 'nodejs';
-
-import { prisma } from '../../../../../../utils/prismaClient';
 
 export async function GET(
   req: NextRequest,
@@ -22,7 +20,10 @@ export async function GET(
       );
     }
 
-    const incident = await prisma.c_incidente.findUnique({ where: { id } });
+    const incident = await callDynamicPrisma({
+      req,
+      data: { action: "GET", table: "c_incidente", operation: "findUnique", where: { id } }
+    });
     if (!incident) {
       return NextResponse.json(
         { status: false, message: 'Incidente no encontrado' },
@@ -30,8 +31,14 @@ export async function GET(
       );
     }
 
-    const fileRecord = await prisma.c_archivos_incidente.findFirst({
-      where: { incidente_id: incident.id, name: audio },
+    const fileRecord = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "c_archivos_incidente",
+        operation: "findFirst",
+        where: { incidente_id: incident.id, name: audio }
+      }
     });
 
     if (!fileRecord) {
@@ -41,35 +48,17 @@ export async function GET(
       );
     }
 
-    const filePath = path.join(
-      process.cwd(),
-      'public',
-      'uploads',
-      'incidents',
-      `${incident.id}`,
-      audio
-    );
+    const fetched = await fetchDynamicFile({
+      req,
+      type: 'audio',
+      url: `incidents/${incident.id}/${audio}`,
+      download: false,
+    });
 
-    if (!fs.existsSync(filePath)) {
-      return NextResponse.json(
-        { status: false, message: 'Audio no encontrado' },
-        { status: 404 }
-      );
-    }
-
-    const file = await fs.promises.readFile(filePath);
-    const ext = path.extname(filePath).toLowerCase();
-
-    let contentType = 'audio/mpeg';
-    if (ext === '.wav') contentType = 'audio/wav';
-    if (ext === '.m4a') contentType = 'audio/mp4';
-    if (ext === '.ogg') contentType = 'audio/ogg';
-    if (ext === '.mp3') contentType = 'audio/mpeg';
-
-    return new NextResponse(Buffer.from(file), {
+    return new NextResponse(fetched.buffer, {
       headers: {
-        'Content-Type': contentType,
-        'Cache-Control': 'public, max-age=31536000',
+        'Content-Type': fetched.headers.contentType,
+        'Cache-Control': fetched.headers.cacheControl,
       },
     });
   } catch (error: unknown) {

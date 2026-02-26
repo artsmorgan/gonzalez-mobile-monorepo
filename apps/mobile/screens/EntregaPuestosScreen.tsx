@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, ActivityIndicator, Modal, View, Platform } from 'react-native';
+import { StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, ActivityIndicator, Modal, View, Platform, Image } from 'react-native';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import { useAuth } from '@/contexts/AuthContext';
@@ -173,12 +173,18 @@ export default function EntregaPuestosScreen() {
   const [info, setInfo] = useState<EntregaPuestosInfo | null>(null);
   const [articulos, setArticulos] = useState<ArticuloForm[]>([]);
   const [observaciones, setObservaciones] = useState('');
+  const [firmaRecibe, setFirmaRecibe] = useState<string>('');
+  const [firmaEntrega, setFirmaEntrega] = useState<string>('');
   const [firmaResponsable, setFirmaResponsable] = useState<string>('');
   const [isSignatureModalVisible, setIsSignatureModalVisible] = useState(false);
+  const [signatureTarget, setSignatureTarget] = useState<'firma_recibe' | 'firma_entrega'>('firma_recibe');
+  const [isReadingSignature, setIsReadingSignature] = useState(false);
   const [isGeneratingFirma, setIsGeneratingFirma] = useState(false);
   const [location, setLocation] = useState<Location.LocationObject | null>(null);
   const signatureRef = useRef<any>(null);
   const [signatureKey, setSignatureKey] = useState(0);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitResponse, setSubmitResponse] = useState<{ type: 'success' | 'error', message: string } | null>(null);
 
   const getConnectionStatus = async (): Promise<boolean> => {
     const networkState = await Network.getNetworkStateAsync();
@@ -340,14 +346,50 @@ export default function EntregaPuestosScreen() {
     setArticulos(newArticulos);
   };
 
+  const openSignatureModal = (target: 'firma_recibe' | 'firma_entrega') => {
+    setSignatureTarget(target);
+    setIsSignatureModalVisible(true);
+    setSignatureKey(prev => prev + 1);
+  };
+
   const handleSignatureOK = (signature: string) => {
-    setFirmaResponsable(signature);
+    setIsReadingSignature(false);
+    if (!signature || !signature.trim()) {
+      Alert.alert('Firma vacía', 'Dibuja tu firma antes de guardar.');
+      return;
+    }
+    if (signatureTarget === 'firma_recibe') {
+      setFirmaRecibe(signature);
+    } else {
+      setFirmaEntrega(signature);
+    }
     setIsSignatureModalVisible(false);
     setSignatureKey(prev => prev + 1);
   };
 
+  const clearSignatureInModal = () => {
+    try {
+      signatureRef.current?.clearSignature?.();
+    } catch { }
+    setIsReadingSignature(false);
+  };
+
+  const acceptSignature = () => {
+    try {
+      setIsReadingSignature(true);
+      signatureRef.current?.readSignature?.();
+    } catch {
+      setIsReadingSignature(false);
+      Alert.alert('Error', 'No se pudo leer la firma. Intenta nuevamente.');
+    }
+  };
+
   const handleSignatureClear = () => {
-    setFirmaResponsable('');
+    if (signatureTarget === 'firma_recibe') {
+      setFirmaRecibe('');
+    } else {
+      setFirmaEntrega('');
+    }
     setSignatureKey(prev => prev + 1);
   };
 
@@ -410,8 +452,8 @@ export default function EntregaPuestosScreen() {
       return;
     }
 
-    if (!firmaResponsable) {
-      Alert.alert('Error', 'Debe generar o escanear la firma responsable');
+    if (!firmaRecibe) {
+      Alert.alert('Error', 'Debe registrar la firma de quien recibe');
       return;
     }
 
@@ -423,6 +465,8 @@ export default function EntregaPuestosScreen() {
         {
           text: 'Guardar',
           onPress: async () => {
+            setIsSubmitting(true);
+            setSubmitResponse(null);
             try {
               setIsCreating(true);
 
@@ -465,6 +509,8 @@ export default function EntregaPuestosScreen() {
                 turno_recibe: currentMarca.tipo_turno,
                 articulos_puesto: articulosPuesto,
                 observaciones: observaciones,
+                firma_recibe: firmaRecibe,
+                firma_entrega: firmaEntrega || null,
                 firma_responsable: firmaResponsable,
                 marca_id: currentMarca.id,
               };
@@ -499,8 +545,10 @@ export default function EntregaPuestosScreen() {
                   throw new Error(data.message || 'Error al guardar');
                 }
 
-                Alert.alert('Éxito', 'Registro de entrega de puesto guardado correctamente');
-                navigation.goBack();
+                setSubmitResponse({ type: 'success', message: data.message || 'Registro de entrega de puesto guardado correctamente' });
+                setTimeout(() => {
+                  navigation.goBack();
+                }, 2000);
               } else {
                 // Modo offline
                 const localId = generateRandomId();
@@ -514,14 +562,17 @@ export default function EntregaPuestosScreen() {
                 });
                 await AsyncStorage.setItem('entrega_puestos_actions', JSON.stringify(actions));
 
-                Alert.alert('Modo Offline', 'Registro guardado localmente. Se sincronizará cuando haya conexión.');
-                navigation.goBack();
+                setSubmitResponse({ type: 'success', message: 'Registro guardado localmente. Se sincronizará cuando haya conexión.' });
+                setTimeout(() => {
+                  navigation.goBack();
+                }, 2000);
               }
             } catch (err: any) {
               console.error('Error saving:', err);
-              Alert.alert('Error', err.message || 'No se pudo guardar el registro');
+              setSubmitResponse({ type: 'error', message: err.message || 'No se pudo guardar el registro' });
             } finally {
               setIsCreating(false);
+              setIsSubmitting(false);
             }
           },
         },
@@ -865,6 +916,50 @@ export default function EntregaPuestosScreen() {
               numberOfLines={4}
             />
 
+            {/* Firma Recibe */}
+            <ThemedText style={styles.sectionTitle}>Firma de quien recibe *</ThemedText>
+            <ThemedView style={styles.signatureButtons}>
+              <TouchableOpacity
+                style={styles.signatureButton}
+                onPress={() => openSignatureModal('firma_recibe')}
+              >
+                <Ionicons name="create-outline" size={18} color="#FFFFFF" />
+                <ThemedText style={styles.signatureButtonText}>Dibujar firma</ThemedText>
+              </TouchableOpacity>
+            </ThemedView>
+            {!firmaRecibe ? (
+              <ThemedText style={styles.signatureHintMuted}>Aún no hay firma de quien recibe.</ThemedText>
+            ) : (
+              <ThemedView style={styles.signaturePreviewContainer}>
+                <Image source={{ uri: firmaRecibe }} style={styles.signaturePreviewImage} resizeMode="contain" />
+                <TouchableOpacity style={styles.firmaClearButtonTiny} onPress={() => setFirmaRecibe('')}>
+                  <Ionicons name="trash" size={18} color="#FFFFFF" />
+                </TouchableOpacity>
+              </ThemedView>
+            )}
+
+            {/* Firma Entrega (opcional) */}
+            <ThemedText style={styles.sectionTitle}>Firma de quien entrega (opcional)</ThemedText>
+            <ThemedView style={styles.signatureButtons}>
+              <TouchableOpacity
+                style={styles.signatureButton}
+                onPress={() => openSignatureModal('firma_entrega')}
+              >
+                <Ionicons name="create-outline" size={18} color="#FFFFFF" />
+                <ThemedText style={styles.signatureButtonText}>Dibujar firma</ThemedText>
+              </TouchableOpacity>
+            </ThemedView>
+            {!firmaEntrega ? (
+              <ThemedText style={styles.signatureHintMuted}>No se agregó firma de quien entrega.</ThemedText>
+            ) : (
+              <ThemedView style={styles.signaturePreviewContainer}>
+                <Image source={{ uri: firmaEntrega }} style={styles.signaturePreviewImage} resizeMode="contain" />
+                <TouchableOpacity style={styles.firmaClearButtonTiny} onPress={() => setFirmaEntrega('')}>
+                  <Ionicons name="trash" size={18} color="#FFFFFF" />
+                </TouchableOpacity>
+              </ThemedView>
+            )}
+
             {/* Firma Responsable */}
             <ThemedText style={styles.sectionTitle}>Firma responsable *</ThemedText>
             <ThemedView style={styles.signatureButtons}>
@@ -915,9 +1010,21 @@ export default function EntregaPuestosScreen() {
               </ThemedView>
             )}
 
+            {submitResponse && (
+              <ThemedView style={[styles.responseContainer, submitResponse.type === 'success' ? styles.responseSuccess : styles.responseError]}>
+                <ThemedText style={styles.responseText}>
+                  {submitResponse.type === 'success' ? '✓ ' : '✗ '}
+                  {submitResponse.message}
+                </ThemedText>
+              </ThemedView>
+            )}
             <ThemedView style={styles.formActions}>
-              <TouchableOpacity style={[styles.formActionButton, styles.formActionSave]} onPress={handleSave} disabled={isCreating}>
-                {isCreating ? (
+              <TouchableOpacity
+                style={[styles.formActionButton, styles.formActionSave, isSubmitting && styles.buttonDisabled]}
+                onPress={handleSave}
+                disabled={isSubmitting || isCreating}
+              >
+                {isSubmitting ? (
                   <ActivityIndicator size="small" color="#fff" />
                 ) : (
                   <>
@@ -931,35 +1038,61 @@ export default function EntregaPuestosScreen() {
         </ThemedView>
       </ScrollView >
 
-      {/* Modal de Firma */}
-      < Modal
+      {/* Modal de Firma (flotante) */}
+      <Modal
         visible={isSignatureModalVisible}
-        animationType="slide"
-        presentationStyle="pageSheet"
-        onRequestClose={() => setIsSignatureModalVisible(false)
-        }
+        animationType="fade"
+        transparent
+        presentationStyle="overFullScreen"
+        onRequestClose={() => setIsSignatureModalVisible(false)}
       >
-        <ThemedView style={styles.modalContainer}>
-          <ThemedView style={styles.modalHeader}>
-            <ThemedText style={styles.modalTitle}>Firma Manual</ThemedText>
-            <TouchableOpacity onPress={() => setIsSignatureModalVisible(false)}>
-              <Ionicons name="close" size={24} color="#000" />
-            </TouchableOpacity>
+        <View style={styles.overlay}>
+          <ThemedView style={styles.floatModalCard}>
+            <ThemedView style={styles.floatModalHeader}>
+              <ThemedText style={styles.modalTitle}>
+                {signatureTarget === 'firma_recibe' ? 'Firma de quien recibe' : 'Firma de quien entrega'}
+              </ThemedText>
+              <TouchableOpacity onPress={() => setIsSignatureModalVisible(false)}>
+                <Ionicons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+            </ThemedView>
+
+            <ThemedText style={styles.signatureModalHint}>Firma dentro del recuadro blanco y pulsa Guardar.</ThemedText>
+
+            <View style={styles.signaturePadBox}>
+              <SignatureScreen
+                ref={signatureRef}
+                onOK={handleSignatureOK}
+                onClear={handleSignatureClear}
+                descriptionText=""
+                clearText=""
+                confirmText=""
+                webStyle={signatureWebStyle}
+                key={signatureKey}
+              />
+            </View>
+
+            <ThemedView style={styles.modalActions}>
+              <TouchableOpacity style={styles.modalClearButton} onPress={clearSignatureInModal}>
+                <Ionicons name="trash" size={20} color="#000000" />
+                <ThemedText style={styles.modalClearButtonText}>Limpiar</ThemedText>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalAcceptButton, isReadingSignature && { opacity: 0.7 }]}
+                onPress={acceptSignature}
+                disabled={isReadingSignature}
+              >
+                {isReadingSignature ? (
+                  <ActivityIndicator size="small" color="#000000" />
+                ) : (
+                  <Ionicons name="checkmark" size={20} color="#000000" />
+                )}
+                <ThemedText style={styles.modalAcceptButtonText}>Guardar</ThemedText>
+              </TouchableOpacity>
+            </ThemedView>
           </ThemedView>
-          <ThemedView style={styles.signatureContainer}>
-            <SignatureScreen
-              ref={signatureRef}
-              onOK={handleSignatureOK}
-              onClear={handleSignatureClear}
-              descriptionText=""
-              clearText="Limpiar"
-              confirmText="Guardar"
-              webStyle={signatureWebStyle}
-              key={signatureKey}
-            />
-          </ThemedView>
-        </ThemedView>
-      </Modal >
+        </View>
+      </Modal>
 
       <AppFooter />
       <SlideMenu
@@ -1246,6 +1379,25 @@ const styles = StyleSheet.create({
   signatureButtonDisabled: { backgroundColor: '#999' },
   signatureButtonText: { color: '#FFFFFF', fontSize: 14, fontWeight: '600', marginLeft: 8 },
   signatureHintMuted: { marginTop: 6, color: '#999' },
+  signaturePreviewContainer: {
+    marginTop: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    padding: 10,
+    backgroundColor: '#F9F9F9',
+  },
+  signaturePreviewImage: {
+    flex: 1,
+    height: 90,
+    borderRadius: 6,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+  },
 
   firmaInfoBox: {
     marginTop: 10,
@@ -1265,6 +1417,28 @@ const styles = StyleSheet.create({
   formActionButton: { flexDirection: 'row', gap: 10, alignItems: 'center', justifyContent: 'center', paddingVertical: 14, paddingHorizontal: 20, borderRadius: 12 },
   formActionSave: { backgroundColor: '#007AFF' },
   formActionSaveText: { color: '#fff', fontWeight: '800' },
+  buttonDisabled: {
+    opacity: 0.6,
+  },
+  responseContainer: {
+    padding: 12,
+    borderRadius: 6,
+    marginBottom: 12,
+  },
+  responseSuccess: {
+    backgroundColor: '#D4EDDA',
+    borderWidth: 1,
+    borderColor: '#C3E6CB',
+  },
+  responseError: {
+    backgroundColor: '#F8D7DA',
+    borderWidth: 1,
+    borderColor: '#F5C6CB',
+  },
+  responseText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
 
   modalContainer: {
     flex: 1,
@@ -1285,5 +1459,78 @@ const styles = StyleSheet.create({
   signatureContainer: {
     flex: 1,
   },
+  // Modal flotante (como Usos en Llaves)
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+  },
+  floatModalCard: {
+    width: '100%',
+    maxWidth: 520,
+    borderRadius: 14,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    overflow: 'hidden',
+  },
+  floatModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+    backgroundColor: '#F8F9FA',
+  },
+  signatureModalHint: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    color: '#666',
+    fontSize: 13,
+  },
+  signaturePadBox: {
+    marginTop: 10,
+    marginHorizontal: 16,
+    marginBottom: 16,
+    height: 260,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 2,
+    borderColor: '#E0E0E0',
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  modalActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    padding: 16,
+    gap: 12,
+    backgroundColor: '#FFFFFF',
+  },
+  modalClearButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    borderRadius: 10,
+    backgroundColor: '#EDEDED',
+    gap: 8,
+  },
+  modalClearButtonText: { fontWeight: '800', color: '#000' },
+  modalAcceptButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    borderRadius: 10,
+    backgroundColor: '#D7F5E5',
+    gap: 8,
+  },
+  modalAcceptButtonText: { fontWeight: '800', color: '#000' },
 });
 

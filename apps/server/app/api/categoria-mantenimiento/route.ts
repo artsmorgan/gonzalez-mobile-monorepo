@@ -1,14 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../utils/verifyToken";
-import { toZonedTime, format } from "date-fns-tz";
-import { prisma } from "../../../utils/prismaClient";
+import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 
 export async function GET(req: NextRequest) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
-        const categorias = await prisma.c_categoria_mantenimiento.findMany();
+        const categorias = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_categoria_mantenimiento",
+                operation: "findMany"
+            }
+        });
         return NextResponse.json({ status: true, categorias }, { status: 200 });
     }
     catch (error: unknown) {

@@ -1,8 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../utils/verifyToken";
-import { prisma } from "../../../utils/prismaClient";
-import { getUserMarca } from "../../../utils/getUserMarca";
+import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
 
@@ -27,7 +26,7 @@ function normalizeToStringifiedJson(value: any): string {
 
 export async function GET(req: NextRequest) {
   try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
     if (!valid) {
       return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
     }
@@ -50,7 +49,10 @@ export async function GET(req: NextRequest) {
         );
       }
 
-      const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(marcaIdStr) } });
+      const marcaDia = await callDynamicPrisma({
+        req,
+        data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: parseInt(marcaIdStr) } }
+      });
       if (!marcaDia) {
         return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
       }
@@ -59,7 +61,17 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 200 });
       }
 
-      const lastMarca = await getUserMarca(marcaDia.empleadoFijo_id);
+      // Obtener la última marca del empleado (simplificado: obtener la más reciente)
+      const lastMarca = await callDynamicPrisma({
+        req,
+        data: {
+          action: "GET",
+          table: "c_marca_dia",
+          operation: "findFirst",
+          where: { empleadoFijo_id: marcaDia.empleadoFijo_id },
+          orderBy: [{ fecha: "desc" }, { hora_inicio: "desc" }]
+        }
+      });
       if (!lastMarca) {
         return NextResponse.json({ status: false, message: "No se encontró la última marca" }, { status: 200 });
       }
@@ -72,14 +84,18 @@ export async function GET(req: NextRequest) {
       sucursalId = marcaDia.corpo_id;
     }
 
-    const rows = await prisma.c_bitacora_vehiculo_detenido.findMany({
-      where: {
-        sucursal_id: Number(sucursalId),
-      },
-      orderBy: { id: "desc" },
+    const rows = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "c_bitacora_vehiculo_detenido",
+        operation: "findMany",
+        where: { sucursal_id: Number(sucursalId) },
+        orderBy: { id: "desc" }
+      }
     });
 
-    const mapped = rows.map((r) => ({
+    const mapped = rows.map((r: any) => ({
       id: r.id,
       empresa_id: r.empresa_id,
       cliente_id: r.cliente_id,
@@ -107,7 +123,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
     if (!valid) {
       return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
     }
@@ -138,7 +154,10 @@ export async function POST(req: NextRequest) {
     let sucursalId = sucursal_id ? Number(sucursal_id) : 0;
 
     if (marca_id) {
-      const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(String(marca_id)) } });
+      const marcaDia = await callDynamicPrisma({
+        req,
+        data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: parseInt(String(marca_id)) } }
+      });
       if (!marcaDia) {
         return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
       }
@@ -154,22 +173,27 @@ export async function POST(req: NextRequest) {
 
     const createdAt = toZonedTime(new Date(), "America/Costa_Rica") as Date;
 
-    const created = await prisma.c_bitacora_vehiculo_detenido.create({
+    const created = await callDynamicPrisma({
+      req,
       data: {
-        empresa_id: empresaId,
-        cliente_id: clienteId,
-        sucursal_id: sucursalId,
-        vehiculo_id: vehiculo_id ? Number(vehiculo_id) : null,
-        uso_id: uso_id ? Number(uso_id) : null,
-        tipo: String(tipo),
-        informacion_general: normalizeToStringifiedJson(informacion_general),
-        informacion_revision: normalizeToStringifiedJson(informacion_revision),
-        movimientos_vehiculos: normalizeToStringifiedJson(movimientos_vehiculos),
-        observaciones: String(observaciones),
-        firma_responsable: String(firma_responsable),
-        created_by: parseInt(String((payload as any)?.id ?? 0)) || 0,
-        created_at: createdAt,
-      },
+        action: "POST",
+        table: "c_bitacora_vehiculo_detenido",
+        data: {
+          empresa_id: empresaId,
+          cliente_id: clienteId,
+          sucursal_id: sucursalId,
+          vehiculo_id: vehiculo_id ? Number(vehiculo_id) : null,
+          uso_id: uso_id ? Number(uso_id) : null,
+          tipo: String(tipo),
+          informacion_general: normalizeToStringifiedJson(informacion_general),
+          informacion_revision: normalizeToStringifiedJson(informacion_revision),
+          movimientos_vehiculos: normalizeToStringifiedJson(movimientos_vehiculos),
+          observaciones: String(observaciones),
+          firma_responsable: String(firma_responsable),
+          created_by: parseInt(String((payload as any)?.id ?? 0)) || 0,
+          created_at: createdAt.toISOString(),
+        }
+      }
     });
 
     // Vinculación: si viene `uso_id`, marcamos el uso con `bitacora_id = created.id`
@@ -179,13 +203,19 @@ export async function POST(req: NextRequest) {
     const fechaEntrada = createdAt.toISOString().split("T")[0];
     const horaEntrada = createdAt.toISOString().split("T")[1].split(".")[0];
     if (created.created_by) {
-      const empleado = await prisma.c_empleado.findUnique({ where: { id: created.created_by } });
+      const empleado = await callDynamicPrisma({
+        req,
+        data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: created.created_by } }
+      });
       if (empleado) {
         empNombre = empleado.nombre + " " + empleado.primer_apellido + " " + empleado.segundo_apellido;
       }
     }
     if (sucursalId) {
-      const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: sucursalId } });
+      const sucursal = await callDynamicPrisma({
+        req,
+        data: { action: "GET", table: "e_estructura_sucursal", operation: "findUnique", where: { id: sucursalId } }
+      });
       if (sucursal) {
         sucursalNombre = sucursal.nombre;
       }
@@ -194,12 +224,20 @@ export async function POST(req: NextRequest) {
       description = "El empleado " + empNombre + " ha creado una bitácora de vehículo detenido de tipo " + tipo;
       if (uso_id) {
         try {
-          const uso = await prisma.c_usos_vehiculos_corporativos.update({
-            where: { id: Number(uso_id) },
-            data: { bitacora_id: created.id },
+          const uso = await callDynamicPrisma({
+            req,
+            data: {
+              action: "UPDATE",
+              table: "c_usos_vehiculos_corporativos",
+              where: { id: Number(uso_id) },
+              data: { bitacora_id: created.id }
+            }
           });
           if (uso) {
-            const vehiculo = await prisma.c_vehiculos_corporativos.findUnique({ where: { id: uso.vehiculo_id } });
+            const vehiculo = await callDynamicPrisma({
+              req,
+              data: { action: "GET", table: "c_vehiculos_corporativos", operation: "findUnique", where: { id: uso.vehiculo_id } }
+            });
             if (vehiculo) {
               description += " para el vehículo con la placa " + vehiculo.placa;
             }
@@ -209,30 +247,35 @@ export async function POST(req: NextRequest) {
         }
       }
       description += " en la sucursal " + sucursalNombre + " el día " + fechaEntrada + " a las " + horaEntrada;
-      sendNotificationByRole(sucursalId, [], "Bitácora de vehículo detenido creada", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+      await sendNotificationByRole(req, sucursalId, [], "Bitácora de vehículo detenido creada", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
     }
 
     // Registrar cambio de creación
-    await prisma.c_cambios_apps_modules.create({
+    await callDynamicPrisma({
+      req,
       data: {
-        nombre_tabla: "c_bitacora_vehiculo_detenido",
-        registro_id: created.id,
-        cambios: JSON.stringify([{
-          prop: "__created__",
-          before: null,
-          after: {
-            id: created.id,
-            empresa_id: created.empresa_id,
-            cliente_id: created.cliente_id,
-            sucursal_id: created.sucursal_id,
-            tipo: created.tipo,
-            observaciones: created.observaciones,
-            firma_responsable: created.firma_responsable,
-          },
-        }]),
-        created_at: createdAt,
-        created_by: created.created_by,
-      },
+        action: "POST",
+        table: "c_cambios_apps_modules",
+        data: {
+          nombre_tabla: "c_bitacora_vehiculo_detenido",
+          registro_id: created.id,
+          cambios: JSON.stringify([{
+            prop: "__created__",
+            before: null,
+            after: {
+              id: created.id,
+              empresa_id: created.empresa_id,
+              cliente_id: created.cliente_id,
+              sucursal_id: created.sucursal_id,
+              tipo: created.tipo,
+              observaciones: created.observaciones,
+              firma_responsable: created.firma_responsable,
+            },
+          }]),
+          created_at: createdAt.toISOString(),
+          created_by: created.created_by,
+        }
+      }
     });
 
     return NextResponse.json({ status: true, message: "Bitácora creada correctamente", id: created.id }, { status: 200 });

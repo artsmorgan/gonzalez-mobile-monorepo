@@ -1,11 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../utils/verifyToken";
+import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { toZonedTime } from "date-fns-tz";
-import { prisma } from "../../../utils/prismaClient";
-import fs from "fs";
-import path from "path";
-import { v4 as uuidv4 } from "uuid";
+import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
+import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
 
 export const runtime = "nodejs";
 
@@ -30,16 +28,25 @@ function safeParseJson<T>(value: any, fallback: T): T {
     }
 }
 
-function normalizeBase64(b64: string): string {
-    if (!b64) return "";
-    const idx = b64.indexOf("base64,");
-    if (idx !== -1) return b64.slice(idx + "base64,".length);
-    return b64;
+function buildFileUrl(baseUrl: string, recordId: number, file: { name: string; type: string }): string {
+    const fileName = file.name;
+    const type = String(file.type || "file").toLowerCase();
+    let urlPath: string;
+    if (type === "image") {
+        urlPath = `/api/complaints-master/${recordId}/get-image/${fileName}`;
+    } else if (type === "audio") {
+        urlPath = `/api/complaints-master/${recordId}/get-audio/${fileName}`;
+    } else if (type === "video") {
+        urlPath = `/api/complaints-master/${recordId}/get-video/${fileName}`;
+    } else {
+        urlPath = `/api/complaints-master/${recordId}/get-file/${fileName}`;
+    }
+    return `${baseUrl}${urlPath}`;
 }
 
 export async function POST(req: NextRequest) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
 
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
@@ -70,12 +77,21 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 400 });
         }
 
-        const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(marca_id) } });
+        const marcaDia = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_marca_dia",
+                operation: "findUnique",
+                where: { id: parseInt(marca_id) },
+            },
+        });
         if (!marcaDia) {
             return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 404 });
         }
 
-        if (!marcaDia.empleadoFijo_id) {
+        const marcaDiaObj = marcaDia as any;
+        if (!marcaDiaObj.empleadoFijo_id) {
             return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 404 });
         }
 
@@ -85,39 +101,46 @@ export async function POST(req: NextRequest) {
 
         const created_at = toZonedTime(new Date(), "America/Costa_Rica");
         // Autocompletar campos desde la marca
-        const new_record = await prisma.c_maestro_quejas.create({
+        const new_record = await callDynamicPrisma({
+            req,
             data: {
-                empresa_id: marcaDia.empresa_id,
-                cliente_id: marcaDia.cliente_id,
-                contrato_id: marcaDia.contrato_id,
-                corpo_id: marcaDia.corpo_id,
-                puesto_id: marcaDia.puesto_id,
-                plaza_id: marcaDia.plaza_id,
-                sociedad: String(sociedad ?? ""),
-                nombre_realiza_queja: String(nombre_realiza_queja ?? ""),
-                cliente: String(cliente ?? ""),
-                empresa_presenta_queja: String(empresa_presenta_queja ?? ""),
-                persona_presenta_queja: String(persona_presenta_queja ?? ""),
-                medio_recepcion_queja: String(medio_recepcion_queja ?? ""),
-                tipo_queja: String(tipo_queja ?? ""),
-                ubicacion: String(ubicacion ?? ""),
-                nivel_queja: String(nivel_queja ?? ""),
-                fecha_queja: String(fecha_queja ?? ""),
-                motivo_queja: String(motivo_queja ?? ""),
-                descripcion_queja: String(descripcion_queja ?? ""),
-                fecha_inicio: String(fecha_inicio ?? ""),
-                fecha_revision: String(fecha_revision ?? ""),
-                resolucion_queja: String(resolucion_queja ?? ""),
-                estado: String(estado ?? ""),
-                accion_correctiva_preventiva: String(accion_correctiva_preventiva ?? ""),
-                firma_responsable: String(firma_responsable),
-                created_at: created_at,
-                created_by: payload.id?.toString() || ""
-            },
-            include: {
-                c_anexos_quejas: true,
+                action: "POST",
+                table: "c_maestro_quejas",
+                operation: "create",
+                data: {
+                    empresa_id: marcaDiaObj.empresa_id,
+                    cliente_id: marcaDiaObj.cliente_id,
+                    contrato_id: marcaDiaObj.contrato_id,
+                    corpo_id: marcaDiaObj.corpo_id,
+                    puesto_id: marcaDiaObj.puesto_id,
+                    plaza_id: marcaDiaObj.plaza_id,
+                    sociedad: String(sociedad ?? ""),
+                    nombre_realiza_queja: String(nombre_realiza_queja ?? ""),
+                    cliente: String(cliente ?? ""),
+                    empresa_presenta_queja: String(empresa_presenta_queja ?? ""),
+                    persona_presenta_queja: String(persona_presenta_queja ?? ""),
+                    medio_recepcion_queja: String(medio_recepcion_queja ?? ""),
+                    tipo_queja: String(tipo_queja ?? ""),
+                    ubicacion: String(ubicacion ?? ""),
+                    nivel_queja: String(nivel_queja ?? ""),
+                    fecha_queja: String(fecha_queja ?? ""),
+                    motivo_queja: String(motivo_queja ?? ""),
+                    descripcion_queja: String(descripcion_queja ?? ""),
+                    fecha_inicio: String(fecha_inicio ?? ""),
+                    fecha_revision: String(fecha_revision ?? ""),
+                    resolucion_queja: String(resolucion_queja ?? ""),
+                    estado: String(estado ?? ""),
+                    accion_correctiva_preventiva: String(accion_correctiva_preventiva ?? ""),
+                    firma_responsable: String(firma_responsable),
+                    created_at: created_at.toISOString(),
+                    created_by: payload?.id?.toString() || ""
+                },
+                include: {
+                    c_anexos_quejas: true,
+                },
             },
         });
+        const newRecordObj = new_record as any;
 
         // Archivos anexos
         let filesParsed: ComplaintFileInput[] = [];
@@ -126,104 +149,129 @@ export async function POST(req: NextRequest) {
         }
 
         if (filesParsed.length > 0) {
-            const dir = path.join(process.cwd(), "public", "uploads", "complaints-master", `${new_record.id}`);
-            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+            const uploadResp = await uploadDynamicFiles({
+                req,
+                folderPath: `complaints-master/${newRecordObj.id}`,
+                files: filesParsed
+                    .filter((f) => f?.file_base64 && f?.extension && f?.type)
+                    .map((f) => ({
+                        type: f.type,
+                        extension: f.extension,
+                        original_name: f.original_name,
+                        file_base64: f.file_base64,
+                    })),
+            });
 
-            for (const f of filesParsed) {
-                if (!f?.file_base64 || !f?.extension || !f?.type) continue;
-                let buffer: Buffer;
-                try {
-                    buffer = Buffer.from(normalizeBase64(String(f.file_base64)), "base64");
-                } catch {
-                    continue;
-                }
-
-                const ext = String(f.extension).replace(".", "").trim() || "dat";
-                const fileName = `${uuidv4()}.${ext}`;
-                fs.writeFileSync(path.join(dir, fileName), buffer);
-
-                const originalName =
-                    (typeof f.original_name === "string" && f.original_name.trim().length > 0)
-                        ? f.original_name.trim()
-                        : fileName;
-
-                await prisma.c_anexos_quejas.create({
+            const uploadedFiles = Array.isArray(uploadResp?.files) ? uploadResp.files : [];
+            for (const uploaded of uploadedFiles) {
+                await callDynamicPrisma({
+                    req,
                     data: {
-                        name: fileName,
-                        original_name: originalName,
-                        type: String(f.type),
-                        extension: ext,
-                        queja_id: new_record.id,
-                    }
+                        action: "POST",
+                        table: "c_anexos_quejas",
+                        operation: "create",
+                        data: {
+                            name: uploaded.name,
+                            original_name: uploaded.original_name || uploaded.name,
+                            type: uploaded.type,
+                            extension: uploaded.extension,
+                            queja_id: newRecordObj.id,
+                        },
+                    },
                 });
             }
         }
 
-        const fullRecord = await prisma.c_maestro_quejas.findUnique({
-            where: { id: new_record.id },
-            include: { c_anexos_quejas: true },
+        const fullRecord = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_maestro_quejas",
+                operation: "findUnique",
+                where: { id: newRecordObj.id },
+                include: { c_anexos_quejas: true },
+            },
         });
 
-        const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: marcaDia.corpo_id } });
+        const sucursal = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "e_estructura_sucursal",
+                operation: "findUnique",
+                where: { id: marcaDiaObj.corpo_id },
+            },
+        });
 
         if (sucursal) {
+            const sucursalObj = sucursal as any;
             const fecha_string = created_at.toISOString().split("T")[0];
             const hora_string = created_at.toISOString().split("T")[1].split(".")[0];
-            const description = `Se ha registrado una queja de tipo ${tipo_queja} en la sucursal ${sucursal.nombre} de la empresa ${cliente.nombre} el día ${fecha_string} a las ${hora_string}`;
-            sendNotificationByRole(marcaDia.corpo_id, [marcaDia.plaza_id], "Queja registrada", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+            const description = `Se ha registrado una queja de tipo ${tipo_queja} en la sucursal ${sucursalObj.nombre} de la empresa ${cliente} el día ${fecha_string} a las ${hora_string}`;
+            await sendNotificationByRole(req, marcaDiaObj.corpo_id, [marcaDiaObj.plaza_id], "Queja registrada", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
         }
 
         // Registrar cambio de creación
         const createdBy = parseInt(String(payload?.id ?? 0), 10) || 0;
-        await prisma.c_cambios_apps_modules.create({
+        await callDynamicPrisma({
+            req,
             data: {
-                nombre_tabla: "c_maestro_quejas",
-                registro_id: new_record.id,
-                cambios: JSON.stringify([{
-                    prop: "__created__",
-                    before: null,
-                    after: {
-                        id: new_record.id,
-                        empresa_id: new_record.empresa_id,
-                        cliente_id: new_record.cliente_id,
-                        corpo_id: new_record.corpo_id,
-                        puesto_id: new_record.puesto_id,
-                        sociedad: new_record.sociedad,
-                        nombre_realiza_queja: new_record.nombre_realiza_queja,
-                        cliente: new_record.cliente,
-                        empresa_presenta_queja: new_record.empresa_presenta_queja,
-                        persona_presenta_queja: new_record.persona_presenta_queja,
-                        medio_recepcion_queja: new_record.medio_recepcion_queja,
-                        tipo_queja: new_record.tipo_queja,
-                        ubicacion: new_record.ubicacion,
-                        nivel_queja: new_record.nivel_queja,
-                        fecha_queja: new_record.fecha_queja,
-                        motivo_queja: new_record.motivo_queja,
-                        descripcion_queja: new_record.descripcion_queja,
-                        fecha_inicio: new_record.fecha_inicio,
-                        fecha_revision: new_record.fecha_revision,
-                        resolucion_queja: new_record.resolucion_queja,
-                        estado: new_record.estado,
-                        accion_correctiva_preventiva: new_record.accion_correctiva_preventiva,
-                    },
-                }]),
-                created_at: created_at,
-                created_by: createdBy,
+                action: "POST",
+                table: "c_cambios_apps_modules",
+                operation: "create",
+                data: {
+                    nombre_tabla: "c_maestro_quejas",
+                    registro_id: newRecordObj.id,
+                    cambios: JSON.stringify([{
+                        prop: "__created__",
+                        before: null,
+                        after: {
+                            id: newRecordObj.id,
+                            empresa_id: newRecordObj.empresa_id,
+                            cliente_id: newRecordObj.cliente_id,
+                            corpo_id: newRecordObj.corpo_id,
+                            puesto_id: newRecordObj.puesto_id,
+                            sociedad: newRecordObj.sociedad,
+                            nombre_realiza_queja: newRecordObj.nombre_realiza_queja,
+                            cliente: newRecordObj.cliente,
+                            empresa_presenta_queja: newRecordObj.empresa_presenta_queja,
+                            persona_presenta_queja: newRecordObj.persona_presenta_queja,
+                            medio_recepcion_queja: newRecordObj.medio_recepcion_queja,
+                            tipo_queja: newRecordObj.tipo_queja,
+                            ubicacion: newRecordObj.ubicacion,
+                            nivel_queja: newRecordObj.nivel_queja,
+                            fecha_queja: newRecordObj.fecha_queja,
+                            motivo_queja: newRecordObj.motivo_queja,
+                            descripcion_queja: newRecordObj.descripcion_queja,
+                            fecha_inicio: newRecordObj.fecha_inicio,
+                            fecha_revision: newRecordObj.fecha_revision,
+                            resolucion_queja: newRecordObj.resolucion_queja,
+                            estado: newRecordObj.estado,
+                            accion_correctiva_preventiva: newRecordObj.accion_correctiva_preventiva,
+                        },
+                    }]),
+                    created_at: created_at.toISOString(),
+                    created_by: createdBy,
+                },
             },
         });
 
+        const fullRecordObj = fullRecord as any;
+        const anexosArray = Array.isArray(fullRecordObj?.c_anexos_quejas) ? fullRecordObj.c_anexos_quejas : [];
+        const baseUrl = req.nextUrl.origin;
         return NextResponse.json({
             status: true,
             message: "Queja creada correctamente",
             data: {
-                ...(fullRecord ?? new_record),
+                ...(fullRecordObj ?? newRecordObj),
                 id_local: "",
-                files: ((fullRecord as any)?.c_anexos_quejas || []).map((f: any) => ({
+                files: anexosArray.map((f: any) => ({
                     id: f.id,
                     name: f.name,
                     original_name: f.original_name,
                     type: f.type,
                     extension: f.extension,
+                    url: buildFileUrl(baseUrl, newRecordObj.id, f),
                 })),
             }
         }, { status: 200 });

@@ -1,8 +1,7 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Image,
   Modal,
   Platform,
   ScrollView,
@@ -10,7 +9,6 @@ import {
   TextInput,
   TouchableOpacity,
   View,
-  Dimensions,
 } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -21,6 +19,7 @@ import Ionicons from '@expo/vector-icons/build/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Network from 'expo-network';
 import * as Location from 'expo-location';
+import * as DocumentPicker from 'expo-document-picker';
 import { jwtDecode } from 'jwt-decode';
 import Constants from 'expo-constants';
 
@@ -29,73 +28,81 @@ import AppFooter from '@/components/AppFooter';
 import SlideMenu from '@/components/SlideMenu';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
-import { formatDateDMY } from '@/utils/formatDate';
 import { useAuth } from '@/contexts/AuthContext';
-import { eventBus } from '@/hooks/eventBus';
-import getHoraAccion from '@/hooks/getHoraAccion';
 import { useQRScanner } from '@/hooks/useQRScanner';
 import authedFetch from '@/hooks/authedFetch';
-
-import type { ExecutiveOption } from '@/hooks/incidentsTypes';
+import getHoraAccion from '@/hooks/getHoraAccion';
 import { listExecutives } from '@/hooks/incidentsFunctions';
-import { getExecutivesCache, setExecutivesCache } from '@/hooks/incidentsStorage';
-
-import type { MutuoAcuerdo } from '@/hooks/mutuosAcuerdosTypes';
-import { createMutuoAcuerdo, deleteMutuoAcuerdo, listMutuosAcuerdosByCorpo, signMutuoAcuerdoEjecutivo, updateMutuoAcuerdo } from '@/hooks/mutuosAcuerdosFunctions';
-import { getMutuosAcuerdosCache, MUTUOS_ACUERDOS_ACTIONS_KEY, setMutuosAcuerdosCache } from '@/hooks/mutuosAcuerdosStorage';
-
+import type { ExecutiveOption } from '@/hooks/incidentsTypes';
+import type { MarcaDiaResumen, MutuoAcuerdo } from '@/hooks/mutuosAcuerdosTypes';
+import {
+  acceptMutuoAcuerdo,
+  createMutuoAcuerdo,
+  listMarcasParaMutuo,
+  listMutuosAcuerdosMine,
+  signMutuoAcuerdoEjecutivo,
+} from '@/hooks/mutuosAcuerdosFunctions';
 import type { RootStackParamList } from '../App';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'MutuosAcuerdos'>;
+type SectionKey = 'ausente' | 'reemplaza';
 
-type OficialInfoForm = {
+type EmployeeSectionState = {
+  fecha: Date;
+  showDatePicker: boolean;
   codigo: string;
-  nombre: string;
-  firma: string | null; // data url
-  rol_normal: string;
-  rol_cambio: string;
+  employeeId: number | null;
+  employeeNombre: string;
+  employeeCedula: string;
+  marcas: MarcaDiaResumen[];
+  selectedMarcaId: number | null;
+  loadingMarcas: boolean;
+  message: string;
 };
 
-const TURNOS = ['Mañana', 'tarde', 'noche'] as const;
+const emptySection = (): EmployeeSectionState => ({
+  fecha: new Date(),
+  showDatePicker: false,
+  codigo: '',
+  employeeId: null,
+  employeeNombre: '',
+  employeeCedula: '',
+  marcas: [],
+  selectedMarcaId: null,
+  loadingMarcas: false,
+  message: '',
+});
 
-const safeJsonParse = <T,>(value: any, fallback: T): T => {
-  try {
-    if (!value) return fallback;
-    if (typeof value === 'string') return JSON.parse(value) as T;
-    return value as T;
-  } catch {
-    return fallback;
-  }
-};
-
-const getBase64Only = (signature: string | null | undefined): string => {
-  if (!signature) return '';
-  const s = String(signature);
-  if (s.startsWith('data:')) {
-    const parts = s.split(',');
-    return parts.length >= 2 ? parts.slice(1).join(',') : '';
-  }
-  return s;
-};
-
-const formatSignatureForDisplay = (signature: string | null | undefined): string | null => {
-  if (!signature) return null;
-  const s = String(signature);
-  if (s.startsWith('data:')) return s;
-  return `data:image/png;base64,${s}`;
-};
-
-const dateToLocalString = (d: Date): string => {
+const dateToYmd = (d: Date) => {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
 };
 
-const formatDateForDisplay = (d: Date): string => {
-  const ymd = dateToLocalString(d);
+const formatDateDMY = (d: Date) => {
+  const ymd = dateToYmd(d);
   const [y, m, day] = ymd.split('-');
   return `${day}-${m}-${y}`;
+};
+
+const formatTime = (raw?: string | null) => {
+  if (!raw) return '—';
+  const str = String(raw).trim();
+  if (!str) return '—';
+  if (str.includes('T')) {
+    const afterT = str.split('T')[1] || '';
+    return afterT.replace(/\.\d+Z?$/i, '').trim() || str;
+  }
+  return str.replace(/\.\d+Z?$/i, '').trim();
+};
+
+type AttachedDocument = {
+  base64: string;
+  extension: string;
+  original_name: string;
+  mimeType?: string;
+  type: 'document';
 };
 
 const decodeFirmaHash = (hash?: string | null) => {
@@ -111,128 +118,53 @@ const decodeFirmaHash = (hash?: string | null) => {
   }
 };
 
+const getBase64Only = (signature: string | null | undefined): string => {
+  if (!signature) return '';
+  const s = String(signature);
+  if (s.startsWith('data:')) {
+    const parts = s.split(',');
+    return parts.length >= 2 ? parts.slice(1).join(',') : '';
+  }
+  return s;
+};
+
+const signatureWebStyle = `
+body, html { margin: 0; padding: 0; height: 100%; width: 100%; }
+.m-signature-pad { position: absolute; top: 0; left: 0; right: 0; bottom: 0; margin: 0; padding: 0; box-shadow: none; border: none; background-color: #FFFFFF; }
+.m-signature-pad--body { position: absolute; top: 0; left: 0; right: 0; bottom: 0; border: none; margin: 0; padding: 0; }
+.m-signature-pad--body canvas { width: 100% !important; height: 100% !important; touch-action: none; }
+.m-signature-pad--footer { display: none; }
+`;
+
 export default function MutuosAcuerdosScreen() {
   const navigation = useNavigation<Nav>();
   const { employee, refreshAccessToken, logout } = useAuth();
   const { scanQR, QRScannerComponent } = useQRScanner();
 
   const [isMenuVisible, setIsMenuVisible] = useState(false);
-
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [hasCurrentMarca, setHasCurrentMarca] = useState(true);
   const [records, setRecords] = useState<MutuoAcuerdo[]>([]);
-
-  // Modal: ver cambios (auditoría)
-  const [isCambiosModalVisible, setIsCambiosModalVisible] = useState(false);
-  const [cambiosTitle, setCambiosTitle] = useState<string>('Cambios');
-  const [cambiosItems, setCambiosItems] = useState<any[]>([]);
-  const [expandedCambioId, setExpandedCambioId] = useState<number | null>(null);
-
-  // estructura
-  const [marcaDivisionId, setMarcaDivisionId] = useState<number | null>(null);
-  const [marcaCorpoId, setMarcaCorpoId] = useState<number | null>(null);
-  const [marcaClienteId, setMarcaClienteId] = useState<number | null>(null);
-
-  // ejecutivos
   const [executives, setExecutives] = useState<ExecutiveOption[]>([]);
-  const [selectedEjecutivoCuenta, setSelectedEjecutivoCuenta] = useState<number | null>(null);
 
-  // form
   const [isCreating, setIsCreating] = useState(false);
-  const [editing, setEditing] = useState<{ id: number; id_local?: string } | null>(null);
-
-  const [fecha, setFecha] = useState<Date>(new Date());
-  const [showFechaPicker, setShowFechaPicker] = useState(false);
-  const [turno, setTurno] = useState<(typeof TURNOS)[number] | ''>('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [selectedEjecutivoCuenta, setSelectedEjecutivoCuenta] = useState<number | null>(null);
   const [motivo, setMotivo] = useState('');
-
-  const [oficialInteresado, setOficialInteresado] = useState<OficialInfoForm>({
-    codigo: '',
-    nombre: '',
-    firma: null,
-    rol_normal: '',
-    rol_cambio: '',
-  });
-  const [oficialColaborador, setOficialColaborador] = useState<OficialInfoForm>({
-    codigo: '',
-    nombre: '',
-    firma: null,
-    rol_normal: '',
-    rol_cambio: '',
-  });
-
-  // Sincronización cruzada de roles (sin recursividad)
-  const isSyncingRolesRef = useRef(false);
-  const updateInteresadoRolNormal = (v: string) => {
-    if (isSyncingRolesRef.current) {
-      setOficialInteresado((p) => ({ ...p, rol_normal: v }));
-      return;
-    }
-    isSyncingRolesRef.current = true;
-    setOficialInteresado((p) => ({ ...p, rol_normal: v }));
-    setOficialColaborador((p) => ({ ...p, rol_cambio: v }));
-    setTimeout(() => {
-      isSyncingRolesRef.current = false;
-    }, 0);
-  };
-  const updateInteresadoRolCambio = (v: string) => {
-    if (isSyncingRolesRef.current) {
-      setOficialInteresado((p) => ({ ...p, rol_cambio: v }));
-      return;
-    }
-    isSyncingRolesRef.current = true;
-    setOficialInteresado((p) => ({ ...p, rol_cambio: v }));
-    setOficialColaborador((p) => ({ ...p, rol_normal: v }));
-    setTimeout(() => {
-      isSyncingRolesRef.current = false;
-    }, 0);
-  };
-  const updateColaboradorRolNormal = (v: string) => {
-    if (isSyncingRolesRef.current) {
-      setOficialColaborador((p) => ({ ...p, rol_normal: v }));
-      return;
-    }
-    isSyncingRolesRef.current = true;
-    setOficialColaborador((p) => ({ ...p, rol_normal: v }));
-    setOficialInteresado((p) => ({ ...p, rol_cambio: v }));
-    setTimeout(() => {
-      isSyncingRolesRef.current = false;
-    }, 0);
-  };
-  const updateColaboradorRolCambio = (v: string) => {
-    if (isSyncingRolesRef.current) {
-      setOficialColaborador((p) => ({ ...p, rol_cambio: v }));
-      return;
-    }
-    isSyncingRolesRef.current = true;
-    setOficialColaborador((p) => ({ ...p, rol_cambio: v }));
-    setOficialInteresado((p) => ({ ...p, rol_normal: v }));
-    setTimeout(() => {
-      isSyncingRolesRef.current = false;
-    }, 0);
-  };
-
-  // firma responsable (QR)
   const [firmaResponsable, setFirmaResponsable] = useState('');
   const [isGeneratingFirmaResponsable, setIsGeneratingFirmaResponsable] = useState(false);
-  const [location, setLocation] = useState<Location.LocationObject | null>(null);
+  const [ausente, setAusente] = useState<EmployeeSectionState>(emptySection());
+  const [reemplaza, setReemplaza] = useState<EmployeeSectionState>(emptySection());
+  const [attachedDocument, setAttachedDocument] = useState<AttachedDocument | null>(null);
 
-  // modal firmas dibujadas (interesado/colaborador/ejecutivo)
+  const [isSigning, setIsSigning] = useState(false);
   const [signatureModalVisible, setSignatureModalVisible] = useState(false);
-  const signatureRef = useRef<any>(null);
-  const [signatureKey, setSignatureKey] = useState(0);
-  const [signatureTarget, setSignatureTarget] = useState<'interesado' | 'colaborador' | 'ejecutivo' | null>(null);
-  const [signingRecordKey, setSigningRecordKey] = useState<{ id: number; id_local?: string } | null>(null);
+  const [signingRecordId, setSigningRecordId] = useState<number | null>(null);
+  const [firmaEjecutivoDigital, setFirmaEjecutivoDigital] = useState('');
+  const [isGeneratingFirmaEjecutivoDigital, setIsGeneratingFirmaEjecutivoDigital] = useState(false);
   const [isReadingSignature, setIsReadingSignature] = useState(false);
-
-  const signatureWebStyle = `
-    .m-signature-pad { box-shadow: none; border: none; }
-    .m-signature-pad--body { border: 1px solid #E0E0E0; background: #FFFFFF; }
-    .m-signature-pad--footer { display: none; margin: 0px; }
-    body,html { width: 100%; height: 100%; }
-    canvas { background: #FFFFFF; }
-  `;
+  const [signatureKey, setSignatureKey] = useState(0);
+  const signatureRef = useRef<any>(null);
 
   const getConnectionStatus = async (): Promise<boolean> => {
     try {
@@ -243,165 +175,15 @@ export default function MutuosAcuerdosScreen() {
     }
   };
 
-  const closeCambiosModal = () => {
-    setIsCambiosModalVisible(false);
-    setCambiosItems([]);
-    setExpandedCambioId(null);
+  const updateSection = (section: SectionKey, updater: (prev: EmployeeSectionState) => EmployeeSectionState) => {
+    if (section === 'ausente') setAusente(updater);
+    else setReemplaza(updater);
   };
-
-  const formatCambioCreatedAt = (value: any) => {
-    if (!value) return '';
-    try {
-      const d = new Date(String(value));
-      if (isNaN(d.getTime())) return String(value);
-      const day = d.getDate().toString().padStart(2, '0');
-      const month = (d.getMonth() + 1).toString().padStart(2, '0');
-      const year = d.getFullYear();
-      const hours = d.getHours().toString().padStart(2, '0');
-      const minutes = d.getMinutes().toString().padStart(2, '0');
-      return `${day}/${month}/${year} ${hours}:${minutes}`;
-    } catch {
-      return String(value);
-    }
-  };
-
-  const formatOficialInfoForDisplay = (oficialInfo: any): string => {
-    if (!oficialInfo) return '';
-    try {
-      // Si viene como string JSON, parsearlo
-      const info = typeof oficialInfo === 'string' ? JSON.parse(oficialInfo) : oficialInfo;
-
-      // Puede ser un array [codigo, nombre, firma, rol_normal, rol_cambio] o un objeto
-      if (Array.isArray(info)) {
-        const partes: string[] = [];
-        if (info[0]) partes.push(`Código: ${info[0]}`);
-        if (info[1]) partes.push(`Nombre: ${info[1]}`);
-        if (info[3]) partes.push(`Rol normal: ${info[3]}`);
-        if (info[4]) partes.push(`Rol cambio: ${info[4]}`);
-        return partes.length > 0 ? partes.join(' | ') : 'Sin información';
-      }
-
-      // Si es un objeto
-      if (typeof info === 'object' && info !== null) {
-        const partes: string[] = [];
-        if (info.codigo) partes.push(`Código: ${info.codigo}`);
-        if (info.nombre) partes.push(`Nombre: ${info.nombre}`);
-        if (info.rol_normal) partes.push(`Rol normal: ${info.rol_normal}`);
-        if (info.rol_cambio) partes.push(`Rol cambio: ${info.rol_cambio}`);
-        return partes.length > 0 ? partes.join(' | ') : 'Sin información';
-      }
-
-      return String(oficialInfo);
-    } catch {
-      return String(oficialInfo);
-    }
-  };
-
-  const formatChangeValue = (prop: string, value: any): string => {
-    if (prop === 'informacion_oficial_interesado' || prop === 'informacion_oficial_colaborador') {
-      return formatOficialInfoForDisplay(value);
-    }
-    if (typeof value === 'object' && value !== null && !(value instanceof Date)) {
-      try {
-        if (Array.isArray(value)) {
-          return JSON.stringify(value, null, 2);
-        }
-        const keys = Object.keys(value);
-        if (keys.length > 0 && keys.length <= 5) {
-          return keys.map(k => `${k}: ${value[k]}`).join(', ');
-        }
-        return JSON.stringify(value, null, 2);
-      } catch {
-        return String(value);
-      }
-    }
-    return String(value ?? '');
-  };
-
-  const fetchCambios = useCallback(async (tabla: string, registroId: number) => {
-    const isConnected = await getConnectionStatus();
-    if (!isConnected) {
-      Alert.alert('Sin conexión', 'Esta función solo está disponible con conexión a internet.');
-      return;
-    }
-    try {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-      if (!apiUrl) throw new Error('Server URL not configured');
-      const resp = await authedFetch({
-        url: `${apiUrl}/api/cambios-apps-modules?tabla=${encodeURIComponent(tabla)}&registro_id=${registroId}`,
-        init: {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        },
-        refreshAccessToken,
-        logout,
-      });
-      if (!resp) return;
-
-      const data = await resp.json().catch(() => ({}));
-      if (!resp.ok || !data.status) {
-        throw new Error(data.message || 'No se pudieron cargar los cambios');
-      }
-      setCambiosItems(Array.isArray(data.data) ? data.data : []);
-      setIsCambiosModalVisible(true);
-    } catch (e: any) {
-      Alert.alert('Error', e.message || 'No se pudieron cargar los cambios');
-    }
-  }, [refreshAccessToken, logout]);
-
-  const loadMarcaContext = async () => {
-    const currentMarcaStr = await AsyncStorage.getItem('current_marca');
-    if (!currentMarcaStr) {
-      setHasCurrentMarca(false);
-      setMarcaDivisionId(null);
-      setMarcaCorpoId(null);
-      setMarcaClienteId(null);
-      return null;
-    }
-    try {
-      const current = JSON.parse(currentMarcaStr);
-      if (!current) {
-        setHasCurrentMarca(false);
-        setMarcaDivisionId(null);
-        setMarcaCorpoId(null);
-        setMarcaClienteId(null);
-        return null;
-      }
-      setHasCurrentMarca(true);
-      const divIdRaw = current?.roleDivision?.division?.id;
-      const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
-      const clienteIdRaw = current?.cliente?.id ?? current?.cliente_id;
-      setMarcaDivisionId(divIdRaw !== undefined && divIdRaw !== null ? Number(divIdRaw) : null);
-      setMarcaCorpoId(corpoIdRaw !== undefined && corpoIdRaw !== null ? Number(corpoIdRaw) : null);
-      setMarcaClienteId(clienteIdRaw !== undefined && clienteIdRaw !== null ? Number(clienteIdRaw) : null);
-      return current;
-    } catch {
-      setHasCurrentMarca(false);
-      setMarcaDivisionId(null);
-      setMarcaCorpoId(null);
-      setMarcaClienteId(null);
-      return null;
-    }
-  };
-
 
   const fetchExecutives = useCallback(async () => {
-    try {
-      const cached = await getExecutivesCache();
-      if (cached) setExecutives(cached);
-
-      const isConnected = await getConnectionStatus();
-      if (!isConnected) return;
-
-      const res = await listExecutives({ refreshAccessToken, logout });
-      if (res.status && Array.isArray((res as any).executives)) {
-        setExecutives((res as any).executives);
-        await setExecutivesCache((res as any).executives);
-      }
-    } catch (e) {
-      console.error('Error fetching executives:', e);
+    const res = await listExecutives({ refreshAccessToken, logout });
+    if (res.status && Array.isArray((res as any).executives)) {
+      setExecutives((res as any).executives);
     }
   }, [refreshAccessToken, logout]);
 
@@ -410,71 +192,24 @@ export default function MutuosAcuerdosScreen() {
       setIsLoading(true);
       setError(null);
 
-      const current = await loadMarcaContext();
-      if (!current) {
-        setIsLoading(false);
+      const isConnected = await getConnectionStatus();
+      if (!isConnected) {
+        setError('Este módulo funciona exclusivamente con internet.');
+        setRecords([]);
         return;
       }
 
       await fetchExecutives();
-
-      const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
-      const corpoId = corpoIdRaw !== undefined && corpoIdRaw !== null ? Number(corpoIdRaw) : null;
-
-      if (!corpoId) {
-        setError('No se encontró el ID de la sucursal (corpo) en la marca actual');
-        setIsLoading(false);
+      const res = await listMutuosAcuerdosMine({ refreshAccessToken, logout });
+      if (!res.status) {
+        setError(res.message || 'No se pudieron cargar los mutuos acuerdos');
+        setRecords([]);
         return;
       }
-
-      const corpoIdStr = String(corpoId);
-
-      const localCache = (await getMutuosAcuerdosCache()) || [];
-      // Filtrar cache local por corpo_id
-      const filteredLocalCache = localCache.filter((r: any) => {
-        const rCorpoId = Number(r?.corpo_id) || 0;
-        return rCorpoId === corpoId;
-      });
-      const localOnly = filteredLocalCache.filter((r: any) => (r?.id === 0 || String(r?.id_local || '').startsWith('local-')));
-
-      const isConnected = await getConnectionStatus();
-      if (isConnected) {
-        const res = await listMutuosAcuerdosByCorpo({ corpo_id: corpoIdStr, refreshAccessToken, logout });
-        if (res.status) {
-          const serverItems = Array.isArray(res.data) ? res.data : [];
-          // Filtrar items del servidor por corpo_id (por si acaso)
-          const filteredServerItems = serverItems.filter((r: any) => {
-            const rCorpoId = Number(r?.corpo_id) || 0;
-            return rCorpoId === corpoId;
-          });
-          const merged: MutuoAcuerdo[] = [
-            ...localOnly.map((r: any) => ({ ...r, synced: false })),
-            ...filteredServerItems.map((r: any) => ({ ...r, synced: true })),
-          ];
-          setRecords(merged);
-          await setMutuosAcuerdosCache(merged);
-        } else {
-          setRecords(filteredLocalCache);
-        }
-      } else {
-        setRecords(filteredLocalCache);
-      }
+      setRecords(Array.isArray(res.data) ? res.data : []);
     } catch (e: any) {
-      console.error('Error fetching mutuos acuerdos:', e);
       setError(e?.message || 'Error al cargar mutuos acuerdos');
-      const localCache = (await getMutuosAcuerdosCache()) || [];
-      const current = await loadMarcaContext();
-      const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
-      const corpoId = corpoIdRaw !== undefined && corpoIdRaw !== null ? Number(corpoIdRaw) : null;
-      if (corpoId) {
-        const filteredLocalCache = localCache.filter((r: any) => {
-          const rCorpoId = Number(r?.corpo_id) || 0;
-          return rCorpoId === corpoId;
-        });
-        setRecords(filteredLocalCache);
-      } else {
-        setRecords(localCache);
-      }
+      setRecords([]);
     } finally {
       setIsLoading(false);
     }
@@ -483,23 +218,156 @@ export default function MutuosAcuerdosScreen() {
   useFocusEffect(
     useCallback(() => {
       fetchRecords();
-      const handler = () => fetchRecords();
-      eventBus.on('connectionRestored', handler);
-      return () => {
-        eventBus.off('connectionRestored', handler);
-      };
     }, [fetchRecords])
   );
 
+  const getEmpleadoById = async (id: number) => {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) throw new Error('Server URL not configured');
+    const response = await authedFetch({
+      url: `${apiUrl}/api/empleados/${id}`,
+      init: {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+      },
+      refreshAccessToken,
+      logout,
+    });
+    if (!response) throw new Error('Sesión expirada');
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      throw new Error(errData?.message || 'No se pudo obtener el empleado por ID');
+    }
+    return await response.json();
+  };
 
-  // ===== firma responsable =====
-  const requestLocation = async () => {
+  const getEmpleadoByCodigo = async (codigo: string) => {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) throw new Error('Server URL not configured');
+    const response = await authedFetch({
+      url: `${apiUrl}/api/empleados/codigo/${encodeURIComponent(String(codigo).trim())}`,
+      init: {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+      },
+      refreshAccessToken,
+      logout,
+    });
+    if (!response) throw new Error('Sesión expirada');
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      throw new Error(errData?.message || 'No se pudo obtener el empleado por código');
+    }
+    const data = await response.json();
+    if (!data?.status || !data?.data) throw new Error(data?.message || 'Empleado no encontrado');
+    return data.data;
+  };
+
+  const loadMarcas = async (section: SectionKey, employeeId: number, fecha: Date) => {
+    updateSection(section, (prev) => ({ ...prev, loadingMarcas: true, message: '', marcas: [], selectedMarcaId: null }));
     try {
+      const res = await listMarcasParaMutuo({
+        empleado_id: employeeId,
+        fecha: dateToYmd(fecha),
+        refreshAccessToken,
+        logout,
+      });
+      updateSection(section, (prev) => ({
+        ...prev,
+        loadingMarcas: false,
+        marcas: Array.isArray(res.data) ? res.data : [],
+        selectedMarcaId: null,
+        message: Array.isArray(res.data) && res.data.length === 0 ? (res.message || 'El empleado está libre ese día') : '',
+      }));
+    } catch (e: any) {
+      updateSection(section, (prev) => ({
+        ...prev,
+        loadingMarcas: false,
+        marcas: [],
+        selectedMarcaId: null,
+        message: e?.message || 'No se pudieron obtener las marcas',
+      }));
+    }
+  };
+
+  const applyEmployeeToSection = async (section: SectionKey, empleadoData: any) => {
+    const employeeId = Number(empleadoData?.id || 0);
+    const nombre = [
+      String(empleadoData?.nombre || '').trim(),
+      String(empleadoData?.primer_apellido || '').trim(),
+      String(empleadoData?.segundo_apellido || '').trim(),
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .trim() || String(empleadoData?.nombre_completo || '').trim();
+    const cedula = String(empleadoData?.cedula || '').trim();
+    if (!employeeId || !nombre) throw new Error('Empleado inválido');
+
+    updateSection(section, (prev) => ({
+      ...prev,
+      employeeId,
+      employeeNombre: nombre,
+      employeeCedula: cedula,
+    }));
+    const sectionState = section === 'ausente' ? ausente : reemplaza;
+    await loadMarcas(section, employeeId, sectionState.fecha);
+  };
+
+  const handleSearchByCode = async (section: SectionKey) => {
+    const sectionState = section === 'ausente' ? ausente : reemplaza;
+    const code = String(sectionState.codigo || '').trim();
+    if (!code) {
+      Alert.alert('Error', 'Debes ingresar un código');
+      return;
+    }
+    try {
+      const empleado = await getEmpleadoByCodigo(code);
+      await applyEmployeeToSection(section, empleado);
+    } catch (e: any) {
+      Alert.alert('Error', e?.message || 'No se pudo buscar el empleado por código');
+    }
+  };
+
+  const handleScanEmployeeQR = async (section: SectionKey) => {
+    try {
+      const qrData = await scanQR();
+      if (!qrData) return;
+      const decoded = decodeFirmaHash(qrData);
+      if (!decoded?.empleadoId) {
+        Alert.alert('Error', 'El QR no contiene un ID de empleado válido');
+        return;
+      }
+      const empleado = await getEmpleadoById(Number(decoded.empleadoId));
+      await applyEmployeeToSection(section, empleado);
+    } catch (e: any) {
+      Alert.alert('Error', e?.message || 'No se pudo leer el QR');
+    }
+  };
+
+  const handleSectionDateChange = async (section: SectionKey, date: Date) => {
+    updateSection(section, (prev) => ({ ...prev, fecha: date, showDatePicker: false }));
+    const sectionState = section === 'ausente' ? ausente : reemplaza;
+    if (sectionState.employeeId) {
+      await loadMarcas(section, sectionState.employeeId, date);
+    }
+  };
+
+  const generateFirmaHashForCurrentUser = async (): Promise<string | null> => {
+    try {
+      if (!employee) return null;
       const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') return null;
-      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-      setLocation(loc);
-      return loc;
+      if (status !== 'granted') {
+        Alert.alert('Permiso denegado', 'Se necesita permiso de ubicación para generar la firma digital');
+        return null;
+      }
+      const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      const token = await AsyncStorage.getItem('access_token');
+      if (!token) return null;
+      const decoded: any = jwtDecode(token);
+      const sessionId = decoded?.sessionId || 'unknown';
+      const timestamp = await getHoraAccion();
+      if (!timestamp) return null;
+      return btoa(`${sessionId}:${employee.id}:${location.coords.latitude}:${location.coords.longitude}:${timestamp}`);
     } catch {
       return null;
     }
@@ -509,604 +377,327 @@ export default function MutuosAcuerdosScreen() {
     if (isGeneratingFirmaResponsable) return;
     setIsGeneratingFirmaResponsable(true);
     try {
-      const loc = location ?? (await requestLocation());
-      if (!loc || !employee) {
-        Alert.alert('Error', 'No se pudo obtener ubicación o usuario');
+      const hash = await generateFirmaHashForCurrentUser();
+      if (!hash) {
+        Alert.alert('Error', 'No se pudo generar la firma digital');
         return;
       }
-      const token = await AsyncStorage.getItem('access_token');
-      if (!token) throw new Error('No authentication token found');
-      const decodedToken: any = jwtDecode(token);
-      const sessionId = decodedToken.sessionId;
-      const timestamp = await getHoraAccion();
-      const hash = btoa(`${sessionId}:${employee.id}:${loc.coords.latitude}:${loc.coords.longitude}:${timestamp}`);
       setFirmaResponsable(hash);
-    } catch (e: any) {
-      Alert.alert('Error', e?.message || 'No se pudo generar la firma');
     } finally {
       setIsGeneratingFirmaResponsable(false);
     }
   };
 
-  const handleScanFirmaResponsable = async () => {
+  const resetForm = () => {
+    setSelectedEjecutivoCuenta(null);
+    setMotivo('');
+    setFirmaResponsable('');
+    setAusente(emptySection());
+    setReemplaza(emptySection());
+    setAttachedDocument(null);
+  };
+
+  const startCreate = () => {
+    resetForm();
+    setIsCreating(true);
+  };
+
+  const handleSave = async () => {
+    if (!selectedEjecutivoCuenta) {
+      Alert.alert('Error', 'Debes seleccionar el ejecutivo de cuenta');
+      return;
+    }
+    if (!motivo.trim()) {
+      Alert.alert('Error', 'El motivo es obligatorio');
+      return;
+    }
+    if (!firmaResponsable.trim()) {
+      Alert.alert('Error', 'La firma responsable es obligatoria');
+      return;
+    }
+    if (!ausente.selectedMarcaId || !reemplaza.selectedMarcaId) {
+      Alert.alert('Error', 'Debes seleccionar una marca para ausente y una para reemplaza');
+      return;
+    }
+
+    setIsSubmitting(true);
     try {
-      const qrData = await scanQR();
-      if (!qrData) return;
-      setFirmaResponsable(qrData);
-    } catch {
-      Alert.alert('Error', 'No se pudo escanear el QR');
-    }
-  };
-
-  // ===== acciones offline =====
-  const upsertAction = async (action: any) => {
-    const actionsStr = await AsyncStorage.getItem(MUTUOS_ACUERDOS_ACTIONS_KEY);
-    const actions = actionsStr ? JSON.parse(actionsStr) : [];
-    actions.push(action);
-    await AsyncStorage.setItem(MUTUOS_ACUERDOS_ACTIONS_KEY, JSON.stringify(actions));
-  };
-
-  const updateCreateActionForLocalId = async (localId: string, requestData: any) => {
-    const actionsStr = await AsyncStorage.getItem(MUTUOS_ACUERDOS_ACTIONS_KEY);
-    if (!actionsStr) return false;
-    const actions = JSON.parse(actionsStr) || [];
-    let updatedAny = false;
-    const next = actions.map((a: any) => {
-      if (a.type === 'create' && a.id === localId) {
-        updatedAny = true;
-        return { ...a, requestData };
+      const response = await createMutuoAcuerdo({
+        requestData: {
+          ejecutivo_cuenta: selectedEjecutivoCuenta,
+          marcaDiaAusente_id: ausente.selectedMarcaId,
+          marcaDiaReemplaza_id: reemplaza.selectedMarcaId,
+          motivo: motivo.trim(),
+          firma_responsable: firmaResponsable.trim(),
+          ...(attachedDocument
+            ? {
+                file_base64: attachedDocument.base64,
+                extension: attachedDocument.extension,
+                original_name: attachedDocument.original_name,
+                mimeType: attachedDocument.mimeType,
+                type: attachedDocument.type,
+              }
+            : {}),
+        },
+        refreshAccessToken,
+        logout,
+      });
+      if (!response.status) {
+        Alert.alert('Error', response.message || 'No se pudo crear el registro');
+        return;
       }
-      return a;
-    });
-    if (updatedAny) {
-      await AsyncStorage.setItem(MUTUOS_ACUERDOS_ACTIONS_KEY, JSON.stringify(next));
-      return true;
+      Alert.alert('Éxito', response.message || 'Mutuo acuerdo creado');
+      setIsCreating(false);
+      resetForm();
+      await fetchRecords();
+    } catch (e: any) {
+      Alert.alert('Error', e?.message || 'No se pudo guardar');
+    } finally {
+      setIsSubmitting(false);
     }
-    return false;
   };
 
-  const removeActionsForLocalId = async (localId: string) => {
-    const actionsStr = await AsyncStorage.getItem(MUTUOS_ACUERDOS_ACTIONS_KEY);
-    if (!actionsStr) return;
-    const actions = JSON.parse(actionsStr) || [];
-    const updated = actions.filter((a: any) => a.id !== localId);
-    await AsyncStorage.setItem(MUTUOS_ACUERDOS_ACTIONS_KEY, JSON.stringify(updated));
+  const handlePickDocument = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: [
+          'application/pdf',
+          'application/msword',
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          'application/vnd.ms-excel',
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          'text/plain',
+          'text/csv',
+        ],
+        multiple: false,
+        copyToCacheDirectory: true,
+      });
+      if (result.canceled || !result.assets || result.assets.length === 0) return;
+
+      const asset = result.assets[0];
+      const fileResponse = await fetch(asset.uri);
+      const blob = await fileResponse.blob();
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const raw = reader.result;
+          if (typeof raw !== 'string') return reject(new Error('No se pudo leer el archivo'));
+          const parts = raw.split(',');
+          resolve(parts.length > 1 ? parts[1] : parts[0]);
+        };
+        reader.onerror = () => reject(reader.error ?? new Error('Error al leer el archivo'));
+        reader.readAsDataURL(blob);
+      });
+
+      const extension =
+        String(asset.name || '')
+          .split('.')
+          .pop()
+          ?.toLowerCase()
+          ?.trim() || 'dat';
+
+      setAttachedDocument({
+        base64,
+        extension,
+        original_name: asset.name || `archivo.${extension}`,
+        mimeType: asset.mimeType || undefined,
+        type: 'document',
+      });
+    } catch (e: any) {
+      Alert.alert('Error', e?.message || 'No se pudo seleccionar el archivo');
+    }
   };
 
-  // ===== modal firma =====
-  const openSignatureModal = (target: 'interesado' | 'colaborador' | 'ejecutivo', record?: { id: number; id_local?: string }) => {
-    setSignatureTarget(target);
-    setSigningRecordKey(record ?? null);
-    setIsReadingSignature(false);
+  const handleAccept = async (recordId: number, role: 'ausente' | 'reemplaza') => {
+    try {
+      const response = await acceptMutuoAcuerdo({ id: recordId, role, refreshAccessToken, logout });
+      if (!response.status) {
+        Alert.alert('Error', response.message || 'No se pudo registrar la aceptación');
+        return;
+      }
+      Alert.alert('Éxito', response.message || 'Aceptación registrada');
+      await fetchRecords();
+    } catch (e: any) {
+      Alert.alert('Error', e?.message || 'No se pudo registrar la aceptación');
+    }
+  };
+
+  const openSignatureModal = (recordId: number) => {
+    setSigningRecordId(recordId);
+    setFirmaEjecutivoDigital('');
     setSignatureKey((k) => k + 1);
     setSignatureModalVisible(true);
   };
 
   const closeSignatureModal = () => {
     setSignatureModalVisible(false);
-    setSignatureTarget(null);
-    setSigningRecordKey(null);
+    setSigningRecordId(null);
+    setFirmaEjecutivoDigital('');
     setIsReadingSignature(false);
   };
 
-  const clearSignatureInModal = () => {
+  const handleGenerateFirmaEjecutivoDigital = async () => {
+    if (isGeneratingFirmaEjecutivoDigital) return;
+    setIsGeneratingFirmaEjecutivoDigital(true);
     try {
-      signatureRef.current?.clearSignature?.();
-    } catch { }
-    setIsReadingSignature(false);
-    setSignatureKey((k) => k + 1);
+      const hash = await generateFirmaHashForCurrentUser();
+      if (!hash) {
+        Alert.alert('Error', 'No se pudo generar la firma digital');
+        return;
+      }
+      setFirmaEjecutivoDigital(hash);
+    } finally {
+      setIsGeneratingFirmaEjecutivoDigital(false);
+    }
   };
 
-  const acceptSignature = () => {
+  const submitSignature = () => {
+    if (!firmaEjecutivoDigital) {
+      Alert.alert('Error', 'Primero debes generar la firma digital');
+      return;
+    }
     try {
       setIsReadingSignature(true);
       signatureRef.current?.readSignature?.();
     } catch {
       setIsReadingSignature(false);
-      Alert.alert('Error', 'No se pudo leer la firma. Intenta nuevamente.');
+      Alert.alert('Error', 'No se pudo leer la firma manual');
     }
   };
 
-  const handleSignatureRead = async (signature: string) => {
-    const sig = String(signature || '').trim();
-    if (!sig || sig.length < 10 || !signatureTarget) {
-      Alert.alert('Error', 'No se detectó la firma. Intenta de nuevo.');
-      setIsReadingSignature(false);
-      return;
-    }
-
-    const formatted = sig.startsWith('data:') ? sig : `data:image/png;base64,${sig}`;
-
-    if (signatureTarget === 'interesado') {
-      setOficialInteresado((p) => ({ ...p, firma: formatted }));
-      setIsReadingSignature(false);
-      closeSignatureModal();
-      return;
-    }
-
-    if (signatureTarget === 'colaborador') {
-      setOficialColaborador((p) => ({ ...p, firma: formatted }));
-      setIsReadingSignature(false);
-      closeSignatureModal();
-      return;
-    }
-
-    // ejecutivo: persistir en registro (online/offline)
-    const targetRecord = signingRecordKey;
-    if (!targetRecord) {
-      setIsReadingSignature(false);
-      closeSignatureModal();
-      return;
-    }
-
+  const onManualSignatureRead = async (signature: string) => {
     try {
-      const base64Only = getBase64Only(formatted);
-      const isConnected = await getConnectionStatus();
-
-      // Local record: actualizar cache + create action
-      if (targetRecord.id === 0 || (targetRecord.id_local && String(targetRecord.id_local).startsWith('local-'))) {
-        const cache = (await getMutuosAcuerdosCache()) || [];
-        const updatedCache = cache.map((r: any) => {
-          const match =
-            (targetRecord.id_local && r.id_local === targetRecord.id_local) ||
-            (!targetRecord.id_local && r.id === targetRecord.id);
-          if (!match) return r;
-          return { ...r, firma_ejecutivo_cuenta: base64Only, synced: false };
-        });
-        await setMutuosAcuerdosCache(updatedCache);
-        setRecords(updatedCache);
-
-        if (targetRecord.id_local) {
-          const local = updatedCache.find((r: any) => r.id_local === targetRecord.id_local);
-          const requestData = local
-            ? {
-              cliente_id: local.cliente_id,
-              corpo_id: local.corpo_id,
-              ejecutivo_cuenta: local.ejecutivo_cuenta,
-              fecha: local.fecha,
-              turno: local.turno,
-              informacion_oficial_interesado: local.informacion_oficial_interesado,
-              informacion_oficial_colaborador: local.informacion_oficial_colaborador,
-              motivo: local.motivo,
-              firma_responsable: local.firma_responsable,
-              firma_ejecutivo_cuenta: base64Only,
-            }
-            : null;
-          if (requestData) await updateCreateActionForLocalId(targetRecord.id_local, requestData);
-        }
-      } else if (isConnected) {
-        const res = await signMutuoAcuerdoEjecutivo({
-          id: targetRecord.id,
-          firma_ejecutivo_cuenta: base64Only,
-          refreshAccessToken,
-          logout,
-        });
-        if (res.status) {
-          Alert.alert('Éxito', 'Firma del ejecutivo guardada correctamente');
-          await fetchRecords();
-        } else {
-          Alert.alert('Error', res.message || 'No se pudo guardar la firma');
-        }
-      } else {
-        // offline: queue
-        const cache = (await getMutuosAcuerdosCache()) || [];
-        const updatedCache = cache.map((r: any) => (r.id === targetRecord.id ? { ...r, firma_ejecutivo_cuenta: base64Only, synced: false } : r));
-        await setMutuosAcuerdosCache(updatedCache);
-        setRecords(updatedCache);
-        await upsertAction({ type: 'sign', id: targetRecord.id, firma_ejecutivo_cuenta: base64Only });
-        Alert.alert('Guardado (offline)', 'La firma se sincronizará cuando vuelva la conexión.');
-      }
-    } catch (e: any) {
-      Alert.alert('Error', e?.message || 'No se pudo guardar la firma');
-    } finally {
-      setIsReadingSignature(false);
-      closeSignatureModal();
-    }
-  };
-
-  const resetForm = () => {
-    setSelectedEjecutivoCuenta(null);
-    setFecha(new Date());
-    setTurno('');
-    setMotivo('');
-    setOficialInteresado({ codigo: '', nombre: '', firma: null, rol_normal: '', rol_cambio: '' });
-    setOficialColaborador({ codigo: '', nombre: '', firma: null, rol_normal: '', rol_cambio: '' });
-    setFirmaResponsable('');
-  };
-
-  const startCreate = () => {
-    setEditing(null);
-    setIsCreating(true);
-    resetForm();
-  };
-
-  const startEditing = (r: MutuoAcuerdo) => {
-    setIsCreating(true);
-    setEditing({ id: r.id, id_local: r.id_local });
-
-    setSelectedEjecutivoCuenta(r.ejecutivo_cuenta || null);
-    setFecha(r.fecha ? new Date(String(r.fecha)) : new Date());
-    setTurno((r.turno as any) || '');
-    setMotivo(r.motivo || '');
-
-    const interesadoArr = safeJsonParse<string[]>(r.informacion_oficial_interesado, []);
-    const colaboradorArr = safeJsonParse<string[]>(r.informacion_oficial_colaborador, []);
-    setOficialInteresado({
-      codigo: String(interesadoArr[0] || ''),
-      nombre: String(interesadoArr[1] || ''),
-      firma: formatSignatureForDisplay(interesadoArr[2] || null),
-      rol_normal: String(interesadoArr[3] || ''),
-      rol_cambio: String(interesadoArr[4] || ''),
-    });
-    setOficialColaborador({
-      codigo: String(colaboradorArr[0] || ''),
-      nombre: String(colaboradorArr[1] || ''),
-      firma: formatSignatureForDisplay(colaboradorArr[2] || null),
-      rol_normal: String(colaboradorArr[3] || ''),
-      rol_cambio: String(colaboradorArr[4] || ''),
-    });
-
-    setFirmaResponsable(r.firma_responsable || '');
-  };
-
-  const cancelCreateOrEdit = () => {
-    setIsCreating(false);
-    setEditing(null);
-    resetForm();
-  };
-
-  const validateForm = () => {
-    if (!marcaClienteId || !marcaCorpoId) return 'No se encontró la información de cliente o sucursal en la marca actual';
-    if (!marcaDivisionId) return 'No se pudo determinar la división (marca actual)';
-    if (!selectedEjecutivoCuenta) return 'El ejecutivo de cuenta es obligatorio';
-    if (!turno) return 'El turno es obligatorio';
-    if (!motivo.trim()) return 'El motivo es obligatorio';
-    if (!firmaResponsable.trim()) return 'La firma responsable es obligatoria';
-
-    const requiredOficial = (label: string, o: OficialInfoForm) => {
-      if (!o.codigo.trim()) return `Código requerido (${label})`;
-      if (!o.nombre.trim()) return `Nombre requerido (${label})`;
-      if (!o.firma) return `Firma requerida (${label})`;
-      if (!o.rol_normal.trim()) return `Rol normal requerido (${label})`;
-      if (!o.rol_cambio.trim()) return `Rol cambio requerido (${label})`;
-      return null;
-    };
-    const e1 = requiredOficial('Oficial interesado', oficialInteresado);
-    if (e1) return e1;
-    const e2 = requiredOficial('Oficial colaborador', oficialColaborador);
-    if (e2) return e2;
-
-    return null;
-  };
-
-  const buildRequestData = () => {
-    const interesadoArr = [
-      oficialInteresado.codigo.trim(),
-      oficialInteresado.nombre.trim(),
-      getBase64Only(oficialInteresado.firma),
-      oficialInteresado.rol_normal.trim(),
-      oficialInteresado.rol_cambio.trim(),
-    ];
-    const colaboradorArr = [
-      oficialColaborador.codigo.trim(),
-      oficialColaborador.nombre.trim(),
-      getBase64Only(oficialColaborador.firma),
-      oficialColaborador.rol_normal.trim(),
-      oficialColaborador.rol_cambio.trim(),
-    ];
-    return {
-      cliente_id: marcaClienteId,
-      corpo_id: marcaCorpoId,
-      ejecutivo_cuenta: selectedEjecutivoCuenta,
-      fecha: dateToLocalString(fecha),
-      turno: turno,
-      informacion_oficial_interesado: JSON.stringify(interesadoArr),
-      informacion_oficial_colaborador: JSON.stringify(colaboradorArr),
-      motivo: motivo.trim(),
-      firma_responsable: firmaResponsable.trim(),
-      // en creación va vacío, y se llenará luego con el modal si owned=true
-      firma_ejecutivo_cuenta: '',
-    };
-  };
-
-  const handleSave = async () => {
-    if (!employee) return;
-    const validationError = validateForm();
-    if (validationError) {
-      Alert.alert('Error', validationError);
-      return;
-    }
-
-    const requestData = buildRequestData();
-    const isConnected = await getConnectionStatus();
-
-    // CREATE
-    if (!editing) {
-      if (isConnected) {
-        const res = await createMutuoAcuerdo({ requestData, refreshAccessToken, logout });
-        if (res.status) {
-          Alert.alert('Éxito', 'Registro creado correctamente');
-          cancelCreateOrEdit();
-          await fetchRecords();
-        } else {
-          Alert.alert('Error', res.message || 'No se pudo crear el registro');
-        }
+      if (!signingRecordId) {
+        Alert.alert('Error', 'No hay registro seleccionado para firmar');
         return;
       }
-
-      const localId = `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-      const nowIso = new Date().toISOString();
-      const exec = executives.find((e) => e.id === selectedEjecutivoCuenta) || null;
-      const current = await loadMarcaContext();
-      const clienteNombre = current?.cliente?.nombre ?? null;
-      const corpoNombre = current?.corpo?.nombre ?? null;
-
-      const localItem: MutuoAcuerdo = {
-        id: 0,
-        id_local: localId,
-        cliente_id: requestData.cliente_id ?? 0,
-        corpo_id: requestData.corpo_id ?? 0,
-        ejecutivo_cuenta: requestData.ejecutivo_cuenta ?? 0,
-        fecha: requestData.fecha,
-        turno: requestData.turno,
-        informacion_oficial_interesado: requestData.informacion_oficial_interesado,
-        informacion_oficial_colaborador: requestData.informacion_oficial_colaborador,
-        motivo: requestData.motivo,
-        firma_ejecutivo_cuenta: '',
-        firma_responsable: requestData.firma_responsable,
-        created_at: nowIso,
-        created_by: Number(employee.id) || 0,
-        cliente_nombre: clienteNombre,
-        corpo_nombre: corpoNombre,
-        ejecutivo_nombre: (exec as any)?.nombre || null,
-        owned: false,
-        synced: false,
-      };
-
-      const next = [localItem, ...records];
-      setRecords(next);
-      await setMutuosAcuerdosCache(next);
-      await upsertAction({ type: 'create', id: localId, requestData });
-      Alert.alert('Guardado (offline)', 'El registro se sincronizará cuando vuelva la conexión.');
-      cancelCreateOrEdit();
-      return;
-    }
-
-    // UPDATE
-    const isLocal = editing.id === 0 || (editing.id_local && String(editing.id_local).startsWith('local-'));
-    if (isConnected && !isLocal) {
-      const res = await updateMutuoAcuerdo({ id: editing.id, requestData: { ...requestData, firma_ejecutivo_cuenta: undefined }, refreshAccessToken, logout });
-      if (res.status) {
-        Alert.alert('Éxito', 'Registro actualizado correctamente');
-        cancelCreateOrEdit();
-        await fetchRecords();
-      } else {
-        // fallback offline
-        const cache = (await getMutuosAcuerdosCache()) || [];
-        const updatedCache = cache.map((r: any) => (r.id === editing.id ? { ...r, ...requestData, synced: false } : r));
-        await setMutuosAcuerdosCache(updatedCache);
-        setRecords(updatedCache);
-        await upsertAction({ type: 'update', id: editing.id, requestData });
-        Alert.alert('Actualizado (offline)', 'El servidor no está disponible. Se sincronizará al recuperar conexión.');
-        cancelCreateOrEdit();
+      const formatted = String(signature || '').startsWith('data:')
+        ? String(signature)
+        : `data:image/png;base64,${String(signature || '')}`;
+      if (!getBase64Only(formatted)) {
+        Alert.alert('Error', 'La firma manual está vacía');
+        return;
       }
-      return;
-    }
-
-    // offline update (incluye local)
-    {
-      const cache = (await getMutuosAcuerdosCache()) || [];
-      const updatedCache = cache.map((r: any) => {
-        const match =
-          (editing.id_local && r.id_local === editing.id_local) ||
-          (!editing.id_local && r.id === editing.id);
-        if (!match) return r;
-        return { ...r, ...requestData, synced: false };
+      setIsSigning(true);
+      const response = await signMutuoAcuerdoEjecutivo({
+        id: signingRecordId,
+        firma_ejecutivo_cuenta_manual: formatted,
+        firma_ejecutivo_cuenta_digital: firmaEjecutivoDigital,
+        refreshAccessToken,
+        logout,
       });
-      await setMutuosAcuerdosCache(updatedCache);
-      setRecords(updatedCache);
-
-      if (editing.id_local) {
-        const updated = await updateCreateActionForLocalId(editing.id_local, {
-          ...requestData,
-          firma_ejecutivo_cuenta: (updatedCache.find((r: any) => r.id_local === editing.id_local) as any)?.firma_ejecutivo_cuenta || '',
-        });
-        if (!updated) await upsertAction({ type: 'create', id: editing.id_local, requestData });
-      } else {
-        await upsertAction({ type: 'update', id: editing.id, requestData });
+      if (!response.status) {
+        Alert.alert('Error', response.message || 'No se pudieron guardar las firmas');
+        return;
       }
-
-      Alert.alert('Guardado (offline)', 'Los cambios se sincronizarán cuando vuelva la conexión.');
-      cancelCreateOrEdit();
+      Alert.alert('Éxito', response.message || 'Firmas guardadas');
+      closeSignatureModal();
+      await fetchRecords();
+    } catch (e: any) {
+      Alert.alert('Error', e?.message || 'No se pudieron guardar las firmas');
+    } finally {
+      setIsReadingSignature(false);
+      setIsSigning(false);
     }
   };
 
-  const handleDelete = async (r: MutuoAcuerdo) => {
-    Alert.alert('Confirmar', '¿Deseas eliminar este registro?', [
-      { text: 'Cancelar', style: 'cancel' },
-      {
-        text: 'Eliminar',
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            const isConnected = await getConnectionStatus();
-            const isLocal = r.id === 0 || (r.id_local && String(r.id_local).startsWith('local-'));
-
-            if (isLocal) {
-              const cache = (await getMutuosAcuerdosCache()) || [];
-              const updatedCache = cache.filter((x: any) => x.id_local !== r.id_local);
-              await setMutuosAcuerdosCache(updatedCache);
-              setRecords(updatedCache);
-              if (r.id_local) await removeActionsForLocalId(r.id_local);
-              return;
-            }
-
-            if (isConnected) {
-              const res = await deleteMutuoAcuerdo({ id: r.id, refreshAccessToken, logout });
-              if (res.status) {
-                Alert.alert('Éxito', 'Registro eliminado');
-                await fetchRecords();
-                return;
-              }
-            }
-
-            // offline delete
-            const cache = (await getMutuosAcuerdosCache()) || [];
-            const updatedCache = cache.filter((x: any) => x.id !== r.id);
-            await setMutuosAcuerdosCache(updatedCache);
-            setRecords(updatedCache);
-            await upsertAction({ type: 'delete', id: r.id });
-            Alert.alert('Eliminado (offline)', 'Se sincronizará cuando vuelva la conexión.');
-          } catch (e: any) {
-            Alert.alert('Error', e?.message || 'No se pudo eliminar');
-          }
-        },
-      },
-    ]);
-  };
-
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const toggleExpanded = (key: string) => {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  };
-
-  // Collapsable interno: firma del ejecutivo por registro
-  const [expandedFirmaEjecutivoByKey, setExpandedFirmaEjecutivoByKey] = useState<Record<string, boolean>>({});
-
-  const renderRecord = (r: MutuoAcuerdo, idx: number) => {
-    const key = r.id !== 0 ? `ma-${r.id}` : r.id_local ? `ma-${r.id_local}` : `ma-${idx}`;
-    const isExpanded = expanded.has(key);
-    const fechaTxt = formatDateDMY(r.fecha, '');
-    const firmaInfo = decodeFirmaHash(r.firma_responsable);
-    const firmaEjecutivoUri = formatSignatureForDisplay(r.firma_ejecutivo_cuenta);
-
-    const interesado = safeJsonParse<string[]>(r.informacion_oficial_interesado, []);
-    const colaborador = safeJsonParse<string[]>(r.informacion_oficial_colaborador, []);
-    const interesadoSig = formatSignatureForDisplay(interesado[2] || null);
-    const colaboradorSig = formatSignatureForDisplay(colaborador[2] || null);
-
+  const renderMarcaList = (section: SectionKey, sectionState: EmployeeSectionState) => {
+    if (!sectionState.employeeId) return null;
+    if (sectionState.loadingMarcas) {
+      return (
+        <View style={styles.inlineLoading}>
+          <ActivityIndicator size="small" color="#007AFF" />
+          <ThemedText style={styles.inlineLoadingText}>Buscando marcas...</ThemedText>
+        </View>
+      );
+    }
+    if (sectionState.marcas.length === 0) {
+      return <ThemedText style={styles.freeDayText}>{sectionState.message || 'El empleado está libre ese día'}</ThemedText>;
+    }
     return (
-      <ThemedView key={key} style={styles.card}>
-        <ThemedText style={styles.cardTitle}>
-          {r.corpo_nombre || `Sucursal ${r.corpo_id}`}
-          {r.id_local ? ' (offline)' : ''}
-        </ThemedText>
-
-        <ThemedText style={styles.cardLine}>
-          <ThemedText style={styles.cardLabel}>Fecha/Turno: </ThemedText>
-          <ThemedText style={styles.cardValue}>{fechaTxt} - {r.turno || '-'}</ThemedText>
-        </ThemedText>
-        <ThemedText style={styles.cardLine}>
-          <ThemedText style={styles.cardLabel}>Ejecutivo: </ThemedText>
-          <ThemedText style={styles.cardValue}>{r.ejecutivo_nombre || String(r.ejecutivo_cuenta || '-')}</ThemedText>
-        </ThemedText>
-
-        <TouchableOpacity style={styles.collapseButton} onPress={() => toggleExpanded(key)} activeOpacity={0.85}>
-          <ThemedText style={styles.collapseButtonText}>{isExpanded ? 'Ocultar detalles' : 'Ver detalles'}</ThemedText>
-          <Ionicons name={isExpanded ? 'chevron-up' : 'chevron-down'} size={18} color="#007AFF" />
-        </TouchableOpacity>
-
-        {isExpanded && (
-          <ThemedView style={styles.collapseContent}>
-            <ThemedText style={styles.sectionTitle}>Motivo</ThemedText>
-            <ThemedText style={styles.detailText}>{r.motivo || '—'}</ThemedText>
-
-            <ThemedText style={styles.sectionTitle}>Oficial interesado</ThemedText>
-            <ThemedText style={styles.detailText}>Código: {interesado[0] || '—'}</ThemedText>
-            <ThemedText style={styles.detailText}>Nombre: {interesado[1] || '—'}</ThemedText>
-            <ThemedText style={styles.detailText}>Rol normal: {interesado[3] || '—'}</ThemedText>
-            <ThemedText style={styles.detailText}>Rol cambio: {interesado[4] || '—'}</ThemedText>
-            {interesadoSig ? <Image source={{ uri: interesadoSig }} style={styles.signaturePreview} resizeMode="contain" /> : null}
-
-            <ThemedText style={styles.sectionTitle}>Oficial colaborador</ThemedText>
-            <ThemedText style={styles.detailText}>Código: {colaborador[0] || '—'}</ThemedText>
-            <ThemedText style={styles.detailText}>Nombre: {colaborador[1] || '—'}</ThemedText>
-            <ThemedText style={styles.detailText}>Rol normal: {colaborador[3] || '—'}</ThemedText>
-            <ThemedText style={styles.detailText}>Rol cambio: {colaborador[4] || '—'}</ThemedText>
-            {colaboradorSig ? <Image source={{ uri: colaboradorSig }} style={styles.signaturePreview} resizeMode="contain" /> : null}
-
-            <ThemedText style={styles.sectionTitle}>Firma responsable (QR)</ThemedText>
-            {!r.firma_responsable ? (
-              <ThemedText style={styles.muted}>—</ThemedText>
-            ) : !firmaInfo ? (
-              <ThemedText style={styles.muted}>Formato no decodificable</ThemedText>
-            ) : (
-              <>
-                <ThemedText style={styles.detailText}>Sesión: {firmaInfo.sessionId}</ThemedText>
-                <ThemedText style={styles.detailText}>Empleado: {firmaInfo.empleadoId}</ThemedText>
-                <ThemedText style={styles.detailText}>Lat/Lng: {firmaInfo.latitud}, {firmaInfo.longitud}</ThemedText>
-                <ThemedText style={styles.detailText}>Hora: {firmaInfo.timestamp}</ThemedText>
-              </>
-            )}
-
-            <ThemedText style={styles.sectionTitle}>Firma ejecutivo de cuenta</ThemedText>
-            {!firmaEjecutivoUri ? (
-              <ThemedText style={styles.muted}>Pendiente</ThemedText>
-            ) : (
-              <>
-                <TouchableOpacity
-                  style={styles.innerCollapseButton}
-                  onPress={() => setExpandedFirmaEjecutivoByKey((prev) => ({ ...prev, [key]: !prev[key] }))}
-                  activeOpacity={0.85}
-                >
-                  <ThemedText style={styles.innerCollapseButtonText}>
-                    {expandedFirmaEjecutivoByKey[key] ? 'Ocultar firma' : 'Ver firma'}
-                  </ThemedText>
-                  <Ionicons name={expandedFirmaEjecutivoByKey[key] ? 'chevron-up' : 'chevron-down'} size={18} color="#007AFF" />
-                </TouchableOpacity>
-                {expandedFirmaEjecutivoByKey[key] && (
-                  <ThemedView style={styles.innerCollapseContent}>
-                    <Image source={{ uri: firmaEjecutivoUri }} style={styles.signaturePreview} resizeMode="contain" />
-                  </ThemedView>
-                )}
-              </>
-            )}
-          </ThemedView>
-        )}
-
-        <ThemedView style={styles.actionsRow}>
-          <TouchableOpacity style={[styles.actionBtn, styles.editBtn]} onPress={() => startEditing(r)} activeOpacity={0.85}>
-            <Ionicons name="pencil" size={18} color="#FFFFFF" />
-            <ThemedText style={styles.actionBtnText}>Editar</ThemedText>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.actionBtn, styles.changesBtn]}
-            onPress={() => {
-              if (r.id_local || r.id === 0) {
-                Alert.alert('Sin conexión', 'Este registro es local/offline. Los cambios solo se pueden consultar en el servidor.');
-                return;
-              }
-              setCambiosTitle(`Cambios - Mutuo Acuerdo #${r.id}`);
-              fetchCambios('e_mutuos_acuerdos', r.id);
-            }}
-            activeOpacity={0.85}
-          >
-            <Ionicons name="list-outline" size={18} color="#FFFFFF" />
-            <ThemedText style={styles.actionBtnText}>Cambios</ThemedText>
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.actionBtn, styles.deleteBtn]} onPress={() => handleDelete(r)} activeOpacity={0.85}>
-            <Ionicons name="trash" size={18} color="#FFFFFF" />
-            <ThemedText style={styles.actionBtnText}>Eliminar</ThemedText>
-          </TouchableOpacity>
-        </ThemedView>
-
-        {true && (
-          <ThemedView style={styles.actionsRow}>
+      <View style={styles.marcaList}>
+        {sectionState.marcas.map((m) => {
+          const selected = sectionState.selectedMarcaId === m.id;
+          return (
             <TouchableOpacity
-              style={[styles.actionBtn, styles.signBtn]}
-              onPress={() => openSignatureModal('ejecutivo', { id: r.id, id_local: r.id_local })}
+              key={`${section}-${m.id}`}
+              style={[styles.marcaItem, selected && styles.marcaItemSelected]}
+              onPress={() => updateSection(section, (prev) => ({ ...prev, selectedMarcaId: m.id }))}
               activeOpacity={0.85}
             >
-              <Ionicons name="create-outline" size={18} color="#FFFFFF" />
-              <ThemedText style={styles.actionBtnText}>{r.firma_ejecutivo_cuenta ? 'Re-firmar ejecutivo' : 'Firmar como ejecutivo'}</ThemedText>
+              <ThemedText style={styles.marcaItemTitle}>
+                {m.cliente || '—'} | {m.sucursal || '—'}
+              </ThemedText>
+              <ThemedText style={styles.marcaItemText}>Puesto: {m.puesto || '—'}</ThemedText>
+              <ThemedText style={styles.marcaItemText}>
+                Horario: {formatTime(m.hora_inicio)} - {formatTime(m.hora_fin)}
+              </ThemedText>
+              <ThemedText style={styles.marcaItemText}>Turno: {m.tipo_turno_texto}</ThemedText>
             </TouchableOpacity>
-          </ThemedView>
+          );
+        })}
+      </View>
+    );
+  };
+
+  const renderEmployeeSection = (section: SectionKey, title: string, sectionState: EmployeeSectionState) => {
+    return (
+      <ThemedView style={styles.sectionCard}>
+        <ThemedText style={styles.sectionTitle}>{title}</ThemedText>
+
+        <ThemedText style={styles.label}>Fecha *</ThemedText>
+        <TouchableOpacity
+          style={styles.dateButton}
+          onPress={() => updateSection(section, (prev) => ({ ...prev, showDatePicker: true }))}
+          activeOpacity={0.85}
+        >
+          <ThemedText style={styles.dateButtonText}>{formatDateDMY(sectionState.fecha)}</ThemedText>
+          <Ionicons name="calendar-outline" size={18} color="#007AFF" />
+        </TouchableOpacity>
+        {sectionState.showDatePicker && (
+          <DateTimePicker
+            value={sectionState.fecha}
+            mode="date"
+            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+            onChange={(_, d) => {
+              if (!d) {
+                updateSection(section, (prev) => ({ ...prev, showDatePicker: false }));
+                return;
+              }
+              handleSectionDateChange(section, d);
+            }}
+          />
         )}
+
+        <ThemedText style={styles.label}>Buscar empleado por código</ThemedText>
+        <View style={styles.codeRow}>
+          <TextInput
+            style={styles.codeInput}
+            value={sectionState.codigo}
+            onChangeText={(t) => updateSection(section, (prev) => ({ ...prev, codigo: t }))}
+            placeholder="Código del empleado"
+            placeholderTextColor="#999"
+          />
+          <TouchableOpacity style={styles.codeActionButton} onPress={() => handleSearchByCode(section)} activeOpacity={0.85}>
+            <ThemedText style={styles.codeActionButtonText}>Buscar</ThemedText>
+          </TouchableOpacity>
+        </View>
+
+        <TouchableOpacity style={styles.qrButton} onPress={() => handleScanEmployeeQR(section)} activeOpacity={0.85}>
+          <Ionicons name="qr-code-outline" size={18} color="#007AFF" />
+          <ThemedText style={styles.qrButtonText}>Escanear QR de firma digital</ThemedText>
+        </TouchableOpacity>
+
+        {sectionState.employeeId ? (
+          <ThemedView style={styles.employeeInfoBox}>
+            <ThemedText style={styles.employeeInfoText}>ID: {sectionState.employeeId}</ThemedText>
+            <ThemedText style={styles.employeeInfoText}>Nombre: {sectionState.employeeNombre || '—'}</ThemedText>
+            <ThemedText style={styles.employeeInfoText}>Cédula: {sectionState.employeeCedula || '—'}</ThemedText>
+          </ThemedView>
+        ) : null}
+
+        <ThemedText style={styles.label}>Marcas del día *</ThemedText>
+        {renderMarcaList(section, sectionState)}
       </ThemedView>
     );
   };
@@ -1123,14 +714,8 @@ export default function MutuosAcuerdosScreen() {
             <ThemedText type="title" style={styles.title}>
               <Ionicons name="document-text" size={22} color="#000000" /> Mutuos acuerdos
             </ThemedText>
-            <ThemedText style={styles.subtitle}>Registro con firmas (offline + sync)</ThemedText>
+            <ThemedText style={styles.subtitle}>Módulo exclusivamente online</ThemedText>
           </ThemedView>
-
-          {!hasCurrentMarca ? (
-            <ThemedView style={styles.emptyContainer}>
-              <ThemedText style={styles.errorText}>Debes tener una marca activa para usar este módulo.</ThemedText>
-            </ThemedView>
-          ) : null}
 
           {!isCreating && !isLoading && (
             <TouchableOpacity style={styles.createButton} onPress={startCreate} activeOpacity={0.85}>
@@ -1142,9 +727,7 @@ export default function MutuosAcuerdosScreen() {
 
           {isCreating && (
             <ThemedView style={styles.formCard}>
-              <ThemedText style={styles.formTitle}>{editing ? 'Editar registro' : 'Nuevo registro'}</ThemedText>
-
-              <ThemedText style={styles.sectionTitle}>Datos</ThemedText>
+              <ThemedText style={styles.formTitle}>Nuevo registro</ThemedText>
 
               <ThemedText style={styles.label}>Ejecutivo de cuenta *</ThemedText>
               <ThemedView style={styles.pickerWrapper}>
@@ -1160,113 +743,82 @@ export default function MutuosAcuerdosScreen() {
                 </Picker>
               </ThemedView>
 
-              <ThemedText style={styles.label}>Fecha *</ThemedText>
-              <TouchableOpacity style={styles.dateButton} onPress={() => setShowFechaPicker(true)} activeOpacity={0.85}>
-                <ThemedText style={styles.dateButtonText}>{formatDateForDisplay(fecha)}</ThemedText>
-                <Ionicons name="calendar-outline" size={18} color="#007AFF" />
+              {renderEmployeeSection('ausente', 'Empleado ausente', ausente)}
+              {renderEmployeeSection('reemplaza', 'Empleado reemplaza', reemplaza)}
+
+              <ThemedText style={styles.label}>Motivo *</ThemedText>
+              <TextInput
+                style={[styles.input, styles.textArea]}
+                value={motivo}
+                onChangeText={setMotivo}
+                placeholder="Motivo"
+                placeholderTextColor="#999"
+                multiline
+              />
+
+              <ThemedText style={styles.label}>Adjunto (opcional)</ThemedText>
+              <TouchableOpacity style={styles.pickFileBtn} onPress={handlePickDocument} activeOpacity={0.85}>
+                <Ionicons name="attach-outline" size={18} color="#007AFF" />
+                <ThemedText style={styles.pickFileBtnText}>
+                  {attachedDocument ? 'Cambiar archivo adjunto' : 'Adjuntar archivo'}
+                </ThemedText>
               </TouchableOpacity>
-              {showFechaPicker && (
-                <DateTimePicker
-                  value={fecha}
-                  mode="date"
-                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                  onChange={(_, d) => {
-                    setShowFechaPicker(false);
-                    if (d) setFecha(d);
-                  }}
-                />
-              )}
-
-              <ThemedText style={styles.label}>Turno *</ThemedText>
-              <ThemedView style={styles.pickerWrapper}>
-                <Picker selectedValue={turno} onValueChange={(v) => setTurno(String(v) as any)} style={styles.picker}>
-                  <Picker.Item label="Seleccione turno..." value="" />
-                  {TURNOS.map((t) => (
-                    <Picker.Item key={t} label={t} value={t} />
-                  ))}
-                </Picker>
-              </ThemedView>
-
-              <ThemedText style={styles.sectionTitle}>Información oficial interesado</ThemedText>
-              <ThemedText style={styles.label}>Código *</ThemedText>
-              <TextInput style={styles.input} value={oficialInteresado.codigo} onChangeText={(t) => setOficialInteresado((p) => ({ ...p, codigo: t }))} placeholder="Código" placeholderTextColor="#999" />
-              <ThemedText style={styles.label}>Nombre *</ThemedText>
-              <TextInput style={styles.input} value={oficialInteresado.nombre} onChangeText={(t) => setOficialInteresado((p) => ({ ...p, nombre: t }))} placeholder="Nombre" placeholderTextColor="#999" />
-              <ThemedText style={styles.label}>Firma *</ThemedText>
-              {oficialInteresado.firma ? <Image source={{ uri: oficialInteresado.firma }} style={styles.signaturePreview} resizeMode="contain" /> : null}
-              <TouchableOpacity style={styles.signatureButton} onPress={() => openSignatureModal('interesado')} activeOpacity={0.85}>
-                <Ionicons name="create-outline" size={18} color="#007AFF" />
-                <ThemedText style={styles.signatureButtonText}>{oficialInteresado.firma ? 'Editar firma' : 'Agregar firma'}</ThemedText>
-              </TouchableOpacity>
-              <ThemedText style={styles.label}>Rol normal *</ThemedText>
-              <TextInput style={styles.input} value={oficialInteresado.rol_normal} onChangeText={updateInteresadoRolNormal} placeholder="Rol normal" placeholderTextColor="#999" />
-              <ThemedText style={styles.label}>Rol cambio *</ThemedText>
-              <TextInput style={styles.input} value={oficialInteresado.rol_cambio} onChangeText={updateInteresadoRolCambio} placeholder="Rol cambio" placeholderTextColor="#999" />
-
-              <ThemedText style={styles.sectionTitle}>Información oficial colaborador</ThemedText>
-              <ThemedText style={styles.label}>Código *</ThemedText>
-              <TextInput style={styles.input} value={oficialColaborador.codigo} onChangeText={(t) => setOficialColaborador((p) => ({ ...p, codigo: t }))} placeholder="Código" placeholderTextColor="#999" />
-              <ThemedText style={styles.label}>Nombre *</ThemedText>
-              <TextInput style={styles.input} value={oficialColaborador.nombre} onChangeText={(t) => setOficialColaborador((p) => ({ ...p, nombre: t }))} placeholder="Nombre" placeholderTextColor="#999" />
-              <ThemedText style={styles.label}>Firma *</ThemedText>
-              {oficialColaborador.firma ? <Image source={{ uri: oficialColaborador.firma }} style={styles.signaturePreview} resizeMode="contain" /> : null}
-              <TouchableOpacity style={styles.signatureButton} onPress={() => openSignatureModal('colaborador')} activeOpacity={0.85}>
-                <Ionicons name="create-outline" size={18} color="#007AFF" />
-                <ThemedText style={styles.signatureButtonText}>{oficialColaborador.firma ? 'Editar firma' : 'Agregar firma'}</ThemedText>
-              </TouchableOpacity>
-              <ThemedText style={styles.label}>Rol normal *</ThemedText>
-              <TextInput style={styles.input} value={oficialColaborador.rol_normal} onChangeText={updateColaboradorRolNormal} placeholder="Rol normal" placeholderTextColor="#999" />
-              <ThemedText style={styles.label}>Rol cambio *</ThemedText>
-              <TextInput style={styles.input} value={oficialColaborador.rol_cambio} onChangeText={updateColaboradorRolCambio} placeholder="Rol cambio" placeholderTextColor="#999" />
-
-              <ThemedText style={styles.sectionTitle}>Motivo *</ThemedText>
-              <TextInput style={[styles.input, styles.textArea]} value={motivo} onChangeText={setMotivo} placeholder="Motivo" placeholderTextColor="#999" multiline />
-
-              <ThemedText style={styles.sectionTitle}>Firma responsable *</ThemedText>
-              <ThemedView style={styles.signatureButtonsRow}>
-                <TouchableOpacity style={[styles.signatureBlueButton, isGeneratingFirmaResponsable && styles.signatureDisabled]} onPress={handleGenerateFirmaResponsable} disabled={isGeneratingFirmaResponsable} activeOpacity={0.85}>
-                  {isGeneratingFirmaResponsable ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Ionicons name="finger-print" size={18} color="#FFFFFF" />}
-                  <ThemedText style={styles.signatureBlueButtonText}>{isGeneratingFirmaResponsable ? 'Generando...' : 'Generar'}</ThemedText>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.signatureBlueButton} onPress={handleScanFirmaResponsable} activeOpacity={0.85}>
-                  <Ionicons name="qr-code" size={18} color="#FFFFFF" />
-                  <ThemedText style={styles.signatureBlueButtonText}>Escanear QR</ThemedText>
-                </TouchableOpacity>
-              </ThemedView>
-
-              {firmaResponsable ? (
-                <ThemedView style={styles.firmaInfoBox}>
-                  <ThemedView style={styles.firmaInfoHeader}>
-                    <ThemedText style={styles.firmaInfoTitle}>Firma registrada</ThemedText>
-                    <TouchableOpacity onPress={() => setFirmaResponsable('')} style={styles.firmaTinyTrash} activeOpacity={0.85}>
-                      <Ionicons name="trash" size={16} color="#FF3B30" />
-                    </TouchableOpacity>
-                  </ThemedView>
-                  {(() => {
-                    const info = decodeFirmaHash(firmaResponsable);
-                    if (!info) return <ThemedText style={styles.muted}>QR sin información decodificable.</ThemedText>;
-                    return (
-                      <>
-                        <ThemedText style={styles.firmaInfoText}>Sesión: {info.sessionId}</ThemedText>
-                        <ThemedText style={styles.firmaInfoText}>Empleado: {info.empleadoId}</ThemedText>
-                        <ThemedText style={styles.firmaInfoText}>Lat/Lng: {info.latitud}, {info.longitud}</ThemedText>
-                        <ThemedText style={styles.firmaInfoText}>Hora: {info.timestamp}</ThemedText>
-                      </>
-                    );
-                  })()}
+              {attachedDocument ? (
+                <ThemedView style={styles.fileSelectedBox}>
+                  <ThemedText style={styles.fileSelectedText} numberOfLines={2}>
+                    {attachedDocument.original_name}
+                  </ThemedText>
+                  <TouchableOpacity onPress={() => setAttachedDocument(null)} activeOpacity={0.85}>
+                    <Ionicons name="close-circle" size={20} color="#CC3333" />
+                  </TouchableOpacity>
                 </ThemedView>
-              ) : (
-                <ThemedText style={styles.muted}>Aún no hay firma responsable.</ThemedText>
-              )}
+              ) : null}
+
+              <ThemedText style={styles.label}>Firma responsable *</ThemedText>
+              <TouchableOpacity
+                style={[styles.signatureBlueButton, isGeneratingFirmaResponsable && styles.buttonDisabled]}
+                onPress={handleGenerateFirmaResponsable}
+                disabled={isGeneratingFirmaResponsable}
+                activeOpacity={0.85}
+              >
+                {isGeneratingFirmaResponsable ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Ionicons name="finger-print" size={18} color="#FFFFFF" />
+                )}
+                <ThemedText style={styles.signatureBlueButtonText}>
+                  {isGeneratingFirmaResponsable ? 'Generando...' : 'Generar firma digital'}
+                </ThemedText>
+              </TouchableOpacity>
+              {!!firmaResponsable && <ThemedText style={styles.firmaOkText}>Firma digital generada correctamente.</ThemedText>}
 
               <ThemedView style={styles.formActions}>
-                <TouchableOpacity style={[styles.formActionBtn, styles.cancelBtn]} onPress={cancelCreateOrEdit} activeOpacity={0.85}>
+                <TouchableOpacity
+                  style={[styles.formActionBtn, styles.cancelBtn]}
+                  onPress={() => {
+                    setIsCreating(false);
+                    resetForm();
+                  }}
+                  activeOpacity={0.85}
+                  disabled={isSubmitting}
+                >
                   <Ionicons name="close" size={18} color="#000" />
                   <ThemedText style={styles.cancelBtnText}>Cancelar</ThemedText>
                 </TouchableOpacity>
-                <TouchableOpacity style={[styles.formActionBtn, styles.saveBtn]} onPress={handleSave} activeOpacity={0.85}>
-                  <Ionicons name="save" size={18} color="#fff" />
-                  <ThemedText style={styles.saveBtnText}>Guardar</ThemedText>
+                <TouchableOpacity
+                  style={[styles.formActionBtn, styles.saveBtn, isSubmitting && styles.buttonDisabled]}
+                  onPress={handleSave}
+                  activeOpacity={0.85}
+                  disabled={isSubmitting}
+                >
+                  {isSubmitting ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <>
+                      <Ionicons name="save" size={18} color="#fff" />
+                      <ThemedText style={styles.saveBtnText}>Guardar</ThemedText>
+                    </>
+                  )}
                 </TouchableOpacity>
               </ThemedView>
             </ThemedView>
@@ -1285,7 +837,64 @@ export default function MutuosAcuerdosScreen() {
                 </ThemedView>
               ) : (
                 <ThemedView style={styles.listContainer}>
-                  {records.map(renderRecord)}
+                  {records.map((r) => (
+                    <ThemedView key={`mutuo-${r.id}`} style={styles.card}>
+                      <ThemedText style={styles.cardTitle}>{r.cliente_nombre || '-'} | {r.corpo_nombre || '-'}</ThemedText>
+                      <ThemedText style={styles.cardLine}><ThemedText style={styles.cardLabel}>Ejecutivo: </ThemedText>{r.ejecutivo_nombre || r.ejecutivo_cuenta}</ThemedText>
+                      <ThemedText style={styles.cardLine}><ThemedText style={styles.cardLabel}>Motivo: </ThemedText>{r.motivo || '-'}</ThemedText>
+
+                      <ThemedText style={styles.sectionTitle}>Empleado ausente</ThemedText>
+                      <ThemedText style={styles.cardLine}>{r.empleado_ausente_nombre || `ID ${r.empleadoAusente_id}`}</ThemedText>
+                      <ThemedText style={styles.cardLine}>Puesto: {r.marca_ausente?.puesto || r.puesto_ausente_nombre || '-'}</ThemedText>
+                      <ThemedText style={styles.cardLine}>
+                        Horario: {formatTime(r.marca_ausente?.hora_inicio)} - {formatTime(r.marca_ausente?.hora_fin)} ({r.marca_ausente?.tipo_turno_texto || 'Sin definir'})
+                      </ThemedText>
+                      <ThemedText style={styles.cardLine}>Acepta: {r.ausente_acepta ? 'Sí' : 'No'}</ThemedText>
+
+                      <ThemedText style={styles.sectionTitle}>Empleado reemplaza</ThemedText>
+                      <ThemedText style={styles.cardLine}>{r.empleado_reemplaza_nombre || `ID ${r.empleadoReemplaza_id}`}</ThemedText>
+                      <ThemedText style={styles.cardLine}>Puesto: {r.marca_reemplaza?.puesto || r.puesto_reemplaza_nombre || '-'}</ThemedText>
+                      <ThemedText style={styles.cardLine}>
+                        Horario: {formatTime(r.marca_reemplaza?.hora_inicio)} - {formatTime(r.marca_reemplaza?.hora_fin)} ({r.marca_reemplaza?.tipo_turno_texto || 'Sin definir'})
+                      </ThemedText>
+                      <ThemedText style={styles.cardLine}>Acepta: {r.reemplaza_acepta ? 'Sí' : 'No'}</ThemedText>
+
+                      <ThemedView style={styles.actionsRow}>
+                        {r.can_accept_ausente ? (
+                          <TouchableOpacity
+                            style={[styles.actionBtn, styles.acceptBtn]}
+                            onPress={() => handleAccept(r.id, 'ausente')}
+                            activeOpacity={0.85}
+                          >
+                            <Ionicons name="checkmark-circle-outline" size={18} color="#FFFFFF" />
+                            <ThemedText style={styles.actionBtnText}>Aceptar (ausente)</ThemedText>
+                          </TouchableOpacity>
+                        ) : null}
+                        {r.can_accept_reemplaza ? (
+                          <TouchableOpacity
+                            style={[styles.actionBtn, styles.acceptBtn]}
+                            onPress={() => handleAccept(r.id, 'reemplaza')}
+                            activeOpacity={0.85}
+                          >
+                            <Ionicons name="checkmark-circle-outline" size={18} color="#FFFFFF" />
+                            <ThemedText style={styles.actionBtnText}>Aceptar (reemplaza)</ThemedText>
+                          </TouchableOpacity>
+                        ) : null}
+                        {r.can_sign_ejecutivo ? (
+                          <TouchableOpacity
+                            style={[styles.actionBtn, styles.signBtn]}
+                            onPress={() => openSignatureModal(r.id)}
+                            activeOpacity={0.85}
+                          >
+                            <Ionicons name="create-outline" size={18} color="#FFFFFF" />
+                            <ThemedText style={styles.actionBtnText}>
+                              {r.firma_ejecutivo_cuenta_digital ? 'Re-firmar' : 'Firmar'}
+                            </ThemedText>
+                          </TouchableOpacity>
+                        ) : null}
+                      </ThemedView>
+                    </ThemedView>
+                  ))}
                 </ThemedView>
               )}
             </>
@@ -1293,151 +902,80 @@ export default function MutuosAcuerdosScreen() {
         </ThemedView>
       </ScrollView>
 
-      {/* Modal firma (bootstrap-like) */}
       <Modal
         visible={signatureModalVisible}
-        animationType="fade"
-        transparent
-        presentationStyle="overFullScreen"
+        animationType="slide"
+        presentationStyle="pageSheet"
         onRequestClose={closeSignatureModal}
       >
-        <View style={styles.overlay}>
-          <ThemedView style={styles.modalCard}>
-            <ThemedView style={styles.modalHeader}>
-              <ThemedText style={styles.modalTitle}>
-                {signatureTarget === 'interesado'
-                  ? 'Firma oficial interesado'
-                  : signatureTarget === 'colaborador'
-                    ? 'Firma oficial colaborador'
-                    : 'Firma ejecutivo de cuenta'}
-              </ThemedText>
-              <TouchableOpacity onPress={closeSignatureModal} activeOpacity={0.85}>
-                <Ionicons name="close" size={24} color="#333" />
-              </TouchableOpacity>
-            </ThemedView>
-
-            <ThemedText style={styles.modalHint}>Firma dentro del recuadro blanco.</ThemedText>
-
-            <View style={styles.signaturePadBox}>
-              <SignatureScreen
-                ref={signatureRef}
-                onOK={handleSignatureRead}
-                onEmpty={() => {
-                  setIsReadingSignature(false);
-                  Alert.alert('Error', 'La firma está vacía');
-                }}
-                descriptionText=""
-                clearText=""
-                confirmText=""
-                webStyle={signatureWebStyle}
-                key={signatureKey}
-              />
-            </View>
-
-            <ThemedView style={styles.modalActions}>
-              <TouchableOpacity style={styles.modalClearBtn} onPress={clearSignatureInModal} activeOpacity={0.85}>
-                <Ionicons name="trash" size={20} color="#000000" />
-                <ThemedText style={styles.modalClearBtnText}>Limpiar</ThemedText>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalAcceptBtn, isReadingSignature && { opacity: 0.7 }]}
-                onPress={acceptSignature}
-                disabled={isReadingSignature}
-                activeOpacity={0.85}
-              >
-                {isReadingSignature ? <ActivityIndicator size="small" color="#000000" /> : <Ionicons name="checkmark" size={20} color="#000000" />}
-                <ThemedText style={styles.modalAcceptBtnText}>Aceptar</ThemedText>
-              </TouchableOpacity>
-            </ThemedView>
+        <ThemedView style={styles.modalContainer}>
+          <ThemedView style={styles.modalHeader}>
+            <ThemedText style={styles.modalTitle}>Firmar (Ejecutivo de cuenta)</ThemedText>
+            <TouchableOpacity onPress={closeSignatureModal}>
+              <Ionicons name="close" size={24} color="#000" />
+            </TouchableOpacity>
           </ThemedView>
-        </View>
-      </Modal>
 
-      {/* Modal: ver cambios */}
-      <Modal
-        visible={isCambiosModalVisible}
-        animationType="fade"
-        transparent
-        presentationStyle="overFullScreen"
-        onRequestClose={closeCambiosModal}
-      >
-        <View style={styles.overlay}>
-          <ThemedView style={styles.floatModalCardMovimientos}>
-            <ThemedView style={styles.floatModalHeader}>
-              <ThemedText style={styles.modalTitle}>{cambiosTitle}</ThemedText>
-              <TouchableOpacity onPress={closeCambiosModal}>
-                <Ionicons name="close" size={24} color="#333" />
-              </TouchableOpacity>
-            </ThemedView>
-
-            <ScrollView style={{ maxHeight: Dimensions.get('window').height * 0.75 }} contentContainerStyle={{ padding: 16 }}>
-              {(!cambiosItems || cambiosItems.length === 0) ? (
-                <ThemedView style={styles.emptyContainer}>
-                  <ThemedText style={styles.emptyText}>No hay cambios registrados</ThemedText>
-                </ThemedView>
+          <ThemedView style={styles.modalDigitalRow}>
+            <TouchableOpacity
+              style={[styles.signatureBlueButton, isGeneratingFirmaEjecutivoDigital && styles.buttonDisabled]}
+              onPress={handleGenerateFirmaEjecutivoDigital}
+              disabled={isGeneratingFirmaEjecutivoDigital}
+              activeOpacity={0.85}
+            >
+              {isGeneratingFirmaEjecutivoDigital ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
               ) : (
-                cambiosItems.map((row: any) => {
-                  let parsed: any[] = [];
-                  try {
-                    parsed = row?.cambios ? JSON.parse(row.cambios) : [];
-                  } catch {
-                    parsed = [];
-                  }
-                  const createdAtLabel = formatCambioCreatedAt(row?.created_at);
-                  const isOpen = expandedCambioId === row.id;
-
-                  return (
-                    <ThemedView key={`chg-${row.id}`} style={styles.cambioCollapsableMain}>
-                      <TouchableOpacity
-                        style={styles.cambioCollapsableHeader}
-                        onPress={() => setExpandedCambioId((prev) => (prev === row.id ? null : row.id))}
-                        activeOpacity={0.8}
-                      >
-                        <ThemedText style={styles.cambioCollapsableTitle}>
-                          {createdAtLabel}
-                        </ThemedText>
-                        <Ionicons
-                          name={isOpen ? "chevron-up" : "chevron-down"}
-                          size={18}
-                          color="#007AFF"
-                        />
-                      </TouchableOpacity>
-
-                      {isOpen && (
-                        <ThemedView style={styles.cambioCollapsableContent}>
-                          <ThemedView style={styles.filterGroupSearch}>
-                            <ThemedText style={styles.filterLabel}>Cambio realizado por:</ThemedText>
-                            <ThemedText style={styles.changeDescription}>
-                              {row.empleado_nombre || 'Desconocido'}
-                              {row.empleado_cedula ? ` - Cédula: ${row.empleado_cedula}` : ''}
-                            </ThemedText>
-                          </ThemedView>
-
-                          {(Array.isArray(parsed) ? parsed : []).length > 0 && (
-                            <ThemedView style={styles.filterGroupSearch}>
-                              <ThemedText style={styles.filterLabel}>Cambios:</ThemedText>
-                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => {
-                                const propName = String(c?.prop ?? '-');
-                                const value = formatChangeValue(propName, c?.after);
-
-                                return (
-                                  <ThemedText key={`c-${row.id}-${idx}`} style={styles.changeDescription}>
-                                    <ThemedText style={{ fontWeight: '800' }}>{propName}: </ThemedText>
-                                    {value}
-                                  </ThemedText>
-                                );
-                              })}
-                            </ThemedView>
-                          )}
-                        </ThemedView>
-                      )}
-                    </ThemedView>
-                  );
-                })
+                <Ionicons name="finger-print" size={18} color="#FFFFFF" />
               )}
-            </ScrollView>
+              <ThemedText style={styles.signatureBlueButtonText}>Generar firma digital</ThemedText>
+            </TouchableOpacity>
+            {!!firmaEjecutivoDigital && <ThemedText style={styles.firmaOkText}>Firma digital lista.</ThemedText>}
           </ThemedView>
-        </View>
+
+          <ThemedView style={styles.signatureContainer}>
+            <SignatureScreen
+              ref={signatureRef}
+              onOK={onManualSignatureRead}
+              onEmpty={() => {
+                setIsReadingSignature(false);
+                Alert.alert('Error', 'La firma manual está vacía');
+              }}
+              onClear={() => {
+                setIsReadingSignature(false);
+              }}
+              descriptionText=""
+              clearText="Limpiar"
+              confirmText="Guardar"
+              webStyle={signatureWebStyle}
+              key={signatureKey}
+            />
+          </ThemedView>
+
+          <ThemedView style={styles.modalActions}>
+            <TouchableOpacity
+              style={[styles.modalClearBtn, isSigning && styles.buttonDisabled]}
+              onPress={() => {
+                signatureRef.current?.clearSignature?.();
+                setSignatureKey((k) => k + 1);
+              }}
+              activeOpacity={0.85}
+              disabled={isSigning}
+            >
+              <Ionicons name="refresh" size={18} color="#000" />
+              <ThemedText style={styles.modalClearBtnText}>Limpiar</ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.modalAcceptBtn, (isSigning || isReadingSignature) && styles.buttonDisabled]}
+              onPress={submitSignature}
+              activeOpacity={0.85}
+              disabled={isSigning || isReadingSignature}
+            >
+              {(isSigning || isReadingSignature) ? <ActivityIndicator size="small" color="#000" /> : <Ionicons name="checkmark" size={18} color="#000" />}
+              <ThemedText style={styles.modalAcceptBtnText}>Confirmar</ThemedText>
+            </TouchableOpacity>
+          </ThemedView>
+        </ThemedView>
       </Modal>
 
       <AppFooter />
@@ -1451,7 +989,7 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   scrollView: { flex: 1 },
   scrollContent: { padding: 16 },
-  content: { width: '100%', maxWidth: 800, alignSelf: 'center' },
+  content: { width: '100%', maxWidth: 860, alignSelf: 'center' },
 
   titleContainer: { alignItems: 'center', marginBottom: 18, paddingBottom: 14, borderBottomWidth: 1, borderBottomColor: '#E0E0E0' },
   title: { fontSize: 22, fontWeight: 'bold', textAlign: 'center', marginBottom: 8 },
@@ -1468,31 +1006,43 @@ const styles = StyleSheet.create({
 
   formCard: { marginTop: 12, backgroundColor: '#fff', borderRadius: 10, padding: 14, borderWidth: 1, borderColor: '#E0E0E0' },
   formTitle: { fontSize: 18, fontWeight: '800', marginBottom: 10, color: '#000' },
+  sectionTitle: { marginTop: 14, marginBottom: 8, fontSize: 15, fontWeight: '800', color: '#007AFF' },
   label: { fontSize: 13, fontWeight: '700', marginTop: 10, color: '#333' },
   input: { borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 10, backgroundColor: '#fff', color: '#000', marginBottom: 6 },
   textArea: { minHeight: 90, textAlignVertical: 'top' as any },
   pickerWrapper: { borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 8, overflow: 'hidden', backgroundColor: '#FFFFFF', justifyContent: 'center' },
   picker: { height: 54, width: '100%', color: '#000' },
+
+  sectionCard: { marginTop: 10, borderWidth: 1, borderColor: '#E7E7E7', borderRadius: 10, padding: 12, backgroundColor: '#FAFAFA' },
   dateButton: { marginBottom: 6, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 10, backgroundColor: '#fff' },
   dateButtonText: { color: '#000', fontWeight: '700' },
 
-  sectionTitle: { marginTop: 14, fontSize: 15, fontWeight: '800', color: '#007AFF' },
-  muted: { marginTop: 6, color: '#999' },
+  codeRow: { flexDirection: 'row', gap: 10, alignItems: 'center' },
+  codeInput: { flex: 1, borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 10, backgroundColor: '#fff', color: '#000' },
+  codeActionButton: { backgroundColor: '#007AFF', borderRadius: 8, paddingHorizontal: 14, paddingVertical: 11 },
+  codeActionButtonText: { color: '#FFF', fontWeight: '700' },
+  qrButton: { marginTop: 10, borderWidth: 1, borderColor: '#007AFF', borderRadius: 8, paddingVertical: 10, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#FFF' },
+  qrButtonText: { color: '#007AFF', fontWeight: '700' },
 
-  signatureButton: { flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 1, borderColor: '#007AFF', borderRadius: 10, paddingVertical: 12, paddingHorizontal: 12, backgroundColor: '#FFFFFF', marginBottom: 10 },
-  signatureButtonText: { color: '#007AFF', fontWeight: '700' },
-  signaturePreview: { width: '100%', height: 140, backgroundColor: '#FFFFFF', borderRadius: 8, borderWidth: 1, borderColor: '#E0E0E0', marginTop: 10, marginBottom: 10 },
+  employeeInfoBox: { marginTop: 10, borderRadius: 8, borderWidth: 1, borderColor: '#E0E0E0', backgroundColor: '#FFF', padding: 10 },
+  employeeInfoText: { fontSize: 13, color: '#222', marginBottom: 3 },
 
-  signatureButtonsRow: { flexDirection: 'row', gap: 10, marginTop: 10, flexWrap: 'wrap' },
-  signatureBlueButton: { flex: 1, minWidth: '45%', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#007AFF', borderRadius: 10, paddingVertical: 12, paddingHorizontal: 10, gap: 8 },
+  inlineLoading: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10 },
+  inlineLoadingText: { fontSize: 14, color: '#000', opacity: 0.7 },
+  freeDayText: { marginTop: 8, color: '#666', fontStyle: 'italic' },
+  marcaList: { marginTop: 10, gap: 8 },
+  marcaItem: { borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 8, padding: 10, backgroundColor: '#FFF' },
+  marcaItemSelected: { borderColor: '#007AFF', backgroundColor: '#EAF3FF' },
+  marcaItemTitle: { fontWeight: '800', color: '#1E1E1E', marginBottom: 4 },
+  marcaItemText: { fontSize: 13, color: '#444', marginBottom: 2 },
+  pickFileBtn: { marginTop: 6, borderWidth: 1, borderColor: '#007AFF', borderRadius: 8, paddingVertical: 10, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#FFF' },
+  pickFileBtnText: { color: '#007AFF', fontWeight: '700' },
+  fileSelectedBox: { marginTop: 8, borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 8, backgroundColor: '#F8F8F8', paddingHorizontal: 10, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  fileSelectedText: { color: '#222', fontSize: 13, flex: 1 },
+
+  signatureBlueButton: { marginTop: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#007AFF', borderRadius: 10, paddingVertical: 12, paddingHorizontal: 10, gap: 8 },
   signatureBlueButtonText: { color: '#FFFFFF', fontSize: 14, fontWeight: '800' },
-  signatureDisabled: { opacity: 0.6 },
-
-  firmaInfoBox: { marginTop: 10, borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 10, padding: 12, backgroundColor: '#FFFFFF' },
-  firmaInfoHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
-  firmaInfoTitle: { fontSize: 14, fontWeight: '800', color: '#000000' },
-  firmaTinyTrash: { padding: 4 },
-  firmaInfoText: { fontSize: 13, color: '#000000', opacity: 0.8, marginBottom: 4 },
+  firmaOkText: { marginTop: 8, color: '#1B8F3A', fontWeight: '700' },
 
   formActions: { marginTop: 16, flexDirection: 'row', gap: 10, justifyContent: 'space-between' },
   formActionBtn: { flex: 1, flexDirection: 'row', gap: 10, alignItems: 'center', justifyContent: 'center', paddingVertical: 14, borderRadius: 12 },
@@ -1500,66 +1050,28 @@ const styles = StyleSheet.create({
   cancelBtnText: { color: '#000', fontWeight: '800' },
   saveBtn: { backgroundColor: '#007AFF' },
   saveBtnText: { color: '#fff', fontWeight: '800' },
+  buttonDisabled: { opacity: 0.6 },
 
   listContainer: {},
   card: { backgroundColor: '#FFFFFF', borderRadius: 8, padding: 16, marginBottom: 12, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 4, elevation: 2 },
   cardTitle: { fontSize: 16, fontWeight: '800', marginBottom: 10, color: '#000' },
   cardLine: { marginBottom: 6, color: '#000' },
   cardLabel: { fontWeight: '700', color: '#333' },
-  cardValue: { color: '#000' },
-  collapseButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 8, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1, borderColor: '#E0E0E0', marginTop: 8, backgroundColor: '#FAFAFA' },
-  collapseButtonText: { fontSize: 13, fontWeight: '700', color: '#007AFF' },
-  collapseContent: { marginTop: 8, padding: 10, borderRadius: 8, backgroundColor: '#F8F9FA' },
-  detailText: { marginBottom: 6, color: '#000' },
 
-  // Collapsable interno (firma ejecutivo)
-  innerCollapseButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#E0E0E0',
-    marginTop: 8,
-    backgroundColor: '#FFFFFF',
-  },
-  innerCollapseButtonText: { fontSize: 13, fontWeight: '700', color: '#007AFF' },
-  innerCollapseContent: { marginTop: 8, padding: 10, borderRadius: 8, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E0E0E0' },
+  actionsRow: { marginTop: 12, flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
+  actionBtn: { minWidth: 150, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 10, paddingHorizontal: 12, borderRadius: 8, gap: 8 },
+  acceptBtn: { backgroundColor: '#34C759' },
+  signBtn: { backgroundColor: '#5856D6' },
+  actionBtnText: { color: '#FFFFFF', fontSize: 13, fontWeight: '700' },
 
-  actionsRow: { marginTop: 10, flexDirection: 'row', justifyContent: 'space-between', gap: 12 },
-  actionBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 12, borderRadius: 8, gap: 8 },
-  editBtn: { backgroundColor: '#007AFF' },
-  deleteBtn: { backgroundColor: '#FF3B30' },
-  signBtn: { backgroundColor: '#34C759' },
-  actionBtnText: { color: '#FFFFFF', fontSize: 14, fontWeight: '700' },
-
-  inlineLoading: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10 },
-  inlineLoadingText: { fontSize: 14, color: '#000', opacity: 0.7 },
-
-  // modal
-  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', alignItems: 'center', justifyContent: 'center', padding: 16 },
-  modalCard: { width: '100%', maxWidth: 520, borderRadius: 14, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E0E0E0', overflow: 'hidden' },
-  modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#E0E0E0', backgroundColor: '#F8F9FA' },
-  modalTitle: { fontSize: 16, fontWeight: '800', color: '#000' },
-  modalHint: { paddingHorizontal: 16, paddingTop: 12, color: '#666', fontSize: 13 },
-  signaturePadBox: { marginTop: 10, marginHorizontal: 16, height: 260, backgroundColor: '#FFFFFF', borderWidth: 2, borderColor: '#E0E0E0', borderRadius: 12, overflow: 'hidden' },
+  modalContainer: { flex: 1, backgroundColor: '#FFFFFF' },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: '#E0E0E0' },
+  modalTitle: { fontSize: 18, fontWeight: 'bold' },
+  modalDigitalRow: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 4 },
+  signatureContainer: { flex: 1 },
   modalActions: { flexDirection: 'row', justifyContent: 'space-between', padding: 16, gap: 12, backgroundColor: '#FFFFFF' },
   modalClearBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 12, borderRadius: 10, backgroundColor: '#EDEDED', gap: 8 },
   modalClearBtnText: { fontWeight: '800', color: '#000' },
   modalAcceptBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 12, borderRadius: 10, backgroundColor: '#D7F5E5', gap: 8 },
   modalAcceptBtnText: { fontWeight: '800', color: '#000' },
-  changesBtn: { backgroundColor: '#5856D6', flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 12, borderRadius: 8, gap: 8 },
-  floatModalCardMovimientos: { backgroundColor: '#FFFFFF', borderRadius: 12, width: '100%', maxWidth: 500, maxHeight: '80%', borderWidth: 1, borderColor: '#E0E0E0', overflow: 'hidden' },
-  floatModalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#E0E0E0' },
-  cambioCollapsableMain: { width: '100%', marginBottom: 10, backgroundColor: '#fff', borderRadius: 6, borderWidth: 1, borderColor: '#E0E0E0', overflow: 'hidden' },
-  cambioCollapsableHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, backgroundColor: '#F8F9FA' },
-  cambioCollapsableTitle: { fontSize: 14, fontWeight: '600', color: '#007AFF', flex: 1 },
-  cambioCollapsableContent: { padding: 12, gap: 8, backgroundColor: '#F8F9FA' },
-  changeDescription: { fontSize: 14, lineHeight: 20, color: '#666', marginBottom: 8 },
-  filterGroupSearch: { marginBottom: 12 },
-  filterLabel: { fontSize: 14, fontWeight: '600', color: '#333', marginBottom: 4 },
 });
-
-

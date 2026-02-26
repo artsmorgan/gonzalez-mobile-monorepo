@@ -1,170 +1,331 @@
 -- CreateTable
 CREATE TABLE `c_horas_extras` (
     `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `empleadoId` INTEGER NOT NULL,
-    `fecha` DATETIME(3) NOT NULL,
-    `horas` DOUBLE NOT NULL,
-    `descripcion` VARCHAR(191) NULL,
-    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `fecha` DATE NOT NULL,
+    `descripcion` VARCHAR(254) NULL,
+    `categoriaEmpleado_id` INTEGER NULL,
+    `coeficiente_pago` DECIMAL(10, 2) NULL,
+    `consecutivo` VARCHAR(15) NULL,
+    `coordinadoPor_id` INTEGER NULL,
+    `coordinador_id` INTEGER NULL,
+    `doblaje` BOOLEAN NULL,
+    `empleadoAusente_id` INTEGER NULL,
+    `empleado_id` INTEGER NULL,
+    `estado_aprobacion` VARCHAR(3) NULL,
+    `fecha_actualizacion` DATETIME(0) NULL,
+    `fecha_aprobado_ec` DATETIME(0) NULL,
+    `fecha_aprobado_jo` DATETIME(0) NULL,
+    `fecha_insercion` DATETIME(0) NULL,
+    `fecha_reversion` DATETIME(0) NULL,
+    `formula_pago` LONGTEXT NULL,
+    `hora_fin` TIME(0) NULL,
+    `hora_inicio` TIME(0) NULL,
+    `marcaDia_id` INTEGER NULL,
+    `monto_comida` DECIMAL(10, 2) NULL,
+    `monto_pagado_planilla` DECIMAL(10, 2) NULL,
+    `motivoRechazo_id` INTEGER NULL,
+    `motivo_id` INTEGER NULL,
+    `motivo_reversion` VARCHAR(255) NULL,
+    `observaciones_rechazo` VARCHAR(255) NULL,
+    `operacion` BOOLEAN NULL,
+    `periodoPago_id` INTEGER NULL,
+    `planillaEmpleado_id` INTEGER NULL,
+    `planillaExtraEmpleado_id` INTEGER NULL,
+    `plaza_id` INTEGER NULL,
+    `sindicato_id` INTEGER NULL,
+    `tipoContratacion_id` INTEGER NULL,
+    `tipo_comida` VARCHAR(3) NULL,
+    `tipo_doblado` VARCHAR(150) NULL,
+    `tipo_turno` VARCHAR(3) NULL,
+    `tipo_turno_pagar` VARCHAR(3) NULL,
+    `trabajando_libre` BOOLEAN NULL,
+    `usuario_actualizacion` VARCHAR(255) NULL,
+    `usuario_aprueba_ec` VARCHAR(50) NULL,
+    `usuario_aprueba_jo` VARCHAR(50) NULL,
+    `usuario_insercion` VARCHAR(255) NULL,
+    `usuario_reversion` VARCHAR(255) NULL,
 
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `log_accionpersonal` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `empleadoId` INTEGER NOT NULL,
-    `accion` VARCHAR(191) NOT NULL,
-    `detalle` VARCHAR(191) NULL,
-    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `ext_log_entries` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `origen` VARCHAR(191) NOT NULL,
-    `mensaje` VARCHAR(191) NOT NULL,
-    `nivel` VARCHAR(191) NULL,
-    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `log_horario_dia` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `empleadoId` INTEGER NOT NULL,
-    `fecha` DATETIME(3) NOT NULL,
-    `horaEntrada` DATETIME(3) NULL,
-    `horaSalida` DATETIME(3) NULL,
-    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `log_extra` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `empleadoId` INTEGER NOT NULL,
-    `tipo` VARCHAR(191) NOT NULL,
-    `descripcion` VARCHAR(191) NULL,
-    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-
+    INDEX `IDX_3B30426475F636ED`(`empleadoAusente_id`),
+    INDEX `IDX_3B3042647963DFC5`(`marcaDia_id`),
+    INDEX `IDX_3B304264799EE823`(`planillaEmpleado_id`),
+    INDEX `IDX_3B3042647F5F4055`(`motivoRechazo_id`),
+    INDEX `IDX_3B30426481B56B3`(`coordinadoPor_id`),
+    INDEX `IDX_3B3042648D7C55D2`(`sindicato_id`),
+    INDEX `IDX_3B304264952BE730`(`empleado_id`),
+    INDEX `IDX_3B304264B0B41592`(`tipoContratacion_id`),
+    INDEX `IDX_3B304264CAA77C0D`(`planillaExtraEmpleado_id`),
+    INDEX `IDX_3B304264D2624C39`(`periodoPago_id`),
+    INDEX `IDX_3B304264E4517BDD`(`coordinador_id`),
+    INDEX `IDX_3B304264ED33694C`(`categoriaEmpleado_id`),
+    INDEX `IDX_3B304264EF34C0BD`(`plaza_id`),
+    INDEX `IDX_3B304264F9E584F8`(`motivo_id`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- CreateTable
 CREATE TABLE `c_accion_personal_linea` (
     `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `accionPersonalId` INTEGER NOT NULL,
-    `detalle` VARCHAR(191) NULL,
-    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `accionPersonal_id` INTEGER NULL,
+    `cantidad_horas` DECIMAL(5, 2) NULL,
+    `fecha` DATE NOT NULL,
+    `horario_str` VARCHAR(20) NULL,
+    `monto_descontar_turno` DECIMAL(10, 2) NULL,
+    `reemplazo_id` INTEGER NULL,
+    `tipo_turno` VARCHAR(1) NULL,
 
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `log_accionpersonal_enlazada` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `accionPersonalId` INTEGER NOT NULL,
-    `referenciaId` INTEGER NULL,
-    `descripcion` VARCHAR(191) NULL,
-    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-
+    INDEX `IDX_54EA19084558C79`(`accionPersonal_id`),
+    INDEX `IDX_54EA1908620C225E`(`reemplazo_id`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- CreateTable
 CREATE TABLE `c_traslado` (
     `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `empleadoId` INTEGER NOT NULL,
-    `origen` VARCHAR(191) NOT NULL,
-    `destino` VARCHAR(191) NOT NULL,
-    `fecha` DATETIME(3) NOT NULL,
-    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `datos_horario_plaza_final` LONGTEXT NULL,
+    `datos_horario_plaza_inicial` LONGTEXT NULL,
+    `motivo_oficial_sustituido` VARCHAR(255) NULL,
+    `motivo_traslado` VARCHAR(20) NULL,
+    `nombre_oficial_sustituido` VARCHAR(255) NULL,
+    `observaciones_cambio_salario` VARCHAR(255) NULL,
+    `observaciones_motivo_traslado` VARCHAR(255) NULL,
+    `plazaInicial_id` INTEGER NULL,
+    `traslado_sociedad` BOOLEAN NULL,
 
+    INDEX `IDX_BEFF7AEC1B482BBB`(`plazaInicial_id`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- CreateTable
 CREATE TABLE `e_articulo_uniforme_empleado` (
     `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `empleadoId` INTEGER NOT NULL,
-    `articulo` VARCHAR(191) NOT NULL,
     `cantidad` INTEGER NOT NULL,
-    `fechaEntrega` DATETIME(3) NOT NULL,
-    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `articuloUniforme_id` INTEGER NOT NULL,
+    `cedula` VARCHAR(64) NULL,
+    `consecutivo` INTEGER NOT NULL,
+    `document` VARCHAR(255) NULL,
+    `empleado_id` INTEGER NULL,
+    `estado` INTEGER NOT NULL,
+    `fecha_entrega` DATE NOT NULL,
+    `talla` VARCHAR(10) NOT NULL,
+    `tipo_entrega` INTEGER NULL,
+    `updated_at` DATE NULL,
+    `vence` DATE NOT NULL,
 
+    INDEX `IDX_F0617B2F4591C704`(`articuloUniforme_id`),
+    INDEX `IDX_F0617B2F952BE730`(`empleado_id`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- CreateTable
 CREATE TABLE `s_planilla_empleado` (
     `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `empleadoId` INTEGER NOT NULL,
-    `salario` DOUBLE NOT NULL,
-    `periodo` VARCHAR(191) NOT NULL,
-    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `anticipossalariales` DECIMAL(10, 2) NULL,
+    `area` VARCHAR(100) NULL,
+    `bonificacion_monto` DECIMAL(10, 2) NULL,
+    `ccss` DECIMAL(10, 2) NULL,
+    `cedula` VARCHAR(100) NULL,
+    `codigo` VARCHAR(30) NULL,
+    `contrato` VARCHAR(100) NULL,
+    `corpo_sistema_segar` VARCHAR(255) NULL,
+    `cuenta_banco_activa` BOOLEAN NULL,
+    `diasordinarios_cantidad` DECIMAL(10, 2) NULL,
+    `diasordinarios_monto` DECIMAL(10, 2) NULL,
+    `dictamenmedico` DECIMAL(10, 2) NULL,
+    `embargos` DECIMAL(10, 2) NULL,
+    `empleado_id` INTEGER NULL,
+    `examenpsicologico` DECIMAL(10, 2) NULL,
+    `feriado_cantidad` DECIMAL(10, 2) NULL,
+    `feriado_monto` DECIMAL(10, 2) NULL,
+    `hed_cantidad` DECIMAL(10, 2) NULL,
+    `hed_monto` DECIMAL(10, 2) NULL,
+    `hem_cantidad` DECIMAL(10, 2) NULL,
+    `hem_monto` DECIMAL(10, 2) NULL,
+    `hen_cantidad` DECIMAL(10, 2) NULL,
+    `hen_monto` DECIMAL(10, 2) NULL,
+    `llegadastardias_horas` DECIMAL(10, 2) NULL,
+    `llegadastardias_monto` DECIMAL(10, 2) NULL,
+    `mail_notified_at` DATETIME(0) NULL,
+    `monto_ccss` DECIMAL(10, 2) NULL,
+    `monto_extras_33` DECIMAL(10, 2) NULL,
+    `monto_licencia_maternidad` DECIMAL(10, 2) NULL,
+    `nombre` VARCHAR(100) NULL,
+    `numero_cuenta_banco` VARCHAR(50) NULL,
+    `observaciones_comprobante` LONGTEXT NULL,
+    `otrosrebajos` DECIMAL(10, 2) NULL,
+    `pensionsalimenticia` DECIMAL(10, 2) NULL,
+    `planilla_id` INTEGER NOT NULL,
+    `puesto` VARCHAR(255) NULL,
+    `rebajodanoequipo` DECIMAL(10, 2) NULL,
+    `rebajofuneraria` DECIMAL(10, 2) NULL,
+    `rebajoindicato` DECIMAL(10, 2) NULL,
+    `rebajoprestamotercero` DECIMAL(10, 2) NULL,
+    `rebajos` DECIMAL(10, 2) NULL,
+    `rebajouniforme` DECIMAL(10, 2) NULL,
+    `retencionesrenta` DECIMAL(10, 2) NULL,
+    `salario_base_anterior` VARCHAR(50) NULL,
+    `salario_base_nuevo` VARCHAR(50) NULL,
+    `salario_bruto` DECIMAL(10, 2) NULL,
+    `salario_diario` DECIMAL(10, 2) NULL,
+    `salario_mensual_anterior` VARCHAR(50) NULL,
+    `salario_mensual_nuevo` VARCHAR(50) NULL,
+    `salario_neto` DECIMAL(10, 2) NULL,
+    `subsidio_cantidad` DECIMAL(10, 2) NULL,
+    `subsidio_monto` DECIMAL(10, 2) NULL,
+    `total_retenciones` DECIMAL(10, 2) NULL,
+    `vacacion_cantidad` DECIMAL(10, 2) NULL,
+    `vacacion_monto` DECIMAL(10, 2) NULL,
 
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_bitacora_acciones_empleado` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `empleadoId` INTEGER NOT NULL,
-    `accion` VARCHAR(191) NOT NULL,
-    `detalle` VARCHAR(191) NULL,
-    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-
+    INDEX `IDX_F450C66C952BE730`(`empleado_id`),
+    INDEX `IDX_F450C66CF747F090`(`planilla_id`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- CreateTable
 CREATE TABLE `jobs` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `titulo` VARCHAR(191) NOT NULL,
-    `descripcion` VARCHAR(191) NULL,
-    `estado` VARCHAR(191) NOT NULL DEFAULT 'pendiente',
-    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `createdAt` DATETIME(0) NOT NULL,
+    `args` LONGTEXT NOT NULL,
+    `checkedAt` DATETIME(0) NULL,
+    `closedAt` DATETIME(0) NULL,
+    `command` VARCHAR(255) NOT NULL,
+    `download_link` VARCHAR(255) NULL,
+    `errorOutput` LONGTEXT NULL,
+    `executeAfter` DATETIME(0) NULL,
+    `exitCode` SMALLINT UNSIGNED NULL,
+    `friendly_name` VARCHAR(80) NULL,
+    `maxRetries` SMALLINT UNSIGNED NOT NULL,
+    `maxRuntime` SMALLINT UNSIGNED NOT NULL,
+    `output` LONGTEXT NULL,
+    `priority` SMALLINT NOT NULL,
+    `progress` INTEGER UNSIGNED NULL,
+    `queue` VARCHAR(50) NOT NULL,
+    `runtime` SMALLINT UNSIGNED NULL,
+    `stackTrace` LONGBLOB NULL,
+    `startedAt` DATETIME(0) NULL,
+    `state` VARCHAR(15) NOT NULL,
+    `user` VARCHAR(40) NULL,
+    `workerName` VARCHAR(50) NULL,
 
+    INDEX `cmd_search_index`(`command`),
+    INDEX `sorting_index`(`state`, `priority`, `id`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- CreateTable
 CREATE TABLE `c_accion_personal` (
     `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `empleadoId` INTEGER NOT NULL,
-    `tipo` VARCHAR(191) NOT NULL,
-    `motivo` VARCHAR(191) NULL,
-    `fecha` DATETIME(3) NOT NULL,
-    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `accionGeneraSeparacion_id` INTEGER NULL,
+    `aceptar_restricciones_reversion` BOOLEAN NULL,
+    `adenda_id` INTEGER NULL,
+    `ajuste_salario_id` INTEGER NULL,
+    `ausencia_id` INTEGER NULL,
+    `ausencia_transformada` BOOLEAN NULL,
+    `baja_id` INTEGER NULL,
+    `cambio_horario_id` INTEGER NULL,
+    `cambio_periodo_pago_id` INTEGER NULL,
+    `cantidad_horas` INTEGER NULL,
+    `categoriaEmpleado_id` INTEGER NULL,
+    `cliente_id` INTEGER NULL,
+    `comentarios` VARCHAR(254) NULL,
+    `consecutivo` VARCHAR(15) NULL,
+    `contratacion_id` INTEGER NULL,
+    `contrato_id` INTEGER NULL,
+    `coordinadoPor_id` INTEGER NULL,
+    `coordinador_id` INTEGER NULL,
+    `corpo_id` INTEGER NULL,
+    `document` VARCHAR(255) NULL,
+    `empleado_id` INTEGER NULL,
+    `empresa_id` INTEGER NULL,
+    `estado_aprobacion` VARCHAR(3) NULL,
+    `fecha_actualizacion` DATETIME(0) NULL,
+    `fecha_aprobado_ec` DATETIME(0) NULL,
+    `fecha_aprobado_jo` DATETIME(0) NULL,
+    `fecha_fin` DATE NULL,
+    `fecha_fin_traslado` DATE NULL,
+    `fecha_inicio` DATE NOT NULL,
+    `fecha_insercion` DATETIME(0) NOT NULL,
+    `fecha_reversion` DATETIME(0) NULL,
+    `fecha_sobrepuesto` DATETIME(0) NULL,
+    `fecha_vence_justificar_ausencia` DATETIME(0) NULL,
+    `fecha_vence_subir_adjunto` DATETIME(0) NULL,
+    `horario_id` INTEGER NULL,
+    `incapacidad_ccss_id` INTEGER NULL,
+    `incapacidad_ins_id` INTEGER NULL,
+    `libre_cubre_vacasiones_id` INTEGER NULL,
+    `licencia_id` INTEGER NULL,
+    `llegada_tardia_id` INTEGER NULL,
+    `monto_descontar_turnos` DECIMAL(10, 2) NULL,
+    `motivo_reversion` VARCHAR(254) NULL,
+    `numero_hed` DECIMAL(10, 2) NULL,
+    `numero_hem` DECIMAL(10, 2) NULL,
+    `numero_hen` DECIMAL(10, 2) NULL,
+    `operacion` BOOLEAN NULL,
+    `periodoPago_id` INTEGER NULL,
+    `permiso_con_goce_id` INTEGER NULL,
+    `permiso_sin_goce_id` INTEGER NULL,
+    `plaza_id` INTEGER NULL,
+    `preaviso_id` INTEGER NULL,
+    `puesto_id` INTEGER NULL,
+    `reemplazo_id` INTEGER NULL,
+    `reversible` BOOLEAN NULL,
+    `salario` DECIMAL(10, 2) NOT NULL,
+    `salario_base_diario` DECIMAL(10, 2) NULL,
+    `salario_base_mensual` DECIMAL(10, 2) NULL,
+    `salida_anticipada_id` INTEGER NULL,
+    `separacion_temp_id` INTEGER NULL,
+    `suspension_id` INTEGER NULL,
+    `tipoAccion_id` INTEGER NULL,
+    `tipoContratacion_id` INTEGER NULL,
+    `traslado_id` INTEGER NULL,
+    `traslado_temp_id` INTEGER NULL,
+    `usuario_actualizacion` VARCHAR(255) NULL,
+    `usuario_aprueba_ec` VARCHAR(50) NULL,
+    `usuario_aprueba_jo` VARCHAR(50) NULL,
+    `usuario_insercion` VARCHAR(255) NOT NULL,
+    `usuario_reversion` VARCHAR(254) NULL,
+    `vacacionMes_id` INTEGER NULL,
+    `vacacion_disfrute_id` INTEGER NULL,
+    `vacacion_pago_id` INTEGER NULL,
 
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `log_generico` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `modulo` VARCHAR(191) NOT NULL,
-    `mensaje` VARCHAR(191) NOT NULL,
-    `nivel` VARCHAR(191) NULL,
-    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `log_cambioguardia` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `guardiaId` INTEGER NOT NULL,
-    `turnoInicio` DATETIME(3) NOT NULL,
-    `turnoFin` DATETIME(3) NOT NULL,
-    `observacion` VARCHAR(191) NULL,
-    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-
+    UNIQUE INDEX `UNIQ_97D9ECEE43A913D8`(`accionGeneraSeparacion_id`),
+    UNIQUE INDEX `UNIQ_97D9ECEE64E87FA9`(`adenda_id`),
+    UNIQUE INDEX `UNIQ_97D9ECEEA61F9752`(`ajuste_salario_id`),
+    UNIQUE INDEX `UNIQ_97D9ECEE60C93433`(`ausencia_id`),
+    UNIQUE INDEX `UNIQ_97D9ECEE8BF5BDE5`(`baja_id`),
+    UNIQUE INDEX `UNIQ_97D9ECEE3F0F0EAB`(`cambio_horario_id`),
+    UNIQUE INDEX `UNIQ_97D9ECEECE18A6FD`(`cambio_periodo_pago_id`),
+    UNIQUE INDEX `UNIQ_97D9ECEE68DBB923`(`contratacion_id`),
+    UNIQUE INDEX `UNIQ_97D9ECEEE5C49C4`(`incapacidad_ccss_id`),
+    UNIQUE INDEX `UNIQ_97D9ECEE175A33D1`(`incapacidad_ins_id`),
+    UNIQUE INDEX `UNIQ_97D9ECEE6A6AE222`(`libre_cubre_vacasiones_id`),
+    UNIQUE INDEX `UNIQ_97D9ECEE3A0F5A23`(`licencia_id`),
+    UNIQUE INDEX `UNIQ_97D9ECEEDF88A977`(`llegada_tardia_id`),
+    UNIQUE INDEX `UNIQ_97D9ECEEE9FE9372`(`permiso_con_goce_id`),
+    UNIQUE INDEX `UNIQ_97D9ECEE4A1627FE`(`permiso_sin_goce_id`),
+    UNIQUE INDEX `UNIQ_97D9ECEE89D8089F`(`preaviso_id`),
+    UNIQUE INDEX `UNIQ_97D9ECEEDF363018`(`salida_anticipada_id`),
+    UNIQUE INDEX `UNIQ_97D9ECEEA0E4F3B3`(`separacion_temp_id`),
+    UNIQUE INDEX `UNIQ_97D9ECEE5D5F8F8E`(`suspension_id`),
+    UNIQUE INDEX `UNIQ_97D9ECEEA74E1638`(`traslado_id`),
+    UNIQUE INDEX `UNIQ_97D9ECEEE78BA714`(`traslado_temp_id`),
+    UNIQUE INDEX `UNIQ_97D9ECEEEEC5118E`(`vacacion_disfrute_id`),
+    UNIQUE INDEX `UNIQ_97D9ECEEAD90890`(`vacacion_pago_id`),
+    INDEX `IDX_97D9ECEE3C5F34F`(`corpo_id`),
+    INDEX `IDX_97D9ECEE45BFCF7F`(`tipoAccion_id`),
+    INDEX `IDX_97D9ECEE4959F1BA`(`horario_id`),
+    INDEX `IDX_97D9ECEE5035E9DA`(`puesto_id`),
+    INDEX `IDX_97D9ECEE521E1991`(`empresa_id`),
+    INDEX `IDX_97D9ECEE620C225E`(`reemplazo_id`),
+    INDEX `IDX_97D9ECEE70AE7BF1`(`contrato_id`),
+    INDEX `IDX_97D9ECEE81B56B3`(`coordinadoPor_id`),
+    INDEX `IDX_97D9ECEE952BE730`(`empleado_id`),
+    INDEX `IDX_97D9ECEEB0B41592`(`tipoContratacion_id`),
+    INDEX `IDX_97D9ECEEC4298A13`(`vacacionMes_id`),
+    INDEX `IDX_97D9ECEED2624C39`(`periodoPago_id`),
+    INDEX `IDX_97D9ECEEDE734E51`(`cliente_id`),
+    INDEX `IDX_97D9ECEEE4517BDD`(`coordinador_id`),
+    INDEX `IDX_97D9ECEEED33694C`(`categoriaEmpleado_id`),
+    INDEX `IDX_97D9ECEEEF34C0BD`(`plaza_id`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
@@ -173,32 +334,32 @@ CREATE TABLE `c_marca_dia` (
     `id` INTEGER NOT NULL AUTO_INCREMENT,
     `fecha` DATE NOT NULL,
     `accionPersonal_id` INTEGER NULL,
-    `cliente_id` INTEGER NOT NULL,
-    `contrato_id` INTEGER NOT NULL,
+    `cliente_id` INTEGER NULL,
+    `contrato_id` INTEGER NULL,
     `coordinador_id` INTEGER NULL,
-    `corpo_id` INTEGER NOT NULL,
+    `corpo_id` INTEGER NULL,
     `empleadoCDG_id` INTEGER NULL,
     `empleadoFijo_id` INTEGER NULL,
     `empleadoReemplaza2_id` INTEGER NULL,
     `empleadoReemplaza_id` INTEGER NULL,
-    `empresa_id` INTEGER NOT NULL,
-    `hora_entrada` DATETIME(3) NULL,
-    `hora_entrada_digitada` DATETIME(3) NULL,
+    `empresa_id` INTEGER NULL,
+    `hora_entrada` TIME(0) NULL,
+    `hora_entrada_digitada` DATETIME(0) NULL,
     `hora_fin` TIME(0) NULL,
     `hora_fin_plan` TIME(0) NULL,
     `hora_inicio` TIME(0) NULL,
     `hora_inicio_plan` TIME(0) NULL,
     `hora_mas_cuatro` TIME(0) NULL,
-    `hora_mas_cuatro_digitada` TIME(0) NULL,
-    `hora_mas_cuatro_entrada` TIME(0) NULL,
-    `hora_salida` DATETIME(3) NULL,
+    `hora_mas_cuatro_digitada` DATETIME(0) NULL,
+    `hora_mas_cuatro_entrada` DATETIME(0) NULL,
+    `hora_salida` TIME(0) NULL,
     `hora_salida_anticipada` TIME(0) NULL,
-    `hora_salida_digitada` TIME(0) NULL,
-    `horario_id` INTEGER NOT NULL,
-    `horas_duracion` DOUBLE NULL,
-    `is_dia_excepcion` BOOLEAN NULL DEFAULT false,
-    `is_puesto_no_cubierto` BOOLEAN NULL DEFAULT false,
-    `is_reposicion_de_horas` BOOLEAN NULL DEFAULT false,
+    `hora_salida_digitada` DATETIME(0) NULL,
+    `horario_id` INTEGER NULL,
+    `horas_duracion` DECIMAL(10, 0) NULL,
+    `is_dia_excepcion` BOOLEAN NULL,
+    `is_puesto_no_cubierto` BOOLEAN NULL,
+    `is_reposicion_de_horas` BOOLEAN NULL,
     `marcaCdgHacia_id` INTEGER NULL,
     `marcaComoReemplazo2_id` INTEGER NULL,
     `marcaComoReemplazo_id` INTEGER NULL,
@@ -206,36 +367,60 @@ CREATE TABLE `c_marca_dia` (
     `motivoErrorAsignacion_id` INTEGER NULL,
     `motivoExtra_id` INTEGER NULL,
     `motivoMarcarHorarioPlaza_id` INTEGER NULL,
-    `motivo_ausente` VARCHAR(191) NULL,
-    `motivo_cdg` VARCHAR(191) NULL,
-    `motivo_induccion` VARCHAR(191) NULL,
-    `motivo_separacion_temp` VARCHAR(191) NULL,
-    `observaciones` VARCHAR(191) NULL,
-    `operacion_accion` VARCHAR(191) NULL,
-    `operacion_extra` VARCHAR(191) NULL,
-    `plaza_id` INTEGER NOT NULL,
-    `puesto_id` INTEGER NOT NULL,
-    `teorico` BOOLEAN NULL DEFAULT false,
-    `tipo_comida` VARCHAR(191) NULL,
-    `tipo_turno` VARCHAR(191) NULL,
-    `tipo_turno_plan` VARCHAR(191) NULL,
-    `usuario_marca_entrada` INTEGER NULL,
-    `usuario_marca_salida` INTEGER NULL,
+    `motivo_ausente` VARCHAR(5) NULL,
+    `motivo_cdg` VARCHAR(3) NULL,
+    `motivo_induccion` VARCHAR(10) NULL,
+    `motivo_separacion_temp` VARCHAR(5) NULL,
+    `observaciones` VARCHAR(150) NULL,
+    `operacion_accion` BOOLEAN NULL,
+    `operacion_extra` BOOLEAN NULL,
+    `plaza_id` INTEGER NULL,
+    `puesto_id` INTEGER NULL,
+    `teorico` BOOLEAN NULL,
+    `tipo_comida` VARCHAR(3) NULL,
+    `tipo_turno` VARCHAR(1) NULL,
+    `tipo_turno_plan` VARCHAR(1) NULL,
+    `usuario_marca_entrada` VARCHAR(20) NULL,
+    `usuario_marca_salida` VARCHAR(20) NULL,
     `usuarioMarcaEntrada` VARCHAR(191) NULL,
     `salida_anticipada_id` INTEGER NULL,
+    `is_cubierto_como_comodin` BOOLEAN NULL,
 
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `a_recovery_password_token` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `expira_en` INTEGER NOT NULL,
-    `creacion` DATETIME(0) NOT NULL,
-    `token` VARCHAR(255) NOT NULL,
-    `empleadoId` INTEGER NOT NULL,
-
-    INDEX `FK_E35A23BC952BE730`(`empleadoId`),
+    UNIQUE INDEX `UNIQ_583C45E5547FB693`(`marcaCdgHacia_id`),
+    INDEX `IDX_583C45E52F4E077F`(`motivoMarcarHorarioPlaza_id`),
+    INDEX `IDX_583C45E537A7CDB4`(`marcaComoReemplazo_id`),
+    INDEX `IDX_583C45E53C5F34F`(`corpo_id`),
+    INDEX `IDX_583C45E53CE4E731`(`empleadoFijo_id`),
+    INDEX `IDX_583C45E54558C79`(`accionPersonal_id`),
+    INDEX `IDX_583C45E54959F1BA`(`horario_id`),
+    INDEX `IDX_583C45E55035E9DA`(`puesto_id`),
+    INDEX `IDX_583C45E5521E1991`(`empresa_id`),
+    INDEX `IDX_583C45E56B95DB`(`empleadoCDG_id`),
+    INDEX `IDX_583C45E570AE7BF1`(`contrato_id`),
+    INDEX `IDX_583C45E58602BB`(`motivoExtra_id`),
+    INDEX `IDX_583C45E58E25225`(`marcaComoReemplazo2_id`),
+    INDEX `IDX_583C45E59D7193A2`(`empleadoReemplaza_id`),
+    INDEX `IDX_583C45E5BBF7CA96`(`marcaEnInduccion_id`),
+    INDEX `IDX_583C45E5DE734E51`(`cliente_id`),
+    INDEX `IDX_583C45E5E4517BDD`(`coordinador_id`),
+    INDEX `IDX_583C45E5EF34C0BD`(`plaza_id`),
+    INDEX `IDX_583C45E5F9838DA4`(`motivoErrorAsignacion_id`),
+    INDEX `IDX_583C45E5FC9C312A`(`empleadoReemplaza2_id`),
+    INDEX `fecha_idx`(`fecha`),
+    INDEX `fecha_tipoTurno_idx`(`fecha`, `tipo_turno`),
+    INDEX `isDiaExcepcion_idx`(`is_dia_excepcion`),
+    INDEX `isPuestoNoCubierto_idx`(`is_puesto_no_cubierto`),
+    INDEX `isReposicionDeHoras_idx`(`is_reposicion_de_horas`),
+    INDEX `motivoAusente_idx`(`motivo_ausente`),
+    INDEX `motivoCdg_idx`(`motivo_cdg`),
+    INDEX `motivoInduccion_idx`(`motivo_induccion`),
+    INDEX `motivoSeparacionTemp_idx`(`motivo_separacion_temp`),
+    INDEX `operacionAccion_idx`(`operacion_accion`),
+    INDEX `operacionExtra_idx`(`operacion_extra`),
+    INDEX `tipoTurnoPlan_idx`(`tipo_turno_plan`),
+    INDEX `tipoTurno_idx`(`tipo_turno`),
+    INDEX `usuarioMarcaEntrada_idx`(`usuario_marca_entrada`),
+    INDEX `usuarioMarcaSalida_idx`(`usuario_marca_salida`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
@@ -696,1122 +881,6 @@ CREATE TABLE `c_empleado` (
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- CreateTable
-CREATE TABLE `c_notifications` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `title` LONGTEXT NOT NULL,
-    `description` LONGTEXT NOT NULL,
-    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_empleado_notification` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `empleadoId` INTEGER NOT NULL,
-    `notificationId` INTEGER NOT NULL,
-    `watched` BOOLEAN NOT NULL DEFAULT false,
-
-    INDEX `c_empleado_notification_notificationId_fkey`(`notificationId`),
-    INDEX `c_plaza_notification_empleadoId_fkey`(`empleadoId`),
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_plaza_notification` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `plazaId` INTEGER NOT NULL,
-    `notificationId` INTEGER NOT NULL,
-    `watched` BOOLEAN NOT NULL DEFAULT false,
-
-    INDEX `c_plaza_notification_notificationId_fkey`(`notificationId`),
-    INDEX `c_plaza_notification_plazaId_fkey`(`plazaId`),
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_notas_voz` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `empresa_id` INTEGER NOT NULL,
-    `cliente_id` INTEGER NOT NULL,
-    `corpo_id` INTEGER NOT NULL,
-    `puesto_id` INTEGER NULL,
-    `titulo` LONGTEXT NOT NULL,
-    `descripcion` LONGTEXT NOT NULL,
-    `path` LONGTEXT NOT NULL,
-    `transcripcion` LONGTEXT NOT NULL,
-    `firma_responsable` LONGTEXT NOT NULL,
-    `created_by` INTEGER NOT NULL,
-    `created_at` DATETIME(0) NOT NULL,
-
-    INDEX `c_notas_voz_cliente_id_fkey`(`cliente_id`),
-    INDEX `c_notas_voz_corpo_id_fkey`(`corpo_id`),
-    INDEX `c_notas_voz_empresa_id_fkey`(`empresa_id`),
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_incidente` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `corpo_id` INTEGER NOT NULL,
-    `ejecutivo_cuenta` INTEGER NOT NULL,
-    `fecha_incidente` DATE NOT NULL,
-    `fecha_reporte` DATE NOT NULL,
-    `nombre_responsable` VARCHAR(45) NOT NULL,
-    `clasificacion` INTEGER NOT NULL,
-    `descripcion` LONGTEXT NOT NULL,
-    `involucrados` LONGTEXT NOT NULL,
-    `fecha_libro_novedades` LONGTEXT NOT NULL,
-    `nombre_responsable_atencion` VARCHAR(45) NOT NULL,
-    `solucion` LONGTEXT NULL,
-    `fecha_solucion` DATE NULL,
-    `fecha_real_solucion` DATE NULL,
-    `costo_asociado` LONGTEXT NULL,
-    `consecutivo_informe` LONGTEXT NULL,
-    `link_informe` LONGTEXT NULL,
-    `cliente_id` INTEGER NOT NULL,
-    `empresa_id` INTEGER NOT NULL,
-    `estado` BOOLEAN NOT NULL,
-
-    INDEX `c_incidente_clasificacion_fkey`(`clasificacion`),
-    INDEX `c_incidente_cliente_id_fkey`(`cliente_id`),
-    INDEX `c_incidente_corpo_id_fkey`(`corpo_id`),
-    INDEX `c_incidente_ejecutivo_cuenta_fkey`(`ejecutivo_cuenta`),
-    INDEX `c_incidente_empresa_id_fkey`(`empresa_id`),
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_archivos_incidente` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `name` LONGTEXT NOT NULL,
-    `original_name` LONGTEXT NOT NULL,
-    `type` VARCHAR(25) NOT NULL,
-    `extension` VARCHAR(25) NOT NULL,
-    `incidente_id` INTEGER NOT NULL,
-
-    INDEX `c_archivos_incidente_incidente_id_fkey`(`incidente_id`),
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_contribucion_incidente` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `incidente_id` INTEGER NOT NULL,
-    `empleado_id` INTEGER NOT NULL,
-    `aporte` LONGTEXT NOT NULL,
-    `rol_aporte` VARCHAR(25) NOT NULL,
-    `created_at` DATETIME(0) NOT NULL,
-
-    INDEX `c_contribucion_incidente_empleado_id_fkey`(`empleado_id`),
-    INDEX `c_contribucion_incidente_incidente_id_fkey`(`incidente_id`),
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_archivos_aporte_incidente` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `name` LONGTEXT NOT NULL,
-    `original_name` LONGTEXT NOT NULL,
-    `type` VARCHAR(25) NOT NULL,
-    `extension` VARCHAR(25) NOT NULL,
-    `contribucion_id` INTEGER NOT NULL,
-
-    INDEX `c_archivos_aporte_incidente_contribucion_id_fkey`(`contribucion_id`),
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_evaluacion_empleado` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `nombre_empleado` VARCHAR(45) NOT NULL,
-    `cedula_empleado` VARCHAR(45) NOT NULL,
-    `corpo_id` INTEGER NOT NULL,
-    `puesto_id` INTEGER NOT NULL,
-    `plaza_id` INTEGER NOT NULL,
-    `empleado_id` INTEGER NOT NULL,
-    `evaluador_id` INTEGER NOT NULL,
-    `tipo` VARCHAR(25) NOT NULL,
-    `fecha_ingreso` DATE NOT NULL,
-    `fecha_evaluacion` DATE NOT NULL,
-    `evaluacion` LONGTEXT NOT NULL,
-    `comentarios` LONGTEXT NOT NULL,
-    `nombre_evaluador` VARCHAR(45) NOT NULL,
-    `firma_evaluador` LONGTEXT NOT NULL,
-    `firma_empleado` LONGTEXT NOT NULL,
-    `created_at` DATETIME(0) NOT NULL,
-
-    INDEX `c_evaluacion_empleado_corpo_id_fkey`(`corpo_id`),
-    INDEX `c_evaluacion_empleado_plaza_id_fkey`(`plaza_id`),
-    INDEX `c_evaluacion_empleado_puesto_id_fkey`(`puesto_id`),
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_control_kilometraje` (
-    `id` VARCHAR(191) NOT NULL,
-    `empresa_id` VARCHAR(191) NULL,
-    `cliente_id` VARCHAR(191) NULL,
-    `contrato_id` VARCHAR(191) NULL,
-    `corpo_id` VARCHAR(191) NULL,
-    `puesto_id` VARCHAR(191) NULL,
-    `plaza_id` VARCHAR(191) NULL,
-    `chofer_id` VARCHAR(191) NULL,
-    `chofer_nombre` VARCHAR(191) NULL,
-    `total_km` VARCHAR(191) NULL,
-    `ruta` VARCHAR(191) NULL,
-    `prox_mant_km` VARCHAR(191) NULL,
-    `km_para_mantenimiento` VARCHAR(191) NULL,
-    `km_actual` VARCHAR(191) NULL,
-    `estado` VARCHAR(191) NULL,
-    `vehiculo_id` VARCHAR(191) NULL,
-    `registros_viaje` LONGTEXT NULL,
-    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    `created_by` VARCHAR(191) NULL,
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_solicitud_uniforme` (
-    `id` VARCHAR(191) NOT NULL,
-    `empresa_id` VARCHAR(191) NULL,
-    `cliente_id` VARCHAR(191) NULL,
-    `contrato_id` VARCHAR(191) NULL,
-    `corpo_id` VARCHAR(191) NULL,
-    `puesto_id` VARCHAR(191) NULL,
-    `plaza_id` VARCHAR(191) NULL,
-    `codigo` VARCHAR(191) NULL,
-    `nombre_completo` VARCHAR(191) NULL,
-    `cliente_area` VARCHAR(191) NULL,
-    `ultima_fecha_uniformes` VARCHAR(191) NULL,
-    `talla_scrub_naranja` VARCHAR(191) NULL,
-    `talla_pantalon` VARCHAR(191) NULL,
-    `talla_zapatos` VARCHAR(191) NULL,
-    `estado` VARCHAR(191) NULL,
-    `persona_designada_entrega` VARCHAR(191) NULL,
-    `no_procede_hasta` VARCHAR(191) NULL,
-    `estatus_designado_entrega` VARCHAR(191) NULL,
-    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    `created_by` VARCHAR(191) NULL,
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_satisfaccion_personal` (
-    `id` VARCHAR(191) NOT NULL,
-    `empresa_id` VARCHAR(191) NULL,
-    `cliente_id` VARCHAR(191) NULL,
-    `contrato_id` VARCHAR(191) NULL,
-    `corpo_id` VARCHAR(191) NULL,
-    `puesto_id` VARCHAR(191) NULL,
-    `plaza_id` VARCHAR(191) NULL,
-    `nombre_empleado` VARCHAR(191) NULL,
-    `cliente_sede` VARCHAR(191) NULL,
-    `tiempo_laborado` VARCHAR(191) NULL,
-    `recibe_uniformes_tiempo` VARCHAR(191) NULL,
-    `llevo_induccion` VARCHAR(191) NULL,
-    `calificacion_induccion` VARCHAR(191) NULL,
-    `recibe_visitas_supervision` VARCHAR(191) NULL,
-    `recibe_atencion_oficina` VARCHAR(191) NULL,
-    `problemas_pago_resueltos` VARCHAR(191) NULL,
-    `equipo_proteccion` VARCHAR(191) NULL,
-    `que_mejorar` VARCHAR(191) NULL,
-    `considera_empresa_debe_mejorar` VARCHAR(191) NULL,
-    `conoce_reportar_accidente` VARCHAR(191) NULL,
-    `le_gustaria_capacitado` VARCHAR(191) NULL,
-    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    `created_by` VARCHAR(191) NULL,
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_planificacion_mantenimiento_vehiculo` (
-    `id` VARCHAR(191) NOT NULL,
-    `empresa_id` VARCHAR(191) NULL,
-    `cliente_id` VARCHAR(191) NULL,
-    `contrato_id` VARCHAR(191) NULL,
-    `corpo_id` VARCHAR(191) NULL,
-    `puesto_id` VARCHAR(191) NULL,
-    `plaza_id` VARCHAR(191) NULL,
-    `nombre_vehiculo` VARCHAR(191) NULL,
-    `matricula_vehiculo` VARCHAR(191) NULL,
-    `mantenimientos` LONGTEXT NULL,
-    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    `created_by` VARCHAR(191) NULL,
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_producto_no_conforme_matriz` (
-    `id` VARCHAR(191) NOT NULL,
-    `empresa_id` VARCHAR(191) NULL,
-    `cliente_id` VARCHAR(191) NULL,
-    `contrato_id` VARCHAR(191) NULL,
-    `corpo_id` VARCHAR(191) NULL,
-    `puesto_id` VARCHAR(191) NULL,
-    `plaza_id` VARCHAR(191) NULL,
-    `cliente` VARCHAR(191) NULL,
-    `numero_corpo` VARCHAR(191) NULL,
-    `responsable_cuenta` VARCHAR(191) NULL,
-    `macroactividad` VARCHAR(191) NULL,
-    `actividad` VARCHAR(191) NULL,
-    `tipo_servicio_no_conforme` VARCHAR(191) NULL,
-    `tipo_registro` VARCHAR(191) NULL,
-    `responsable_registro` VARCHAR(191) NULL,
-    `acciones_seguir` LONGTEXT NULL,
-    `responsable_corregir` LONGTEXT NULL,
-    `responsable_aprobar` LONGTEXT NULL,
-    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    `created_by` VARCHAR(191) NULL,
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_acta_entre_producto` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `empresa_id` INTEGER NOT NULL,
-    `cliente_id` INTEGER NOT NULL,
-    `contrato_id` INTEGER NOT NULL,
-    `corpo_id` INTEGER NOT NULL,
-    `puesto_id` INTEGER NOT NULL,
-    `plaza_id` INTEGER NOT NULL,
-    `fecha` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    `tipo_entrega` LONGTEXT NOT NULL,
-    `cliente` LONGTEXT NOT NULL,
-    `mensual` LONGTEXT NOT NULL,
-    `division` VARCHAR(25) NOT NULL,
-    `detalle` LONGTEXT NOT NULL,
-    `observaciones` LONGTEXT NOT NULL,
-    `nombre_entrega` LONGTEXT NOT NULL,
-    `cedula_entrega` VARCHAR(30) NOT NULL,
-    `fecha_entrega` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    `firma_entrega` LONGTEXT NOT NULL,
-    `nombre_recibe` LONGTEXT NOT NULL,
-    `cedula_recibe` VARCHAR(30) NOT NULL,
-    `fecha_recibe` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    `firma_recibe` LONGTEXT NOT NULL,
-    `firma_responsable` LONGTEXT NOT NULL,
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_imagenes_acta_entrega_producto` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `name` LONGTEXT NOT NULL,
-    `acta_id` INTEGER NOT NULL,
-
-    INDEX `c_imagenes_acta_entrega_producto_acta_id_fkey`(`acta_id`),
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_maestro_quejas` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `empresa_id` INTEGER NOT NULL,
-    `cliente_id` INTEGER NOT NULL,
-    `contrato_id` INTEGER NOT NULL,
-    `corpo_id` INTEGER NOT NULL,
-    `puesto_id` INTEGER NOT NULL,
-    `plaza_id` INTEGER NOT NULL,
-    `sociedad` VARCHAR(191) NOT NULL,
-    `nombre_realiza_queja` VARCHAR(191) NOT NULL,
-    `cliente` VARCHAR(191) NOT NULL,
-    `empresa_presenta_queja` VARCHAR(191) NOT NULL,
-    `persona_presenta_queja` VARCHAR(191) NOT NULL,
-    `medio_recepcion_queja` VARCHAR(191) NOT NULL,
-    `tipo_queja` VARCHAR(191) NOT NULL,
-    `ubicacion` VARCHAR(191) NOT NULL,
-    `nivel_queja` VARCHAR(191) NOT NULL,
-    `fecha_queja` VARCHAR(191) NOT NULL,
-    `motivo_queja` VARCHAR(191) NOT NULL,
-    `descripcion_queja` LONGTEXT NOT NULL,
-    `fecha_inicio` VARCHAR(191) NOT NULL,
-    `fecha_revision` VARCHAR(191) NOT NULL,
-    `resolucion_queja` LONGTEXT NOT NULL,
-    `estado` VARCHAR(191) NOT NULL,
-    `accion_correctiva_preventiva` VARCHAR(191) NOT NULL,
-    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    `created_by` VARCHAR(191) NOT NULL,
-    `firma_responsable` LONGTEXT NOT NULL,
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_anexos_quejas` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `name` LONGTEXT NOT NULL,
-    `original_name` LONGTEXT NOT NULL,
-    `type` VARCHAR(25) NOT NULL,
-    `extension` VARCHAR(25) NOT NULL,
-    `queja_id` INTEGER NOT NULL,
-
-    INDEX `c_anexos_quejas_queja_id_fkey`(`queja_id`),
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_control_aseadores` (
-    `id` VARCHAR(191) NOT NULL,
-    `empresa_id` VARCHAR(191) NULL,
-    `cliente_id` VARCHAR(191) NULL,
-    `contrato_id` VARCHAR(191) NULL,
-    `corpo_id` VARCHAR(191) NULL,
-    `puesto_id` VARCHAR(191) NULL,
-    `plaza_id` VARCHAR(191) NULL,
-    `nombre_aseador` VARCHAR(191) NULL,
-    `oficina_despacho` VARCHAR(191) NULL,
-    `provincia` VARCHAR(191) NULL,
-    `canton` VARCHAR(191) NULL,
-    `distrito` VARCHAR(191) NULL,
-    `direccion` VARCHAR(191) NULL,
-    `metraje` VARCHAR(191) NULL,
-    `horario` VARCHAR(191) NULL,
-    `horas_dia` VARCHAR(191) NULL,
-    `horas_semana` VARCHAR(191) NULL,
-    `dias` VARCHAR(191) NULL,
-    `cantidad_personal` VARCHAR(191) NULL,
-    `detalle_supervision` LONGTEXT NULL,
-    `fecha_inicio` VARCHAR(191) NULL,
-    `lista_equipos_insumos` LONGTEXT NULL,
-    `costo_mensual` VARCHAR(191) NULL,
-    `costo_anual` VARCHAR(191) NULL,
-    `codigo` VARCHAR(191) NULL,
-    `plaza` VARCHAR(191) NULL,
-    `observaciones` LONGTEXT NULL,
-    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    `created_by` VARCHAR(191) NULL,
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_agenda_minuta_fisica` (
-    `id` VARCHAR(191) NOT NULL,
-    `empresa_id` VARCHAR(191) NULL,
-    `cliente_id` VARCHAR(191) NULL,
-    `contrato_id` VARCHAR(191) NULL,
-    `corpo_id` VARCHAR(191) NULL,
-    `puesto_id` VARCHAR(191) NULL,
-    `plaza_id` VARCHAR(191) NULL,
-    `fecha` VARCHAR(191) NULL,
-    `puesto` VARCHAR(191) NULL,
-    `hora_inicio` VARCHAR(191) NULL,
-    `hora_fin` VARCHAR(191) NULL,
-    `elaborado_por` VARCHAR(191) NULL,
-    `minuta_numero` VARCHAR(191) NULL,
-    `presentes` LONGTEXT NULL,
-    `observaciones` LONGTEXT NULL,
-    `temas_tratados` LONGTEXT NULL,
-    `notas` LONGTEXT NULL,
-    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    `created_by` VARCHAR(191) NULL,
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_plan_accion` (
-    `id` VARCHAR(191) NOT NULL,
-    `empresa_id` VARCHAR(191) NULL,
-    `cliente_id` VARCHAR(191) NULL,
-    `contrato_id` VARCHAR(191) NULL,
-    `corpo_id` VARCHAR(191) NULL,
-    `puesto_id` VARCHAR(191) NULL,
-    `plaza_id` VARCHAR(191) NULL,
-    `nombre_lugar` VARCHAR(191) NULL,
-    `fecha_inicio_operaciones` VARCHAR(191) NULL,
-    `tareas` LONGTEXT NULL,
-    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    `created_by` VARCHAR(191) NULL,
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_rol_trabajo` (
-    `id` VARCHAR(191) NOT NULL,
-    `empresa_id` VARCHAR(191) NULL,
-    `cliente_id` VARCHAR(191) NULL,
-    `contrato_id` VARCHAR(191) NULL,
-    `corpo_id` VARCHAR(191) NULL,
-    `puesto_id` VARCHAR(191) NULL,
-    `plaza_id` VARCHAR(191) NULL,
-    `area` VARCHAR(191) NULL,
-    `metraje` VARCHAR(191) NULL,
-    `horario` VARCHAR(191) NULL,
-    `personal` VARCHAR(191) NULL,
-    `horarios` LONGTEXT NULL,
-    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    `created_by` VARCHAR(191) NULL,
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_datos_basicos_contrato` (
-    `id` VARCHAR(191) NOT NULL,
-    `empresa_id` VARCHAR(191) NULL,
-    `cliente_id` VARCHAR(191) NULL,
-    `contrato_id` VARCHAR(191) NULL,
-    `corpo_id` VARCHAR(191) NULL,
-    `puesto_id` VARCHAR(191) NULL,
-    `plaza_id` VARCHAR(191) NULL,
-    `fecha_inicio_contrato` VARCHAR(191) NULL,
-    `cliente_contrato` VARCHAR(191) NULL,
-    `ejecutivo_gerente_asistente` VARCHAR(191) NULL,
-    `personal` LONGTEXT NULL,
-    `lugar_servicio` VARCHAR(191) NULL,
-    `roles_horarios` LONGTEXT NULL,
-    `desglose_salarios` LONGTEXT NULL,
-    `tipo_uniforme` LONGTEXT NULL,
-    `tipo_arma` LONGTEXT NULL,
-    `capacitaciones` LONGTEXT NULL,
-    `otros_datos` LONGTEXT NULL,
-    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    `created_by` VARCHAR(191) NULL,
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_cronograma_entrega_materiales_equipos` (
-    `id` VARCHAR(191) NOT NULL,
-    `empresa_id` VARCHAR(191) NULL,
-    `cliente_id` VARCHAR(191) NULL,
-    `contrato_id` VARCHAR(191) NULL,
-    `corpo_id` VARCHAR(191) NULL,
-    `puesto_id` VARCHAR(191) NULL,
-    `plaza_id` VARCHAR(191) NULL,
-    `contrato` VARCHAR(191) NULL,
-    `region` VARCHAR(191) NULL,
-    `puesto` VARCHAR(191) NULL,
-    `fecha_apertura_entrega` VARCHAR(191) NULL,
-    `responsable_apertura_entrega` VARCHAR(191) NULL,
-    `equipos_solicitados` LONGTEXT NULL,
-    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    `created_by` VARCHAR(191) NULL,
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_plan_gestion_ambiental` (
-    `id` VARCHAR(191) NOT NULL,
-    `empresa_id` VARCHAR(191) NULL,
-    `cliente_id` VARCHAR(191) NULL,
-    `contrato_id` VARCHAR(191) NULL,
-    `corpo_id` VARCHAR(191) NULL,
-    `puesto_id` VARCHAR(191) NULL,
-    `plaza_id` VARCHAR(191) NULL,
-    `ubicacion` VARCHAR(191) NULL,
-    `objetivo` LONGTEXT NULL,
-    `metodologia` LONGTEXT NULL,
-    `rol_horario` LONGTEXT NULL,
-    `uniformes` LONGTEXT NULL,
-    `equipos` LONGTEXT NULL,
-    `accesorios_varios` LONGTEXT NULL,
-    `tiempo_respuesta` LONGTEXT NULL,
-    `distribucion_labores` LONGTEXT NULL,
-    `frecuencia_limpieza` LONGTEXT NULL,
-    `supervision` LONGTEXT NULL,
-    `estrategia` LONGTEXT NULL,
-    `responsable` LONGTEXT NULL,
-    `formularios` LONGTEXT NULL,
-    `plan_capacitacion` LONGTEXT NULL,
-    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    `created_by` VARCHAR(191) NULL,
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_plan_trabajo_aseo_limpieza` (
-    `id` VARCHAR(191) NOT NULL,
-    `empresa_id` VARCHAR(191) NULL,
-    `cliente_id` VARCHAR(191) NULL,
-    `contrato_id` VARCHAR(191) NULL,
-    `corpo_id` VARCHAR(191) NULL,
-    `puesto_id` VARCHAR(191) NULL,
-    `plaza_id` VARCHAR(191) NULL,
-    `objetivo` LONGTEXT NULL,
-    `metodologia_trabajo_ambitos_accion` LONGTEXT NULL,
-    `rol_horario_trabajo` LONGTEXT NULL,
-    `uniformes` LONGTEXT NULL,
-    `equipos` LONGTEXT NULL,
-    `accesorios_varios` LONGTEXT NULL,
-    `tiempo_respuesta_disposicion_imprevistos` LONGTEXT NULL,
-    `distribucion_diaria_labores_personal` LONGTEXT NULL,
-    `frecuencia_minima_limpieza_areas` LONGTEXT NULL,
-    `supervision_metodo_rol_visitas` LONGTEXT NULL,
-    `estrategia_adecuado_continuo_servicio` LONGTEXT NULL,
-    `responsable_general_contrato` LONGTEXT NULL,
-    `formularios_registro_control_puestos_equipos` LONGTEXT NULL,
-    `plan_capacitacion` LONGTEXT NULL,
-    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    `created_by` VARCHAR(191) NULL,
-    `ubicacion` VARCHAR(191) NULL,
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_plan_atencion_situaciones_especiales` (
-    `id` VARCHAR(191) NOT NULL,
-    `empresa_id` VARCHAR(191) NULL,
-    `cliente_id` VARCHAR(191) NULL,
-    `contrato_id` VARCHAR(191) NULL,
-    `corpo_id` VARCHAR(191) NULL,
-    `puesto_id` VARCHAR(191) NULL,
-    `plaza_id` VARCHAR(191) NULL,
-    `edificio` VARCHAR(191) NULL,
-    `supervisor` VARCHAR(191) NULL,
-    `situaciones` LONGTEXT NULL,
-    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    `created_by` VARCHAR(191) NULL,
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_registro_tareas_actividades_limpieza` (
-    `id` VARCHAR(191) NOT NULL,
-    `empresa_id` VARCHAR(191) NULL,
-    `cliente_id` VARCHAR(191) NULL,
-    `contrato_id` VARCHAR(191) NULL,
-    `corpo_id` VARCHAR(191) NULL,
-    `puesto_id` VARCHAR(191) NULL,
-    `plaza_id` VARCHAR(191) NULL,
-    `miscelaneo` VARCHAR(191) NULL,
-    `area_piso` VARCHAR(191) NULL,
-    `turno_inicio` VARCHAR(191) NULL,
-    `turno_fin` VARCHAR(191) NULL,
-    `mes` VARCHAR(191) NULL,
-    `supervisor` VARCHAR(191) NULL,
-    `sucursal` VARCHAR(191) NULL,
-    `area` VARCHAR(191) NULL,
-    `cliente` VARCHAR(191) NULL,
-    `actividades_ejecucion_diaria` LONGTEXT NULL,
-    `actividades_ejecucion_semanal` LONGTEXT NULL,
-    `actividades_quincenales` LONGTEXT NULL,
-    `actividades_mensual` LONGTEXT NULL,
-    `actividades_bimensual` LONGTEXT NULL,
-    `actividades_trimestral` LONGTEXT NULL,
-    `actividades_cuatrimestral` LONGTEXT NULL,
-    `actividades_semestral` LONGTEXT NULL,
-    `actividades_anual` LONGTEXT NULL,
-    `otras_actividades` LONGTEXT NULL,
-    `programa_eventos_especiales` LONGTEXT NULL,
-    `firma_miscelaneo` LONGTEXT NULL,
-    `firma_supervisor` LONGTEXT NULL,
-    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    `created_by` VARCHAR(191) NULL,
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_matriz_riesgos` (
-    `id` VARCHAR(191) NOT NULL,
-    `empresa_id` VARCHAR(191) NULL,
-    `cliente_id` VARCHAR(191) NULL,
-    `contrato_id` VARCHAR(191) NULL,
-    `corpo_id` VARCHAR(191) NULL,
-    `puesto_id` VARCHAR(191) NULL,
-    `plaza_id` VARCHAR(191) NULL,
-    `riesgos` LONGTEXT NULL,
-    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    `created_by` VARCHAR(191) NULL,
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_matriz_oportunidades` (
-    `id` VARCHAR(191) NOT NULL,
-    `empresa_id` VARCHAR(191) NULL,
-    `cliente_id` VARCHAR(191) NULL,
-    `contrato_id` VARCHAR(191) NULL,
-    `corpo_id` VARCHAR(191) NULL,
-    `puesto_id` VARCHAR(191) NULL,
-    `plaza_id` VARCHAR(191) NULL,
-    `oportunidades` LONGTEXT NULL,
-    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    `created_by` VARCHAR(191) NULL,
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_matriz_indicador_procesos` (
-    `id` VARCHAR(191) NOT NULL,
-    `empresa_id` VARCHAR(191) NULL,
-    `cliente_id` VARCHAR(191) NULL,
-    `contrato_id` VARCHAR(191) NULL,
-    `corpo_id` VARCHAR(191) NULL,
-    `puesto_id` VARCHAR(191) NULL,
-    `plaza_id` VARCHAR(191) NULL,
-    `procesos` LONGTEXT NULL,
-    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    `created_by` VARCHAR(191) NULL,
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_rol_trabajo_mensual` (
-    `id` VARCHAR(191) NOT NULL,
-    `empresa_id` VARCHAR(191) NULL,
-    `cliente_id` VARCHAR(191) NULL,
-    `contrato_id` VARCHAR(191) NULL,
-    `corpo_id` VARCHAR(191) NULL,
-    `puesto_id` VARCHAR(191) NULL,
-    `plaza_id` VARCHAR(191) NULL,
-    `mes_ano` VARCHAR(191) NULL,
-    `cliente` VARCHAR(191) NULL,
-    `empleados` LONGTEXT NULL,
-    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    `created_by` VARCHAR(191) NULL,
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_solicitud_permiso` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `empresa_id` VARCHAR(191) NOT NULL,
-    `cliente_id` VARCHAR(191) NOT NULL,
-    `contrato_id` VARCHAR(191) NOT NULL,
-    `corpo_id` VARCHAR(191) NOT NULL,
-    `puesto_id` VARCHAR(191) NOT NULL,
-    `plaza_id` VARCHAR(191) NOT NULL,
-    `persona_solicita` VARCHAR(191) NOT NULL,
-    `codigo` VARCHAR(191) NOT NULL,
-    `contrato` VARCHAR(191) NOT NULL,
-    `horario` VARCHAR(191) NOT NULL,
-    `fecha_solicitud` DATETIME(3) NOT NULL,
-    `motivo_permiso` LONGTEXT NOT NULL,
-    `permiso_sustituido_por` VARCHAR(191) NOT NULL,
-    `codigo_sustituto` VARCHAR(191) NOT NULL,
-    `firma_gerente` LONGTEXT NOT NULL,
-    `firma_encargado_monitoreo` LONGTEXT NOT NULL,
-    `permiso_coordinado_por` VARCHAR(191) NOT NULL,
-    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    `created_by` VARCHAR(191) NOT NULL,
-    `firma_responsables` LONGTEXT NOT NULL,
-    `division` VARCHAR(191) NOT NULL,
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_control_asistencia` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `empresa_id` INTEGER NOT NULL,
-    `cliente_id` INTEGER NOT NULL,
-    `contrato_id` INTEGER NOT NULL,
-    `corpo_id` INTEGER NOT NULL,
-    `puesto_id` INTEGER NOT NULL,
-    `plaza_id` INTEGER NOT NULL,
-    `fecha` DATETIME(3) NOT NULL,
-    `turno` VARCHAR(191) NOT NULL,
-    `area_piso` VARCHAR(191) NOT NULL,
-    `total_presentes` INTEGER NOT NULL,
-    `fijos` INTEGER NOT NULL,
-    `colaboradores` LONGTEXT NOT NULL,
-    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    `created_by` INTEGER NOT NULL,
-    `firma_responsable` LONGTEXT NOT NULL,
-    `nombre_cliente` VARCHAR(191) NOT NULL,
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_apertura_cierre_puesto` (
-    `id` VARCHAR(191) NOT NULL,
-    `empresa_id` VARCHAR(191) NULL,
-    `cliente_id` VARCHAR(191) NULL,
-    `contrato_id` VARCHAR(191) NULL,
-    `corpo_id` VARCHAR(191) NULL,
-    `puesto_id` VARCHAR(191) NULL,
-    `plaza_id` VARCHAR(191) NULL,
-    `cliente` VARCHAR(191) NULL,
-    `numero_corpo` VARCHAR(191) NULL,
-    `numero_puesto` VARCHAR(191) NULL,
-    `fecha_realizado` VARCHAR(191) NULL,
-    `nombre_corpo` VARCHAR(191) NULL,
-    `nombre_puesto` VARCHAR(191) NULL,
-    `tipo` VARCHAR(191) NULL,
-    `actividades` LONGTEXT NULL,
-    `inventario` LONGTEXT NULL,
-    `fotos` LONGTEXT NULL,
-    `otras_observaciones` LONGTEXT NULL,
-    `nombre_representante_cliente` VARCHAR(191) NULL,
-    `firma_cliente` LONGTEXT NULL,
-    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    `created_by` VARCHAR(191) NULL,
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_registro_induccion_recorrido` (
-    `id` VARCHAR(191) NOT NULL,
-    `empresa_id` VARCHAR(191) NULL,
-    `cliente_id` VARCHAR(191) NULL,
-    `contrato_id` VARCHAR(191) NULL,
-    `corpo_id` VARCHAR(191) NULL,
-    `puesto_id` VARCHAR(191) NULL,
-    `plaza_id` VARCHAR(191) NULL,
-    `fecha` VARCHAR(191) NULL,
-    `renglon_edificio` VARCHAR(191) NULL,
-    `supervisor_cliente` VARCHAR(191) NULL,
-    `supervisor_corporacion` VARCHAR(191) NULL,
-    `temas_desarrollados` LONGTEXT NULL,
-    `aspectos_especificos` LONGTEXT NULL,
-    `participantes` LONGTEXT NULL,
-    `firma_supervisor` LONGTEXT NULL,
-    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    `created_by` VARCHAR(191) NULL,
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_informe_supervision` (
-    `id` VARCHAR(191) NOT NULL,
-    `empresa_id` VARCHAR(191) NULL,
-    `cliente_id` VARCHAR(191) NULL,
-    `contrato_id` VARCHAR(191) NULL,
-    `corpo_id` VARCHAR(191) NULL,
-    `puesto_id` VARCHAR(191) NULL,
-    `plaza_id` VARCHAR(191) NULL,
-    `fecha` VARCHAR(191) NULL,
-    `piso` VARCHAR(191) NULL,
-    `area` VARCHAR(191) NULL,
-    `aseador` VARCHAR(191) NULL,
-    `supervisor` VARCHAR(191) NULL,
-    `limpieza_general` LONGTEXT NULL,
-    `cuarto_aseo` LONGTEXT NULL,
-    `servicios_sanitarios` LONGTEXT NULL,
-    `uniforme_presentacion` LONGTEXT NULL,
-    `estado_equipos` LONGTEXT NULL,
-    `calificacion_general` LONGTEXT NULL,
-    `firma_aseador` LONGTEXT NULL,
-    `firma_supervisor` LONGTEXT NULL,
-    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    `created_by` VARCHAR(191) NULL,
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_guia_uso_cepillo_electrico` (
-    `id` VARCHAR(191) NOT NULL,
-    `empresa_id` VARCHAR(191) NULL,
-    `cliente_id` VARCHAR(191) NULL,
-    `contrato_id` VARCHAR(191) NULL,
-    `corpo_id` VARCHAR(191) NULL,
-    `puesto_id` VARCHAR(191) NULL,
-    `plaza_id` VARCHAR(191) NULL,
-    `miscelaneo` VARCHAR(191) NULL,
-    `capacitador` VARCHAR(191) NULL,
-    `cedula` VARCHAR(191) NULL,
-    `fecha` VARCHAR(191) NULL,
-    `firma_miscelaneo` LONGTEXT NULL,
-    `firma_capacitador` LONGTEXT NULL,
-    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    `created_by` VARCHAR(191) NULL,
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_listado_general_clientes` (
-    `id` VARCHAR(191) NOT NULL,
-    `empresa_id` VARCHAR(191) NULL,
-    `cliente_id` VARCHAR(191) NULL,
-    `contrato_id` VARCHAR(191) NULL,
-    `corpo_id` VARCHAR(191) NULL,
-    `puesto_id` VARCHAR(191) NULL,
-    `plaza_id` VARCHAR(191) NULL,
-    `numero_cliente` VARCHAR(191) NULL,
-    `fecha_inicio` VARCHAR(191) NULL,
-    `fecha_finalizacion` VARCHAR(191) NULL,
-    `extension_prorroga` VARCHAR(191) NULL,
-    `nombre_cliente` VARCHAR(191) NULL,
-    `area_sede` VARCHAR(191) NULL,
-    `numero_corpo` VARCHAR(191) NULL,
-    `numero_licitacion` VARCHAR(191) NULL,
-    `cantidad_miscelaneos` VARCHAR(191) NULL,
-    `tipo_requerimiento_insumos` VARCHAR(191) NULL,
-    `tipo_requerimiento_utencilios` VARCHAR(191) NULL,
-    `tipo_requerimiento_equipos` VARCHAR(191) NULL,
-    `ubicacion` VARCHAR(191) NULL,
-    `fecha_reunion_apertura` VARCHAR(191) NULL,
-    `necesidades` LONGTEXT NULL,
-    `gustos_preferencias` LONGTEXT NULL,
-    `supervisor_asignado` VARCHAR(191) NULL,
-    `condiciones_licitaciones` LONGTEXT NULL,
-    `plan_trabajo` LONGTEXT NULL,
-    `encuestas` LONGTEXT NULL,
-    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    `created_by` VARCHAR(191) NULL,
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_control_acciones_mejora` (
-    `id` VARCHAR(191) NOT NULL,
-    `empresa_id` VARCHAR(191) NULL,
-    `cliente_id` VARCHAR(191) NULL,
-    `contrato_id` VARCHAR(191) NULL,
-    `corpo_id` VARCHAR(191) NULL,
-    `puesto_id` VARCHAR(191) NULL,
-    `plaza_id` VARCHAR(191) NULL,
-    `numero_accion` VARCHAR(191) NULL,
-    `causa_origen` LONGTEXT NULL,
-    `fecha_deteccion_incidencia` VARCHAR(191) NULL,
-    `mes_deteccion` VARCHAR(191) NULL,
-    `tipo_accion` VARCHAR(191) NULL,
-    `proceso_relacionado` LONGTEXT NULL,
-    `encargado_proceso` VARCHAR(191) NULL,
-    `origen_accion` VARCHAR(191) NULL,
-    `fecha_elaboracion_plan` VARCHAR(191) NULL,
-    `tiempo_plan_vs_deteccion` VARCHAR(191) NULL,
-    `plan_elaborado_a_tiempo` VARCHAR(191) NULL,
-    `detalle_nc_opr_dm` LONGTEXT NULL,
-    `analisis_causas` LONGTEXT NULL,
-    `accion_inmediata` LONGTEXT NULL,
-    `accion_mejora` LONGTEXT NULL,
-    `fecha_aprobacion` VARCHAR(191) NULL,
-    `responsable_ejecucion` VARCHAR(191) NULL,
-    `fecha_programada_ejecucion` VARCHAR(191) NULL,
-    `fecha_real_ejecucion` VARCHAR(191) NULL,
-    `mes_ejecucion` VARCHAR(191) NULL,
-    `modif_fecha_ejecucion_motivo` LONGTEXT NULL,
-    `aplica_seguimiento` VARCHAR(191) NULL,
-    `seguimiento_meses` LONGTEXT NULL,
-    `evidencias` LONGTEXT NULL,
-    `estado_accion` VARCHAR(191) NULL,
-    `a_tiempo` VARCHAR(191) NULL,
-    `no_conformidades_similares` VARCHAR(191) NULL,
-    `reincidencia` VARCHAR(191) NULL,
-    `actualiza_matriz_riesgos` VARCHAR(191) NULL,
-    `efectividad` VARCHAR(191) NULL,
-    `no_efectiva` VARCHAR(191) NULL,
-    `cambiar_al_8d` VARCHAR(191) NULL,
-    `cerrada` VARCHAR(191) NULL,
-    `dueño_proceso` VARCHAR(191) NULL,
-    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    `created_by` VARCHAR(191) NULL,
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_politica_calidad` (
-    `id` VARCHAR(191) NOT NULL,
-    `empresa_id` VARCHAR(191) NULL,
-    `cliente_id` VARCHAR(191) NULL,
-    `contrato_id` VARCHAR(191) NULL,
-    `corpo_id` VARCHAR(191) NULL,
-    `puesto_id` VARCHAR(191) NULL,
-    `plaza_id` VARCHAR(191) NULL,
-    `politica_contenido` LONGTEXT NULL,
-    `nombre_aprobado` VARCHAR(191) NULL,
-    `firma_aprobado` LONGTEXT NULL,
-    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    `created_by` VARCHAR(191) NULL,
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_objetivos_empresariales_calidad` (
-    `id` VARCHAR(191) NOT NULL,
-    `empresa_id` VARCHAR(191) NULL,
-    `cliente_id` VARCHAR(191) NULL,
-    `contrato_id` VARCHAR(191) NULL,
-    `corpo_id` VARCHAR(191) NULL,
-    `puesto_id` VARCHAR(191) NULL,
-    `plaza_id` VARCHAR(191) NULL,
-    `ambitos` LONGTEXT NULL,
-    `nombre_aprobado` VARCHAR(191) NULL,
-    `firma_aprobado` LONGTEXT NULL,
-    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    `created_by` VARCHAR(191) NULL,
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_matriz_analisis_partes_interesadas` (
-    `id` VARCHAR(191) NOT NULL,
-    `empresa_id` VARCHAR(191) NULL,
-    `cliente_id` VARCHAR(191) NULL,
-    `contrato_id` VARCHAR(191) NULL,
-    `corpo_id` VARCHAR(191) NULL,
-    `puesto_id` VARCHAR(191) NULL,
-    `plaza_id` VARCHAR(191) NULL,
-    `partes_interesadas` LONGTEXT NULL,
-    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    `created_by` VARCHAR(191) NULL,
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_plan_comunicacion` (
-    `id` VARCHAR(191) NOT NULL,
-    `empresa_id` VARCHAR(191) NULL,
-    `cliente_id` VARCHAR(191) NULL,
-    `contrato_id` VARCHAR(191) NULL,
-    `corpo_id` VARCHAR(191) NULL,
-    `puesto_id` VARCHAR(191) NULL,
-    `plaza_id` VARCHAR(191) NULL,
-    `comunicaciones` LONGTEXT NULL,
-    `responsable_aprobacion` VARCHAR(191) NULL,
-    `puesto_aprobacion` VARCHAR(191) NULL,
-    `fecha_aprobacion` VARCHAR(191) NULL,
-    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    `created_by` VARCHAR(191) NULL,
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_matriz_gestion_conocimiento` (
-    `id` VARCHAR(191) NOT NULL,
-    `empresa_id` VARCHAR(191) NULL,
-    `cliente_id` VARCHAR(191) NULL,
-    `contrato_id` VARCHAR(191) NULL,
-    `corpo_id` VARCHAR(191) NULL,
-    `puesto_id` VARCHAR(191) NULL,
-    `plaza_id` VARCHAR(191) NULL,
-    `registros` LONGTEXT NULL,
-    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    `created_by` VARCHAR(191) NULL,
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_planificacion_cambios_sgc` (
-    `id` VARCHAR(191) NOT NULL,
-    `empresa_id` VARCHAR(191) NULL,
-    `cliente_id` VARCHAR(191) NULL,
-    `contrato_id` VARCHAR(191) NULL,
-    `corpo_id` VARCHAR(191) NULL,
-    `puesto_id` VARCHAR(191) NULL,
-    `plaza_id` VARCHAR(191) NULL,
-    `datos_cambio` LONGTEXT NULL,
-    `actividades` LONGTEXT NULL,
-    `aprobado_por` VARCHAR(191) NULL,
-    `firma_representante` LONGTEXT NULL,
-    `fecha_aprobacion` VARCHAR(191) NULL,
-    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    `created_by` VARCHAR(191) NULL,
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_rutas_giras` (
-    `id` VARCHAR(191) NOT NULL,
-    `empresa_id` VARCHAR(191) NULL,
-    `cliente_id` VARCHAR(191) NULL,
-    `contrato_id` VARCHAR(191) NULL,
-    `corpo_id` VARCHAR(191) NULL,
-    `puesto_id` VARCHAR(191) NULL,
-    `plaza_id` VARCHAR(191) NULL,
-    `sociedad` VARCHAR(191) NULL,
-    `cliente` VARCHAR(191) NULL,
-    `zona` VARCHAR(191) NULL,
-    `cantidad_personal` VARCHAR(191) NULL,
-    `gira_ruta` VARCHAR(191) NULL,
-    `dia_entrega` VARCHAR(191) NULL,
-    `estatus` VARCHAR(191) NULL,
-    `cumplimiento_supervision` VARCHAR(191) NULL,
-    `cumplimiento_entrega_insumos` VARCHAR(191) NULL,
-    `persona_refuerzo` VARCHAR(191) NULL,
-    `notas_cambios` VARCHAR(191) NULL,
-    `estado` VARCHAR(191) NULL,
-    `nombre_persona_refuerzo` VARCHAR(191) NULL,
-    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    `created_by` VARCHAR(191) NULL,
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_empleado_almuerzo` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `empleadoId` INTEGER NOT NULL,
-    `pausas` LONGTEXT NOT NULL,
-    `inicio` DATETIME(0) NOT NULL,
-    `fin` DATETIME(0) NOT NULL,
-    `es_manual` BOOLEAN NOT NULL DEFAULT false,
-
-    INDEX `empleadoId_almuerzo_fkey`(`empleadoId`),
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_encuesta_cliente` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `empresa_id` INTEGER NOT NULL,
-    `cliente_id` INTEGER NOT NULL,
-    `corpo_id` INTEGER NOT NULL,
-    `puesto_id` INTEGER NOT NULL,
-    `division_id` INTEGER NOT NULL,
-    `responsable_id` INTEGER NOT NULL,
-    `fecha` DATE NOT NULL,
-    `evaluaciones` LONGTEXT NOT NULL,
-    `created_at` DATETIME(0) NOT NULL,
-    `firma_responsable` LONGTEXT NOT NULL,
-    `nombre_evaluado` VARCHAR(45) NOT NULL,
-    `cedula_evaluado` VARCHAR(25) NOT NULL,
-    `cedula_responsable` VARCHAR(25) NOT NULL,
-    `nombre_responsable` VARCHAR(45) NOT NULL,
-    `email_evaluado` VARCHAR(50) NOT NULL,
-    `firma_evaluado` LONGTEXT NOT NULL,
-    `telefono_evaluado` VARCHAR(25) NOT NULL,
-    `empresa_evaluado` VARCHAR(55) NOT NULL,
-    `observaciones` LONGTEXT NOT NULL,
-
-    INDEX `c_encuesta_cliente_cliente_id_fkey`(`cliente_id`),
-    INDEX `c_encuesta_cliente_corpo_id_fkey`(`corpo_id`),
-    INDEX `c_encuesta_cliente_division_id_fkey`(`division_id`),
-    INDEX `c_encuesta_cliente_empresa_id_fkey`(`empresa_id`),
-    INDEX `c_encuesta_cliente_puesto_id_fkey`(`puesto_id`),
-    INDEX `c_encuesta_cliente_responsable_id_fkey`(`responsable_id`),
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `refresh_token` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `token` VARCHAR(64) NOT NULL,
-    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    `expiresAt` DATETIME(3) NOT NULL,
-    `revoked` BOOLEAN NOT NULL DEFAULT false,
-    `empleadoId` INTEGER NOT NULL,
-    `sessionId` VARCHAR(36) NOT NULL,
-
-    INDEX `refresh_token_empleadoId_fkey`(`empleadoId`),
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
 CREATE TABLE `c_empleado_basedatos_digital` (
     `id` INTEGER NOT NULL AUTO_INCREMENT,
     `empleado_id` INTEGER NULL,
@@ -2056,7 +1125,7 @@ CREATE TABLE `c_feriado_dia` (
 -- CreateTable
 CREATE TABLE `c_horario` (
     `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `titulo` VARCHAR(100) NOT NULL,
+    `titulo` VARCHAR(250) NOT NULL,
     `fecha_activacion` DATE NOT NULL,
     `deleted_at` DATE NULL,
     `activo` BOOLEAN NULL,
@@ -2225,6 +1294,8 @@ CREATE TABLE `c_intercambio_linea` (
     `plazaInicio_id` INTEGER NULL,
     `plazaFin_id` INTEGER NULL,
     `empleadoSustituido_id` INTEGER NULL,
+    `archivo_adjunto_id` LONGTEXT NULL,
+    `archivo_adjunto_nombre` LONGTEXT NULL,
 
     INDEX `IDX_88E784CE4BC37A6F`(`intercambio_id`),
     INDEX `IDX_88E784CE77BB7125`(`plazaInicio_id`),
@@ -2295,7 +1366,7 @@ CREATE TABLE `c_preaviso` (
 -- CreateTable
 CREATE TABLE `c_rol_tipoaccion` (
     `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `nombre` VARCHAR(50) NOT NULL,
+    `nombre` VARCHAR(100) NOT NULL,
     `observaciones` VARCHAR(254) NULL,
 
     PRIMARY KEY (`id`)
@@ -2590,19 +1661,6 @@ CREATE TABLE `consultor_history_checked_update` (
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- CreateTable
-CREATE TABLE `consultor_log` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `empleado_id` INTEGER NULL,
-    `fecha` DATETIME(0) NOT NULL,
-    `tipo_accion` VARCHAR(32) NULL,
-    `solicitud_id` INTEGER NULL,
-
-    INDEX `IDX_45A0E79B1CB9D6E4`(`solicitud_id`),
-    INDEX `IDX_45A0E79B952BE730`(`empleado_id`),
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
 CREATE TABLE `d_empleado_cartas_recomendacion` (
     `id` INTEGER NOT NULL AUTO_INCREMENT,
     `empleado_id` INTEGER NULL,
@@ -2643,35 +1701,6 @@ CREATE TABLE `d_empleado_otras_anotaciones` (
 
     INDEX `IDX_CAA044011CB9D6E4`(`solicitud_id`),
     INDEX `IDX_CAA04401952BE730`(`empleado_id`),
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_puesto_notas` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `titulo` VARCHAR(255) NOT NULL,
-    `description` LONGTEXT NOT NULL,
-    `categoria_id` INTEGER NULL,
-    `puesto_id` INTEGER NOT NULL,
-    `created_at` DATETIME(0) NOT NULL,
-    `updated_at` DATETIME(0) NOT NULL,
-
-    INDEX `puesto_id_notas_fkey`(`puesto_id`),
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `c_puesto_notas_bitacora_cambios` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `nota_id` INTEGER NOT NULL,
-    `empleado_id` INTEGER NOT NULL,
-    `titulo` VARCHAR(255) NOT NULL,
-    `description` LONGTEXT NOT NULL,
-    `created_at` DATETIME(0) NOT NULL,
-    `categoria` VARCHAR(191) NOT NULL DEFAULT '-',
-
-    INDEX `c_puesto_notas_bitacora_cambios_empleado_id_fkey`(`empleado_id`),
-    INDEX `c_puesto_notas_bitacora_cambios_nota_id_fkey`(`nota_id`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
@@ -2849,25 +1878,6 @@ CREATE TABLE `e_estructura_articulo_corpo_puesto_plan` (
     INDEX `IDX_AAD537C45035E9DA`(`puesto_id`),
     INDEX `IDX_AAD537C4EB6587E3`(`combo_id`),
     INDEX `IDX_AAD537C4EDDDC6B`(`articuloCP_id`),
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `e_estructura_bitacora_acciones` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `codigo_nombre` VARCHAR(128) NOT NULL,
-    `nombre_tabla` VARCHAR(64) NOT NULL,
-    `tipo_accion_base_datos` VARCHAR(10) NOT NULL,
-    `fecha_hora` DATETIME(0) NOT NULL,
-    `id_foraneo` INTEGER NOT NULL,
-    `usuario` VARCHAR(64) NULL,
-    `cambios` LONGTEXT NULL,
-
-    INDEX `codigo_nombre_idx`(`codigo_nombre`),
-    INDEX `fechaHora_idx`(`fecha_hora`),
-    INDEX `nombre_tabla_idx`(`nombre_tabla`),
-    INDEX `tipoAccionBaseDatos_idx`(`tipo_accion_base_datos`),
-    INDEX `usuario_idx`(`usuario`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
@@ -3176,6 +2186,8 @@ CREATE TABLE `e_estructura_puesto` (
     `fecha_inactivacion` DATETIME(0) NULL,
     `usuario_inactivacion` VARCHAR(255) NULL,
     `es_cubrevacaciones` BOOLEAN NULL,
+    `coordenadas_gpslat` VARCHAR(255) NULL,
+    `coordenadas_gpslng` VARCHAR(255) NULL,
 
     UNIQUE INDEX `UNIQ_5C9F9D2020332D99`(`codigo`),
     INDEX `IDX_5C9F9D20279A5D5E`(`sucursal_id`),
@@ -3195,61 +2207,6 @@ CREATE TABLE `e_estructura_requerimiento_contrato` (
 
     INDEX `IDX_D5DEDC5251DD0900`(`requerimiento_id`),
     INDEX `IDX_D5DEDC5270AE7BF1`(`contrato_id`),
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `e_manual_puesto` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `title` LONGTEXT NOT NULL,
-    `description` LONGTEXT NOT NULL,
-    `firma` LONGTEXT NOT NULL,
-    `puesto_id` INTEGER NOT NULL,
-    `created_by` VARCHAR(191) NOT NULL,
-    `created_at` DATETIME(0) NOT NULL,
-    `quiz` LONGTEXT NULL,
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `e_puestos_manual_puesto` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `manual_puesto_id` INTEGER NOT NULL,
-    `puesto_id` INTEGER NOT NULL,
-
-    INDEX `e_puestos_manual_puesto_manual_puesto_id_fkey`(`manual_puesto_id`),
-    INDEX `e_puestos_manual_puesto_puesto_id_fkey`(`puesto_id`),
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `e_archivos_manual_puesto` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `name` LONGTEXT NOT NULL,
-    `type` VARCHAR(25) NOT NULL,
-    `extension` VARCHAR(25) NOT NULL,
-    `manual_puesto_id` INTEGER NOT NULL,
-    `original_name` LONGTEXT NOT NULL,
-
-    INDEX `e_archivos_manual_puesto_manual_puesto_id_fkey`(`manual_puesto_id`),
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `e_empleado_visualizacion_manual_puesto` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `empleado_id` INTEGER NOT NULL,
-    `manual_puesto_id` INTEGER NOT NULL,
-    `nombre_empleado` LONGTEXT NOT NULL,
-    `firma_empleado` LONGTEXT NOT NULL,
-    `created_at` DATETIME(0) NOT NULL,
-    `quiz_answear` LONGTEXT NULL,
-    `updated_at` DATETIME(0) NOT NULL,
-    `approved` BOOLEAN NULL,
-
-    INDEX `e_empleado_visualizacion_manual_puesto_empleado_id_fkey`(`empleado_id`),
-    INDEX `e_empleado_visualizacion_manual_puesto_manual_puesto_id_fkey`(`manual_puesto_id`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
@@ -3286,76 +2243,6 @@ CREATE TABLE `e_estructura_sucursal` (
     INDEX `IDX_85C0E6388D070D0B`(`canton_id`),
     INDEX `IDX_85C0E63898260155`(`region_id`),
     INDEX `IDX_85C0E638E557397E`(`distrito_id`),
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `e_actividad_corpo` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `empresa_id` INTEGER NOT NULL,
-    `cliente_id` INTEGER NOT NULL,
-    `contrato_id` INTEGER NOT NULL,
-    `corpo_id` INTEGER NOT NULL,
-    `puesto_id` INTEGER NULL,
-    `plaza_id` INTEGER NULL,
-    `nombre_actividad` VARCHAR(255) NOT NULL,
-    `fecha_inicio` DATE NOT NULL,
-    `frecuencia` LONGTEXT NOT NULL,
-    `es_revision_equipo` BOOLEAN NOT NULL,
-    `descripcion_actividad` LONGTEXT NOT NULL,
-    `reglas` LONGTEXT NOT NULL,
-    `firma_responsable` LONGTEXT NOT NULL,
-
-    INDEX `e_actividad_corpo_cliente_id_fkey`(`cliente_id`),
-    INDEX `e_actividad_corpo_contrato_id_fkey`(`contrato_id`),
-    INDEX `e_actividad_corpo_corpo_id_fkey`(`corpo_id`),
-    INDEX `e_actividad_corpo_empresa_id_fkey`(`empresa_id`),
-    INDEX `e_actividad_corpo_plaza_id_fkey`(`plaza_id`),
-    INDEX `e_actividad_corpo_puesto_id_fkey`(`puesto_id`),
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `e_actividad_puesto_plaza` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `actividadCorpo_id` INTEGER NOT NULL,
-    `puesto_id` INTEGER NOT NULL,
-    `plaza_id` INTEGER NULL,
-
-    INDEX `e_actividad_puesto_plaza_actividadCorpo_id_fkey`(`actividadCorpo_id`),
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `e_actividad_corpo_plaza` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `actividadCorpo_id` INTEGER NOT NULL,
-    `plaza_id` INTEGER NOT NULL,
-    `bitacora` LONGTEXT NOT NULL,
-    `file_name` LONGTEXT NULL,
-    `created_at` DATETIME(3) NOT NULL,
-    `updated_at` DATETIME(3) NOT NULL,
-    `marcada` BOOLEAN NOT NULL DEFAULT false,
-
-    INDEX `e_actividad_corpo_plaza_actividadCorpo_id_fkey`(`actividadCorpo_id`),
-    INDEX `e_actividad_corpo_plaza_plaza_id_fkey`(`plaza_id`),
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `e_actividad_corpo_revision_equipo` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `articulo_id` INTEGER NOT NULL,
-    `es_correcto` BOOLEAN NOT NULL,
-    `motivo_incorrecto` LONGTEXT NOT NULL,
-    `created_at` DATETIME(3) NOT NULL,
-    `updated_at` DATETIME(3) NOT NULL,
-    `marcada` BOOLEAN NOT NULL DEFAULT false,
-    `file_name` LONGTEXT NULL,
-    `actividadCorpoPlaza_id` INTEGER NOT NULL,
-
-    INDEX `e_actividad_corpo_revision_equipo_articulo_id_fkey`(`articulo_id`),
-    INDEX `e_actividad_corpo_revision_equipo_actividad_corpo_plaza_fkey`(`actividadCorpoPlaza_id`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
@@ -3529,52 +2416,6 @@ CREATE TABLE `e_referencia_personal` (
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- CreateTable
-CREATE TABLE `e_registro_capacitaciones` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `empresa_id` INTEGER NOT NULL,
-    `cliente_id` INTEGER NOT NULL,
-    `corpo_id` INTEGER NOT NULL,
-    `titulo` LONGTEXT NOT NULL,
-    `descripcion` LONGTEXT NOT NULL,
-    `resultado` VARCHAR(15) NULL,
-    `observaciones` LONGTEXT NOT NULL,
-    `nombre_responsable` LONGTEXT NOT NULL,
-    `firma_responsable` LONGTEXT NOT NULL,
-    `cedula_responsable` VARCHAR(25) NOT NULL,
-    `responsable_id` INTEGER NOT NULL,
-    `fecha` DATE NOT NULL,
-    `file` LONGTEXT NULL,
-    `tipo` VARCHAR(15) NOT NULL,
-
-    INDEX `e_registro_capacitaciones_cliente_id_fkey`(`cliente_id`),
-    INDEX `e_registro_capacitaciones_corpo_id_fkey`(`corpo_id`),
-    INDEX `e_registro_capacitaciones_empresa_id_fkey`(`empresa_id`),
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `e_capacitacion_empleado` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `capacitacion_id` INTEGER NOT NULL,
-    `empleado_id` INTEGER NOT NULL,
-
-    INDEX `e_capacitacion_empleado_capacitacion_id_fkey`(`capacitacion_id`),
-    INDEX `e_capacitacion_empleado_empleado_id_fkey`(`empleado_id`),
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `e_capacitacion_puesto` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `capacitacion_id` INTEGER NOT NULL,
-    `puesto_id` INTEGER NOT NULL,
-
-    INDEX `e_capacitacion_puesto_capacitacion_id_fkey`(`capacitacion_id`),
-    INDEX `e_capacitacion_puesto_puesto_id_fkey`(`puesto_id`),
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
 CREATE TABLE `e_registro_enfermedades` (
     `id` INTEGER NOT NULL AUTO_INCREMENT,
     `empleado_id` INTEGER NULL,
@@ -3641,72 +2482,6 @@ CREATE TABLE `e_registro_habilidades` (
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- CreateTable
-CREATE TABLE `e_registro_vehiculos` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `cliente_id` INTEGER NOT NULL,
-    `corpo_id` INTEGER NOT NULL,
-    `puesto_id` INTEGER NOT NULL,
-    `tipo` VARCHAR(20) NOT NULL,
-    `placa` VARCHAR(30) NOT NULL,
-    `nombre` VARCHAR(75) NOT NULL,
-    `cedula` VARCHAR(30) NOT NULL,
-    `hora_entrada` DATETIME(0) NOT NULL,
-    `hora_salida` DATETIME(0) NULL,
-    `razon_visita` LONGTEXT NOT NULL,
-    `responsable_id` INTEGER NOT NULL,
-    `created_at` DATETIME(0) NOT NULL,
-    `updated_at` DATETIME(0) NOT NULL,
-    `file_name` LONGTEXT NULL,
-
-    INDEX `FK_BB503B25952BE730`(`responsable_id`),
-    INDEX `FK_BB503B25953BE730`(`cliente_id`),
-    INDEX `FK_BB503B25954BE730`(`corpo_id`),
-    INDEX `FK_BB503B25955BE730`(`puesto_id`),
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `e_registro_personas` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `cliente_id` INTEGER NOT NULL,
-    `corpo_id` INTEGER NOT NULL,
-    `puesto_id` INTEGER NOT NULL,
-    `nombre` VARCHAR(75) NOT NULL,
-    `cedula` VARCHAR(30) NOT NULL,
-    `hora_entrada` DATETIME(0) NOT NULL,
-    `hora_salida` DATETIME(0) NULL,
-    `razon_visita` VARCHAR(75) NOT NULL,
-    `responsable_id` INTEGER NOT NULL,
-    `es_funcionario` BOOLEAN NOT NULL,
-    `observaciones` VARCHAR(255) NULL,
-    `tipo_accion` VARCHAR(15) NULL,
-    `created_at` DATETIME(0) NOT NULL,
-    `updated_at` DATETIME(0) NOT NULL,
-    `foto_cedula` LONGTEXT NULL,
-    `pers_autoriza_salida` VARCHAR(255) NULL,
-
-    INDEX `FK_BB503B25992BE730`(`responsable_id`),
-    INDEX `FK_BB603B25953BE730`(`cliente_id`),
-    INDEX `FK_BB703B25954BE730`(`corpo_id`),
-    INDEX `FK_BB803B25955BE730`(`puesto_id`),
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `e_activo_visitante` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `visitante_id` INTEGER NOT NULL,
-    `tipo_id` INTEGER NOT NULL,
-    `detalles` LONGTEXT NOT NULL,
-    `numero_serie` VARCHAR(50) NOT NULL,
-    `numero_activo` VARCHAR(50) NULL,
-
-    INDEX `FK_BB503B25992BE739`(`visitante_id`),
-    INDEX `FK_BB503B25993BE739`(`tipo_id`),
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
 CREATE TABLE `e_requerimiento_cumplido` (
     `id` INTEGER NOT NULL AUTO_INCREMENT,
     `empleado_id` INTEGER NULL,
@@ -3728,26 +2503,6 @@ CREATE TABLE `e_trabajo` (
 
     INDEX `IDX_1C41565B952BE730`(`empleado_id`),
     INDEX `IDX_1C41565BC2D4D747`(`nombre_id`),
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `log_horario` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `horario_id` INTEGER NULL,
-    `titulo` VARCHAR(255) NOT NULL,
-    `tipo_accion_base_datos` VARCHAR(10) NOT NULL,
-    `fecha_hora` DATETIME(0) NOT NULL,
-    `id_foraneo` INTEGER NOT NULL,
-    `usuario` VARCHAR(64) NULL,
-    `cambios` LONGTEXT NULL,
-    `unique_request_id` VARCHAR(6) NULL,
-
-    INDEX `IDX_DA956B344959F1BA`(`horario_id`),
-    INDEX `fechaHora_idx`(`fecha_hora`),
-    INDEX `tipoAccionBaseDatos_idx`(`tipo_accion_base_datos`),
-    INDEX `titulo_idx`(`titulo`),
-    INDEX `usuario_idx`(`usuario`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
@@ -3911,32 +2666,6 @@ CREATE TABLE `n_apoderado` (
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- CreateTable
-CREATE TABLE `n_novedades_categoria` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `nombre` VARCHAR(191) NOT NULL,
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `n_tipo_activo_visitas` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `nombre` VARCHAR(255) NOT NULL,
-
-    UNIQUE INDEX `UNIQ_92DE8E473A989126`(`nombre`),
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `n_clasificacion_incidente` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `nombre` VARCHAR(255) NOT NULL,
-
-    UNIQUE INDEX `UNIQ_92DE8E473A988126`(`nombre`),
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
 CREATE TABLE `n_articulo_corpo_puesto` (
     `id` INTEGER NOT NULL AUTO_INCREMENT,
     `nombre` VARCHAR(255) NOT NULL,
@@ -4053,6 +2782,7 @@ CREATE TABLE `n_distrito` (
 CREATE TABLE `n_division` (
     `id` INTEGER NOT NULL AUTO_INCREMENT,
     `nombre` VARCHAR(255) NOT NULL,
+    `codigo` VARCHAR(250) NULL,
 
     UNIQUE INDEX `UNIQ_F47A4A6F3A909126`(`nombre`),
     PRIMARY KEY (`id`)
@@ -5331,25 +4061,6 @@ CREATE TABLE `security_fos_group` (
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- CreateTable
-CREATE TABLE `roles_security` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `name` VARCHAR(255) NOT NULL,
-
-    UNIQUE INDEX `UNIQ_23BF45A45E236E06`(`name`),
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `roles_security_modules` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `module_name` VARCHAR(191) NOT NULL,
-    `actions` LONGTEXT NOT NULL,
-    `role_name` VARCHAR(191) NOT NULL,
-
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
 CREATE TABLE `security_fos_user` (
     `id` INTEGER NOT NULL AUTO_INCREMENT,
     `username` VARCHAR(255) NOT NULL,
@@ -5563,206 +4274,1592 @@ CREATE TABLE `v_vacacion_solicitud` (
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
+-- CreateTable
+CREATE TABLE `a_recovery_password_token` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `expira_en` INTEGER NOT NULL,
+    `creacion` DATETIME(0) NOT NULL,
+    `token` VARCHAR(255) NOT NULL,
+    `empleadoId` INTEGER NOT NULL,
+
+    INDEX `FK_E35A23BC952BE730`(`empleadoId`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_acta_entre_producto` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `empresa_id` INTEGER NOT NULL,
+    `cliente_id` INTEGER NOT NULL,
+    `contrato_id` INTEGER NOT NULL,
+    `corpo_id` INTEGER NOT NULL,
+    `fecha` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `tipo_entrega` LONGTEXT NOT NULL,
+    `mensual` LONGTEXT NOT NULL,
+    `division` VARCHAR(25) NOT NULL,
+    `detalle` LONGTEXT NOT NULL,
+    `observaciones` LONGTEXT NOT NULL,
+    `nombre_entrega` LONGTEXT NOT NULL,
+    `cedula_entrega` VARCHAR(30) NOT NULL,
+    `fecha_entrega` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `firma_entrega` LONGTEXT NOT NULL,
+    `nombre_recibe` LONGTEXT NOT NULL,
+    `cedula_recibe` VARCHAR(30) NOT NULL,
+    `fecha_recibe` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `firma_recibe` LONGTEXT NOT NULL,
+    `firma_responsable` LONGTEXT NOT NULL,
+    `division_id` INTEGER NOT NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_agenda_minuta` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `cliente_id` INTEGER NOT NULL,
+    `corpo_id` INTEGER NOT NULL,
+    `puesto_id` INTEGER NOT NULL,
+    `numero` INTEGER NOT NULL,
+    `titulo` VARCHAR(255) NOT NULL,
+    `fecha` DATE NOT NULL,
+    `hora_inicio` TIME(0) NOT NULL,
+    `hora_fin` TIME(0) NOT NULL,
+    `autor` LONGTEXT NOT NULL,
+    `participantes` LONGTEXT NOT NULL,
+    `acuerdos` LONGTEXT NOT NULL,
+    `observaciones` LONGTEXT NOT NULL,
+    `firma_responsable` LONGTEXT NOT NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `created_by` VARCHAR(191) NOT NULL,
+    `temas_a_tratar` LONGTEXT NULL,
+
+    INDEX `c_agenda_minuta_cliente_id_fkey`(`cliente_id`),
+    INDEX `c_agenda_minuta_corpo_id_fkey`(`corpo_id`),
+    INDEX `c_agenda_minuta_puesto_id_fkey`(`puesto_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_anexos_quejas` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `name` LONGTEXT NOT NULL,
+    `original_name` LONGTEXT NOT NULL,
+    `type` VARCHAR(25) NOT NULL,
+    `extension` VARCHAR(25) NOT NULL,
+    `queja_id` INTEGER NOT NULL,
+
+    INDEX `c_anexos_quejas_queja_id_fkey`(`queja_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_apertura_cierre_puesto` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `cliente_id` INTEGER NOT NULL,
+    `corpo_id` INTEGER NOT NULL,
+    `puesto_id` INTEGER NOT NULL,
+    `tipo` VARCHAR(191) NOT NULL,
+    `actividades` LONGTEXT NOT NULL,
+    `inventario` LONGTEXT NOT NULL,
+    `otras_observaciones` LONGTEXT NULL,
+    `nombre_representante_cliente` VARCHAR(255) NOT NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `created_by` INTEGER NOT NULL,
+    `fecha` DATETIME(3) NOT NULL,
+    `firma_representante_empresa_entrante` LONGTEXT NOT NULL,
+    `firma_representante_empresa_saliente` LONGTEXT NOT NULL,
+    `firma_responsable` LONGTEXT NOT NULL,
+    `nombre_representante_empresa_entrante` VARCHAR(255) NOT NULL,
+    `nombre_representante_empresa_saliente` VARCHAR(255) NOT NULL,
+    `firma_representante_cliente` LONGTEXT NOT NULL,
+    `division_id` INTEGER NOT NULL,
+
+    INDEX `c_apertura_cierre_puesto_cliente_id_fkey`(`cliente_id`),
+    INDEX `c_apertura_cierre_puesto_corpo_id_fkey`(`corpo_id`),
+    INDEX `c_apertura_cierre_puesto_division_id_fkey`(`division_id`),
+    INDEX `c_apertura_cierre_puesto_puesto_id_fkey`(`puesto_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_archivos_adjuntos_articulo_mantenimiento` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `name` LONGTEXT NOT NULL,
+    `original_name` LONGTEXT NOT NULL,
+    `type` VARCHAR(25) NOT NULL,
+    `extension` VARCHAR(25) NOT NULL,
+    `activo_mantenimiento_id` INTEGER NOT NULL,
+
+    INDEX `c_archivos_adjuntos_articulo_mantenimiento_activo_mantenimi_fkey`(`activo_mantenimiento_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_archivos_aporte_incidente` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `name` LONGTEXT NOT NULL,
+    `original_name` LONGTEXT NOT NULL,
+    `type` VARCHAR(25) NOT NULL,
+    `extension` VARCHAR(25) NOT NULL,
+    `contribucion_id` INTEGER NOT NULL,
+
+    INDEX `c_archivos_aporte_incidente_contribucion_id_fkey`(`contribucion_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_archivos_incidente` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `name` LONGTEXT NOT NULL,
+    `original_name` LONGTEXT NOT NULL,
+    `type` VARCHAR(25) NOT NULL,
+    `extension` VARCHAR(25) NOT NULL,
+    `incidente_id` INTEGER NOT NULL,
+
+    INDEX `c_archivos_incidente_incidente_id_fkey`(`incidente_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_articulo_mantenimiento` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `articulo_plan_id` INTEGER NULL,
+    `articulo_asignado_id` INTEGER NULL,
+    `estado` VARCHAR(55) NOT NULL,
+    `cantidad_necesaria` INTEGER NOT NULL,
+    `cantidad_real` INTEGER NOT NULL,
+    `observaciones` LONGTEXT NOT NULL,
+    `fecha_solucion` DATETIME(0) NULL,
+    `accion` VARCHAR(55) NULL,
+    `fecha_inicio` DATETIME(0) NULL,
+    `numero_boleta_proveeduria` LONGTEXT NULL,
+    `tipo` LONGTEXT NULL,
+    `marca` LONGTEXT NULL,
+    `modelo` LONGTEXT NULL,
+    `serie_placa` LONGTEXT NULL,
+    `marca_nuevo` LONGTEXT NULL,
+    `modelo_nuevo` LONGTEXT NULL,
+    `serie_placa_nuevo` LONGTEXT NULL,
+    `categoria` LONGTEXT NULL,
+    `tipo_mantenimiento_art` LONGTEXT NULL,
+    `fecha_salida` DATETIME(0) NULL,
+    `fecha_entrada` DATETIME(0) NULL,
+    `kilometraje` INTEGER NULL,
+    `mant_armas_form` LONGTEXT NULL,
+    `categoria_mantinimiento` LONGTEXT NULL,
+    `detalle` LONGTEXT NULL,
+    `numero_fc` LONGTEXT NULL,
+    `proveedor` LONGTEXT NULL,
+    `costo_mo` INTEGER NULL,
+    `costo_i` INTEGER NULL,
+    `iva` INTEGER NULL,
+    `costo_total` INTEGER NULL,
+    `fecha_fin` DATETIME(0) NULL,
+    `reincidencia_treinta_dias` BOOLEAN NULL,
+    `tipo_mant_art_reincid` LONGTEXT NULL,
+
+    INDEX `c_articulo_mantenimiento_articulo_asignado_id_fkey`(`articulo_asignado_id`),
+    INDEX `c_articulo_mantenimiento_articulo_plan_id_fkey`(`articulo_plan_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_bitacora_vehiculo_detenido` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `tipo` VARCHAR(52) NOT NULL,
+    `informacion_general` LONGTEXT NOT NULL,
+    `informacion_revision` LONGTEXT NOT NULL,
+    `movimientos_vehiculos` LONGTEXT NOT NULL,
+    `observaciones` LONGTEXT NOT NULL,
+    `firma_responsable` LONGTEXT NOT NULL,
+    `created_by` INTEGER NOT NULL,
+    `created_at` DATETIME(0) NOT NULL,
+    `cliente_id` INTEGER NOT NULL,
+    `empresa_id` INTEGER NOT NULL,
+    `sucursal_id` INTEGER NOT NULL,
+    `uso_id` INTEGER NULL,
+    `vehiculo_id` INTEGER NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_boleta_apreciacion_vulnerabilidad` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `cliente_id` INTEGER NOT NULL,
+    `corpo_id` INTEGER NOT NULL,
+    `puesto_id` INTEGER NOT NULL,
+    `fecha` DATETIME(0) NOT NULL,
+    `enlace` VARCHAR(255) NOT NULL,
+    `nombre_solicitante` VARCHAR(255) NOT NULL,
+    `boleta` LONGTEXT NOT NULL,
+    `metricas_vulnerablidad` LONGTEXT NOT NULL,
+    `observaciones` LONGTEXT NULL,
+    `firma_solicitante` LONGTEXT NOT NULL,
+    `firma_responsable` LONGTEXT NOT NULL,
+
+    INDEX `c_boleta_apreciacion_vulnerabilidad_cliente_id_fkey`(`cliente_id`),
+    INDEX `c_boleta_apreciacion_vulnerabilidad_corpo_id_fkey`(`corpo_id`),
+    INDEX `c_boleta_apreciacion_vulnerabilidad_puesto_id_fkey`(`puesto_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_cambios_apps_modules` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `nombre_tabla` LONGTEXT NOT NULL,
+    `registro_id` INTEGER NOT NULL,
+    `cambios` LONGTEXT NOT NULL,
+    `created_at` DATETIME(0) NOT NULL,
+    `created_by` INTEGER NOT NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_categoria_mantenimiento` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `nombre` VARCHAR(255) NOT NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_checklist_supervision` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `cliente_id` INTEGER NOT NULL,
+    `division_id` INTEGER NOT NULL,
+    `corpo_id` INTEGER NOT NULL,
+    `puesto_id` INTEGER NOT NULL,
+    `ejecutivo_cuenta` VARCHAR(55) NOT NULL,
+    `evaluacion` LONGTEXT NOT NULL,
+    `firma_responsable` LONGTEXT NOT NULL,
+    `created_by` INTEGER NOT NULL,
+    `created_at` DATETIME(0) NOT NULL,
+    `fecha` DATETIME(0) NOT NULL,
+    `firma_supervisor` LONGTEXT NOT NULL,
+    `articulos_puesto` LONGTEXT NOT NULL,
+
+    INDEX `c_checklist_supervision_cliente_id_fkey`(`cliente_id`),
+    INDEX `c_checklist_supervision_corpo_id_fkey`(`corpo_id`),
+    INDEX `c_checklist_supervision_puesto_id_fkey`(`puesto_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_contribucion_incidente` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `incidente_id` INTEGER NOT NULL,
+    `empleado_id` INTEGER NOT NULL,
+    `aporte` LONGTEXT NOT NULL,
+    `rol_aporte` VARCHAR(25) NOT NULL,
+    `created_at` DATETIME(0) NOT NULL,
+    `firma_aporte_tercero` LONGTEXT NULL,
+    `nombre_aporte` VARCHAR(191) NULL,
+
+    INDEX `c_contribucion_incidente_empleado_id_fkey`(`empleado_id`),
+    INDEX `c_contribucion_incidente_incidente_id_fkey`(`incidente_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_control_asistencia` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `empresa_id` INTEGER NOT NULL,
+    `contrato_id` INTEGER NOT NULL,
+    `corpo_id` INTEGER NOT NULL,
+    `fecha` DATETIME(3) NOT NULL,
+    `turno` VARCHAR(191) NOT NULL,
+    `area_piso` VARCHAR(191) NOT NULL,
+    `total_presentes` INTEGER NOT NULL,
+    `fijos` INTEGER NOT NULL,
+    `colaboradores` LONGTEXT NOT NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `created_by` INTEGER NOT NULL,
+    `firma_responsable` LONGTEXT NOT NULL,
+    `nombre_cliente` VARCHAR(191) NOT NULL,
+    `division_id` INTEGER NOT NULL,
+    `cliente_id` INTEGER NOT NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_empleado_almuerzo` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `empleadoId` INTEGER NOT NULL,
+    `pausas` LONGTEXT NOT NULL,
+    `inicio` DATETIME(0) NOT NULL,
+    `fin` DATETIME(0) NOT NULL,
+    `es_manual` BOOLEAN NOT NULL DEFAULT false,
+
+    INDEX `empleadoId_almuerzo_fkey`(`empleadoId`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_empleado_notification` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `empleadoId` INTEGER NOT NULL,
+    `notificationId` INTEGER NOT NULL,
+    `watched` BOOLEAN NOT NULL DEFAULT false,
+
+    INDEX `c_empleado_notification_notificationId_fkey`(`notificationId`),
+    INDEX `c_plaza_notification_empleadoId_fkey`(`empleadoId`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_encuesta_cliente` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `empresa_id` INTEGER NOT NULL,
+    `cliente_id` INTEGER NOT NULL,
+    `corpo_id` INTEGER NOT NULL,
+    `puesto_id` INTEGER NOT NULL,
+    `division_id` INTEGER NOT NULL,
+    `responsable_id` INTEGER NOT NULL,
+    `fecha` DATE NOT NULL,
+    `evaluaciones` LONGTEXT NOT NULL,
+    `created_at` DATETIME(0) NOT NULL,
+    `firma_responsable` LONGTEXT NOT NULL,
+    `nombre_evaluado` VARCHAR(45) NOT NULL,
+    `cedula_evaluado` VARCHAR(25) NOT NULL,
+    `cedula_responsable` VARCHAR(25) NOT NULL,
+    `nombre_responsable` VARCHAR(45) NOT NULL,
+    `email_evaluado` VARCHAR(50) NOT NULL,
+    `firma_evaluado` LONGTEXT NOT NULL,
+    `telefono_evaluado` VARCHAR(25) NOT NULL,
+    `empresa_evaluado` VARCHAR(55) NOT NULL,
+    `observaciones` LONGTEXT NOT NULL,
+
+    INDEX `c_encuesta_cliente_cliente_id_fkey`(`cliente_id`),
+    INDEX `c_encuesta_cliente_corpo_id_fkey`(`corpo_id`),
+    INDEX `c_encuesta_cliente_division_id_fkey`(`division_id`),
+    INDEX `c_encuesta_cliente_empresa_id_fkey`(`empresa_id`),
+    INDEX `c_encuesta_cliente_puesto_id_fkey`(`puesto_id`),
+    INDEX `c_encuesta_cliente_responsable_id_fkey`(`responsable_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_evaluacion_empleado` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `nombre_empleado` VARCHAR(45) NOT NULL,
+    `cedula_empleado` VARCHAR(45) NOT NULL,
+    `corpo_id` INTEGER NOT NULL,
+    `puesto_id` INTEGER NOT NULL,
+    `plaza_id` INTEGER NOT NULL,
+    `empleado_id` INTEGER NOT NULL,
+    `evaluador_id` INTEGER NOT NULL,
+    `tipo` VARCHAR(25) NOT NULL,
+    `fecha_ingreso` DATE NOT NULL,
+    `fecha_evaluacion` DATE NOT NULL,
+    `evaluacion` LONGTEXT NOT NULL,
+    `comentarios` LONGTEXT NOT NULL,
+    `nombre_evaluador` VARCHAR(45) NOT NULL,
+    `firma_evaluador` LONGTEXT NOT NULL,
+    `firma_empleado` LONGTEXT NOT NULL,
+    `created_at` DATETIME(0) NOT NULL,
+    `firma_empleado_manual` LONGTEXT NULL,
+
+    INDEX `c_evaluacion_empleado_corpo_id_fkey`(`corpo_id`),
+    INDEX `c_evaluacion_empleado_plaza_id_fkey`(`plaza_id`),
+    INDEX `c_evaluacion_empleado_puesto_id_fkey`(`puesto_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_imagenes_acta_entrega_producto` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `name` LONGTEXT NOT NULL,
+    `acta_id` INTEGER NOT NULL,
+
+    INDEX `c_imagenes_acta_entrega_producto_acta_id_fkey`(`acta_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_imagenes_apertura_cierre_puesto` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `name` LONGTEXT NOT NULL,
+    `apetura_cierre_id` INTEGER NOT NULL,
+    `original_name` LONGTEXT NOT NULL,
+
+    INDEX `c_imagenes_apertura_cierre_puesto_apetura_cierre_id_fkey`(`apetura_cierre_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_imagenes_control_asistencia` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `name` LONGTEXT NOT NULL,
+    `control_id` INTEGER NOT NULL,
+    `original_name` LONGTEXT NOT NULL,
+
+    INDEX `c_imagenes_control_asistencia_control_id_fkey`(`control_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_imagenes_vehiculos_corporativos` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `name` LONGTEXT NOT NULL,
+    `vehiculo_id` INTEGER NOT NULL,
+
+    INDEX `c_imagenes_vehiculos_corporativos_vehiculo_id_fkey`(`vehiculo_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_incidente` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `corpo_id` INTEGER NOT NULL,
+    `ejecutivo_cuenta` INTEGER NOT NULL,
+    `fecha_incidente` DATE NOT NULL,
+    `fecha_reporte` DATE NOT NULL,
+    `nombre_responsable` VARCHAR(45) NOT NULL,
+    `clasificacion` INTEGER NOT NULL,
+    `descripcion` LONGTEXT NOT NULL,
+    `involucrados` LONGTEXT NOT NULL,
+    `fecha_libro_novedades` LONGTEXT NOT NULL,
+    `nombre_responsable_atencion` VARCHAR(45) NOT NULL,
+    `solucion` LONGTEXT NULL,
+    `fecha_solucion` DATE NULL,
+    `fecha_real_solucion` DATE NULL,
+    `costo_asociado` LONGTEXT NULL,
+    `consecutivo_informe` LONGTEXT NULL,
+    `link_informe` LONGTEXT NULL,
+    `cliente_id` INTEGER NOT NULL,
+    `empresa_id` INTEGER NOT NULL,
+    `estado` BOOLEAN NOT NULL,
+    `created_at` DATETIME(0) NOT NULL,
+    `created_by` INTEGER NOT NULL,
+
+    INDEX `c_incidente_clasificacion_fkey`(`clasificacion`),
+    INDEX `c_incidente_cliente_id_fkey`(`cliente_id`),
+    INDEX `c_incidente_corpo_id_fkey`(`corpo_id`),
+    INDEX `c_incidente_ejecutivo_cuenta_fkey`(`ejecutivo_cuenta`),
+    INDEX `c_incidente_empresa_id_fkey`(`empresa_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_maestro_quejas` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `empresa_id` INTEGER NOT NULL,
+    `cliente_id` INTEGER NOT NULL,
+    `contrato_id` INTEGER NOT NULL,
+    `corpo_id` INTEGER NOT NULL,
+    `puesto_id` INTEGER NOT NULL,
+    `plaza_id` INTEGER NOT NULL,
+    `sociedad` VARCHAR(191) NOT NULL,
+    `nombre_realiza_queja` VARCHAR(191) NOT NULL,
+    `cliente` VARCHAR(191) NOT NULL,
+    `empresa_presenta_queja` VARCHAR(191) NOT NULL,
+    `persona_presenta_queja` VARCHAR(191) NOT NULL,
+    `medio_recepcion_queja` VARCHAR(191) NOT NULL,
+    `tipo_queja` VARCHAR(191) NOT NULL,
+    `ubicacion` VARCHAR(191) NOT NULL,
+    `nivel_queja` VARCHAR(191) NOT NULL,
+    `fecha_queja` VARCHAR(191) NOT NULL,
+    `motivo_queja` VARCHAR(191) NOT NULL,
+    `descripcion_queja` LONGTEXT NOT NULL,
+    `fecha_inicio` VARCHAR(191) NOT NULL,
+    `fecha_revision` VARCHAR(191) NOT NULL,
+    `resolucion_queja` LONGTEXT NOT NULL,
+    `estado` VARCHAR(191) NOT NULL,
+    `accion_correctiva_preventiva` VARCHAR(191) NOT NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `created_by` VARCHAR(191) NOT NULL,
+    `firma_responsable` LONGTEXT NOT NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_mantenimiento_vehiculos_corporativos` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `vehiculo_id` INTEGER NOT NULL,
+    `fecha` DATETIME(0) NOT NULL,
+    `tipo` VARCHAR(25) NOT NULL,
+    `mantenimiento` LONGTEXT NOT NULL,
+    `diagnostico` LONGTEXT NOT NULL,
+    `kilometraje_siguiente_revision` INTEGER NOT NULL,
+    `firma_responsable` LONGTEXT NOT NULL,
+    `imagen_antes` LONGTEXT NOT NULL,
+    `imagen_despues` LONGTEXT NOT NULL,
+    `created_by` INTEGER NOT NULL,
+    `created_at` DATETIME(0) NOT NULL,
+    `firma_mecanico` LONGTEXT NOT NULL,
+    `nombre_mecanico` LONGTEXT NOT NULL,
+
+    INDEX `c_mantenimiento_vehiculos_corporativos_vehiculo_id_fkey`(`vehiculo_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_movimientos_articulo_mantenimiento` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `articulo_plan_id` INTEGER NULL,
+    `articulo_asignado_id` INTEGER NULL,
+    `nombre_persona_recibe` VARCHAR(255) NOT NULL,
+    `nombre_persona_entrega` VARCHAR(255) NOT NULL,
+    `departamento` VARCHAR(255) NOT NULL,
+    `telefono` VARCHAR(20) NOT NULL,
+    `entrega` VARCHAR(255) NOT NULL,
+    `recibe` VARCHAR(255) NOT NULL,
+    `fecha` DATE NOT NULL,
+    `hora` TIME(0) NOT NULL,
+    `firma_entrega` LONGTEXT NOT NULL,
+    `firma_recibe` LONGTEXT NOT NULL,
+    `firma_responsable` LONGTEXT NOT NULL,
+
+    INDEX `c_movimientos_articulo_mantenimiento_articulo_asignado_id_fkey`(`articulo_asignado_id`),
+    INDEX `c_movimientos_articulo_mantenimiento_articulo_plan_id_fkey`(`articulo_plan_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_notas_voz` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `empresa_id` INTEGER NOT NULL,
+    `cliente_id` INTEGER NOT NULL,
+    `corpo_id` INTEGER NOT NULL,
+    `puesto_id` INTEGER NULL,
+    `titulo` LONGTEXT NOT NULL,
+    `descripcion` LONGTEXT NOT NULL,
+    `path` LONGTEXT NOT NULL,
+    `transcripcion` LONGTEXT NOT NULL,
+    `firma_responsable` LONGTEXT NOT NULL,
+    `created_by` INTEGER NOT NULL,
+    `created_at` DATETIME(0) NOT NULL,
+
+    INDEX `c_notas_voz_cliente_id_fkey`(`cliente_id`),
+    INDEX `c_notas_voz_corpo_id_fkey`(`corpo_id`),
+    INDEX `c_notas_voz_empresa_id_fkey`(`empresa_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_notifications` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `title` LONGTEXT NOT NULL,
+    `description` LONGTEXT NOT NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_plaza_notification` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `plazaId` INTEGER NOT NULL,
+    `notificationId` INTEGER NOT NULL,
+    `watched` BOOLEAN NOT NULL DEFAULT false,
+
+    INDEX `c_plaza_notification_notificationId_fkey`(`notificationId`),
+    INDEX `c_plaza_notification_plazaId_fkey`(`plazaId`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_producto_no_conforme` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `cliente_id` INTEGER NOT NULL,
+    `corpo_id` INTEGER NOT NULL,
+    `fecha_identificacion` DATE NOT NULL,
+    `responsable_cuenta` VARCHAR(50) NOT NULL,
+    `tipo_servicio_no_conforme` VARCHAR(50) NOT NULL,
+    `persona_identifico_pnc` VARCHAR(255) NOT NULL,
+    `descripcion` LONGTEXT NOT NULL,
+    `persona_origino_pnc` VARCHAR(255) NOT NULL,
+    `accion_implementada` LONGTEXT NOT NULL,
+    `fecha_solucion` DATE NOT NULL,
+    `responsable_aprobar` LONGTEXT NOT NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `created_by` VARCHAR(191) NOT NULL,
+    `firma_persona_identifico_pnc` LONGTEXT NOT NULL,
+    `firma_persona_origino_pnc` LONGTEXT NOT NULL,
+    `firma_responsable` LONGTEXT NOT NULL,
+
+    INDEX `c_producto_no_conforme_cliente_id_fkey`(`cliente_id`),
+    INDEX `c_producto_no_conforme_corpo_id_fkey`(`corpo_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_puesto_notas` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `titulo` VARCHAR(255) NOT NULL,
+    `description` LONGTEXT NOT NULL,
+    `categoria_id` INTEGER NULL,
+    `puesto_id` INTEGER NOT NULL,
+    `created_at` DATETIME(0) NOT NULL,
+    `updated_at` DATETIME(0) NOT NULL,
+    `relevancia` VARCHAR(16) NULL,
+
+    INDEX `puesto_id_notas_fkey`(`puesto_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_puesto_notas_bitacora_cambios` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `nota_id` INTEGER NOT NULL,
+    `empleado_id` INTEGER NOT NULL,
+    `titulo` VARCHAR(255) NOT NULL,
+    `description` LONGTEXT NOT NULL,
+    `created_at` DATETIME(0) NOT NULL,
+    `categoria` VARCHAR(191) NOT NULL DEFAULT '-',
+    `relevancia` VARCHAR(16) NULL,
+
+    INDEX `c_puesto_notas_bitacora_cambios_empleado_id_fkey`(`empleado_id`),
+    INDEX `c_puesto_notas_bitacora_cambios_nota_id_fkey`(`nota_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_registro_induccion_general` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `empresa_id` INTEGER NOT NULL,
+    `cliente_id` INTEGER NOT NULL,
+    `corpo_id` INTEGER NOT NULL,
+    `division` VARCHAR(50) NOT NULL,
+    `fecha` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `temas_a_tratar` LONGTEXT NOT NULL,
+    `colaboradores` LONGTEXT NOT NULL,
+    `capacitadores` LONGTEXT NOT NULL,
+    `firma_responsable` LONGTEXT NOT NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `created_by` VARCHAR(191) NOT NULL,
+
+    INDEX `c_registro_induccion_general_cliente_id_fkey`(`cliente_id`),
+    INDEX `c_registro_induccion_general_corpo_id_fkey`(`corpo_id`),
+    INDEX `c_registro_induccion_general_empresa_id_fkey`(`empresa_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_registro_induccion_recorrido` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `empresa_id` INTEGER NOT NULL,
+    `cliente_id` INTEGER NOT NULL,
+    `contrato_id` INTEGER NOT NULL,
+    `corpo_id` INTEGER NOT NULL,
+    `puesto_id` INTEGER NOT NULL,
+    `plaza_id` INTEGER NOT NULL,
+    `fecha` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `renglon_edificio` VARCHAR(191) NOT NULL,
+    `supervisor_cliente` VARCHAR(191) NULL,
+    `supervisor_corporacion` VARCHAR(191) NOT NULL,
+    `temas_desarrollados` LONGTEXT NOT NULL,
+    `aspectos_especificos` LONGTEXT NOT NULL,
+    `participantes` LONGTEXT NOT NULL,
+    `firma_supervisor` LONGTEXT NOT NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `created_by` VARCHAR(191) NOT NULL,
+    `division` VARCHAR(191) NOT NULL,
+    `firma_responsable` LONGTEXT NOT NULL,
+    `empleado_id` INTEGER NOT NULL,
+    `firma_empleado` LONGTEXT NOT NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_solicitud_permiso` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `empresa_id` VARCHAR(191) NOT NULL,
+    `cliente_id` VARCHAR(191) NOT NULL,
+    `contrato_id` VARCHAR(191) NOT NULL,
+    `corpo_id` VARCHAR(191) NOT NULL,
+    `puesto_id` VARCHAR(191) NOT NULL,
+    `plaza_id` VARCHAR(191) NOT NULL,
+    `persona_solicita` VARCHAR(191) NOT NULL,
+    `codigo` VARCHAR(191) NOT NULL,
+    `contrato` VARCHAR(191) NOT NULL,
+    `horario` VARCHAR(191) NOT NULL,
+    `fecha_solicitud` DATETIME(3) NOT NULL,
+    `motivo_permiso` LONGTEXT NOT NULL,
+    `permiso_sustituido_por` VARCHAR(191) NOT NULL,
+    `codigo_sustituto` VARCHAR(191) NOT NULL,
+    `firma_gerente` LONGTEXT NOT NULL,
+    `firma_encargado_monitoreo` LONGTEXT NOT NULL,
+    `permiso_coordinado_por` VARCHAR(191) NOT NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `created_by` VARCHAR(191) NOT NULL,
+    `firma_responsables` LONGTEXT NOT NULL,
+    `division` VARCHAR(191) NOT NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_usos_vehiculos_corporativos` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `bitacora_id` INTEGER NULL,
+    `vehiculo_id` INTEGER NOT NULL,
+    `nombre_conductor` VARCHAR(55) NOT NULL,
+    `fecha` DATETIME(0) NOT NULL,
+    `hora_inicio` TIME(0) NOT NULL,
+    `hora_fin` TIME(0) NOT NULL,
+    `combustible_inicio` INTEGER NOT NULL,
+    `combustible_fin` INTEGER NOT NULL,
+    `km_inicio` INTEGER NOT NULL,
+    `km_fin` INTEGER NOT NULL,
+    `motivo` LONGTEXT NOT NULL,
+    `firma_responsable` LONGTEXT NOT NULL,
+
+    INDEX `c_usos_vehiculos_corporativos_vehiculo_id_fkey`(`vehiculo_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `c_vehiculos_corporativos` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `cliente_id` INTEGER NOT NULL,
+    `sucursal_id` INTEGER NOT NULL,
+    `placa` VARCHAR(52) NOT NULL,
+    `tipo` VARCHAR(52) NOT NULL,
+    `kilometraje` INTEGER NOT NULL,
+    `prox_cambio_aceite` INTEGER NOT NULL,
+    `modelo` VARCHAR(52) NOT NULL,
+    `anno` INTEGER NOT NULL,
+    `descripcion` LONGTEXT NOT NULL,
+    `titulo_propiedad` BOOLEAN NOT NULL DEFAULT true,
+    `rtv` BOOLEAN NOT NULL DEFAULT true,
+    `marchamo` BOOLEAN NOT NULL DEFAULT true,
+    `firma_responsable` LONGTEXT NOT NULL,
+    `created_by` INTEGER NOT NULL,
+    `created_at` DATETIME(0) NOT NULL,
+    `estado` VARCHAR(25) NOT NULL,
+    `empresa_id` INTEGER NOT NULL,
+
+    INDEX `c_vehiculos_corporativos_cliente_id_fkey`(`cliente_id`),
+    INDEX `c_vehiculos_corporativos_sucursal_id_fkey`(`sucursal_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `e_actividad_corpo` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `empresa_id` INTEGER NOT NULL,
+    `cliente_id` INTEGER NOT NULL,
+    `contrato_id` INTEGER NOT NULL,
+    `corpo_id` INTEGER NOT NULL,
+    `puesto_id` INTEGER NULL,
+    `plaza_id` INTEGER NULL,
+    `nombre_actividad` VARCHAR(255) NOT NULL,
+    `fecha_inicio` DATE NOT NULL,
+    `frecuencia` LONGTEXT NOT NULL,
+    `es_revision_equipo` BOOLEAN NOT NULL,
+    `descripcion_actividad` LONGTEXT NOT NULL,
+    `reglas` LONGTEXT NOT NULL,
+    `firma_responsable` LONGTEXT NOT NULL,
+
+    INDEX `e_actividad_corpo_cliente_id_fkey`(`cliente_id`),
+    INDEX `e_actividad_corpo_contrato_id_fkey`(`contrato_id`),
+    INDEX `e_actividad_corpo_corpo_id_fkey`(`corpo_id`),
+    INDEX `e_actividad_corpo_empresa_id_fkey`(`empresa_id`),
+    INDEX `e_actividad_corpo_plaza_id_fkey`(`plaza_id`),
+    INDEX `e_actividad_corpo_puesto_id_fkey`(`puesto_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `e_actividad_corpo_plaza` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `actividadCorpo_id` INTEGER NOT NULL,
+    `plaza_id` INTEGER NOT NULL,
+    `bitacora` LONGTEXT NOT NULL,
+    `file_name` LONGTEXT NULL,
+    `created_at` DATETIME(3) NOT NULL,
+    `updated_at` DATETIME(3) NOT NULL,
+    `marcada` BOOLEAN NOT NULL DEFAULT false,
+
+    INDEX `e_actividad_corpo_plaza_actividadCorpo_id_fkey`(`actividadCorpo_id`),
+    INDEX `e_actividad_corpo_plaza_plaza_id_fkey`(`plaza_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `e_actividad_corpo_revision_equipo` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `articulo_id` INTEGER NOT NULL,
+    `es_correcto` BOOLEAN NOT NULL,
+    `motivo_incorrecto` LONGTEXT NOT NULL,
+    `created_at` DATETIME(3) NOT NULL,
+    `updated_at` DATETIME(3) NOT NULL,
+    `marcada` BOOLEAN NOT NULL DEFAULT false,
+    `file_name` LONGTEXT NULL,
+    `actividadCorpoPlaza_id` INTEGER NOT NULL,
+
+    INDEX `e_actividad_corpo_revision_equipo_actividad_corpo_plaza_fkey`(`actividadCorpoPlaza_id`),
+    INDEX `e_actividad_corpo_revision_equipo_articulo_id_fkey`(`articulo_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `e_actividad_puesto_plaza` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `actividadCorpo_id` INTEGER NOT NULL,
+    `puesto_id` INTEGER NOT NULL,
+    `plaza_id` INTEGER NULL,
+
+    INDEX `e_actividad_puesto_plaza_actividadCorpo_id_fkey`(`actividadCorpo_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `e_activo_visitante` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `visitante_id` INTEGER NOT NULL,
+    `tipo_id` INTEGER NOT NULL,
+    `detalles` LONGTEXT NOT NULL,
+    `numero_serie` VARCHAR(50) NOT NULL,
+    `numero_activo` VARCHAR(50) NULL,
+
+    INDEX `FK_BB503B25992BE739`(`visitante_id`),
+    INDEX `FK_BB503B25993BE739`(`tipo_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `e_archivos_manual_puesto` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `name` LONGTEXT NOT NULL,
+    `type` VARCHAR(25) NOT NULL,
+    `extension` VARCHAR(25) NOT NULL,
+    `manual_puesto_id` INTEGER NOT NULL,
+    `original_name` LONGTEXT NOT NULL,
+
+    INDEX `e_archivos_manual_puesto_manual_puesto_id_fkey`(`manual_puesto_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `e_archivos_producto_no_conforme` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `name` LONGTEXT NOT NULL,
+    `type` VARCHAR(25) NOT NULL,
+    `extension` VARCHAR(25) NOT NULL,
+    `pnc_id` INTEGER NOT NULL,
+    `original_name` LONGTEXT NOT NULL,
+
+    INDEX `e_archivos_producto_no_conforme_pnc_id_fkey`(`pnc_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `e_capacitacion_empleado` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `capacitacion_id` INTEGER NOT NULL,
+    `empleado_id` INTEGER NOT NULL,
+
+    INDEX `e_capacitacion_empleado_capacitacion_id_fkey`(`capacitacion_id`),
+    INDEX `e_capacitacion_empleado_empleado_id_fkey`(`empleado_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `e_capacitacion_puesto` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `capacitacion_id` INTEGER NOT NULL,
+    `puesto_id` INTEGER NOT NULL,
+
+    INDEX `e_capacitacion_puesto_capacitacion_id_fkey`(`capacitacion_id`),
+    INDEX `e_capacitacion_puesto_puesto_id_fkey`(`puesto_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `e_control_documento_entregado_cliente` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `cliente_id` INTEGER NOT NULL,
+    `corpo_id` INTEGER NOT NULL,
+    `fecha` DATE NOT NULL,
+    `nombre_oficial_entrega` VARCHAR(255) NOT NULL,
+    `nombre_oficial_recibe` VARCHAR(255) NOT NULL,
+    `tipo_documento` VARCHAR(255) NOT NULL,
+    `descripcion` LONGTEXT NOT NULL,
+    `firma_representante_cliente` LONGTEXT NOT NULL,
+    `firma_responsable` LONGTEXT NOT NULL,
+
+    INDEX `e_control_documento_entregado_cliente_cliente_id_fkey`(`cliente_id`),
+    INDEX `e_control_documento_entregado_cliente_corpo_id_fkey`(`corpo_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `e_empleado_visualizacion_archivos` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `name` LONGTEXT NOT NULL,
+    `type` VARCHAR(25) NOT NULL,
+    `extension` VARCHAR(25) NOT NULL,
+    `visualizacion_id` INTEGER NOT NULL,
+    `original_name` LONGTEXT NOT NULL,
+
+    INDEX `e_archivos_empleado_visualizacion_id_fkey`(`visualizacion_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `e_empleado_visualizacion_manual_puesto` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `empleado_id` INTEGER NOT NULL,
+    `manual_puesto_id` INTEGER NOT NULL,
+    `nombre_empleado` LONGTEXT NOT NULL,
+    `firma_empleado` LONGTEXT NOT NULL,
+    `created_at` DATETIME(0) NOT NULL,
+    `quiz_answear` LONGTEXT NULL,
+    `updated_at` DATETIME(0) NOT NULL,
+    `approved` BOOLEAN NULL,
+
+    INDEX `e_empleado_visualizacion_manual_puesto_empleado_id_fkey`(`empleado_id`),
+    INDEX `e_empleado_visualizacion_manual_puesto_manual_puesto_id_fkey`(`manual_puesto_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `e_llave` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `cliente_id` INTEGER NOT NULL,
+    `corpo_id` INTEGER NOT NULL,
+    `puesto_id` INTEGER NOT NULL,
+    `lugar_abre` VARCHAR(255) NOT NULL,
+    `cantidad_copias` INTEGER NOT NULL,
+    `observaciones` LONGTEXT NOT NULL,
+    `firma_responsable` LONGTEXT NOT NULL,
+    `created_by` INTEGER NOT NULL,
+    `created_at` DATETIME(0) NOT NULL,
+
+    INDEX `e_llave_cliente_id_fkey`(`cliente_id`),
+    INDEX `e_llave_corpo_id_fkey`(`corpo_id`),
+    INDEX `e_llave_puesto_id_fkey`(`puesto_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `e_llave_en_llavero` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `llave_id` INTEGER NOT NULL,
+    `llavero_id` INTEGER NOT NULL,
+
+    INDEX `e_llave_en_llavero_llave_id_fkey`(`llave_id`),
+    INDEX `e_llave_en_llavero_llavero_id_fkey`(`llavero_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `e_llavero` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `cliente_id` INTEGER NOT NULL,
+    `corpo_id` INTEGER NOT NULL,
+    `puesto_id` INTEGER NOT NULL,
+    `observaciones` LONGTEXT NOT NULL,
+    `firma_responsable` LONGTEXT NOT NULL,
+    `created_by` INTEGER NOT NULL,
+    `created_at` DATETIME(0) NOT NULL,
+    `nombre_llavero` VARCHAR(50) NOT NULL,
+
+    INDEX `e_llavero_cliente_id_fkey`(`cliente_id`),
+    INDEX `e_llavero_corpo_id_fkey`(`corpo_id`),
+    INDEX `e_llavero_puesto_id_fkey`(`puesto_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `e_manual_puesto` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `title` LONGTEXT NOT NULL,
+    `description` LONGTEXT NOT NULL,
+    `firma` LONGTEXT NOT NULL,
+    `puesto_id` INTEGER NOT NULL,
+    `created_by` VARCHAR(191) NOT NULL,
+    `created_at` DATETIME(0) NOT NULL,
+    `quiz` LONGTEXT NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `e_movimiento_llave` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `llave_id` INTEGER NOT NULL,
+    `nombre_persona_recibe` VARCHAR(255) NOT NULL,
+    `nombre_persona_entrega` VARCHAR(255) NOT NULL,
+    `departamento` VARCHAR(255) NOT NULL,
+    `telefono` VARCHAR(20) NOT NULL,
+    `fecha` DATE NOT NULL,
+    `hora` TIME(0) NOT NULL,
+    `firma_entrega` LONGTEXT NOT NULL,
+    `firma_recibe` LONGTEXT NOT NULL,
+    `firma_responsable` LONGTEXT NOT NULL,
+
+    INDEX `e_movimiento_llave_llave_id_fkey`(`llave_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `e_movimiento_llavero` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `llavero_id` INTEGER NOT NULL,
+    `nombre_persona_recibe` VARCHAR(255) NOT NULL,
+    `nombre_persona_entrega` VARCHAR(255) NOT NULL,
+    `departamento` VARCHAR(255) NOT NULL,
+    `telefono` VARCHAR(20) NOT NULL,
+    `fecha` DATE NOT NULL,
+    `hora` TIME(0) NOT NULL,
+    `firma_entrega` LONGTEXT NOT NULL,
+    `firma_recibe` LONGTEXT NOT NULL,
+    `firma_responsable` LONGTEXT NOT NULL,
+
+    INDEX `e_movimiento_llavero_llavero_id_fkey`(`llavero_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `e_mutuos_acuerdos` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `cliente_id` INTEGER NOT NULL,
+    `corpo_id` INTEGER NOT NULL,
+    `ejecutivo_cuenta` INTEGER NOT NULL,
+    `fecha` DATE NOT NULL,
+    `turno` VARCHAR(50) NOT NULL,
+    `informacion_oficial_interesado` LONGTEXT NOT NULL,
+    `informacion_oficial_colaborador` LONGTEXT NOT NULL,
+    `motivo` LONGTEXT NOT NULL,
+    `firma_ejecutivo_cuenta` LONGTEXT NOT NULL,
+    `firma_responsable` LONGTEXT NOT NULL,
+    `created_at` DATETIME(0) NOT NULL,
+    `created_by` INTEGER NOT NULL,
+
+    INDEX `e_mutuos_acuerdos_cliente_id_fkey`(`cliente_id`),
+    INDEX `e_mutuos_acuerdos_corpo_id_fkey`(`corpo_id`),
+    INDEX `e_mutuos_acuerdos_ejecutivo_cuenta_fkey`(`ejecutivo_cuenta`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `e_puestos_manual_puesto` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `manual_puesto_id` INTEGER NOT NULL,
+    `puesto_id` INTEGER NOT NULL,
+
+    INDEX `e_puestos_manual_puesto_manual_puesto_id_fkey`(`manual_puesto_id`),
+    INDEX `e_puestos_manual_puesto_puesto_id_fkey`(`puesto_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `e_registro_capacitaciones` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `empresa_id` INTEGER NOT NULL,
+    `cliente_id` INTEGER NOT NULL,
+    `corpo_id` INTEGER NOT NULL,
+    `titulo` LONGTEXT NOT NULL,
+    `descripcion` LONGTEXT NOT NULL,
+    `resultado` VARCHAR(15) NULL,
+    `observaciones` LONGTEXT NOT NULL,
+    `nombre_responsable` LONGTEXT NOT NULL,
+    `firma_responsable` LONGTEXT NOT NULL,
+    `cedula_responsable` VARCHAR(25) NOT NULL,
+    `responsable_id` INTEGER NOT NULL,
+    `fecha` DATE NOT NULL,
+    `file` LONGTEXT NULL,
+    `tipo` VARCHAR(15) NOT NULL,
+
+    INDEX `e_registro_capacitaciones_cliente_id_fkey`(`cliente_id`),
+    INDEX `e_registro_capacitaciones_corpo_id_fkey`(`corpo_id`),
+    INDEX `e_registro_capacitaciones_empresa_id_fkey`(`empresa_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `e_registro_entrega_puesto` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `cliente_id` INTEGER NOT NULL,
+    `corpo_id` INTEGER NOT NULL,
+    `puesto_id` INTEGER NOT NULL,
+    `oficial_entrega` VARCHAR(255) NOT NULL,
+    `fecha_entrada_entrega` DATE NOT NULL,
+    `fecha_salida_entrega` DATE NOT NULL,
+    `hora_entrada_entrega` TIME(0) NOT NULL,
+    `hora_salida_entrega` TIME(0) NOT NULL,
+    `turno_entrega` VARCHAR(55) NOT NULL,
+    `oficial_recibe` VARCHAR(255) NOT NULL,
+    `fecha_entrada_recibe` DATE NOT NULL,
+    `fecha_salida_recibe` DATE NOT NULL,
+    `hora_entrada_recibe` TIME(0) NOT NULL,
+    `hora_salida_recibe` TIME(0) NOT NULL,
+    `turno_recibe` VARCHAR(55) NOT NULL,
+    `articulos_puesto` LONGTEXT NOT NULL,
+    `observaciones` LONGTEXT NOT NULL,
+    `firma_responsable` LONGTEXT NOT NULL,
+    `created_at` DATETIME(0) NOT NULL,
+    `created_by` INTEGER NOT NULL,
+
+    INDEX `e_registro_entrega_puesto_cliente_id_fkey`(`cliente_id`),
+    INDEX `e_registro_entrega_puesto_corpo_id_fkey`(`corpo_id`),
+    INDEX `e_registro_entrega_puesto_puesto_id_fkey`(`puesto_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `e_registro_personas` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `cliente_id` INTEGER NOT NULL,
+    `corpo_id` INTEGER NOT NULL,
+    `puesto_id` INTEGER NOT NULL,
+    `nombre` VARCHAR(75) NOT NULL,
+    `cedula` VARCHAR(30) NOT NULL,
+    `hora_entrada` DATETIME(0) NOT NULL,
+    `hora_salida` DATETIME(0) NULL,
+    `razon_visita` VARCHAR(75) NOT NULL,
+    `responsable_id` INTEGER NOT NULL,
+    `es_funcionario` BOOLEAN NOT NULL,
+    `observaciones` VARCHAR(255) NULL,
+    `tipo_accion` VARCHAR(15) NULL,
+    `created_at` DATETIME(0) NOT NULL,
+    `updated_at` DATETIME(0) NOT NULL,
+    `foto_cedula` LONGTEXT NULL,
+    `pers_autoriza_salida` VARCHAR(255) NULL,
+
+    INDEX `FK_BB503B25992BE730`(`responsable_id`),
+    INDEX `FK_BB603B25953BE730`(`cliente_id`),
+    INDEX `FK_BB703B25954BE730`(`corpo_id`),
+    INDEX `FK_BB803B25955BE730`(`puesto_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `e_registro_vehiculos` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `cliente_id` INTEGER NOT NULL,
+    `corpo_id` INTEGER NOT NULL,
+    `puesto_id` INTEGER NOT NULL,
+    `tipo` VARCHAR(20) NOT NULL,
+    `placa` VARCHAR(30) NOT NULL,
+    `nombre` VARCHAR(75) NOT NULL,
+    `cedula` VARCHAR(30) NOT NULL,
+    `hora_entrada` DATETIME(0) NOT NULL,
+    `hora_salida` DATETIME(0) NULL,
+    `razon_visita` LONGTEXT NOT NULL,
+    `responsable_id` INTEGER NOT NULL,
+    `created_at` DATETIME(0) NOT NULL,
+    `updated_at` DATETIME(0) NOT NULL,
+    `file_name` LONGTEXT NULL,
+
+    INDEX `FK_BB503B25952BE730`(`responsable_id`),
+    INDEX `FK_BB503B25953BE730`(`cliente_id`),
+    INDEX `FK_BB503B25954BE730`(`corpo_id`),
+    INDEX `FK_BB503B25955BE730`(`puesto_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `e_tipo_documento` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `nombre` VARCHAR(255) NOT NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `n_clasificacion_incidente` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `nombre` VARCHAR(255) NOT NULL,
+
+    UNIQUE INDEX `UNIQ_92DE8E473A988126`(`nombre`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `n_novedades_categoria` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `nombre` VARCHAR(191) NOT NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `n_tipo_activo_visitas` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `nombre` VARCHAR(255) NOT NULL,
+
+    UNIQUE INDEX `UNIQ_92DE8E473A989126`(`nombre`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `n_tipo_mantenimiento_articulo` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `articulo_id` INTEGER NOT NULL,
+    `nombre` VARCHAR(255) NOT NULL,
+
+    INDEX `n_tipo_mantenimiento_articulo_articulo_id_fkey`(`articulo_id`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `refresh_token` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `token` VARCHAR(64) NOT NULL,
+    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `expiresAt` DATETIME(3) NOT NULL,
+    `revoked` BOOLEAN NOT NULL DEFAULT false,
+    `empleadoId` INTEGER NOT NULL,
+    `sessionId` VARCHAR(36) NOT NULL,
+
+    UNIQUE INDEX `refresh_token_token_key`(`token`),
+    INDEX `refresh_token_empleadoId_idx`(`empleadoId`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- AddForeignKey
+ALTER TABLE `c_horas_extras` ADD CONSTRAINT `FK_3B30426475F636ED` FOREIGN KEY (`empleadoAusente_id`) REFERENCES `c_empleado`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_horas_extras` ADD CONSTRAINT `FK_3B3042647963DFC5` FOREIGN KEY (`marcaDia_id`) REFERENCES `c_marca_dia`(`id`) ON DELETE SET NULL ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_horas_extras` ADD CONSTRAINT `FK_3B304264799EE823` FOREIGN KEY (`planillaEmpleado_id`) REFERENCES `pg_planilla_empleado`(`id`) ON DELETE SET NULL ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_horas_extras` ADD CONSTRAINT `FK_3B3042647F5F4055` FOREIGN KEY (`motivoRechazo_id`) REFERENCES `n_motivo_rechazo_extra`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_horas_extras` ADD CONSTRAINT `FK_3B30426481B56B3` FOREIGN KEY (`coordinadoPor_id`) REFERENCES `n_coordinado_por`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_horas_extras` ADD CONSTRAINT `FK_3B3042648D7C55D2` FOREIGN KEY (`sindicato_id`) REFERENCES `n_sindicato`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_horas_extras` ADD CONSTRAINT `FK_3B304264952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE CASCADE ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_horas_extras` ADD CONSTRAINT `FK_3B304264B0B41592` FOREIGN KEY (`tipoContratacion_id`) REFERENCES `n_tipo_contratacion`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_horas_extras` ADD CONSTRAINT `FK_3B304264CAA77C0D` FOREIGN KEY (`planillaExtraEmpleado_id`) REFERENCES `pg_planilla_extra_empleado`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_horas_extras` ADD CONSTRAINT `FK_3B304264D2624C39` FOREIGN KEY (`periodoPago_id`) REFERENCES `p_periodopago_config`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_horas_extras` ADD CONSTRAINT `FK_3B304264E4517BDD` FOREIGN KEY (`coordinador_id`) REFERENCES `n_coordinador`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_horas_extras` ADD CONSTRAINT `FK_3B304264ED33694C` FOREIGN KEY (`categoriaEmpleado_id`) REFERENCES `pg_categoria_empleado`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_horas_extras` ADD CONSTRAINT `FK_3B304264EF34C0BD` FOREIGN KEY (`plaza_id`) REFERENCES `e_estructura_plazas`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_horas_extras` ADD CONSTRAINT `FK_3B304264F9E584F8` FOREIGN KEY (`motivo_id`) REFERENCES `n_motivo_extra`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_accion_personal_linea` ADD CONSTRAINT `FK_54EA19084558C79` FOREIGN KEY (`accionPersonal_id`) REFERENCES `c_accion_personal`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_accion_personal_linea` ADD CONSTRAINT `FK_54EA1908620C225E` FOREIGN KEY (`reemplazo_id`) REFERENCES `c_empleado`(`id`) ON DELETE SET NULL ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_traslado` ADD CONSTRAINT `FK_BEFF7AEC1B482BBB` FOREIGN KEY (`plazaInicial_id`) REFERENCES `e_estructura_plazas`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `e_articulo_uniforme_empleado` ADD CONSTRAINT `FK_F0617B2F4591C704` FOREIGN KEY (`articuloUniforme_id`) REFERENCES `n_articulo_uniforme`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `e_articulo_uniforme_empleado` ADD CONSTRAINT `FK_F0617B2F952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE SET NULL ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `s_planilla_empleado` ADD CONSTRAINT `FK_F450C66C952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE SET NULL ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `s_planilla_empleado` ADD CONSTRAINT `FK_F450C66CF747F090` FOREIGN KEY (`planilla_id`) REFERENCES `s_planilla`(`id`) ON DELETE CASCADE ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_accion_personal` ADD CONSTRAINT `FK_97D9ECEE175A33D1` FOREIGN KEY (`incapacidad_ins_id`) REFERENCES `c_incapacidad_ins`(`id`) ON DELETE CASCADE ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_accion_personal` ADD CONSTRAINT `FK_97D9ECEE3A0F5A23` FOREIGN KEY (`licencia_id`) REFERENCES `c_licencia`(`id`) ON DELETE CASCADE ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_accion_personal` ADD CONSTRAINT `FK_97D9ECEE3C5F34F` FOREIGN KEY (`corpo_id`) REFERENCES `e_estructura_sucursal`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_accion_personal` ADD CONSTRAINT `FK_97D9ECEE3F0F0EAB` FOREIGN KEY (`cambio_horario_id`) REFERENCES `c_cambio_horario`(`id`) ON DELETE CASCADE ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_accion_personal` ADD CONSTRAINT `FK_97D9ECEE43A913D8` FOREIGN KEY (`accionGeneraSeparacion_id`) REFERENCES `c_accion_personal`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_accion_personal` ADD CONSTRAINT `FK_97D9ECEE45BFCF7F` FOREIGN KEY (`tipoAccion_id`) REFERENCES `c_tipo_accion`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_accion_personal` ADD CONSTRAINT `FK_97D9ECEE4959F1BA` FOREIGN KEY (`horario_id`) REFERENCES `c_horario`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_accion_personal` ADD CONSTRAINT `FK_97D9ECEE4A1627FE` FOREIGN KEY (`permiso_sin_goce_id`) REFERENCES `c_permiso_sin_goce`(`id`) ON DELETE CASCADE ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_accion_personal` ADD CONSTRAINT `FK_97D9ECEE5035E9DA` FOREIGN KEY (`puesto_id`) REFERENCES `e_estructura_puesto`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_accion_personal` ADD CONSTRAINT `FK_97D9ECEE521E1991` FOREIGN KEY (`empresa_id`) REFERENCES `e_estructura_empresa`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_accion_personal` ADD CONSTRAINT `FK_97D9ECEE5D5F8F8E` FOREIGN KEY (`suspension_id`) REFERENCES `c_suspension`(`id`) ON DELETE CASCADE ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_accion_personal` ADD CONSTRAINT `FK_97D9ECEE60C93433` FOREIGN KEY (`ausencia_id`) REFERENCES `c_ausencia`(`id`) ON DELETE CASCADE ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_accion_personal` ADD CONSTRAINT `FK_97D9ECEE620C225E` FOREIGN KEY (`reemplazo_id`) REFERENCES `c_empleado`(`id`) ON DELETE SET NULL ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_accion_personal` ADD CONSTRAINT `FK_97D9ECEE64E87FA9` FOREIGN KEY (`adenda_id`) REFERENCES `c_adendas`(`id`) ON DELETE CASCADE ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_accion_personal` ADD CONSTRAINT `FK_97D9ECEE68DBB923` FOREIGN KEY (`contratacion_id`) REFERENCES `c_contratacion`(`id`) ON DELETE CASCADE ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_accion_personal` ADD CONSTRAINT `FK_97D9ECEE6A6AE222` FOREIGN KEY (`libre_cubre_vacasiones_id`) REFERENCES `c_libre_cubre_vacasiones`(`id`) ON DELETE CASCADE ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_accion_personal` ADD CONSTRAINT `FK_97D9ECEE70AE7BF1` FOREIGN KEY (`contrato_id`) REFERENCES `e_estructura_contrato`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_accion_personal` ADD CONSTRAINT `FK_97D9ECEE81B56B3` FOREIGN KEY (`coordinadoPor_id`) REFERENCES `n_coordinado_por`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_accion_personal` ADD CONSTRAINT `FK_97D9ECEE89D8089F` FOREIGN KEY (`preaviso_id`) REFERENCES `c_preaviso`(`id`) ON DELETE CASCADE ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_accion_personal` ADD CONSTRAINT `FK_97D9ECEE8BF5BDE5` FOREIGN KEY (`baja_id`) REFERENCES `c_baja`(`id`) ON DELETE CASCADE ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_accion_personal` ADD CONSTRAINT `FK_97D9ECEE952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_accion_personal` ADD CONSTRAINT `FK_97D9ECEEA0E4F3B3` FOREIGN KEY (`separacion_temp_id`) REFERENCES `c_separacion_temp`(`id`) ON DELETE CASCADE ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_accion_personal` ADD CONSTRAINT `FK_97D9ECEEA61F9752` FOREIGN KEY (`ajuste_salario_id`) REFERENCES `c_ajuste_salario`(`id`) ON DELETE CASCADE ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_accion_personal` ADD CONSTRAINT `FK_97D9ECEEA74E1638` FOREIGN KEY (`traslado_id`) REFERENCES `c_traslado`(`id`) ON DELETE CASCADE ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_accion_personal` ADD CONSTRAINT `FK_97D9ECEEAD90890` FOREIGN KEY (`vacacion_pago_id`) REFERENCES `c_vacacion_pago`(`id`) ON DELETE CASCADE ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_accion_personal` ADD CONSTRAINT `FK_97D9ECEEB0B41592` FOREIGN KEY (`tipoContratacion_id`) REFERENCES `n_tipo_contratacion`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_accion_personal` ADD CONSTRAINT `FK_97D9ECEEC4298A13` FOREIGN KEY (`vacacionMes_id`) REFERENCES `v_vacacion_mes`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_accion_personal` ADD CONSTRAINT `FK_97D9ECEECE18A6FD` FOREIGN KEY (`cambio_periodo_pago_id`) REFERENCES `c_cambio_periodo_pago`(`id`) ON DELETE CASCADE ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_accion_personal` ADD CONSTRAINT `FK_97D9ECEED2624C39` FOREIGN KEY (`periodoPago_id`) REFERENCES `p_periodopago_config`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_accion_personal` ADD CONSTRAINT `FK_97D9ECEEDE734E51` FOREIGN KEY (`cliente_id`) REFERENCES `e_estructura_cliente`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_accion_personal` ADD CONSTRAINT `FK_97D9ECEEDF363018` FOREIGN KEY (`salida_anticipada_id`) REFERENCES `c_salida_anticipada`(`id`) ON DELETE CASCADE ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_accion_personal` ADD CONSTRAINT `FK_97D9ECEEDF88A977` FOREIGN KEY (`llegada_tardia_id`) REFERENCES `c_llegada_tardia`(`id`) ON DELETE CASCADE ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_accion_personal` ADD CONSTRAINT `FK_97D9ECEEE4517BDD` FOREIGN KEY (`coordinador_id`) REFERENCES `n_coordinador`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_accion_personal` ADD CONSTRAINT `FK_97D9ECEEE5C49C4` FOREIGN KEY (`incapacidad_ccss_id`) REFERENCES `c_incapacidad_ccss`(`id`) ON DELETE CASCADE ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_accion_personal` ADD CONSTRAINT `FK_97D9ECEEE78BA714` FOREIGN KEY (`traslado_temp_id`) REFERENCES `c_traslado_temp`(`id`) ON DELETE CASCADE ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_accion_personal` ADD CONSTRAINT `FK_97D9ECEEE9FE9372` FOREIGN KEY (`permiso_con_goce_id`) REFERENCES `c_permiso_con_goce`(`id`) ON DELETE CASCADE ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_accion_personal` ADD CONSTRAINT `FK_97D9ECEEED33694C` FOREIGN KEY (`categoriaEmpleado_id`) REFERENCES `pg_categoria_empleado`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_accion_personal` ADD CONSTRAINT `FK_97D9ECEEEEC5118E` FOREIGN KEY (`vacacion_disfrute_id`) REFERENCES `c_vacacion_disfrute`(`id`) ON DELETE CASCADE ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_accion_personal` ADD CONSTRAINT `FK_97D9ECEEEF34C0BD` FOREIGN KEY (`plaza_id`) REFERENCES `e_estructura_plazas`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_marca_dia` ADD CONSTRAINT `FK_583C45E52F4E077F` FOREIGN KEY (`motivoMarcarHorarioPlaza_id`) REFERENCES `n_motivo_marcar_horario_plaza`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_marca_dia` ADD CONSTRAINT `FK_583C45E537A7CDB4` FOREIGN KEY (`marcaComoReemplazo_id`) REFERENCES `c_marca_dia`(`id`) ON DELETE SET NULL ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_marca_dia` ADD CONSTRAINT `FK_583C45E53C5F34F` FOREIGN KEY (`corpo_id`) REFERENCES `e_estructura_sucursal`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_marca_dia` ADD CONSTRAINT `FK_583C45E53CE4E731` FOREIGN KEY (`empleadoFijo_id`) REFERENCES `c_empleado`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_marca_dia` ADD CONSTRAINT `FK_583C45E54558C79` FOREIGN KEY (`accionPersonal_id`) REFERENCES `c_accion_personal`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_marca_dia` ADD CONSTRAINT `FK_583C45E54959F1BA` FOREIGN KEY (`horario_id`) REFERENCES `c_horario`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_marca_dia` ADD CONSTRAINT `FK_583C45E55035E9DA` FOREIGN KEY (`puesto_id`) REFERENCES `e_estructura_puesto`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_marca_dia` ADD CONSTRAINT `FK_583C45E5521E1991` FOREIGN KEY (`empresa_id`) REFERENCES `e_estructura_empresa`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_marca_dia` ADD CONSTRAINT `FK_583C45E5547FB693` FOREIGN KEY (`marcaCdgHacia_id`) REFERENCES `c_marca_dia`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_marca_dia` ADD CONSTRAINT `FK_583C45E56B95DB` FOREIGN KEY (`empleadoCDG_id`) REFERENCES `c_empleado`(`id`) ON DELETE SET NULL ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_marca_dia` ADD CONSTRAINT `FK_583C45E570AE7BF1` FOREIGN KEY (`contrato_id`) REFERENCES `e_estructura_contrato`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_marca_dia` ADD CONSTRAINT `FK_583C45E58602BB` FOREIGN KEY (`motivoExtra_id`) REFERENCES `n_motivo_extra`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_marca_dia` ADD CONSTRAINT `FK_583C45E58E25225` FOREIGN KEY (`marcaComoReemplazo2_id`) REFERENCES `c_marca_dia`(`id`) ON DELETE SET NULL ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_marca_dia` ADD CONSTRAINT `FK_583C45E59D7193A2` FOREIGN KEY (`empleadoReemplaza_id`) REFERENCES `c_empleado`(`id`) ON DELETE SET NULL ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_marca_dia` ADD CONSTRAINT `FK_583C45E5BBF7CA96` FOREIGN KEY (`marcaEnInduccion_id`) REFERENCES `c_marca_dia`(`id`) ON DELETE SET NULL ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_marca_dia` ADD CONSTRAINT `FK_583C45E5DE734E51` FOREIGN KEY (`cliente_id`) REFERENCES `e_estructura_cliente`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_marca_dia` ADD CONSTRAINT `FK_583C45E5E4517BDD` FOREIGN KEY (`coordinador_id`) REFERENCES `n_coordinador`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_marca_dia` ADD CONSTRAINT `FK_583C45E5EF34C0BD` FOREIGN KEY (`plaza_id`) REFERENCES `e_estructura_plazas`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_marca_dia` ADD CONSTRAINT `FK_583C45E5F9838DA4` FOREIGN KEY (`motivoErrorAsignacion_id`) REFERENCES `n_motivo_error_asignacion`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_marca_dia` ADD CONSTRAINT `FK_583C45E5FC9C312A` FOREIGN KEY (`empleadoReemplaza2_id`) REFERENCES `c_empleado`(`id`) ON DELETE SET NULL ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `a_recibo_pago` ADD CONSTRAINT `FK_23679AA8DE734E51` FOREIGN KEY (`cliente_id`) REFERENCES `e_estructura_cliente`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `b_consecutivo_empresa_banco` ADD CONSTRAINT `FK_E8669A36521E1991` FOREIGN KEY (`empresa_id`) REFERENCES `e_estructura_empresa`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `b_consecutivo_empresa_banco` ADD CONSTRAINT `FK_E8669A36CC04A73E` FOREIGN KEY (`banco_id`) REFERENCES `n_banco`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `b_pago_excluido` ADD CONSTRAINT `FK_E34A23BC952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_adendas` ADD CONSTRAINT `FK_C15A2329952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_adendas` ADD CONSTRAINT `FK_C15A2329A1C0A276` FOREIGN KEY (`apoderado_id`) REFERENCES `n_apoderado`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_articulo_uniforme_plaza` ADD CONSTRAINT `FK_9F3A46B04591C704` FOREIGN KEY (`articuloUniforme_id`) REFERENCES `n_articulo_uniforme`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_articulo_uniforme_plaza` ADD CONSTRAINT `FK_9F3A46B0EB6587E3` FOREIGN KEY (`combo_id`) REFERENCES `c_combo_uniforme_plaza`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_baja` ADD CONSTRAINT `FK_F87CC83189D8089F` FOREIGN KEY (`preaviso_id`) REFERENCES `c_preaviso`(`id`) ON DELETE SET NULL ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_baja__n_motivo_no_recontratable` ADD CONSTRAINT `FK_4E7270C72DDF1AAA` FOREIGN KEY (`cbaja_id`) REFERENCES `c_baja`(`id`) ON DELETE CASCADE ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_baja__n_motivo_no_recontratable` ADD CONSTRAINT `FK_4E7270C73F43B690` FOREIGN KEY (`nmotivonorecontratable_id`) REFERENCES `n_motivo_no_recontratable`(`id`) ON DELETE CASCADE ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_bonificacion_turno` ADD CONSTRAINT `FK_1F8A4D4970AE7BF1` FOREIGN KEY (`contrato_id`) REFERENCES `e_estructura_contrato`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_bonificacion_turno` ADD CONSTRAINT `FK_1F8A4D49ED33694C` FOREIGN KEY (`categoriaEmpleado_id`) REFERENCES `pg_categoria_empleado`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_bonificaciones` ADD CONSTRAINT `FK_3DBD73D9952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE `c_salida_anticipada` ADD CONSTRAINT `c_salida_anticipada_empleado_id_fkey` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
 -- AddForeignKey
 ALTER TABLE `a_recovery_password_token` ADD CONSTRAINT `FK_E35A23BC952BE730` FOREIGN KEY (`empleadoId`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
 
 -- AddForeignKey
-ALTER TABLE `a_recibo_pago` ADD CONSTRAINT `FK_23679AA8DE734E51` FOREIGN KEY (`cliente_id`) REFERENCES `e_estructura_cliente`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE `c_agenda_minuta` ADD CONSTRAINT `c_agenda_minuta_cliente_id_fkey` FOREIGN KEY (`cliente_id`) REFERENCES `e_estructura_cliente`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `b_consecutivo_empresa_banco` ADD CONSTRAINT `FK_E8669A36521E1991` FOREIGN KEY (`empresa_id`) REFERENCES `e_estructura_empresa`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE `c_agenda_minuta` ADD CONSTRAINT `c_agenda_minuta_corpo_id_fkey` FOREIGN KEY (`corpo_id`) REFERENCES `e_estructura_sucursal`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `b_consecutivo_empresa_banco` ADD CONSTRAINT `FK_E8669A36CC04A73E` FOREIGN KEY (`banco_id`) REFERENCES `n_banco`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE `c_agenda_minuta` ADD CONSTRAINT `c_agenda_minuta_puesto_id_fkey` FOREIGN KEY (`puesto_id`) REFERENCES `e_estructura_puesto`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `b_pago_excluido` ADD CONSTRAINT `FK_E34A23BC952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE `c_anexos_quejas` ADD CONSTRAINT `c_anexos_quejas_queja_id_fkey` FOREIGN KEY (`queja_id`) REFERENCES `c_maestro_quejas`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `c_adendas` ADD CONSTRAINT `FK_C15A2329952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE `c_apertura_cierre_puesto` ADD CONSTRAINT `c_apertura_cierre_puesto_cliente_id_fkey` FOREIGN KEY (`cliente_id`) REFERENCES `e_estructura_cliente`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `c_adendas` ADD CONSTRAINT `FK_C15A2329A1C0A276` FOREIGN KEY (`apoderado_id`) REFERENCES `n_apoderado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE `c_apertura_cierre_puesto` ADD CONSTRAINT `c_apertura_cierre_puesto_corpo_id_fkey` FOREIGN KEY (`corpo_id`) REFERENCES `e_estructura_sucursal`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `c_articulo_uniforme_plaza` ADD CONSTRAINT `FK_9F3A46B04591C704` FOREIGN KEY (`articuloUniforme_id`) REFERENCES `n_articulo_uniforme`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE `c_apertura_cierre_puesto` ADD CONSTRAINT `c_apertura_cierre_puesto_division_id_fkey` FOREIGN KEY (`division_id`) REFERENCES `n_division`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `c_articulo_uniforme_plaza` ADD CONSTRAINT `FK_9F3A46B0EB6587E3` FOREIGN KEY (`combo_id`) REFERENCES `c_combo_uniforme_plaza`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE `c_apertura_cierre_puesto` ADD CONSTRAINT `c_apertura_cierre_puesto_puesto_id_fkey` FOREIGN KEY (`puesto_id`) REFERENCES `e_estructura_puesto`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `c_baja` ADD CONSTRAINT `FK_F87CC83189D8089F` FOREIGN KEY (`preaviso_id`) REFERENCES `c_preaviso`(`id`) ON DELETE SET NULL ON UPDATE NO ACTION;
+ALTER TABLE `c_archivos_adjuntos_articulo_mantenimiento` ADD CONSTRAINT `c_archivos_adjuntos_articulo_mantenimiento_activo_mantenimi_fkey` FOREIGN KEY (`activo_mantenimiento_id`) REFERENCES `c_articulo_mantenimiento`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `c_baja__n_motivo_no_recontratable` ADD CONSTRAINT `FK_4E7270C72DDF1AAA` FOREIGN KEY (`cbaja_id`) REFERENCES `c_baja`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_baja__n_motivo_no_recontratable` ADD CONSTRAINT `FK_4E7270C73F43B690` FOREIGN KEY (`nmotivonorecontratable_id`) REFERENCES `n_motivo_no_recontratable`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_bonificacion_turno` ADD CONSTRAINT `FK_1F8A4D4970AE7BF1` FOREIGN KEY (`contrato_id`) REFERENCES `e_estructura_contrato`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_bonificacion_turno` ADD CONSTRAINT `FK_1F8A4D49ED33694C` FOREIGN KEY (`categoriaEmpleado_id`) REFERENCES `pg_categoria_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_bonificaciones` ADD CONSTRAINT `FK_3DBD73D9952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_cambio_guardia` ADD CONSTRAINT `FK_285F043315ABD58` FOREIGN KEY (`marcaDiaReemplaza_id`) REFERENCES `c_marca_dia`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_cambio_guardia` ADD CONSTRAINT `FK_285F04334558C79` FOREIGN KEY (`accionPersonal_id`) REFERENCES `c_accion_personal`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_cambio_guardia` ADD CONSTRAINT `FK_285F04335FB34B5B` FOREIGN KEY (`marcaDiaAusente_id`) REFERENCES `c_marca_dia`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_cambio_guardia` ADD CONSTRAINT `FK_285F043360ACC8FA` FOREIGN KEY (`plazaAusente_id`) REFERENCES `e_estructura_plazas`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_cambio_guardia` ADD CONSTRAINT `FK_285F043375F636ED` FOREIGN KEY (`empleadoAusente_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_cambio_guardia` ADD CONSTRAINT `FK_285F043381B56B3` FOREIGN KEY (`coordinadoPor_id`) REFERENCES `n_coordinado_por`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_cambio_guardia` ADD CONSTRAINT `FK_285F04339D7193A2` FOREIGN KEY (`empleadoReemplaza_id`) REFERENCES `c_empleado`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_cambio_guardia` ADD CONSTRAINT `FK_285F0433C2F7DD75` FOREIGN KEY (`plazaReemplaza_id`) REFERENCES `e_estructura_plazas`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_cambio_guardia` ADD CONSTRAINT `FK_285F0433E4517BDD` FOREIGN KEY (`coordinador_id`) REFERENCES `n_coordinador`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_cambio_horario` ADD CONSTRAINT `FK_E6A5B2C1186B3418` FOREIGN KEY (`horarioInicial_id`) REFERENCES `c_horario`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_cambio_horario` ADD CONSTRAINT `FK_E6A5B2C16E94741B` FOREIGN KEY (`horarioFinal_id`) REFERENCES `c_horario`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_cambio_horario` ADD CONSTRAINT `FK_E6A5B2C1AF8A0D2D` FOREIGN KEY (`categoriaSalarialInicial_id`) REFERENCES `pg_categoria_salarial`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_cambio_horario` ADD CONSTRAINT `FK_E6A5B2C1B8F00EA0` FOREIGN KEY (`categoriaSalarialFinal_id`) REFERENCES `pg_categoria_salarial`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_cambio_periodo_pago` ADD CONSTRAINT `FK_C869871ABB712BEE` FOREIGN KEY (`periodoPagoInicial_id`) REFERENCES `p_periodopago_config`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_cambio_periodo_pago` ADD CONSTRAINT `FK_C869871ACD4171BE` FOREIGN KEY (`periodoPagoFinal_id`) REFERENCES `p_periodopago_config`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_curso_empleado` ADD CONSTRAINT `FK_EF09AA1287CB4A1F` FOREIGN KEY (`curso_id`) REFERENCES `c_curso`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_curso_empleado` ADD CONSTRAINT `FK_EF09AA12952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_deudas` ADD CONSTRAINT `FK_8AB91D2C6C9408BE` FOREIGN KEY (`tipoDeudas_id`) REFERENCES `n_tipo_deuda`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_deudas` ADD CONSTRAINT `FK_8AB91D2C952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_embargos_judiciales` ADD CONSTRAINT `FK_68326432C5CAD3D1` FOREIGN KEY (`deuda_id`) REFERENCES `c_deudas`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_embargos_pension_alimentaria` ADD CONSTRAINT `FK_B2678676C5CAD3D1` FOREIGN KEY (`deuda_id`) REFERENCES `c_deudas`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_empleado` ADD CONSTRAINT `FK_C84A3999114FAA7C` FOREIGN KEY (`educacionTecnico_id`) REFERENCES `n_educacion_tecnico`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_empleado` ADD CONSTRAINT `FK_C84A399919E9AC5F` FOREIGN KEY (`supervisor_id`) REFERENCES `n_ejecutivo_cuenta`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_empleado` ADD CONSTRAINT `FK_C84A39991CB9D6E4` FOREIGN KEY (`solicitud_id`) REFERENCES `c_solicitud_empleo`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_empleado` ADD CONSTRAINT `FK_C84A399928F0D5CA` FOREIGN KEY (`escolaridad_id`) REFERENCES `n_escolaridad`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_empleado` ADD CONSTRAINT `FK_C84A39992BAEF284` FOREIGN KEY (`estadoCivil_id`) REFERENCES `n_estado_civil`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_empleado` ADD CONSTRAINT `FK_C84A399955CD1AE4` FOREIGN KEY (`educacionUniversidad_id`) REFERENCES `n_educacion_universidad`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_empleado` ADD CONSTRAINT `FK_C84A39995EEC5E1B` FOREIGN KEY (`educacionPrimaria_id`) REFERENCES `n_educacion_primaria`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_empleado` ADD CONSTRAINT `FK_C84A39996EA899DA` FOREIGN KEY (`plazaEmpleado_id`) REFERENCES `c_empleado_plaza`(`id`) ON DELETE SET NULL ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_empleado` ADD CONSTRAINT `FK_C84A399979F98940` FOREIGN KEY (`seguroCaja_id`) REFERENCES `n_seguro_caja`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_empleado` ADD CONSTRAINT `FK_C84A39998D7C55D2` FOREIGN KEY (`sindicato_id`) REFERENCES `n_sindicato`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_empleado` ADD CONSTRAINT `FK_C84A3999996BD967` FOREIGN KEY (`educacionSecundaria_id`) REFERENCES `n_educacion_secundaria`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_empleado` ADD CONSTRAINT `FK_C84A3999A07740F` FOREIGN KEY (`comboUniforme_id`) REFERENCES `c_combo_uniforme_plaza`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_empleado` ADD CONSTRAINT `FK_C84A3999AB8DC0F8` FOREIGN KEY (`nacionalidad_id`) REFERENCES `n_nacionalidad`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_empleado` ADD CONSTRAINT `FK_C84A3999B0B41592` FOREIGN KEY (`tipoContratacion_id`) REFERENCES `n_tipo_contratacion`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_empleado` ADD CONSTRAINT `FK_C84A3999CC04A73E` FOREIGN KEY (`banco_id`) REFERENCES `n_banco`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_empleado` ADD CONSTRAINT `FK_C84A3999D2624C39` FOREIGN KEY (`periodoPago_id`) REFERENCES `p_periodopago_config`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_empleado` ADD CONSTRAINT `FK_C84A3999ED33694C` FOREIGN KEY (`categoriaEmpleado_id`) REFERENCES `pg_categoria_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_empleado` ADD CONSTRAINT `FK_C84A3999FCBB0AEC` FOREIGN KEY (`tipoPagoCasa_id`) REFERENCES `n_tipo_pago_casa`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_empleado_notification` ADD CONSTRAINT `c_empleado_notification_empleadoId_fkey` FOREIGN KEY (`empleadoId`) REFERENCES `c_empleado`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE `c_empleado_notification` ADD CONSTRAINT `c_empleado_notification_notificationId_fkey` FOREIGN KEY (`notificationId`) REFERENCES `c_notifications`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE `c_plaza_notification` ADD CONSTRAINT `c_plaza_notification_notificationId_fkey` FOREIGN KEY (`notificationId`) REFERENCES `c_notifications`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE `c_plaza_notification` ADD CONSTRAINT `c_plaza_notification_plazaId_fkey` FOREIGN KEY (`plazaId`) REFERENCES `e_estructura_plazas`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE `c_notas_voz` ADD CONSTRAINT `c_notas_voz_cliente_id_fkey` FOREIGN KEY (`cliente_id`) REFERENCES `e_estructura_cliente`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE `c_notas_voz` ADD CONSTRAINT `c_notas_voz_corpo_id_fkey` FOREIGN KEY (`corpo_id`) REFERENCES `e_estructura_sucursal`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE `c_notas_voz` ADD CONSTRAINT `c_notas_voz_empresa_id_fkey` FOREIGN KEY (`empresa_id`) REFERENCES `e_estructura_empresa`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE `c_incidente` ADD CONSTRAINT `c_incidente_clasificacion_fkey` FOREIGN KEY (`clasificacion`) REFERENCES `n_clasificacion_incidente`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE `c_incidente` ADD CONSTRAINT `c_incidente_cliente_id_fkey` FOREIGN KEY (`cliente_id`) REFERENCES `e_estructura_cliente`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE `c_incidente` ADD CONSTRAINT `c_incidente_corpo_id_fkey` FOREIGN KEY (`corpo_id`) REFERENCES `e_estructura_sucursal`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE `c_incidente` ADD CONSTRAINT `c_incidente_ejecutivo_cuenta_fkey` FOREIGN KEY (`ejecutivo_cuenta`) REFERENCES `n_ejecutivo_cuenta`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE `c_incidente` ADD CONSTRAINT `c_incidente_empresa_id_fkey` FOREIGN KEY (`empresa_id`) REFERENCES `e_estructura_empresa`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
+ALTER TABLE `c_archivos_aporte_incidente` ADD CONSTRAINT `c_archivos_aporte_incidente_contribucion_id_fkey` FOREIGN KEY (`contribucion_id`) REFERENCES `c_contribucion_incidente`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE `c_archivos_incidente` ADD CONSTRAINT `c_archivos_incidente_incidente_id_fkey` FOREIGN KEY (`incidente_id`) REFERENCES `c_incidente`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `c_articulo_mantenimiento` ADD CONSTRAINT `c_articulo_mantenimiento_articulo_asignado_id_fkey` FOREIGN KEY (`articulo_asignado_id`) REFERENCES `e_estructura_articulo_corpo_puesto_entrega`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `c_articulo_mantenimiento` ADD CONSTRAINT `c_articulo_mantenimiento_articulo_plan_id_fkey` FOREIGN KEY (`articulo_plan_id`) REFERENCES `e_estructura_articulo_corpo_puesto_plan`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `c_boleta_apreciacion_vulnerabilidad` ADD CONSTRAINT `c_boleta_apreciacion_vulnerabilidad_cliente_id_fkey` FOREIGN KEY (`cliente_id`) REFERENCES `e_estructura_cliente`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `c_boleta_apreciacion_vulnerabilidad` ADD CONSTRAINT `c_boleta_apreciacion_vulnerabilidad_corpo_id_fkey` FOREIGN KEY (`corpo_id`) REFERENCES `e_estructura_sucursal`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `c_boleta_apreciacion_vulnerabilidad` ADD CONSTRAINT `c_boleta_apreciacion_vulnerabilidad_puesto_id_fkey` FOREIGN KEY (`puesto_id`) REFERENCES `e_estructura_puesto`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `c_checklist_supervision` ADD CONSTRAINT `c_checklist_supervision_cliente_id_fkey` FOREIGN KEY (`cliente_id`) REFERENCES `e_estructura_cliente`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `c_checklist_supervision` ADD CONSTRAINT `c_checklist_supervision_corpo_id_fkey` FOREIGN KEY (`corpo_id`) REFERENCES `e_estructura_sucursal`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `c_checklist_supervision` ADD CONSTRAINT `c_checklist_supervision_puesto_id_fkey` FOREIGN KEY (`puesto_id`) REFERENCES `e_estructura_puesto`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE `c_contribucion_incidente` ADD CONSTRAINT `c_contribucion_incidente_empleado_id_fkey` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
@@ -5771,25 +5868,13 @@ ALTER TABLE `c_contribucion_incidente` ADD CONSTRAINT `c_contribucion_incidente_
 ALTER TABLE `c_contribucion_incidente` ADD CONSTRAINT `c_contribucion_incidente_incidente_id_fkey` FOREIGN KEY (`incidente_id`) REFERENCES `c_incidente`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `c_archivos_aporte_incidente` ADD CONSTRAINT `c_archivos_aporte_incidente_contribucion_id_fkey` FOREIGN KEY (`contribucion_id`) REFERENCES `c_contribucion_incidente`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE `c_evaluacion_empleado` ADD CONSTRAINT `c_evaluacion_empleado_corpo_id_fkey` FOREIGN KEY (`corpo_id`) REFERENCES `e_estructura_sucursal`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE `c_evaluacion_empleado` ADD CONSTRAINT `c_evaluacion_empleado_plaza_id_fkey` FOREIGN KEY (`plaza_id`) REFERENCES `e_estructura_plazas`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE `c_evaluacion_empleado` ADD CONSTRAINT `c_evaluacion_empleado_puesto_id_fkey` FOREIGN KEY (`puesto_id`) REFERENCES `e_estructura_puesto`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE `c_imagenes_acta_entrega_producto` ADD CONSTRAINT `c_imagenes_acta_entrega_producto_acta_id_fkey` FOREIGN KEY (`acta_id`) REFERENCES `c_acta_entre_producto`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE `c_anexos_quejas` ADD CONSTRAINT `c_anexos_quejas_queja_id_fkey` FOREIGN KEY (`queja_id`) REFERENCES `c_maestro_quejas`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
 ALTER TABLE `c_empleado_almuerzo` ADD CONSTRAINT `c_empleado_almuerzo_empleadoId_fkey` FOREIGN KEY (`empleadoId`) REFERENCES `c_empleado`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `c_empleado_notification` ADD CONSTRAINT `c_empleado_notification_empleadoId_fkey` FOREIGN KEY (`empleadoId`) REFERENCES `c_empleado`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `c_empleado_notification` ADD CONSTRAINT `c_empleado_notification_notificationId_fkey` FOREIGN KEY (`notificationId`) REFERENCES `c_notifications`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE `c_encuesta_cliente` ADD CONSTRAINT `c_encuesta_cliente_cliente_id_fkey` FOREIGN KEY (`cliente_id`) REFERENCES `e_estructura_cliente`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
@@ -5810,280 +5895,70 @@ ALTER TABLE `c_encuesta_cliente` ADD CONSTRAINT `c_encuesta_cliente_puesto_id_fk
 ALTER TABLE `c_encuesta_cliente` ADD CONSTRAINT `c_encuesta_cliente_responsable_id_fkey` FOREIGN KEY (`responsable_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `refresh_token` ADD CONSTRAINT `refresh_token_empleadoId_fkey` FOREIGN KEY (`empleadoId`) REFERENCES `c_empleado`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE `c_evaluacion_empleado` ADD CONSTRAINT `c_evaluacion_empleado_corpo_id_fkey` FOREIGN KEY (`corpo_id`) REFERENCES `e_estructura_sucursal`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `c_empleado_basedatos_digital` ADD CONSTRAINT `FK_9BF4295A1CB9D6E4` FOREIGN KEY (`solicitud_id`) REFERENCES `c_solicitud_empleo`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE `c_evaluacion_empleado` ADD CONSTRAINT `c_evaluacion_empleado_plaza_id_fkey` FOREIGN KEY (`plaza_id`) REFERENCES `e_estructura_plazas`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `c_empleado_basedatos_digital` ADD CONSTRAINT `FK_9BF4295A952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE `c_evaluacion_empleado` ADD CONSTRAINT `c_evaluacion_empleado_puesto_id_fkey` FOREIGN KEY (`puesto_id`) REFERENCES `e_estructura_puesto`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `c_empleado_datos_adjuntos_rrhh` ADD CONSTRAINT `FK_FE891195A2DE568` FOREIGN KEY (`tipoDatoAdjunto_id`) REFERENCES `n_tipo_dato_adjunto_rrhh`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE `c_imagenes_acta_entrega_producto` ADD CONSTRAINT `c_imagenes_acta_entrega_producto_acta_id_fkey` FOREIGN KEY (`acta_id`) REFERENCES `c_acta_entre_producto`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `c_empleado_datos_adjuntos_rrhh` ADD CONSTRAINT `FK_FE89119952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
+ALTER TABLE `c_imagenes_apertura_cierre_puesto` ADD CONSTRAINT `c_imagenes_apertura_cierre_puesto_apetura_cierre_id_fkey` FOREIGN KEY (`apetura_cierre_id`) REFERENCES `c_apertura_cierre_puesto`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `c_empleado_gasto_principal` ADD CONSTRAINT `FK_6136C13518864C8` FOREIGN KEY (`egastoprincipal_id`) REFERENCES `e_gasto_principal`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
+ALTER TABLE `c_imagenes_control_asistencia` ADD CONSTRAINT `c_imagenes_control_asistencia_control_id_fkey` FOREIGN KEY (`control_id`) REFERENCES `c_control_asistencia`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `c_empleado_gasto_principal` ADD CONSTRAINT `FK_6136C13DAB52E4B` FOREIGN KEY (`cempleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
+ALTER TABLE `c_imagenes_vehiculos_corporativos` ADD CONSTRAINT `c_imagenes_vehiculos_corporativos_vehiculo_id_fkey` FOREIGN KEY (`vehiculo_id`) REFERENCES `c_vehiculos_corporativos`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `c_empleado_plaza` ADD CONSTRAINT `FK_9F05308D3C5F34F` FOREIGN KEY (`corpo_id`) REFERENCES `e_estructura_sucursal`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE `c_incidente` ADD CONSTRAINT `c_incidente_clasificacion_fkey` FOREIGN KEY (`clasificacion`) REFERENCES `n_clasificacion_incidente`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `c_empleado_plaza` ADD CONSTRAINT `FK_9F05308D41859289` FOREIGN KEY (`division_id`) REFERENCES `n_division`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE `c_incidente` ADD CONSTRAINT `c_incidente_cliente_id_fkey` FOREIGN KEY (`cliente_id`) REFERENCES `e_estructura_cliente`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `c_empleado_plaza` ADD CONSTRAINT `FK_9F05308D4959F1BA` FOREIGN KEY (`horario_id`) REFERENCES `c_horario`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE `c_incidente` ADD CONSTRAINT `c_incidente_corpo_id_fkey` FOREIGN KEY (`corpo_id`) REFERENCES `e_estructura_sucursal`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `c_empleado_plaza` ADD CONSTRAINT `FK_9F05308D5035E9DA` FOREIGN KEY (`puesto_id`) REFERENCES `e_estructura_puesto`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE `c_incidente` ADD CONSTRAINT `c_incidente_ejecutivo_cuenta_fkey` FOREIGN KEY (`ejecutivo_cuenta`) REFERENCES `n_ejecutivo_cuenta`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `c_empleado_plaza` ADD CONSTRAINT `FK_9F05308D521E1991` FOREIGN KEY (`empresa_id`) REFERENCES `e_estructura_empresa`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE `c_incidente` ADD CONSTRAINT `c_incidente_empresa_id_fkey` FOREIGN KEY (`empresa_id`) REFERENCES `e_estructura_empresa`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `c_empleado_plaza` ADD CONSTRAINT `FK_9F05308D5CAEAC5D` FOREIGN KEY (`ejecutivoCuenta_id`) REFERENCES `n_ejecutivo_cuenta`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE `c_mantenimiento_vehiculos_corporativos` ADD CONSTRAINT `c_mantenimiento_vehiculos_corporativos_vehiculo_id_fkey` FOREIGN KEY (`vehiculo_id`) REFERENCES `c_vehiculos_corporativos`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `c_empleado_plaza` ADD CONSTRAINT `FK_9F05308D70AE7BF1` FOREIGN KEY (`contrato_id`) REFERENCES `e_estructura_contrato`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE `c_movimientos_articulo_mantenimiento` ADD CONSTRAINT `c_movimientos_articulo_mantenimiento_articulo_asignado_id_fkey` FOREIGN KEY (`articulo_asignado_id`) REFERENCES `e_estructura_articulo_corpo_puesto_entrega`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `c_empleado_plaza` ADD CONSTRAINT `FK_9F05308D952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE `c_movimientos_articulo_mantenimiento` ADD CONSTRAINT `c_movimientos_articulo_mantenimiento_articulo_plan_id_fkey` FOREIGN KEY (`articulo_plan_id`) REFERENCES `e_estructura_articulo_corpo_puesto_plan`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `c_empleado_plaza` ADD CONSTRAINT `FK_9F05308DDE734E51` FOREIGN KEY (`cliente_id`) REFERENCES `e_estructura_cliente`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE `c_notas_voz` ADD CONSTRAINT `c_notas_voz_cliente_id_fkey` FOREIGN KEY (`cliente_id`) REFERENCES `e_estructura_cliente`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `c_empleado_plaza` ADD CONSTRAINT `FK_9F05308DEF34C0BD` FOREIGN KEY (`plaza_id`) REFERENCES `e_estructura_plazas`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE `c_notas_voz` ADD CONSTRAINT `c_notas_voz_corpo_id_fkey` FOREIGN KEY (`corpo_id`) REFERENCES `e_estructura_sucursal`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `c_empleado_referencias` ADD CONSTRAINT `FK_E5ADCE2D1CB9D6E4` FOREIGN KEY (`solicitud_id`) REFERENCES `c_solicitud_empleo`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE `c_notas_voz` ADD CONSTRAINT `c_notas_voz_empresa_id_fkey` FOREIGN KEY (`empresa_id`) REFERENCES `e_estructura_empresa`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `c_empleado_referencias` ADD CONSTRAINT `FK_E5ADCE2D2BAEF284` FOREIGN KEY (`estadoCivil_id`) REFERENCES `n_estado_civil`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE `c_plaza_notification` ADD CONSTRAINT `c_plaza_notification_notificationId_fkey` FOREIGN KEY (`notificationId`) REFERENCES `c_notifications`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `c_empleado_referencias` ADD CONSTRAINT `FK_E5ADCE2D952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
+ALTER TABLE `c_plaza_notification` ADD CONSTRAINT `c_plaza_notification_plazaId_fkey` FOREIGN KEY (`plazaId`) REFERENCES `e_estructura_plazas`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `c_empleado_referencias` ADD CONSTRAINT `FK_E5ADCE2DD3F1ED37` FOREIGN KEY (`clasificacionReferencia_id`) REFERENCES `n_clasificacion_referencia`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE `c_producto_no_conforme` ADD CONSTRAINT `c_producto_no_conforme_cliente_id_fkey` FOREIGN KEY (`cliente_id`) REFERENCES `e_estructura_cliente`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `c_empleado_registro_laboral` ADD CONSTRAINT `FK_30CD41E5952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_empleado_registro_laboral` ADD CONSTRAINT `FK_30CD41E5AC3051D` FOREIGN KEY (`tipoRegistroLaboral_id`) REFERENCES `n_tipo_registro_laboral`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_empleado_sindicato` ADD CONSTRAINT `FK_7F8A7D598D7C55D2` FOREIGN KEY (`sindicato_id`) REFERENCES `n_sindicato`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_empleado_sindicato` ADD CONSTRAINT `FK_7F8A7D59952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_empleado_sindicato_adjuntos` ADD CONSTRAINT `FK_2CD97FCF6F9D0169` FOREIGN KEY (`empleado_sindicato_id`) REFERENCES `c_empleado_sindicato`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_empleado_tramite_portacion_arma` ADD CONSTRAINT `FK_E46810F952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_extra_limite_semanal` ADD CONSTRAINT `FK_A0512A95952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_extra_tarifa_corpo` ADD CONSTRAINT `FK_E3FAC1FB279A5D5E` FOREIGN KEY (`sucursal_id`) REFERENCES `e_estructura_sucursal`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_extra_tarifa_corpo` ADD CONSTRAINT `FK_E3FAC1FB3AD4FFE2` FOREIGN KEY (`cextratarifa_id`) REFERENCES `c_extra_tarifa`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_extra_tarifa_rango` ADD CONSTRAINT `FK_4E1AD678ED0E28FB` FOREIGN KEY (`extraTarifa_id`) REFERENCES `c_extra_tarifa`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_fecha_excepcional` ADD CONSTRAINT `FK_403BB7FF4959F1BA` FOREIGN KEY (`horario_id`) REFERENCES `c_horario`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_fecha_excepcional` ADD CONSTRAINT `FK_403BB7FF952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_feriado_dia` ADD CONSTRAINT `FK_9B00E14AB1C52DFC` FOREIGN KEY (`feriadoCalendario_id`) REFERENCES `c_feriado_calendario`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_horario_dia` ADD CONSTRAINT `FK_E719D4BD4959F1BA` FOREIGN KEY (`horario_id`) REFERENCES `c_horario`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_horario_dia` ADD CONSTRAINT `FK_E719D4BDEF34C0BD` FOREIGN KEY (`plaza_id`) REFERENCES `e_estructura_plazas`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_incapacidad_ins` ADD CONSTRAINT `FK_80539B87521E1991` FOREIGN KEY (`empresa_id`) REFERENCES `e_estructura_empresa`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_incapacidad_ins` ADD CONSTRAINT `FK_80539B87DE78DC57` FOREIGN KEY (`empresaPoliza_id`) REFERENCES `n_empresa_poliza`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_induccion` ADD CONSTRAINT `FK_371730A5035E9DA` FOREIGN KEY (`puesto_id`) REFERENCES `e_estructura_puesto`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_induccion` ADD CONSTRAINT `FK_371730A952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_induccion_dia` ADD CONSTRAINT `FK_E5590D543CEEDC64` FOREIGN KEY (`induccion_id`) REFERENCES `c_induccion`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_induccion_dia` ADD CONSTRAINT `FK_E5590D547963DFC5` FOREIGN KEY (`marcaDia_id`) REFERENCES `c_marca_dia`(`id`) ON DELETE SET NULL ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_induccion_dia` ADD CONSTRAINT `FK_E5590D54EF34C0BD` FOREIGN KEY (`plaza_id`) REFERENCES `e_estructura_plazas`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_inducciones` ADD CONSTRAINT `FK_A3BC66E62B959FC6` FOREIGN KEY (`extra_id`) REFERENCES `c_horas_extras`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_inducciones` ADD CONSTRAINT `FK_A3BC66E663ED981F` FOREIGN KEY (`marcaDiaOrigen_id`) REFERENCES `c_marca_dia`(`id`) ON DELETE SET NULL ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_inducciones` ADD CONSTRAINT `FK_A3BC66E681B56B3` FOREIGN KEY (`coordinadoPor_id`) REFERENCES `n_coordinado_por`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_inducciones` ADD CONSTRAINT `FK_A3BC66E68C1B0AEB` FOREIGN KEY (`marcaDiaDestino_id`) REFERENCES `c_marca_dia`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_inducciones` ADD CONSTRAINT `FK_A3BC66E6952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_inducciones` ADD CONSTRAINT `FK_A3BC66E6A65E775D` FOREIGN KEY (`empleadoDestino_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_inducciones` ADD CONSTRAINT `FK_A3BC66E6B304894A` FOREIGN KEY (`plazaDestino_id`) REFERENCES `e_estructura_plazas`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_inducciones` ADD CONSTRAINT `FK_A3BC66E6C968E4B9` FOREIGN KEY (`plazaOrigen_id`) REFERENCES `e_estructura_plazas`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_inducciones` ADD CONSTRAINT `FK_A3BC66E6E4517BDD` FOREIGN KEY (`coordinador_id`) REFERENCES `n_coordinador`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_intercambio_linea` ADD CONSTRAINT `FK_88E784CE4BC37A6F` FOREIGN KEY (`intercambio_id`) REFERENCES `c_intercambio`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_intercambio_linea` ADD CONSTRAINT `FK_88E784CE77BB7125` FOREIGN KEY (`plazaInicio_id`) REFERENCES `e_estructura_plazas`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_intercambio_linea` ADD CONSTRAINT `FK_88E784CE952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_intercambio_linea` ADD CONSTRAINT `FK_88E784CEAED3850` FOREIGN KEY (`plazaFin_id`) REFERENCES `e_estructura_plazas`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_intercambio_linea` ADD CONSTRAINT `FK_88E784CEF883EFAA` FOREIGN KEY (`empleadoSustituido_id`) REFERENCES `c_empleado`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_roltipoaccion_tipoaccion` ADD CONSTRAINT `FK_48CD1A52C9F2F869` FOREIGN KEY (`croltipoaccion_id`) REFERENCES `c_rol_tipoaccion`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_roltipoaccion_tipoaccion` ADD CONSTRAINT `FK_48CD1A52E93DD86B` FOREIGN KEY (`ctipoaccion_id`) REFERENCES `c_tipo_accion`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_salida_anticipada` ADD CONSTRAINT `c_salida_anticipada_empleado_id_fkey` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE `c_separacion_temp` ADD CONSTRAINT `FK_540A8D7C9F59AD70` FOREIGN KEY (`empleadoTrasladoTemp_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_solicitud_empleo` ADD CONSTRAINT `FK_4F8484C018586848` FOREIGN KEY (`tipoPortacionArmas_id`) REFERENCES `n_tipo_carnet_portacion`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_solicitud_empleo` ADD CONSTRAINT `FK_4F8484C02BAEF284` FOREIGN KEY (`estadoCivil_id`) REFERENCES `n_estado_civil`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_solicitud_empleo` ADD CONSTRAINT `FK_4F8484C041859289` FOREIGN KEY (`division_id`) REFERENCES `n_division`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_solicitud_empleo` ADD CONSTRAINT `FK_4F8484C04E7121AF` FOREIGN KEY (`provincia_id`) REFERENCES `n_provincia`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_solicitud_empleo` ADD CONSTRAINT `FK_4F8484C06AC7D228` FOREIGN KEY (`terceraOpcionTrabajar_id`) REFERENCES `n_provincia`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_solicitud_empleo` ADD CONSTRAINT `FK_4F8484C08B34DB71` FOREIGN KEY (`vacante_id`) REFERENCES `e_estructura_plazas`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_solicitud_empleo` ADD CONSTRAINT `FK_4F8484C08D070D0B` FOREIGN KEY (`canton_id`) REFERENCES `n_canton`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_solicitud_empleo` ADD CONSTRAINT `FK_4F8484C08E099F24` FOREIGN KEY (`primeraOpcionTrabajar_id`) REFERENCES `n_provincia`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_solicitud_empleo` ADD CONSTRAINT `FK_4F8484C098260155` FOREIGN KEY (`region_id`) REFERENCES `n_region`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_solicitud_empleo` ADD CONSTRAINT `FK_4F8484C0AB8DC0F8` FOREIGN KEY (`nacionalidad_id`) REFERENCES `n_nacionalidad`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_solicitud_empleo` ADD CONSTRAINT `FK_4F8484C0B894E495` FOREIGN KEY (`segundaOpcionTrabajar_id`) REFERENCES `n_provincia`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_solicitud_empleo` ADD CONSTRAINT `FK_4F8484C0E557397E` FOREIGN KEY (`distrito_id`) REFERENCES `n_distrito`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_solicitud_empleo_adjunto` ADD CONSTRAINT `FK_55893DCD1CB9D6E4` FOREIGN KEY (`solicitud_id`) REFERENCES `c_solicitud_empleo`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_solicitudempleo__n_idioma` ADD CONSTRAINT `FK_38D7303214714E0A` FOREIGN KEY (`nidioma_id`) REFERENCES `n_idioma`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_solicitudempleo__n_idioma` ADD CONSTRAINT `FK_38D730324248037D` FOREIGN KEY (`csolicitudempleo_id`) REFERENCES `c_solicitud_empleo`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_tramite_portacion_arma` ADD CONSTRAINT `FK_B71936626D892826` FOREIGN KEY (`empleadoTramitePortacionArma_id`) REFERENCES `c_empleado_tramite_portacion_arma`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `c_traslado_temp` ADD CONSTRAINT `FK_7B0E282C1B482BBB` FOREIGN KEY (`plazaInicial_id`) REFERENCES `e_estructura_plazas`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `consultor_actualizacion` ADD CONSTRAINT `FK_A7D941FB4E7121AF` FOREIGN KEY (`provincia_id`) REFERENCES `n_provincia`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `consultor_actualizacion` ADD CONSTRAINT `FK_A7D941FB8D070D0B` FOREIGN KEY (`canton_id`) REFERENCES `n_canton`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `consultor_actualizacion` ADD CONSTRAINT `FK_A7D941FB952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `consultor_actualizacion` ADD CONSTRAINT `FK_A7D941FBE557397E` FOREIGN KEY (`distrito_id`) REFERENCES `n_distrito`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `consultor_actualizacion_telefonos` ADD CONSTRAINT `FK_2CF2054CDF01D38` FOREIGN KEY (`actualizacion_id`) REFERENCES `consultor_actualizacion`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `consultor_history_checked_update` ADD CONSTRAINT `FK_37A84590952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `consultor_log` ADD CONSTRAINT `FK_45A0E79B1CB9D6E4` FOREIGN KEY (`solicitud_id`) REFERENCES `v_vacacion_solicitud`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `consultor_log` ADD CONSTRAINT `FK_45A0E79B952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `d_empleado_cartas_recomendacion` ADD CONSTRAINT `FK_244336C1CB9D6E4` FOREIGN KEY (`solicitud_id`) REFERENCES `c_solicitud_empleo`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `d_empleado_cartas_recomendacion` ADD CONSTRAINT `FK_244336C952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `d_empleado_hoja_delincuencia` ADD CONSTRAINT `FK_D39F3EAF1CB9D6E4` FOREIGN KEY (`solicitud_id`) REFERENCES `c_solicitud_empleo`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `d_empleado_hoja_delincuencia` ADD CONSTRAINT `FK_D39F3EAF952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `d_empleado_otras_anotaciones` ADD CONSTRAINT `FK_CAA044011CB9D6E4` FOREIGN KEY (`solicitud_id`) REFERENCES `c_solicitud_empleo`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `d_empleado_otras_anotaciones` ADD CONSTRAINT `FK_CAA04401952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE `c_producto_no_conforme` ADD CONSTRAINT `c_producto_no_conforme_corpo_id_fkey` FOREIGN KEY (`corpo_id`) REFERENCES `e_estructura_sucursal`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE `c_puesto_notas` ADD CONSTRAINT `c_puesto_notas_puesto_id_fkey` FOREIGN KEY (`puesto_id`) REFERENCES `e_estructura_puesto`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
@@ -6095,229 +5970,22 @@ ALTER TABLE `c_puesto_notas_bitacora_cambios` ADD CONSTRAINT `c_puesto_notas_bit
 ALTER TABLE `c_puesto_notas_bitacora_cambios` ADD CONSTRAINT `c_puesto_notas_bitacora_cambios_nota_id_fkey` FOREIGN KEY (`nota_id`) REFERENCES `c_puesto_notas`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `e_antecedente_penal` ADD CONSTRAINT `FK_47E60268952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE `c_registro_induccion_general` ADD CONSTRAINT `c_registro_induccion_general_cliente_id_fkey` FOREIGN KEY (`cliente_id`) REFERENCES `e_estructura_cliente`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `e_cuenta_banco_empleado` ADD CONSTRAINT `FK_DBE7C3CB952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
+ALTER TABLE `c_registro_induccion_general` ADD CONSTRAINT `c_registro_induccion_general_corpo_id_fkey` FOREIGN KEY (`corpo_id`) REFERENCES `e_estructura_sucursal`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `e_cuenta_banco_empleado` ADD CONSTRAINT `FK_DBE7C3CBCC04A73E` FOREIGN KEY (`banco_id`) REFERENCES `n_banco`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE `c_registro_induccion_general` ADD CONSTRAINT `c_registro_induccion_general_empresa_id_fkey` FOREIGN KEY (`empresa_id`) REFERENCES `e_estructura_empresa`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `e_cursos` ADD CONSTRAINT `FK_2B0E1353952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE `c_usos_vehiculos_corporativos` ADD CONSTRAINT `c_usos_vehiculos_corporativos_vehiculo_id_fkey` FOREIGN KEY (`vehiculo_id`) REFERENCES `c_vehiculos_corporativos`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `e_dato_legal` ADD CONSTRAINT `FK_3E0AEB71952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE `c_vehiculos_corporativos` ADD CONSTRAINT `c_vehiculos_corporativos_cliente_id_fkey` FOREIGN KEY (`cliente_id`) REFERENCES `e_estructura_cliente`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `e_domicilio` ADD CONSTRAINT `FK_7F866C2C952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_domicilio` ADD CONSTRAINT `FK_7F866C2C98260155` FOREIGN KEY (`region_id`) REFERENCES `n_region`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_domicilio` ADD CONSTRAINT `FK_7F866C2CE557397E` FOREIGN KEY (`distrito_id`) REFERENCES `n_distrito`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_educacion` ADD CONSTRAINT `FK_F2D67309952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_educacion_idiomas` ADD CONSTRAINT `FK_52B18791952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_educacion_idiomas` ADD CONSTRAINT `FK_52B18791DEDC0611` FOREIGN KEY (`idioma_id`) REFERENCES `n_idioma`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_empleado_incumplimiento` ADD CONSTRAINT `FK_7D24EC63952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE SET NULL ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_empleado_incumplimiento` ADD CONSTRAINT `FK_7D24EC63B0DCC882` FOREIGN KEY (`tipoSancionAplicada_id`) REFERENCES `n_tipo_sancion`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_empleado_incumplimiento` ADD CONSTRAINT `FK_7D24EC63F88683D9` FOREIGN KEY (`accionBaja_id`) REFERENCES `c_accion_personal`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_empleado_incumplimiento__n_motivo` ADD CONSTRAINT `FK_A8E899CD37734155` FOREIGN KEY (`eincumplimiento_id`) REFERENCES `e_empleado_incumplimiento`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_empleado_incumplimiento__n_motivo` ADD CONSTRAINT `FK_A8E899CD517A96A9` FOREIGN KEY (`nmotivoincumplimiento_id`) REFERENCES `n_motivo_incumplimiento`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_empleado_incumplimiento_accion` ADD CONSTRAINT `FK_5FD78332170286C` FOREIGN KEY (`caccionpersonal_id`) REFERENCES `c_accion_personal`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_empleado_incumplimiento_accion` ADD CONSTRAINT `FK_5FD783337734155` FOREIGN KEY (`eincumplimiento_id`) REFERENCES `e_empleado_incumplimiento`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_empleado_lista_negra` ADD CONSTRAINT `FK_69D24DF1279A5D5E` FOREIGN KEY (`sucursal_id`) REFERENCES `e_estructura_sucursal`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_empleado_lista_negra` ADD CONSTRAINT `FK_69D24DF1952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_empleado_lista_negra` ADD CONSTRAINT `FK_69D24DF1DE734E51` FOREIGN KEY (`cliente_id`) REFERENCES `e_estructura_cliente`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_articulo_corpo_puesto_entrega` ADD CONSTRAINT `FK_9BAD26993C5F34F` FOREIGN KEY (`corpo_id`) REFERENCES `e_estructura_sucursal`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_articulo_corpo_puesto_entrega` ADD CONSTRAINT `FK_9BAD26995035E9DA` FOREIGN KEY (`puesto_id`) REFERENCES `e_estructura_puesto`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_articulo_corpo_puesto_entrega` ADD CONSTRAINT `FK_9BAD269985828A9B` FOREIGN KEY (`nomencladorArticuloCP_id`) REFERENCES `n_articulo_corpo_puesto`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_articulo_corpo_puesto_plan` ADD CONSTRAINT `FK_AAD537C43C5F34F` FOREIGN KEY (`corpo_id`) REFERENCES `e_estructura_sucursal`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_articulo_corpo_puesto_plan` ADD CONSTRAINT `FK_AAD537C45035E9DA` FOREIGN KEY (`puesto_id`) REFERENCES `e_estructura_puesto`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_articulo_corpo_puesto_plan` ADD CONSTRAINT `FK_AAD537C4EB6587E3` FOREIGN KEY (`combo_id`) REFERENCES `e_estructura_combo_articulo_cp`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_articulo_corpo_puesto_plan` ADD CONSTRAINT `FK_AAD537C4EDDDC6B` FOREIGN KEY (`articuloCP_id`) REFERENCES `n_articulo_corpo_puesto`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_bonificaciones_plaza` ADD CONSTRAINT `FK_89391A8D86CE56DC` FOREIGN KEY (`bonificacion_id`) REFERENCES `n_bonificacion_plaza`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_bonificaciones_plaza` ADD CONSTRAINT `FK_89391A8DEF34C0BD` FOREIGN KEY (`plaza_id`) REFERENCES `e_estructura_plazas`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_cliente` ADD CONSTRAINT `FK_AE021871521E1991` FOREIGN KEY (`empresa_id`) REFERENCES `e_estructura_empresa`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_cliente_usuario` ADD CONSTRAINT `FK_E039927BA76ED395` FOREIGN KEY (`user_id`) REFERENCES `security_fos_user`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_cliente_usuario` ADD CONSTRAINT `FK_E039927BDE734E51` FOREIGN KEY (`cliente_id`) REFERENCES `e_estructura_cliente`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_contrato` ADD CONSTRAINT `FK_A35EE4D41859289` FOREIGN KEY (`division_id`) REFERENCES `n_division`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_contrato` ADD CONSTRAINT `FK_A35EE4D4FF0676` FOREIGN KEY (`tipoContrato_id`) REFERENCES `n_tipo_contrato`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_contrato` ADD CONSTRAINT `FK_A35EE4D521E1991` FOREIGN KEY (`empresa_id`) REFERENCES `e_estructura_empresa`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_contrato` ADD CONSTRAINT `FK_A35EE4D76490E74` FOREIGN KEY (`lugarApertura_id`) REFERENCES `n_lugar_apertura`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_contrato` ADD CONSTRAINT `FK_A35EE4DDE734E51` FOREIGN KEY (`cliente_id`) REFERENCES `e_estructura_cliente`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_curso_contrato` ADD CONSTRAINT `FK_93FF31DC70AE7BF1` FOREIGN KEY (`contrato_id`) REFERENCES `e_estructura_contrato`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_curso_contrato` ADD CONSTRAINT `FK_93FF31DC87CB4A1F` FOREIGN KEY (`curso_id`) REFERENCES `c_curso`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_dia_excepcion_plaza` ADD CONSTRAINT `FK_640C22F132838645` FOREIGN KEY (`diaExcepcionPuesto_id`) REFERENCES `e_estructura_dia_excepcion_puesto`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_dia_excepcion_plaza` ADD CONSTRAINT `FK_640C22F17963DFC5` FOREIGN KEY (`marcaDia_id`) REFERENCES `c_marca_dia`(`id`) ON DELETE SET NULL ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_dia_excepcion_plaza` ADD CONSTRAINT `FK_640C22F1EF34C0BD` FOREIGN KEY (`plaza_id`) REFERENCES `e_estructura_plazas`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_dia_excepcion_puesto` ADD CONSTRAINT `FK_1F27E2D35035E9DA` FOREIGN KEY (`puesto_id`) REFERENCES `e_estructura_puesto`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_empleado_autorizado_contrato` ADD CONSTRAINT `FK_8E302ED270AE7BF1` FOREIGN KEY (`contrato_id`) REFERENCES `e_estructura_contrato`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_empleado_autorizado_contrato` ADD CONSTRAINT `FK_8E302ED2952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_historico_contrato` ADD CONSTRAINT `FK_688D970F70AE7BF1` FOREIGN KEY (`contrato_id`) REFERENCES `e_estructura_contrato`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_historico_contrato` ADD CONSTRAINT `FK_688D970F84F63C81` FOREIGN KEY (`tipoRegistroContrato_id`) REFERENCES `n_tipo_registro_contrato`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_horario_plaza_historial` ADD CONSTRAINT `FK_F4AAD92F4959F1BA` FOREIGN KEY (`horario_id`) REFERENCES `c_horario`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_horario_plaza_historial` ADD CONSTRAINT `FK_F4AAD92FEF34C0BD` FOREIGN KEY (`plaza_id`) REFERENCES `e_estructura_plazas`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_horariopuesto_dia` ADD CONSTRAINT `FK_2968410A4959F1BA` FOREIGN KEY (`horario_id`) REFERENCES `e_estructura_horariopuesto`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_plazas` ADD CONSTRAINT `FK_92687E504BAB96C` FOREIGN KEY (`rol_id`) REFERENCES `c_horario`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_plazas` ADD CONSTRAINT `FK_92687E505035E9DA` FOREIGN KEY (`puesto_id`) REFERENCES `e_estructura_puesto`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_plazas` ADD CONSTRAINT `FK_92687E5066A839D6` FOREIGN KEY (`empleadoPlaza_id`) REFERENCES `c_empleado_plaza`(`id`) ON DELETE SET NULL ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_plazas` ADD CONSTRAINT `FK_92687E50A07740F` FOREIGN KEY (`comboUniforme_id`) REFERENCES `c_combo_uniforme_plaza`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_plazas` ADD CONSTRAINT `FK_92687E50F4C2234D` FOREIGN KEY (`categoriaSalarial_id`) REFERENCES `pg_categoria_salarial`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_puesto` ADD CONSTRAINT `FK_5C9F9D20279A5D5E` FOREIGN KEY (`sucursal_id`) REFERENCES `e_estructura_sucursal`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_puesto` ADD CONSTRAINT `FK_5C9F9D202AC174D0` FOREIGN KEY (`tipoPuesto_id`) REFERENCES `n_tipo_puesto`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_puesto` ADD CONSTRAINT `FK_5C9F9D207A17505D` FOREIGN KEY (`comboArticulosCP_id`) REFERENCES `e_estructura_combo_articulo_cp`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_puesto` ADD CONSTRAINT `FK_5C9F9D209FF23C2C` FOREIGN KEY (`horarioPuesto_id`) REFERENCES `e_estructura_horariopuesto`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_puesto` ADD CONSTRAINT `FK_5C9F9D20EB6A1B22` FOREIGN KEY (`tipoHoraExtra_id`) REFERENCES `n_horas_extras`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_requerimiento_contrato` ADD CONSTRAINT `FK_D5DEDC5251DD0900` FOREIGN KEY (`requerimiento_id`) REFERENCES `n_requerimiento`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_requerimiento_contrato` ADD CONSTRAINT `FK_D5DEDC5270AE7BF1` FOREIGN KEY (`contrato_id`) REFERENCES `e_estructura_contrato`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_puestos_manual_puesto` ADD CONSTRAINT `e_puestos_manual_puesto_manual_puesto_id_fkey` FOREIGN KEY (`manual_puesto_id`) REFERENCES `e_manual_puesto`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE `e_puestos_manual_puesto` ADD CONSTRAINT `e_puestos_manual_puesto_puesto_id_fkey` FOREIGN KEY (`puesto_id`) REFERENCES `e_estructura_puesto`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE `e_archivos_manual_puesto` ADD CONSTRAINT `e_archivos_manual_puesto_manual_puesto_id_fkey` FOREIGN KEY (`manual_puesto_id`) REFERENCES `e_manual_puesto`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE `e_empleado_visualizacion_manual_puesto` ADD CONSTRAINT `e_empleado_visualizacion_manual_puesto_empleado_id_fkey` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE `e_empleado_visualizacion_manual_puesto` ADD CONSTRAINT `e_empleado_visualizacion_manual_puesto_manual_puesto_id_fkey` FOREIGN KEY (`manual_puesto_id`) REFERENCES `e_manual_puesto`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_sucursal` ADD CONSTRAINT `FK_85C0E6384E7121AF` FOREIGN KEY (`provincia_id`) REFERENCES `n_provincia`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_sucursal` ADD CONSTRAINT `FK_85C0E6385CAEAC5D` FOREIGN KEY (`ejecutivoCuenta_id`) REFERENCES `n_ejecutivo_cuenta`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_sucursal` ADD CONSTRAINT `FK_85C0E63870AE7BF1` FOREIGN KEY (`contrato_id`) REFERENCES `e_estructura_contrato`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_sucursal` ADD CONSTRAINT `FK_85C0E6387A17505D` FOREIGN KEY (`comboArticulosCP_id`) REFERENCES `e_estructura_combo_articulo_cp`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_sucursal` ADD CONSTRAINT `FK_85C0E6388D070D0B` FOREIGN KEY (`canton_id`) REFERENCES `n_canton`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_sucursal` ADD CONSTRAINT `FK_85C0E63898260155` FOREIGN KEY (`region_id`) REFERENCES `n_region`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_estructura_sucursal` ADD CONSTRAINT `FK_85C0E638E557397E` FOREIGN KEY (`distrito_id`) REFERENCES `n_distrito`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE `c_vehiculos_corporativos` ADD CONSTRAINT `c_vehiculos_corporativos_sucursal_id_fkey` FOREIGN KEY (`sucursal_id`) REFERENCES `e_estructura_sucursal`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE `e_actividad_corpo` ADD CONSTRAINT `e_actividad_corpo_cliente_id_fkey` FOREIGN KEY (`cliente_id`) REFERENCES `e_estructura_cliente`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
@@ -6338,9 +6006,6 @@ ALTER TABLE `e_actividad_corpo` ADD CONSTRAINT `e_actividad_corpo_plaza_id_fkey`
 ALTER TABLE `e_actividad_corpo` ADD CONSTRAINT `e_actividad_corpo_puesto_id_fkey` FOREIGN KEY (`puesto_id`) REFERENCES `e_estructura_puesto`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `e_actividad_puesto_plaza` ADD CONSTRAINT `e_actividad_puesto_plaza_actividadCorpo_id_fkey` FOREIGN KEY (`actividadCorpo_id`) REFERENCES `e_actividad_corpo`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
 ALTER TABLE `e_actividad_corpo_plaza` ADD CONSTRAINT `e_actividad_corpo_plaza_actividadCorpo_id_fkey` FOREIGN KEY (`actividadCorpo_id`) REFERENCES `e_actividad_corpo`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
@@ -6353,73 +6018,19 @@ ALTER TABLE `e_actividad_corpo_revision_equipo` ADD CONSTRAINT `e_actividad_corp
 ALTER TABLE `e_actividad_corpo_revision_equipo` ADD CONSTRAINT `e_actividad_corpo_revision_equipo_articulo_id_fkey` FOREIGN KEY (`articulo_id`) REFERENCES `n_articulo_corpo_puesto`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `e_familia` ADD CONSTRAINT `FK_BFFE2C1E5BA311FC` FOREIGN KEY (`parentesco_id`) REFERENCES `n_parentesco`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE `e_actividad_puesto_plaza` ADD CONSTRAINT `e_actividad_puesto_plaza_actividadCorpo_id_fkey` FOREIGN KEY (`actividadCorpo_id`) REFERENCES `e_actividad_corpo`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `e_familia` ADD CONSTRAINT `FK_BFFE2C1E952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE `e_activo_visitante` ADD CONSTRAINT `FK_BB503B25992BE739` FOREIGN KEY (`visitante_id`) REFERENCES `e_registro_personas`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `e_familia` ADD CONSTRAINT `FK_BFFE2C1ED8999C67` FOREIGN KEY (`ocupacion_id`) REFERENCES `n_ocupacion`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE `e_activo_visitante` ADD CONSTRAINT `FK_BB503B25993BE739` FOREIGN KEY (`tipo_id`) REFERENCES `n_tipo_activo_visitas`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `e_historia_salud` ADD CONSTRAINT `FK_DBC9ED35952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE `e_archivos_manual_puesto` ADD CONSTRAINT `e_archivos_manual_puesto_manual_puesto_id_fkey` FOREIGN KEY (`manual_puesto_id`) REFERENCES `e_manual_puesto`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `e_historia_salud_deportes` ADD CONSTRAINT `FK_C8CA2E312AC5252B` FOREIGN KEY (`ehistoriasalud_id`) REFERENCES `e_historia_salud`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_historia_salud_deportes` ADD CONSTRAINT `FK_C8CA2E31CE01478D` FOREIGN KEY (`ndeportes_id`) REFERENCES `n_deportes`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_historia_salud_juego_azar` ADD CONSTRAINT `FK_A5E83ADC2AC5252B` FOREIGN KEY (`ehistoriasalud_id`) REFERENCES `e_historia_salud`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_historia_salud_juego_azar` ADD CONSTRAINT `FK_A5E83ADCCB6A38C4` FOREIGN KEY (`njuegoazar_id`) REFERENCES `n_juego_azar`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_historia_salud_tipo_enfermedad` ADD CONSTRAINT `FK_68A643A55E542676` FOREIGN KEY (`tipoEnfermedad_id`) REFERENCES `n_tipo_enfermedad`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_historia_salud_tipo_enfermedad` ADD CONSTRAINT `FK_68A643A571AC4617` FOREIGN KEY (`historiaSalud_id`) REFERENCES `e_historia_salud`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_historia_trabajo` ADD CONSTRAINT `FK_C3C4D66952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_informacion_educacional` ADD CONSTRAINT `FK_4ECC8A5654204EE1` FOREIGN KEY (`nivelEducacional_id`) REFERENCES `n_nivel_educacional`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_informacion_educacional` ADD CONSTRAINT `FK_4ECC8A568ED81F31` FOREIGN KEY (`educacion_id`) REFERENCES `e_educacion`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_licencia` ADD CONSTRAINT `FK_209564874E5E27A4` FOREIGN KEY (`tipoLicencia_id`) REFERENCES `n_tipo_licencia`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_licencia` ADD CONSTRAINT `FK_20956487952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_persona_dependen` ADD CONSTRAINT `FK_708D21555BA311FC` FOREIGN KEY (`parentesco_id`) REFERENCES `n_parentesco`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_persona_dependen` ADD CONSTRAINT `FK_708D2155952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_persona_dependen` ADD CONSTRAINT `FK_708D2155D8999C67` FOREIGN KEY (`ocupacion_id`) REFERENCES `n_ocupacion`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_persona_empresa` ADD CONSTRAINT `FK_61EEE3DCA57A8FE0` FOREIGN KEY (`otrosDatos_id`) REFERENCES `e_otros_datos`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_referencia_personal` ADD CONSTRAINT `FK_BFAFF6A4952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `e_registro_capacitaciones` ADD CONSTRAINT `e_registro_capacitaciones_cliente_id_fkey` FOREIGN KEY (`cliente_id`) REFERENCES `e_estructura_cliente`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE `e_registro_capacitaciones` ADD CONSTRAINT `e_registro_capacitaciones_corpo_id_fkey` FOREIGN KEY (`corpo_id`) REFERENCES `e_estructura_sucursal`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE `e_registro_capacitaciones` ADD CONSTRAINT `e_registro_capacitaciones_empresa_id_fkey` FOREIGN KEY (`empresa_id`) REFERENCES `e_estructura_empresa`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
+ALTER TABLE `e_archivos_producto_no_conforme` ADD CONSTRAINT `e_archivos_producto_no_conforme_pnc_id_fkey` FOREIGN KEY (`pnc_id`) REFERENCES `c_producto_no_conforme`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE `e_capacitacion_empleado` ADD CONSTRAINT `e_capacitacion_empleado_capacitacion_id_fkey` FOREIGN KEY (`capacitacion_id`) REFERENCES `e_registro_capacitaciones`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
@@ -6434,22 +6045,82 @@ ALTER TABLE `e_capacitacion_puesto` ADD CONSTRAINT `e_capacitacion_puesto_capaci
 ALTER TABLE `e_capacitacion_puesto` ADD CONSTRAINT `e_capacitacion_puesto_puesto_id_fkey` FOREIGN KEY (`puesto_id`) REFERENCES `e_estructura_puesto`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `e_registro_enfermedades` ADD CONSTRAINT `FK_946DE77A952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE `e_control_documento_entregado_cliente` ADD CONSTRAINT `e_control_documento_entregado_cliente_cliente_id_fkey` FOREIGN KEY (`cliente_id`) REFERENCES `e_estructura_cliente`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `e_registro_habilidades` ADD CONSTRAINT `FK_7BA0E6E9952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE `e_control_documento_entregado_cliente` ADD CONSTRAINT `e_control_documento_entregado_cliente_corpo_id_fkey` FOREIGN KEY (`corpo_id`) REFERENCES `e_estructura_sucursal`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `e_registro_vehiculos` ADD CONSTRAINT `FK_BB503B25952BE730` FOREIGN KEY (`responsable_id`) REFERENCES `c_empleado`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE `e_empleado_visualizacion_archivos` ADD CONSTRAINT `e_empleado_visualizacion_archivos_visualizacion_id_fkey` FOREIGN KEY (`visualizacion_id`) REFERENCES `e_empleado_visualizacion_manual_puesto`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `e_registro_vehiculos` ADD CONSTRAINT `FK_BB503B25953BE730` FOREIGN KEY (`cliente_id`) REFERENCES `e_estructura_cliente`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE `e_empleado_visualizacion_manual_puesto` ADD CONSTRAINT `e_empleado_visualizacion_manual_puesto_empleado_id_fkey` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `e_registro_vehiculos` ADD CONSTRAINT `FK_BB503B25954BE730` FOREIGN KEY (`corpo_id`) REFERENCES `e_estructura_sucursal`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE `e_empleado_visualizacion_manual_puesto` ADD CONSTRAINT `e_empleado_visualizacion_manual_puesto_manual_puesto_id_fkey` FOREIGN KEY (`manual_puesto_id`) REFERENCES `e_manual_puesto`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `e_registro_vehiculos` ADD CONSTRAINT `FK_BB503B25955BE730` FOREIGN KEY (`puesto_id`) REFERENCES `e_estructura_puesto`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE `e_llave` ADD CONSTRAINT `e_llave_cliente_id_fkey` FOREIGN KEY (`cliente_id`) REFERENCES `e_estructura_cliente`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `e_llave` ADD CONSTRAINT `e_llave_corpo_id_fkey` FOREIGN KEY (`corpo_id`) REFERENCES `e_estructura_sucursal`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `e_llave` ADD CONSTRAINT `e_llave_puesto_id_fkey` FOREIGN KEY (`puesto_id`) REFERENCES `e_estructura_puesto`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `e_llave_en_llavero` ADD CONSTRAINT `e_llave_en_llavero_llave_id_fkey` FOREIGN KEY (`llave_id`) REFERENCES `e_llave`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `e_llave_en_llavero` ADD CONSTRAINT `e_llave_en_llavero_llavero_id_fkey` FOREIGN KEY (`llavero_id`) REFERENCES `e_llavero`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `e_llavero` ADD CONSTRAINT `e_llavero_cliente_id_fkey` FOREIGN KEY (`cliente_id`) REFERENCES `e_estructura_cliente`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `e_llavero` ADD CONSTRAINT `e_llavero_corpo_id_fkey` FOREIGN KEY (`corpo_id`) REFERENCES `e_estructura_sucursal`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `e_llavero` ADD CONSTRAINT `e_llavero_puesto_id_fkey` FOREIGN KEY (`puesto_id`) REFERENCES `e_estructura_puesto`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `e_movimiento_llave` ADD CONSTRAINT `e_movimiento_llave_llave_id_fkey` FOREIGN KEY (`llave_id`) REFERENCES `e_llave`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `e_movimiento_llavero` ADD CONSTRAINT `e_movimiento_llavero_llavero_id_fkey` FOREIGN KEY (`llavero_id`) REFERENCES `e_llavero`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `e_mutuos_acuerdos` ADD CONSTRAINT `e_mutuos_acuerdos_cliente_id_fkey` FOREIGN KEY (`cliente_id`) REFERENCES `e_estructura_cliente`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `e_mutuos_acuerdos` ADD CONSTRAINT `e_mutuos_acuerdos_corpo_id_fkey` FOREIGN KEY (`corpo_id`) REFERENCES `e_estructura_sucursal`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `e_mutuos_acuerdos` ADD CONSTRAINT `e_mutuos_acuerdos_ejecutivo_cuenta_fkey` FOREIGN KEY (`ejecutivo_cuenta`) REFERENCES `n_ejecutivo_cuenta`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `e_puestos_manual_puesto` ADD CONSTRAINT `e_puestos_manual_puesto_manual_puesto_id_fkey` FOREIGN KEY (`manual_puesto_id`) REFERENCES `e_manual_puesto`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `e_puestos_manual_puesto` ADD CONSTRAINT `e_puestos_manual_puesto_puesto_id_fkey` FOREIGN KEY (`puesto_id`) REFERENCES `e_estructura_puesto`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `e_registro_capacitaciones` ADD CONSTRAINT `e_registro_capacitaciones_cliente_id_fkey` FOREIGN KEY (`cliente_id`) REFERENCES `e_estructura_cliente`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `e_registro_capacitaciones` ADD CONSTRAINT `e_registro_capacitaciones_corpo_id_fkey` FOREIGN KEY (`corpo_id`) REFERENCES `e_estructura_sucursal`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `e_registro_capacitaciones` ADD CONSTRAINT `e_registro_capacitaciones_empresa_id_fkey` FOREIGN KEY (`empresa_id`) REFERENCES `e_estructura_empresa`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `e_registro_entrega_puesto` ADD CONSTRAINT `e_registro_entrega_puesto_cliente_id_fkey` FOREIGN KEY (`cliente_id`) REFERENCES `e_estructura_cliente`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `e_registro_entrega_puesto` ADD CONSTRAINT `e_registro_entrega_puesto_corpo_id_fkey` FOREIGN KEY (`corpo_id`) REFERENCES `e_estructura_sucursal`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `e_registro_entrega_puesto` ADD CONSTRAINT `e_registro_entrega_puesto_puesto_id_fkey` FOREIGN KEY (`puesto_id`) REFERENCES `e_estructura_puesto`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE `e_registro_personas` ADD CONSTRAINT `FK_BB503B25992BE730` FOREIGN KEY (`responsable_id`) REFERENCES `c_empleado`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
@@ -6464,416 +6135,19 @@ ALTER TABLE `e_registro_personas` ADD CONSTRAINT `FK_BB703B25954BE730` FOREIGN K
 ALTER TABLE `e_registro_personas` ADD CONSTRAINT `FK_BB803B25955BE730` FOREIGN KEY (`puesto_id`) REFERENCES `e_estructura_puesto`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `e_activo_visitante` ADD CONSTRAINT `FK_BB503B25992BE739` FOREIGN KEY (`visitante_id`) REFERENCES `e_registro_personas`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE `e_registro_vehiculos` ADD CONSTRAINT `FK_BB503B25952BE730` FOREIGN KEY (`responsable_id`) REFERENCES `c_empleado`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `e_activo_visitante` ADD CONSTRAINT `FK_BB503B25993BE739` FOREIGN KEY (`tipo_id`) REFERENCES `n_tipo_activo_visitas`(`id`) ON DELETE NO ACTION ON UPDATE CASCADE;
+ALTER TABLE `e_registro_vehiculos` ADD CONSTRAINT `FK_BB503B25953BE730` FOREIGN KEY (`cliente_id`) REFERENCES `e_estructura_cliente`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `e_requerimiento_cumplido` ADD CONSTRAINT `FK_BB503B1551DD0900` FOREIGN KEY (`requerimiento_id`) REFERENCES `n_requerimiento`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE `e_registro_vehiculos` ADD CONSTRAINT `FK_BB503B25954BE730` FOREIGN KEY (`corpo_id`) REFERENCES `e_estructura_sucursal`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `e_requerimiento_cumplido` ADD CONSTRAINT `FK_BB503B15952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE `e_registro_vehiculos` ADD CONSTRAINT `FK_BB503B25955BE730` FOREIGN KEY (`puesto_id`) REFERENCES `e_estructura_puesto`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `e_trabajo` ADD CONSTRAINT `FK_1C41565B952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE `n_tipo_mantenimiento_articulo` ADD CONSTRAINT `n_tipo_mantenimiento_articulo_articulo_id_fkey` FOREIGN KEY (`articulo_id`) REFERENCES `n_articulo_corpo_puesto`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE `e_trabajo` ADD CONSTRAINT `FK_1C41565BC2D4D747` FOREIGN KEY (`nombre_id`) REFERENCES `n_trabajo`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `log_horario` ADD CONSTRAINT `FK_DA956B344959F1BA` FOREIGN KEY (`horario_id`) REFERENCES `c_horario`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `m_comodin_ausente` ADD CONSTRAINT `FK_512A0FBD7963DFC5` FOREIGN KEY (`marcaDia_id`) REFERENCES `c_marca_dia`(`id`) ON DELETE SET NULL ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `m_comodin_ausente` ADD CONSTRAINT `FK_512A0FBD952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `m_operacion` ADD CONSTRAINT `FK_8A9E6AF37963DFC5` FOREIGN KEY (`marcaDia_id`) REFERENCES `c_marca_dia`(`id`) ON DELETE SET NULL ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `m_puesto_no_cubierto` ADD CONSTRAINT `FK_61ED78837963DFC5` FOREIGN KEY (`marcaDia_id`) REFERENCES `c_marca_dia`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `m_puesto_no_cubierto` ADD CONSTRAINT `FK_61ED7883952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `m_puesto_no_cubierto` ADD CONSTRAINT `FK_61ED7883C49D574A` FOREIGN KEY (`reposicionDeHoras_id`) REFERENCES `m_reposicion_de_horas`(`id`) ON DELETE SET NULL ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `m_puesto_no_cubierto` ADD CONSTRAINT `FK_61ED7883EF34C0BD` FOREIGN KEY (`plaza_id`) REFERENCES `e_estructura_plazas`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `m_refuerzo` ADD CONSTRAINT `FK_E14C49FC2B959FC6` FOREIGN KEY (`extra_id`) REFERENCES `c_horas_extras`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `m_refuerzo` ADD CONSTRAINT `FK_E14C49FC3C5F34F` FOREIGN KEY (`corpo_id`) REFERENCES `e_estructura_sucursal`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `m_refuerzo` ADD CONSTRAINT `FK_E14C49FC7963DFC5` FOREIGN KEY (`marcaDia_id`) REFERENCES `c_marca_dia`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `m_refuerzo` ADD CONSTRAINT `FK_E14C49FC952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `m_refuerzo` ADD CONSTRAINT `FK_E14C49FCEF34C0BD` FOREIGN KEY (`plaza_id`) REFERENCES `e_estructura_plazas`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `m_reposicion_de_horas` ADD CONSTRAINT `FK_35E7E0D45035E9DA` FOREIGN KEY (`puesto_id`) REFERENCES `e_estructura_puesto`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `m_reposicion_de_horas` ADD CONSTRAINT `FK_35E7E0D47963DFC5` FOREIGN KEY (`marcaDia_id`) REFERENCES `c_marca_dia`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `m_reposicion_de_horas` ADD CONSTRAINT `FK_35E7E0D4952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `m_rol_monitoreo_contrato` ADD CONSTRAINT `FK_98623F170AE7BF1` FOREIGN KEY (`contrato_id`) REFERENCES `e_estructura_contrato`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `m_rol_monitoreo_contrato` ADD CONSTRAINT `FK_98623F1CECCB70E` FOREIGN KEY (`mrolmonitoreo_id`) REFERENCES `m_rol_monitoreo`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `m_rol_monitoreo_sucursal` ADD CONSTRAINT `FK_86732B84279A5D5E` FOREIGN KEY (`sucursal_id`) REFERENCES `e_estructura_sucursal`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `m_rol_monitoreo_sucursal` ADD CONSTRAINT `FK_86732B84CECCB70E` FOREIGN KEY (`mrolmonitoreo_id`) REFERENCES `m_rol_monitoreo`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `m_turno_activo` ADD CONSTRAINT `FK_CC1DB0AE2F4E077F` FOREIGN KEY (`motivoMarcarHorarioPlaza_id`) REFERENCES `n_motivo_marcar_horario_plaza`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `n_apoderado` ADD CONSTRAINT `FK_2D844777952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `n_articulo_uniforme` ADD CONSTRAINT `FK_429432F081E7650` FOREIGN KEY (`tipoDeTalla_id`) REFERENCES `n_clasificacion_talla`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `n_canton` ADD CONSTRAINT `FK_9F82AC3C4E7121AF` FOREIGN KEY (`provincia_id`) REFERENCES `n_provincia`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `n_coordinador` ADD CONSTRAINT `FK_D7D149E781B56B3` FOREIGN KEY (`coordinadoPor_id`) REFERENCES `n_coordinado_por`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `n_distrito` ADD CONSTRAINT `FK_5A4A14868D070D0B` FOREIGN KEY (`canton_id`) REFERENCES `n_canton`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `n_empresa_banco` ADD CONSTRAINT `FK_F5709BC0521E1991` FOREIGN KEY (`empresa_id`) REFERENCES `e_estructura_empresa`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `n_empresa_banco` ADD CONSTRAINT `FK_F5709BC0CC04A73E` FOREIGN KEY (`banco_id`) REFERENCES `n_banco`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `n_empresa_poliza` ADD CONSTRAINT `FK_1223BAD041859289` FOREIGN KEY (`division_id`) REFERENCES `n_division`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `n_empresa_poliza` ADD CONSTRAINT `FK_1223BAD0521E1991` FOREIGN KEY (`empresa_id`) REFERENCES `e_estructura_empresa`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `n_motivo_extra` ADD CONSTRAINT `FK_A3B0B86EB5523D4D` FOREIGN KEY (`tipoExtra_id`) REFERENCES `n_tipo_extra`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `n_pago_turno` ADD CONSTRAINT `FK_971CFF176065BC38` FOREIGN KEY (`categoriaPlaza_id`) REFERENCES `pg_categoria_salarial`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `n_pago_turno` ADD CONSTRAINT `FK_971CFF1769C5211E` FOREIGN KEY (`turno_id`) REFERENCES `n_turno`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `n_requerimiento` ADD CONSTRAINT `FK_529C438AB1D10646` FOREIGN KEY (`requerimiento_padre_id`) REFERENCES `n_requerimiento`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `p_periodopago` ADD CONSTRAINT `FK_31023814D035117` FOREIGN KEY (`periodoPagoConfig_id`) REFERENCES `p_periodopago_config`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `p_planillas` ADD CONSTRAINT `FK_A4977423D2624C39` FOREIGN KEY (`periodoPago_id`) REFERENCES `p_periodopago`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `p_planillas_bonificaciones_pagadas` ADD CONSTRAINT `FK_12CD2767799EE823` FOREIGN KEY (`planillaEmpleado_id`) REFERENCES `p_planillas_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `p_planillas_bonificaciones_pagadas` ADD CONSTRAINT `FK_12CD276786CE56DC` FOREIGN KEY (`bonificacion_id`) REFERENCES `c_bonificaciones`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `p_planillas_bonificaciones_plaza_pagadas` ADD CONSTRAINT `FK_9F2F7DE7799EE823` FOREIGN KEY (`planillaEmpleado_id`) REFERENCES `p_planillas_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `p_planillas_bonificaciones_plaza_pagadas` ADD CONSTRAINT `FK_9F2F7DE7E084692E` FOREIGN KEY (`bonificacionPlaza_id`) REFERENCES `e_estructura_bonificaciones_plaza`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `p_planillas_deudas_pagadas` ADD CONSTRAINT `FK_A96F6365799EE823` FOREIGN KEY (`planillaEmpleado_id`) REFERENCES `p_planillas_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `p_planillas_deudas_pagadas` ADD CONSTRAINT `FK_A96F6365C5CAD3D1` FOREIGN KEY (`deuda_id`) REFERENCES `c_deudas`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `p_planillas_dia_menos_descontado` ADD CONSTRAINT `FK_DBC74561799EE823` FOREIGN KEY (`planillaEmpleado_id`) REFERENCES `p_planillas_empleado`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `p_planillas_empleado` ADD CONSTRAINT `FK_CC9DC074952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `p_planillas_empleado` ADD CONSTRAINT `FK_CC9DC074F747F090` FOREIGN KEY (`planilla_id`) REFERENCES `p_planillas`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `pg_categoria_salarial` ADD CONSTRAINT `FK_E3A1F6CBED33694C` FOREIGN KEY (`categoriaEmpleado_id`) REFERENCES `pg_categoria_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `pg_categoria_salarial_log` ADD CONSTRAINT `FK_5C4E2930ED33694C` FOREIGN KEY (`categoriaEmpleado_id`) REFERENCES `pg_categoria_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `pg_categoria_salarial_log` ADD CONSTRAINT `FK_5C4E2930F4C2234D` FOREIGN KEY (`categoriaSalarial_id`) REFERENCES `pg_categoria_salarial`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `pg_pago_turno_semanal` ADD CONSTRAINT `FK_99D45AACED33694C` FOREIGN KEY (`categoriaEmpleado_id`) REFERENCES `pg_categoria_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `pg_pago_turno_semanal_log` ADD CONSTRAINT `FK_C845571FA0E9F09B` FOREIGN KEY (`pagoTurnoSemanal_id`) REFERENCES `pg_pago_turno_semanal`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `pg_pago_turno_semanal_log` ADD CONSTRAINT `FK_C845571FED33694C` FOREIGN KEY (`categoriaEmpleado_id`) REFERENCES `pg_categoria_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `pg_pe_bonif_empl_pagado` ADD CONSTRAINT `FK_1ED55932799EE823` FOREIGN KEY (`planillaEmpleado_id`) REFERENCES `pg_planilla_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `pg_pe_bonif_empl_pagado` ADD CONSTRAINT `FK_1ED5593286CE56DC` FOREIGN KEY (`bonificacion_id`) REFERENCES `c_bonificaciones`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `pg_pe_bonif_plaza_pagado` ADD CONSTRAINT `FK_AB69EBC4799EE823` FOREIGN KEY (`planillaEmpleado_id`) REFERENCES `pg_planilla_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `pg_pe_bonif_plaza_pagado` ADD CONSTRAINT `FK_AB69EBC486CE56DC` FOREIGN KEY (`bonificacion_id`) REFERENCES `e_estructura_bonificaciones_plaza`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `pg_pe_deuda_descontado` ADD CONSTRAINT `FK_8BF9D6E9799EE823` FOREIGN KEY (`planillaEmpleado_id`) REFERENCES `pg_planilla_empleado`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `pg_pe_deuda_descontado` ADD CONSTRAINT `FK_8BF9D6E9C5CAD3D1` FOREIGN KEY (`deuda_id`) REFERENCES `c_deudas`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `pg_pe_dia` ADD CONSTRAINT `FK_11D3EF533FBAC2B` FOREIGN KEY (`planillaEmpleadoRdh_id`) REFERENCES `pg_planilla_empleado`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `pg_pe_dia` ADD CONSTRAINT `FK_11D3EF53436B53E8` FOREIGN KEY (`planillaEmpleadoCdg_id`) REFERENCES `pg_planilla_empleado`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `pg_pe_dia` ADD CONSTRAINT `FK_11D3EF53799EE823` FOREIGN KEY (`planillaEmpleado_id`) REFERENCES `pg_planilla_empleado`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `pg_pe_dia` ADD CONSTRAINT `FK_11D3EF53AC1F7597` FOREIGN KEY (`dia_id`) REFERENCES `c_marca_dia`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `pg_pe_feriado_dia_pagado` ADD CONSTRAINT `FK_EAF51CE1799EE823` FOREIGN KEY (`planillaEmpleado_id`) REFERENCES `pg_planilla_empleado`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `pg_pe_feriado_dia_pagado` ADD CONSTRAINT `FK_EAF51CE1E2194A39` FOREIGN KEY (`feriadoDia_id`) REFERENCES `c_feriado_dia`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `pg_pe_incapacidad_pagado` ADD CONSTRAINT `FK_FEB9C1B02EDBF996` FOREIGN KEY (`incapacidad_id`) REFERENCES `c_incapacidad_ccss`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `pg_pe_incapacidad_pagado` ADD CONSTRAINT `FK_FEB9C1B0799EE823` FOREIGN KEY (`planillaEmpleado_id`) REFERENCES `pg_planilla_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `pg_pe_induccion_dia_pagado` ADD CONSTRAINT `FK_869A86811D6FE1F6` FOREIGN KEY (`induccionDia_id`) REFERENCES `c_inducciones`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `pg_pe_induccion_dia_pagado` ADD CONSTRAINT `FK_869A8681799EE823` FOREIGN KEY (`planillaEmpleado_id`) REFERENCES `pg_planilla_empleado`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `pg_pe_rebajo_sindicato_pagado` ADD CONSTRAINT `FK_D0FCC65257F57AE7` FOREIGN KEY (`planilla_empleado_id`) REFERENCES `pg_planilla_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `pg_pe_rebajo_sindicato_pagado` ADD CONSTRAINT `FK_D0FCC6526F9D0169` FOREIGN KEY (`empleado_sindicato_id`) REFERENCES `c_empleado_sindicato`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `pg_pe_refuerzo_dia_pagado` ADD CONSTRAINT `FK_C5D26D6632F8140A` FOREIGN KEY (`refuerzoDia_id`) REFERENCES `m_refuerzo`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `pg_pe_refuerzo_dia_pagado` ADD CONSTRAINT `FK_C5D26D66799EE823` FOREIGN KEY (`planillaEmpleado_id`) REFERENCES `pg_planilla_empleado`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `pg_planilla_empleado` ADD CONSTRAINT `FK_1465F95E10B18851` FOREIGN KEY (`accionPersonalLicenciaMaternidad_id`) REFERENCES `c_accion_personal`(`id`) ON DELETE SET NULL ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `pg_planilla_empleado` ADD CONSTRAINT `FK_1465F95E3C5F34F` FOREIGN KEY (`corpo_id`) REFERENCES `e_estructura_sucursal`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `pg_planilla_empleado` ADD CONSTRAINT `FK_1465F95E4558C79` FOREIGN KEY (`accionPersonal_id`) REFERENCES `c_accion_personal`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `pg_planilla_empleado` ADD CONSTRAINT `FK_1465F95E4959F1BA` FOREIGN KEY (`horario_id`) REFERENCES `c_horario`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `pg_planilla_empleado` ADD CONSTRAINT `FK_1465F95E70AE7BF1` FOREIGN KEY (`contrato_id`) REFERENCES `e_estructura_contrato`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `pg_planilla_empleado` ADD CONSTRAINT `FK_1465F95E952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `pg_planilla_empleado` ADD CONSTRAINT `FK_1465F95EB1C7830E` FOREIGN KEY (`salarioMes_id`) REFERENCES `v_salario_mes`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `pg_planilla_empleado` ADD CONSTRAINT `FK_1465F95EEF34C0BD` FOREIGN KEY (`plaza_id`) REFERENCES `e_estructura_plazas`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `pg_planilla_empleado` ADD CONSTRAINT `FK_1465F95EF747F090` FOREIGN KEY (`planilla_id`) REFERENCES `pg_planilla`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `pg_planilla_extra` ADD CONSTRAINT `FK_3764CFDF521E1991` FOREIGN KEY (`empresa_id`) REFERENCES `e_estructura_empresa`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `pg_planilla_extra` ADD CONSTRAINT `FK_3764CFDFCC04A73E` FOREIGN KEY (`banco_id`) REFERENCES `n_banco`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `pg_planilla_extra_empleado` ADD CONSTRAINT `FK_F9A77EA2521E1991` FOREIGN KEY (`empresa_id`) REFERENCES `e_estructura_empresa`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `pg_planilla_extra_empleado` ADD CONSTRAINT `FK_F9A77EA2952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `pg_planilla_extra_empleado` ADD CONSTRAINT `FK_F9A77EA2CC04A73E` FOREIGN KEY (`banco_id`) REFERENCES `n_banco`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `pg_planilla_extra_empleado` ADD CONSTRAINT `FK_F9A77EA2EF34C0BD` FOREIGN KEY (`plaza_id`) REFERENCES `e_estructura_plazas`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `pg_planilla_extra_empleado` ADD CONSTRAINT `FK_F9A77EA2F747F090` FOREIGN KEY (`planilla_id`) REFERENCES `pg_planilla_extra`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `pg_turno_excepcion` ADD CONSTRAINT `FK_9DAD81FEF4C2234D` FOREIGN KEY (`categoriaSalarial_id`) REFERENCES `pg_categoria_salarial`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `s_empleado` ADD CONSTRAINT `FK_EFE4B871114FAA7C` FOREIGN KEY (`educacionTecnico_id`) REFERENCES `n_educacion_tecnico`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `s_empleado` ADD CONSTRAINT `FK_EFE4B87128F0D5CA` FOREIGN KEY (`escolaridad_id`) REFERENCES `n_escolaridad`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `s_empleado` ADD CONSTRAINT `FK_EFE4B8712BAEF284` FOREIGN KEY (`estadoCivil_id`) REFERENCES `n_estado_civil`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `s_empleado` ADD CONSTRAINT `FK_EFE4B87155CD1AE4` FOREIGN KEY (`educacionUniversidad_id`) REFERENCES `n_educacion_universidad`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `s_empleado` ADD CONSTRAINT `FK_EFE4B8715EEC5E1B` FOREIGN KEY (`educacionPrimaria_id`) REFERENCES `n_educacion_primaria`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `s_empleado` ADD CONSTRAINT `FK_EFE4B87179F98940` FOREIGN KEY (`seguroCaja_id`) REFERENCES `n_seguro_caja`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `s_empleado` ADD CONSTRAINT `FK_EFE4B8718D7C55D2` FOREIGN KEY (`sindicato_id`) REFERENCES `n_sindicato`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `s_empleado` ADD CONSTRAINT `FK_EFE4B8719297142` FOREIGN KEY (`empleadoAsociado_id`) REFERENCES `c_empleado`(`id`) ON DELETE SET NULL ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `s_empleado` ADD CONSTRAINT `FK_EFE4B871996BD967` FOREIGN KEY (`educacionSecundaria_id`) REFERENCES `n_educacion_secundaria`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `s_empleado` ADD CONSTRAINT `FK_EFE4B871AB8DC0F8` FOREIGN KEY (`nacionalidad_id`) REFERENCES `n_nacionalidad`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `s_empleado` ADD CONSTRAINT `FK_EFE4B871B0B41592` FOREIGN KEY (`tipoContratacion_id`) REFERENCES `n_tipo_contratacion`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `s_empleado` ADD CONSTRAINT `FK_EFE4B871B7B147D6` FOREIGN KEY (`importacionEmpleados_id`) REFERENCES `s_importacion_empleados`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `s_empleado` ADD CONSTRAINT `FK_EFE4B871CC04A73E` FOREIGN KEY (`banco_id`) REFERENCES `n_banco`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `s_empleado` ADD CONSTRAINT `FK_EFE4B871D2624C39` FOREIGN KEY (`periodoPago_id`) REFERENCES `p_periodopago_config`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `s_empleado` ADD CONSTRAINT `FK_EFE4B871ED33694C` FOREIGN KEY (`categoriaEmpleado_id`) REFERENCES `pg_categoria_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `s_empleado` ADD CONSTRAINT `FK_EFE4B871FCBB0AEC` FOREIGN KEY (`tipoPagoCasa_id`) REFERENCES `n_tipo_pago_casa`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `s_empleado_plaza` ADD CONSTRAINT `FK_79220E13EF34C0BD` FOREIGN KEY (`plaza_id`) REFERENCES `e_estructura_plazas`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `s_planilla` ADD CONSTRAINT `FK_A2ED8530521E1991` FOREIGN KEY (`empresa_id`) REFERENCES `e_estructura_empresa`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `security_fos_user` ADD CONSTRAINT `FK_F611E3AB5CAEAC5D` FOREIGN KEY (`ejecutivoCuenta_id`) REFERENCES `n_ejecutivo_cuenta`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `security_fos_user` ADD CONSTRAINT `FK_F611E3AB81B56B3` FOREIGN KEY (`coordinadoPor_id`) REFERENCES `n_coordinado_por`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `security_fos_user` ADD CONSTRAINT `FK_F611E3ABE4517BDD` FOREIGN KEY (`coordinador_id`) REFERENCES `n_coordinador`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `security_fos_users_divisiones` ADD CONSTRAINT `FK_ECB7EF6390B45A1C` FOREIGN KEY (`ndivision_id`) REFERENCES `n_division`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `security_fos_users_divisiones` ADD CONSTRAINT `FK_ECB7EF63A76ED395` FOREIGN KEY (`user_id`) REFERENCES `security_fos_user`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `security_fos_users_groups` ADD CONSTRAINT `FK_195E7B04A76ED395` FOREIGN KEY (`user_id`) REFERENCES `security_fos_user`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `security_fos_users_groups` ADD CONSTRAINT `FK_195E7B04FE54D947` FOREIGN KEY (`group_id`) REFERENCES `security_fos_group`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `security_fos_users_roles_monitoreo` ADD CONSTRAINT `FK_6B6023C2A76ED395` FOREIGN KEY (`user_id`) REFERENCES `security_fos_user`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `security_fos_users_roles_monitoreo` ADD CONSTRAINT `FK_6B6023C2CECCB70E` FOREIGN KEY (`mrolmonitoreo_id`) REFERENCES `m_rol_monitoreo`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `security_fos_users_roles_tipoaccion` ADD CONSTRAINT `FK_D81D1251A76ED395` FOREIGN KEY (`user_id`) REFERENCES `security_fos_user`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `security_fos_users_roles_tipoaccion` ADD CONSTRAINT `FK_D81D1251C9F2F869` FOREIGN KEY (`croltipoaccion_id`) REFERENCES `c_rol_tipoaccion`(`id`) ON DELETE CASCADE ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `v_planilla_aguinaldo` ADD CONSTRAINT `FK_349B745C521E1991` FOREIGN KEY (`empresa_id`) REFERENCES `e_estructura_empresa`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `v_planilla_aguinaldo_empleado` ADD CONSTRAINT `FK_3941B047952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `v_planilla_aguinaldo_empleado` ADD CONSTRAINT `FK_3941B047D45EF842` FOREIGN KEY (`planillaAguinaldo_id`) REFERENCES `v_planilla_aguinaldo`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `v_salario_mes` ADD CONSTRAINT `FK_E9F02E60952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `v_salario_mes` ADD CONSTRAINT `FK_E9F02E60ACF1D1A2` FOREIGN KEY (`planillaAguinaldoEmpleado_id`) REFERENCES `v_planilla_aguinaldo_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `v_vacacion_empleado` ADD CONSTRAINT `FK_50A3975A952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `v_vacacion_mes` ADD CONSTRAINT `FK_5B04062661CD3BE2` FOREIGN KEY (`vacacionEmpleado_id`) REFERENCES `v_vacacion_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `v_vacacion_solicitud` ADD CONSTRAINT `FK_98808EDA4558C79` FOREIGN KEY (`accionPersonal_id`) REFERENCES `c_accion_personal`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `v_vacacion_solicitud` ADD CONSTRAINT `FK_98808EDA6D3EA93A` FOREIGN KEY (`sustituto_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `v_vacacion_solicitud` ADD CONSTRAINT `FK_98808EDA7F5F4055` FOREIGN KEY (`motivoRechazo_id`) REFERENCES `n_motivo_rechazo_solicitud_vacacion`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `v_vacacion_solicitud` ADD CONSTRAINT `FK_98808EDA81B56B3` FOREIGN KEY (`coordinadoPor_id`) REFERENCES `n_coordinado_por`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `v_vacacion_solicitud` ADD CONSTRAINT `FK_98808EDA952BE730` FOREIGN KEY (`empleado_id`) REFERENCES `c_empleado`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `v_vacacion_solicitud` ADD CONSTRAINT `FK_98808EDAD2624C39` FOREIGN KEY (`periodoPago_id`) REFERENCES `p_periodopago_config`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `v_vacacion_solicitud` ADD CONSTRAINT `FK_98808EDAE4517BDD` FOREIGN KEY (`coordinador_id`) REFERENCES `n_coordinador`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE `v_vacacion_solicitud` ADD CONSTRAINT `FK_98808EDAEF34C0BD` FOREIGN KEY (`plaza_id`) REFERENCES `e_estructura_plazas`(`id`) ON DELETE NO ACTION ON UPDATE NO ACTION;
-
+ALTER TABLE `refresh_token` ADD CONSTRAINT `refresh_token_empleadoId_fkey` FOREIGN KEY (`empleadoId`) REFERENCES `c_empleado`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;

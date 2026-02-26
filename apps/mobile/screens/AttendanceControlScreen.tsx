@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useMemo } from 'react';
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   StyleSheet,
   ScrollView,
@@ -10,7 +10,9 @@ import {
   View,
   Dimensions,
   Modal,
+  Image,
 } from 'react-native';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
@@ -38,7 +40,6 @@ import {
   updateAttendanceControl,
   deleteAttendanceControl,
   listAttendanceControl,
-  listAttendanceControlByCorpo,
 } from '@/hooks/evaluationFunctions';
 import { eventBus } from '@/hooks/eventBus';
 
@@ -69,7 +70,13 @@ interface QRInfo {
 
 interface Colaborador {
   empleado_id: number | null;
-  nombre_colaborador: string;
+  marca_id?: number | null;
+  ausente?: boolean;
+  nombre_colaborador?: string;
+  nombre?: string;
+  cliente?: string;
+  sucursal?: string;
+  puesto?: string;
   cedula: string;
   firma_comentario: string; // base64 del QR
   firma_comentario_info: QRInfo | null; // Información decodificada del QR
@@ -82,6 +89,20 @@ interface Colaborador {
   firma_sustituto_info: QRInfo | null; // Información decodificada del QR
 }
 
+type AttendanceControlImageLocal = {
+  id_local: string;
+  base64: string;
+  extension: string;
+  original_name: string;
+};
+
+type AttendanceControlImageRemote = {
+  id: number;
+  name: string;
+  original_name: string;
+  url: string;
+};
+
 interface AttendanceControl {
   id: string;
   id_local: string;
@@ -90,16 +111,17 @@ interface AttendanceControl {
   division_id?: number | string | null;
   contrato_id?: number | string | null;
   corpo_id?: number | string | null;
+  sucursal_nombre?: string | null;
   cliente: string | null;
   fecha: string | null;
   turno: string | null;
-  area_piso: string | null;
   total_presentes: string | null;
-  fijos: string | null;
   colaboradores: string | null;
   firma_responsable?: string | null;
   created_at: string;
   synced?: boolean;
+  images?: AttendanceControlImageRemote[];
+  images_local?: AttendanceControlImageLocal[];
 }
 
 interface EditingAttendanceControl {
@@ -107,9 +129,7 @@ interface EditingAttendanceControl {
   id_local: string;
   fecha: string;
   turno: string;
-  area_piso: string;
   total_presentes: string;
-  fijos: string;
   colaboradores: Colaborador[];
   firma_responsable: string;
 }
@@ -121,12 +141,19 @@ const TURNO_OPTIONS = [
   { label: 'Nocturno', value: 'NOCTURNO' },
 ];
 
-type EmpleadoOption = { id: number; nombre: string; cedula: string };
+const TURNOS_API_MAP: Record<string, string> = {
+  DIURNO: 'D',
+  MIXTO: 'M',
+  NOCTURNO: 'N',
+};
 
-const EMPLEADOS_CORPO_CACHE_KEY = (corpoId: string) => `empleados_corpo_cache_${corpoId}`;
+const normalizeTurnoToApi = (turno: string): string => {
+  const key = String(turno || '').trim().toUpperCase();
+  return TURNOS_API_MAP[key] || key.charAt(0) || '';
+};
 
 export default function AttendanceControlScreen() {
-  const { employee, refreshAccessToken, logout } = useAuth();
+  const { employee, refreshAccessToken, logout, accessToken } = useAuth();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const navigation = useNavigation<AttendanceControlScreenNavigationProp>();
   const { scanQR, QRScannerComponent } = useQRScanner();
@@ -142,10 +169,6 @@ export default function AttendanceControlScreen() {
   const [cambiosItems, setCambiosItems] = useState<any[]>([]);
   const [expandedCambioId, setExpandedCambioId] = useState<number | null>(null);
   const [hasCurrentMarca, setHasCurrentMarca] = useState<boolean>(false);
-  const [marcaClienteName, setMarcaClienteName] = useState<string>('');
-  const [marcaCorpoName, setMarcaCorpoName] = useState<string>('');
-  const [corpoIdStr, setCorpoIdStr] = useState<string>('');
-  const [empleadosOptions, setEmpleadosOptions] = useState<EmpleadoOption[]>([]);
 
   // Filtros jerárquicos
   const [filterEmpresaId, setFilterEmpresaId] = useState<number | null>(null);
@@ -182,26 +205,37 @@ export default function AttendanceControlScreen() {
   // Editing state
   const [editingRecord, setEditingRecord] = useState<EditingAttendanceControl | null>(null);
   const [isCreating, setIsCreating] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitResponse, setSubmitResponse] = useState<{ type: 'success' | 'error', message: string } | null>(null);
 
   // Form states
   const [fecha, setFecha] = useState<Date>(new Date());
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [turno, setTurno] = useState('');
-  const [areaPiso, setAreaPiso] = useState('');
   const [totalPresentes, setTotalPresentes] = useState('');
-  const [fijos, setFijos] = useState('');
   const [colaboradores, setColaboradores] = useState<Colaborador[]>([]);
+  const [isRefreshingColaboradores, setIsRefreshingColaboradores] = useState(false);
+  const [isResumenModalVisible, setIsResumenModalVisible] = useState(false);
+  const [resumenModalTitle, setResumenModalTitle] = useState('Resumen colaboradores');
+  const [resumenColaboradores, setResumenColaboradores] = useState<Colaborador[]>([]);
 
-  // Time pickers for colaboradores
-  const [showTimePicker, setShowTimePicker] = useState(false);
-  const [timePickerValue, setTimePickerValue] = useState<Date>(new Date());
-  const [timePickerTarget, setTimePickerTarget] = useState<{ index: number; field: 'entrada' | 'salida' } | null>(null);
+  // Carga de marcas al seleccionar fecha, sucursal y turno
+  const [loadingMarcas, setLoadingMarcas] = useState(false);
+  const [errorMarcas, setErrorMarcas] = useState<string | null>(null);
+  const [previewColaboradores, setPreviewColaboradores] = useState<Colaborador[]>([]);
+
+  // Image states
+  const [imagenesLocal, setImagenesLocal] = useState<AttendanceControlImageLocal[]>([]);
+  const [imagenesRemote, setImagenesRemote] = useState<AttendanceControlImageRemote[]>([]);
+  const [deletedRemoteImageIds, setDeletedRemoteImageIds] = useState<number[]>([]);
+  const [expandedImagesById, setExpandedImagesById] = useState<Record<string, boolean>>({});
+
+  // Camera states
+  const [isCameraVisible, setIsCameraVisible] = useState(false);
+  const [permission, requestPermission] = useCameraPermissions();
+  const cameraRef = useRef<CameraView | null>(null);
 
   // Expanded states
-  const [expandedColaboradorIndices, setExpandedColaboradorIndices] = useState<number[]>([]);
-
-  // QR scanning state
-  const [currentQRType, setCurrentQRType] = useState<{ index: number; type: 'firma_comentario' | 'firma_sustituto' } | null>(null);
 
   const getConnectionStatus = async (): Promise<boolean> => {
     const networkState = await Network.getNetworkStateAsync();
@@ -321,10 +355,6 @@ export default function AttendanceControlScreen() {
     }
   }, [refreshAccessToken, logout]);
 
-  const generateRandomId = (): string => {
-    return `local-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-  };
-
   const formatDate = (date: Date): string => {
     const year = date.getFullYear();
     const month = (date.getMonth() + 1).toString().padStart(2, '0');
@@ -337,35 +367,64 @@ export default function AttendanceControlScreen() {
     return `${day}-${month}-${year}`;
   };
 
-  const formatTime = (date: Date): string => {
-    const h = date.getHours().toString().padStart(2, '0');
-    const m = date.getMinutes().toString().padStart(2, '0');
-    return `${h}:${m}`;
-  };
-
-  const parseTimeToDate = (time: string): Date => {
-    const now = new Date();
-    const parts = String(time || '').split(':');
-    if (parts.length === 2) {
-      const hh = parseInt(parts[0], 10);
-      const mm = parseInt(parts[1], 10);
-      if (!Number.isNaN(hh) && !Number.isNaN(mm)) {
-        now.setHours(hh, mm, 0, 0);
-        return now;
-      }
-    }
-    now.setHours(0, 0, 0, 0);
-    return now;
-  };
-
   const normalizeControl = (raw: any): AttendanceControl => {
     const clienteName = raw?.cliente ?? raw?.nombre_cliente ?? null;
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER || '';
+    const recordId = raw?.id;
+    const mappedImages: AttendanceControlImageRemote[] = (Array.isArray(raw?.images) ? raw.images : []).map((img: any) => {
+      const name = String(img?.name || '');
+      const safeUrl =
+        apiUrl && recordId && name
+          ? `${apiUrl}/api/attendance-control/${encodeURIComponent(String(recordId))}/get-image/${encodeURIComponent(name)}`
+          : String(img?.url || '');
+      return {
+        id: Number(img?.id || 0),
+        name,
+        original_name: String(img?.original_name || name),
+        url: safeUrl,
+      };
+    });
     return {
       ...raw,
       cliente: clienteName,
+      sucursal_nombre: raw?.sucursal_nombre ?? raw?.e_estructura_sucursal?.nombre ?? null,
       total_presentes: raw?.total_presentes !== null && raw?.total_presentes !== undefined ? String(raw.total_presentes) : null,
-      fijos: raw?.fijos !== null && raw?.fijos !== undefined ? String(raw.fijos) : null,
+      images: mappedImages,
     } as AttendanceControl;
+  };
+
+  const appendTokenToUrl = (url: string) => {
+    if (!url) return '';
+    if (!accessToken || accessToken.trim().length === 0) return url;
+    if (/[?&]token=/.test(url)) return url;
+    const sep = url.includes('?') ? '&' : '?';
+    return `${url}${sep}token=${encodeURIComponent(accessToken)}`;
+  };
+
+  const appendTokenAndCacheToUrl = (url: string) => {
+    const withToken = appendTokenToUrl(url);
+    if (!withToken) return '';
+    const sep = withToken.includes('?') ? '&' : '?';
+    return `${withToken}${sep}t=${Date.now()}`;
+  };
+
+  const formatTurnoLabel = (value?: string | null) => {
+    const val = String(value || '').trim().toUpperCase();
+    if (val === 'D' || val === 'DIURNO') return 'Diurno';
+    if (val === 'M' || val === 'MIXTO') return 'Mixto';
+    if (val === 'N' || val === 'NOCTURNO') return 'Nocturno';
+    return value || 'N/A';
+  };
+
+  const formatHoraLabel = (value?: string | null) => {
+    if (!value) return '-';
+    const str = String(value).trim();
+    if (!str) return '-';
+    if (str.includes('T')) {
+      const afterT = str.split('T')[1] || '';
+      return afterT.replace(/\.\d+Z?$/i, '').trim() || str;
+    }
+    return str.replace(/\.\d+Z?$/i, '').trim();
   };
 
   const parseFechaToDate = (value: any): Date => {
@@ -384,6 +443,121 @@ export default function AttendanceControlScreen() {
     const d = new Date(value);
     return Number.isNaN(d.getTime()) ? new Date() : d;
   };
+
+  const loadMarcas = useCallback(async () => {
+    if (!formCorpoId || !turno || !fecha) return;
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) return;
+    setLoadingMarcas(true);
+    setErrorMarcas(null);
+    setPreviewColaboradores([]);
+    try {
+      const params = new URLSearchParams({
+        fecha: formatDate(fecha),
+        corpo_id: String(formCorpoId),
+        turno: turno.trim(),
+      });
+      const resp = await authedFetch({
+        url: `${apiUrl}/api/attendance-control/marcas?${params.toString()}`,
+        init: { method: 'GET', headers: { 'Content-Type': 'application/json' } },
+        refreshAccessToken,
+        logout,
+      });
+      if (!resp) {
+        setErrorMarcas('No se pudo conectar con el servidor');
+        return;
+      }
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data?.status) {
+        setErrorMarcas(data?.message || 'Error al cargar las marcas');
+        return;
+      }
+      const list = Array.isArray(data?.data?.colaboradores) ? data.data.colaboradores : [];
+      const total = typeof data?.data?.total_presentes === 'number' ? data.data.total_presentes : list.filter((c: any) => !c?.ausente).length;
+      setPreviewColaboradores(list);
+      setTotalPresentes(String(total));
+    } catch (e: any) {
+      setErrorMarcas(e?.message || 'Error al cargar las marcas de empleados');
+    } finally {
+      setLoadingMarcas(false);
+    }
+  }, [fecha, formCorpoId, turno, refreshAccessToken, logout]);
+
+  useEffect(() => {
+    if (!isCreating && !editingRecord) return;
+    if (!formCorpoId || !turno.trim()) {
+      setPreviewColaboradores([]);
+      setErrorMarcas(null);
+      return;
+    }
+    loadMarcas();
+  }, [isCreating, editingRecord, formCorpoId, turno, fecha, loadMarcas]);
+
+  const refreshColaboradoresFromServer = useCallback(async (recordId: string, openModalAfter = true) => {
+    try {
+      setIsRefreshingColaboradores(true);
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) throw new Error('Server URL not configured');
+
+      const refreshResp = await authedFetch({
+        url: `${apiUrl}/api/attendance-control/${recordId}/refresh-colaboradores`,
+        init: {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+        },
+        refreshAccessToken,
+        logout,
+      });
+      if (!refreshResp) return;
+      const refreshJson = await refreshResp.json().catch(() => ({}));
+      if (!refreshResp.ok || !refreshJson?.status) {
+        throw new Error(refreshJson?.message || 'No se pudo actualizar la lista de colaboradores');
+      }
+
+      const listResp = await authedFetch({
+        url: `${apiUrl}/api/attendance-control?corpo_id=${encodeURIComponent(String(filterCorpoId || formCorpoId || marcaCorpoId || ''))}`,
+        init: { method: 'GET', headers: { 'Content-Type': 'application/json' } },
+        refreshAccessToken,
+        logout,
+      });
+      if (!listResp) return;
+      const listJson = await listResp.json().catch(() => ({}));
+      if (!listResp.ok || !listJson?.status) {
+        throw new Error(listJson?.message || 'No se pudo recargar el registro');
+      }
+
+      const updatedRecords: AttendanceControl[] = Array.isArray(listJson.data) ? listJson.data.map(normalizeControl) : [];
+      setControls(updatedRecords);
+
+      console.log("updatedRecords", updatedRecords);
+
+      const updated = updatedRecords.find((r: any) => String(r.id) === String(recordId));
+      let parsed: Colaborador[] = [];
+      if (updated?.colaboradores) {
+        try {
+          const arr = JSON.parse(updated.colaboradores);
+          if (Array.isArray(arr)) parsed = arr;
+        } catch {
+          parsed = [];
+        }
+      }
+
+      if (editingRecord && String(editingRecord.id) === String(recordId)) {
+        setColaboradores(parsed);
+        setTotalPresentes(String(parsed.filter((c: any) => !c?.ausente).length));
+      }
+
+      setResumenColaboradores(parsed);
+      if (openModalAfter) {
+        setResumenModalTitle(`Resumen colaboradores - Control #${recordId}`);
+        setIsResumenModalVisible(true);
+      }
+    } catch (e: any) {
+      Alert.alert('Error', e?.message || 'No se pudo actualizar la lista de colaboradores');
+    } finally {
+      setIsRefreshingColaboradores(false);
+    }
+  }, [refreshAccessToken, logout, filterCorpoId, formCorpoId, marcaCorpoId, editingRecord]);
 
   const loadMarcaContext = useCallback(async () => {
     try {
@@ -455,10 +629,6 @@ export default function AttendanceControlScreen() {
 
       const current = JSON.parse(currentMarca);
       setHasCurrentMarca(true);
-      setMarcaClienteName(current?.cliente?.nombre || '');
-      setMarcaCorpoName(current?.corpo?.nombre || '');
-      const corpoId = current?.corpo?.id?.toString() || current?.corpo_id?.toString();
-      setCorpoIdStr(corpoId || '');
 
       // Obtener IDs de current_marca directamente sin usar estados
       const empresaIdRaw = current?.empresa?.id ?? current?.empresa_id;
@@ -486,16 +656,10 @@ export default function AttendanceControlScreen() {
         return;
       }
 
-      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-      const cache = cacheStr ? JSON.parse(cacheStr) : [];
-      const controlsCacheAll: AttendanceControl[] = cache.filter((item: any) => item.type === 'attendance_control');
-      // Filtrar cache local por corpo_id
-      const controlsCache: AttendanceControl[] = controlsCacheAll.filter((r: any) => Number(r.corpo_id) === Number(corpoIdNum));
-      const localOnly = controlsCache.filter((r: any) => !r?.synced || String(r?.id_local || '').startsWith('local-'));
-
       const isConnected = await getConnectionStatus();
       if (!isConnected) {
-        setControls(controlsCache);
+        setError('Este módulo funciona exclusivamente con internet.');
+        setControls([]);
         setIsLoading(false);
         return;
       }
@@ -513,82 +677,20 @@ export default function AttendanceControlScreen() {
 
       if (result.status && result.data) {
         const serverItems: AttendanceControl[] = Array.isArray(result.data) ? (result.data as any[]).map(normalizeControl) : [];
-        const unsyncedIds = new Set(localOnly.map((r) => String(r.id || r.id_local || '')));
-        const filteredServer = serverItems.filter((r) => !unsyncedIds.has(String(r.id || r.id_local || '')));
-        const merged = [...localOnly, ...filteredServer];
-        setControls(merged);
+        setControls(serverItems);
       } else {
-        setControls(controlsCache);
+        setControls([]);
       }
     } catch (err) {
       console.error('Error fetching controls:', err);
       setError('Error al cargar los controles de asistencia');
-      try {
-        const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-        if (cacheStr) {
-          const cache = JSON.parse(cacheStr);
-          const controlsCache = cache.filter((item: any) => item.type === 'attendance_control');
-          setControls(controlsCache);
-        }
-      } catch (cacheErr) {
-        console.error('Error loading from cache:', cacheErr);
-      }
+      setControls([]);
     } finally {
       setIsLoading(false);
     }
   }, [refreshAccessToken, logout, filterEmpresaId, filterClienteId, filterDivisionId, filterContratoId, filterCorpoId]);
 
-  const fetchEmpleadosByCorpo = useCallback(async (corpoId: string) => {
-    if (!corpoId) return;
-    try {
-      const hasConnection = await getConnectionStatus();
-      const cacheKey = EMPLEADOS_CORPO_CACHE_KEY(corpoId);
-
-      if (!hasConnection) {
-        const cached = await AsyncStorage.getItem(cacheKey);
-        if (cached) {
-          const parsed = JSON.parse(cached);
-          if (Array.isArray(parsed)) setEmpleadosOptions(parsed);
-        }
-        return;
-      }
-
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-      if (!apiUrl) return;
-
-      const resp = await authedFetch({
-        url: `${apiUrl}/api/empleados/corpo/${corpoId}`,
-        init: {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        },
-        refreshAccessToken,
-        logout,
-      });
-      if (!resp) return;
-
-      const data = await resp.json().catch(() => null);
-      if (resp.ok && data?.status && Array.isArray(data.empleados)) {
-        const mapped: EmpleadoOption[] = data.empleados.map((e: any) => ({
-          id: Number(e.id),
-          nombre: String(e.nombre || ''),
-          cedula: String(e.cedula || ''),
-        }));
-        setEmpleadosOptions(mapped);
-        await AsyncStorage.setItem(cacheKey, JSON.stringify(mapped));
-      }
-    } catch (e) {
-      console.error('Error fetching empleados by corpo:', e);
-    }
-  }, [refreshAccessToken, logout]);
-
-  useEffect(() => {
-    if (corpoIdStr) {
-      fetchEmpleadosByCorpo(corpoIdStr);
-    }
-  }, [corpoIdStr, fetchEmpleadosByCorpo]);
+  // En modo online actual, la lista de colaboradores se calcula desde c_marca_dia en backend.
 
   // Nodos computados para filtros jerárquicos
   const filterEmpresas = useMemo(() => (Array.isArray(structure) ? structure : []), [structure]);
@@ -729,14 +831,15 @@ export default function AttendanceControlScreen() {
     }, [fetchControls, fetchMainStructure, loadMarcaContext])
   );
 
+  const generateRandomId = (): string => {
+    return `local-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  };
+
   const resetForm = () => {
     setFecha(new Date());
     setTurno('');
-    setAreaPiso('');
     setTotalPresentes('');
-    setFijos('');
     setColaboradores([]);
-    setExpandedColaboradorIndices([]);
     setFirmaResponsable(null);
     setFirmaResponsableHash('');
     // Resetear jerarquía del formulario
@@ -745,6 +848,88 @@ export default function AttendanceControlScreen() {
     setFormDivisionId(null);
     setFormContratoId(null);
     setFormCorpoId(null);
+    // Resetear imágenes
+    setImagenesLocal([]);
+    setImagenesRemote([]);
+    setDeletedRemoteImageIds([]);
+  };
+
+  const openCamera = async () => {
+    if (!permission) {
+      const result = await requestPermission();
+      if (!result.granted) {
+        Alert.alert('Permiso denegado', 'Se necesita permiso de cámara para tomar fotos');
+        return;
+      }
+    }
+    if (permission && !permission.granted) {
+      Alert.alert('Permiso denegado', 'Se necesita permiso de cámara para tomar fotos');
+      return;
+    }
+    setIsCameraVisible(true);
+  };
+
+  const capturePhoto = async () => {
+    if (!cameraRef.current) {
+      Alert.alert('Error', 'La cámara no está lista. Por favor intente nuevamente.');
+      return;
+    }
+
+    try {
+      const photo = await cameraRef.current.takePictureAsync({
+        base64: true,
+        quality: 0.7,
+        skipProcessing: false
+      });
+
+      if (!photo || !photo.base64) {
+        Alert.alert('Error', 'No se pudo capturar la foto. Por favor intente nuevamente.');
+        setIsCameraVisible(false);
+        return;
+      }
+      setIsCameraVisible(false);
+
+      setTimeout(() => {
+        setImagenesLocal((prev) => [
+          ...prev,
+          {
+            id_local: generateRandomId(),
+            base64: String(photo.base64),
+            extension: 'jpg',
+            original_name: `foto_${Date.now()}.jpg`,
+          },
+        ]);
+      }, 100);
+    } catch (error) {
+      console.error('Error al capturar foto:', error);
+      Alert.alert('Error', 'No se pudo capturar la foto. Por favor intente nuevamente.');
+      setIsCameraVisible(false);
+    }
+  };
+
+  const removeLocalImage = (idLocal: string) => {
+    Alert.alert('Confirmar', '¿Eliminar esta foto?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Eliminar',
+        style: 'destructive',
+        onPress: () => setImagenesLocal((prev) => prev.filter((x) => x.id_local !== idLocal)),
+      },
+    ]);
+  };
+
+  const removeRemoteImage = (id: number) => {
+    Alert.alert('Confirmar', '¿Eliminar esta foto?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Eliminar',
+        style: 'destructive',
+        onPress: () => {
+          setImagenesRemote((prev) => prev.filter((x) => x.id !== id));
+          setDeletedRemoteImageIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+        },
+      },
+    ]);
   };
 
   const startCreating = () => {
@@ -911,26 +1096,25 @@ export default function AttendanceControlScreen() {
       id_local: record.id_local,
       fecha: record.fecha || '',
       turno: record.turno || '',
-      area_piso: record.area_piso || '',
       total_presentes: record.total_presentes !== null && record.total_presentes !== undefined ? String(record.total_presentes) : '',
-      fijos: record.fijos !== null && record.fijos !== undefined ? String(record.fijos) : '',
       colaboradores: colaboradoresArray,
       firma_responsable: record.firma_responsable || '',
     });
 
     setFecha(parseFechaToDate(record.fecha));
     setTurno(record.turno || '');
-    setAreaPiso(record.area_piso || '');
     setTotalPresentes(record.total_presentes !== null && record.total_presentes !== undefined ? String(record.total_presentes) : '');
-    setFijos(record.fijos !== null && record.fijos !== undefined ? String(record.fijos) : '');
     setColaboradores(colaboradoresArray);
-    setExpandedColaboradorIndices(colaboradoresArray.map((_, i) => i));
     // Cargar jerarquía del registro
     if (record.empresa_id) setFormEmpresaId(Number(record.empresa_id));
     if (record.cliente_id) setFormClienteId(Number(record.cliente_id));
     if (record.division_id) setFormDivisionId(Number(record.division_id));
     if (record.contrato_id) setFormContratoId(Number(record.contrato_id));
     if (record.corpo_id) setFormCorpoId(Number(record.corpo_id));
+    // Cargar imágenes
+    setImagenesRemote(record.images || []);
+    setImagenesLocal(record.images_local || []);
+    setDeletedRemoteImageIds([]);
 
     // Cargar firma responsable si existe
     if (record.firma_responsable) {
@@ -972,6 +1156,10 @@ export default function AttendanceControlScreen() {
         console.error('Error getting location:', error);
       }
     })();
+
+    if (record.id) {
+      await refreshColaboradoresFromServer(String(record.id), false);
+    }
   };
 
   const cancelEditing = () => {
@@ -985,161 +1173,6 @@ export default function AttendanceControlScreen() {
     }
     if (selectedDate) {
       setFecha(selectedDate);
-    }
-  };
-
-  const addColaborador = () => {
-    const newColaborador: Colaborador = {
-      empleado_id: null,
-      nombre_colaborador: '',
-      cedula: '',
-      firma_comentario: '',
-      firma_comentario_info: null,
-      entrada: '',
-      salida: '',
-      sustituto_id: null,
-      nombre_sustituto: '',
-      cedula_sustituto: '',
-      firma_sustituto: '',
-      firma_sustituto_info: null,
-    };
-    setColaboradores([...colaboradores, newColaborador]);
-    setExpandedColaboradorIndices([...expandedColaboradorIndices, colaboradores.length]);
-  };
-
-  const openTimePicker = (index: number, field: 'entrada' | 'salida') => {
-    setTimePickerTarget({ index, field });
-    const current = colaboradores[index]?.[field] || '';
-    setTimePickerValue(parseTimeToDate(current));
-    setShowTimePicker(true);
-  };
-
-  const handleTimeChange = (_event: any, selectedDate?: Date) => {
-    if (Platform.OS === 'android') {
-      setShowTimePicker(false);
-    }
-    if (!selectedDate || !timePickerTarget) return;
-
-    const { index, field } = timePickerTarget;
-    updateColaborador(index, field, formatTime(selectedDate));
-    setTimePickerValue(selectedDate);
-  };
-
-  const updateColaborador = (index: number, field: keyof Colaborador, value: string | boolean) => {
-    const newColaboradores = [...colaboradores];
-    newColaboradores[index] = {
-      ...newColaboradores[index],
-      [field]: value,
-    };
-    setColaboradores(newColaboradores);
-  };
-
-  const removeColaborador = (index: number) => {
-    Alert.alert(
-      'Confirmar',
-      '¿Estás seguro de que deseas eliminar este colaborador?',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Eliminar',
-          style: 'destructive',
-          onPress: () => {
-            setColaboradores(colaboradores.filter((_, i) => i !== index));
-            setExpandedColaboradorIndices(expandedColaboradorIndices.filter(i => i !== index).map(i => i > index ? i - 1 : i));
-          },
-        },
-      ]
-    );
-  };
-
-  const toggleColaboradorExpansion = (index: number) => {
-    setExpandedColaboradorIndices(prev =>
-      prev.includes(index) ? prev.filter(i => i !== index) : [...prev, index]
-    );
-  };
-
-  const handleScanQR = async (index: number, type: 'firma_comentario' | 'firma_sustituto') => {
-    try {
-      setCurrentQRType({ index, type });
-      const qrData = await scanQR();
-
-      if (!qrData) {
-        setCurrentQRType(null);
-        return;
-      }
-
-      // Decodificar el QR para obtener la información
-      let qrInfo: QRInfo | null = null;
-      try {
-        const decodedData = atob(qrData);
-        const parts = decodedData.split(':');
-
-        if (parts.length === 5) {
-          const [sessionId, empleadoId, latitud, longitud, timestamp] = parts;
-
-          // Intentar obtener detalles del empleado
-          let empleadoDetalle = undefined;
-          const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-          if (apiUrl) {
-            try {
-              const empleadoResponse = await authedFetch({
-                url: `${apiUrl}/api/empleados/${empleadoId}`,
-                init: {
-                  method: 'GET',
-                  headers: {
-                    'Content-Type': 'application/json',
-                  },
-                },
-                refreshAccessToken,
-                logout,
-              });
-              if (!empleadoResponse) {
-                setCurrentQRType(null);
-                return;
-              }
-              if (empleadoResponse.ok) {
-                const empleadoData = await empleadoResponse.json();
-                empleadoDetalle = {
-                  nombre: empleadoData.nombre,
-                  primer_apellido: empleadoData.primer_apellido,
-                  segundo_apellido: empleadoData.segundo_apellido,
-                };
-              }
-            } catch (err) {
-              console.error('Error fetching empleado details:', err);
-            }
-          }
-
-          qrInfo = {
-            sessionId,
-            empleadoId,
-            latitud,
-            longitud,
-            timestamp,
-            empleadoDetalle,
-          };
-        }
-      } catch (decodeError) {
-        console.error('Error decoding QR:', decodeError);
-        Alert.alert('Error', 'El QR escaneado no tiene el formato correcto');
-        setCurrentQRType(null);
-        return;
-      }
-
-      // Guardar el QR en base64 y la información decodificada
-      const newColaboradores = [...colaboradores];
-      const infoField = type === 'firma_comentario' ? 'firma_comentario_info' : 'firma_sustituto_info';
-      newColaboradores[index] = {
-        ...newColaboradores[index],
-        [type]: qrData, // El QR en base64
-        [infoField]: qrInfo, // La información decodificada
-      };
-      setColaboradores(newColaboradores);
-      setCurrentQRType(null);
-    } catch (error) {
-      console.error('Error scanning QR:', error);
-      Alert.alert('Error', 'No se pudo escanear el código QR');
-      setCurrentQRType(null);
     }
   };
 
@@ -1282,244 +1315,166 @@ export default function AttendanceControlScreen() {
   const saveControlHandler = async () => {
     const currentMarca = await AsyncStorage.getItem('current_marca');
     if (!currentMarca) {
-      Alert.alert('Error', 'No se encontró la marca actual');
+      setSubmitResponse({ type: 'error', message: 'No se encontró la marca actual' });
       return;
     }
 
-    const currentMarcaData = JSON.parse(currentMarca);
+    setIsSubmitting(true);
+    setSubmitResponse(null);
 
-    Alert.alert(
-      'Confirmar',
-      '¿Estás seguro de que deseas guardar este control de asistencia?',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Confirmar',
-          onPress: async () => {
-            try {
-              // Preparar colaboradores para guardar (sin la información decodificada)
-              const colaboradoresToSave = colaboradores.map((colab) => ({
-                empleado_id: colab.empleado_id,
-                nombre_colaborador: colab.nombre_colaborador,
-                cedula: colab.cedula,
-                firma_comentario: colab.firma_comentario,
-                entrada: colab.entrada,
-                salida: colab.salida,
-                sustituto_id: colab.sustituto_id,
-                nombre_sustituto: colab.nombre_sustituto,
-                cedula_sustituto: colab.cedula_sustituto,
-                firma_sustituto: colab.firma_sustituto,
-              }));
+    try {
+      const currentMarcaData = JSON.parse(currentMarca);
 
-              if (!firmaResponsableHash) {
-                Alert.alert('Error', 'Debes generar la firma del responsable antes de guardar');
-                return;
-              }
+      if (!firmaResponsableHash) {
+        setSubmitResponse({ type: 'error', message: 'Debes generar la firma del responsable antes de guardar' });
+        setIsSubmitting(false);
+        return;
+      }
 
-              // Validar campos jerárquicos
-              if (!formEmpresaId || !formClienteId || !formDivisionId || !formContratoId || !formCorpoId) {
-                Alert.alert('Error', 'Debe seleccionar Empresa, Cliente, División, Contrato y Sucursal');
-                return;
-              }
+      // Validar campos jerárquicos
+      if (!formEmpresaId || !formClienteId || !formDivisionId || !formContratoId || !formCorpoId) {
+        setSubmitResponse({ type: 'error', message: 'Debe seleccionar Empresa, Cliente, División, Contrato y Sucursal' });
+        setIsSubmitting(false);
+        return;
+      }
 
-              const requestData = {
-                marca_id: currentMarcaData.id,
-                empresa_id: formEmpresaId,
-                cliente_id: formClienteId,
-                division_id: formDivisionId,
-                contrato_id: formContratoId,
-                corpo_id: formCorpoId,
-                cliente: (currentMarcaData?.cliente?.nombre || '').trim() || null,
-                fecha: formatDate(fecha) || null,
-                turno: turno.trim() || null,
-                area_piso: areaPiso.trim() || null,
-                total_presentes: totalPresentes.trim() || null,
-                fijos: fijos.trim() || null,
-                colaboradores: colaboradoresToSave.length > 0 ? JSON.stringify(colaboradoresToSave) : null,
-                firma_responsable: firmaResponsableHash,
-              };
+      const imagenesStr =
+        imagenesLocal.length > 0
+          ? JSON.stringify(
+            imagenesLocal.map((img) => ({
+              file_base64: img.base64,
+              extension: img.extension,
+              original_name: img.original_name,
+            }))
+          )
+          : undefined;
 
-              const isConnected = await getConnectionStatus();
+      const requestData = {
+        marca_id: currentMarcaData.id,
+        empresa_id: formEmpresaId,
+        cliente_id: formClienteId,
+        division_id: formDivisionId,
+        contrato_id: formContratoId,
+        corpo_id: formCorpoId,
+        fecha: formatDate(fecha) || null,
+        turno: normalizeTurnoToApi(turno.trim() || ''),
+        firma_responsable: firmaResponsableHash,
+        ...(imagenesStr ? { imagenes: imagenesStr } : {}),
+      };
 
-              if (isConnected) {
-                const result = await createAttendanceControl({
-                  requestData,
-                  refreshAccessToken,
-                  logout,
-                });
+      const isConnected = await getConnectionStatus();
 
-                if (result.status) {
-                  Alert.alert('Éxito', 'Control de asistencia guardado correctamente');
-                  cancelCreating();
-                  fetchControls();
-                } else {
-                  Alert.alert('Error', result.message || 'Error al guardar el control de asistencia');
-                }
-              } else {
-                const localId = generateRandomId();
+      if (!isConnected) {
+        setSubmitResponse({ type: 'error', message: 'Este módulo funciona exclusivamente con internet' });
+        return;
+      }
 
-                const actionsStr = await AsyncStorage.getItem('evaluations_actions');
-                const actions = actionsStr ? JSON.parse(actionsStr) : [];
-                actions.push({
-                  id: localId,
-                  action: 'create',
-                  type: 'attendance_control',
-                  payload: requestData,
-                  synced: false,
-                });
-                await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+      const result = await createAttendanceControl({
+        requestData,
+        refreshAccessToken,
+        logout,
+      });
 
-                const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                const cache = cacheStr ? JSON.parse(cacheStr) : [];
-
-                const newRecordCache: AttendanceControl = {
-                  id: '',
-                  id_local: localId,
-                  cliente: (currentMarcaData?.cliente?.nombre || '').trim() || null,
-                  fecha: formatDate(fecha) || null,
-                  turno: turno.trim() || null,
-                  area_piso: areaPiso.trim() || null,
-                  total_presentes: totalPresentes.trim() || null,
-                  fijos: fijos.trim() || null,
-                  colaboradores: colaboradoresToSave.length > 0 ? JSON.stringify(colaboradoresToSave) : null,
-                  firma_responsable: firmaResponsableHash,
-                  created_at: new Date().toISOString(),
-                  synced: false,
-                };
-
-                cache.push({ ...newRecordCache, type: 'attendance_control' });
-                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(cache));
-
-                Alert.alert('Modo Offline', 'Control de asistencia registrado localmente. Se sincronizará cuando haya conexión.');
-                cancelCreating();
-                fetchControls();
-              }
-            } catch (err) {
-              console.error('Error saving control:', err);
-              Alert.alert('Error', 'No se pudo guardar el control de asistencia');
-            }
-          },
-        },
-      ]
-    );
+      if (result.status) {
+        setSubmitResponse({ type: 'success', message: result.message || 'Control de asistencia guardado correctamente' });
+        setTimeout(() => {
+          cancelCreating();
+          fetchControls();
+        }, 2000);
+      } else {
+        setSubmitResponse({ type: 'error', message: result.message || 'Error al guardar el control de asistencia' });
+      }
+    } catch (err) {
+      console.error('Error saving control:', err);
+      setSubmitResponse({ type: 'error', message: 'No se pudo guardar el control de asistencia' });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const updateControlHandler = async () => {
     if (!editingRecord) return;
 
-    const recordId = editingRecord.id || editingRecord.id_local;
-    if (!recordId) {
-      Alert.alert('Error', 'ID de registro no encontrado para actualizar');
-      return;
+    setIsSubmitting(true);
+    setSubmitResponse(null);
+
+    try {
+      const recordId = editingRecord.id || editingRecord.id_local;
+      if (!recordId) {
+        setSubmitResponse({ type: 'error', message: 'ID de registro no encontrado para actualizar' });
+        setIsSubmitting(false);
+        return;
+      }
+
+      if (!firmaResponsableHash) {
+        setSubmitResponse({ type: 'error', message: 'Debes generar la firma del responsable antes de actualizar' });
+        setIsSubmitting(false);
+        return;
+      }
+
+      // Validar campos jerárquicos
+      if (!formEmpresaId || !formClienteId || !formDivisionId || !formContratoId || !formCorpoId) {
+        setSubmitResponse({ type: 'error', message: 'Debe seleccionar Empresa, Cliente, División, Contrato y Sucursal' });
+        setIsSubmitting(false);
+        return;
+      }
+
+      const imagenesStr =
+        imagenesLocal.length > 0
+          ? JSON.stringify(
+            imagenesLocal.map((img) => ({
+              file_base64: img.base64,
+              extension: img.extension,
+              original_name: img.original_name,
+            }))
+          )
+          : undefined;
+
+      const deleteImagenesStr =
+        deletedRemoteImageIds.length > 0 ? JSON.stringify(deletedRemoteImageIds) : undefined;
+
+      const requestData = {
+        empresa_id: formEmpresaId,
+        cliente_id: formClienteId,
+        division_id: formDivisionId,
+        contrato_id: formContratoId,
+        corpo_id: formCorpoId,
+        fecha: formatDate(fecha) || null,
+        turno: normalizeTurnoToApi(turno.trim() || ''),
+        firma_responsable: firmaResponsableHash,
+        ...(imagenesStr ? { imagenes: imagenesStr } : {}),
+        ...(deleteImagenesStr ? { delete_imagenes: deleteImagenesStr } : {}),
+      };
+
+      const isConnected = await getConnectionStatus();
+
+      if (!isConnected) {
+        setSubmitResponse({ type: 'error', message: 'Este módulo funciona exclusivamente con internet' });
+        return;
+      }
+
+      const result = await updateAttendanceControl({
+        id: recordId,
+        requestData,
+        refreshAccessToken,
+        logout,
+      });
+
+      if (result.status) {
+        setSubmitResponse({ type: 'success', message: result.message || 'Control de asistencia actualizado correctamente' });
+        setTimeout(() => {
+          cancelEditing();
+          fetchControls();
+        }, 2000);
+      } else {
+        setSubmitResponse({ type: 'error', message: result.message || 'Error al actualizar el control de asistencia' });
+      }
+    } catch (err) {
+      console.error('Error updating control:', err);
+      setSubmitResponse({ type: 'error', message: 'No se pudo actualizar el control de asistencia' });
+    } finally {
+      setIsSubmitting(false);
     }
-
-    Alert.alert(
-      'Confirmar',
-      '¿Estás seguro de que deseas actualizar este control de asistencia?',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Confirmar',
-          onPress: async () => {
-            try {
-              // Preparar colaboradores para guardar (sin la información decodificada)
-              const colaboradoresToSave = colaboradores.map((colab) => ({
-                empleado_id: colab.empleado_id,
-                nombre_colaborador: colab.nombre_colaborador,
-                cedula: colab.cedula,
-                firma_comentario: colab.firma_comentario,
-                entrada: colab.entrada,
-                salida: colab.salida,
-                sustituto_id: colab.sustituto_id,
-                nombre_sustituto: colab.nombre_sustituto,
-                cedula_sustituto: colab.cedula_sustituto,
-                firma_sustituto: colab.firma_sustituto,
-              }));
-
-              if (!firmaResponsableHash) {
-                Alert.alert('Error', 'Debes generar la firma del responsable antes de actualizar');
-                return;
-              }
-
-              // Validar campos jerárquicos
-              if (!formEmpresaId || !formClienteId || !formDivisionId || !formContratoId || !formCorpoId) {
-                Alert.alert('Error', 'Debe seleccionar Empresa, Cliente, División, Contrato y Sucursal');
-                return;
-              }
-
-              const requestData = {
-                empresa_id: formEmpresaId,
-                cliente_id: formClienteId,
-                division_id: formDivisionId,
-                contrato_id: formContratoId,
-                corpo_id: formCorpoId,
-                cliente: marcaClienteName.trim() || null,
-                fecha: formatDate(fecha) || null,
-                turno: turno.trim() || null,
-                area_piso: areaPiso.trim() || null,
-                total_presentes: totalPresentes.trim() || null,
-                fijos: fijos.trim() || null,
-                colaboradores: colaboradoresToSave.length > 0 ? JSON.stringify(colaboradoresToSave) : null,
-                firma_responsable: firmaResponsableHash,
-              };
-
-              const isConnected = await getConnectionStatus();
-
-              if (isConnected) {
-                const result = await updateAttendanceControl({
-                  id: recordId,
-                  requestData,
-                  refreshAccessToken,
-                  logout,
-                });
-
-                if (result.status) {
-                  Alert.alert('Éxito', 'Control de asistencia actualizado correctamente');
-                  cancelEditing();
-                  fetchControls();
-                } else {
-                  Alert.alert('Error', result.message || 'Error al actualizar el control de asistencia');
-                }
-              } else {
-                const actionsStr = await AsyncStorage.getItem('evaluations_actions');
-                const actions = actionsStr ? JSON.parse(actionsStr) : [];
-                actions.push({
-                  id: recordId,
-                  action: 'update',
-                  type: 'attendance_control',
-                  payload: requestData,
-                  synced: false,
-                });
-                await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
-
-                const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                if (cacheStr) {
-                  const cache = JSON.parse(cacheStr);
-                  const updatedCache = cache.map((item: any) => {
-                    if ((item.id === recordId || item.id_local === recordId) && item.type === 'attendance_control') {
-                      return {
-                        ...item,
-                        ...requestData,
-                        synced: false,
-                      };
-                    }
-                    return item;
-                  });
-                  await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                }
-
-                Alert.alert('Modo Offline', 'Control de asistencia actualizado localmente. Se sincronizará cuando haya conexión.');
-                cancelEditing();
-                fetchControls();
-              }
-            } catch (err) {
-              console.error('Error updating control:', err);
-              Alert.alert('Error', 'No se pudo actualizar el control de asistencia');
-            }
-          },
-        },
-      ]
-    );
   };
 
   const deleteControlHandler = async (record: AttendanceControl) => {
@@ -1554,26 +1509,7 @@ export default function AttendanceControlScreen() {
                   Alert.alert('Error', result.message || 'Error al eliminar el control de asistencia');
                 }
               } else {
-                const actionsStr = await AsyncStorage.getItem('evaluations_actions');
-                const actions = actionsStr ? JSON.parse(actionsStr) : [];
-                actions.push({
-                  id: recordId,
-                  action: 'delete',
-                  type: 'attendance_control',
-                  payload: {},
-                  synced: false,
-                });
-                await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
-
-                const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                if (cacheStr) {
-                  const cache = JSON.parse(cacheStr);
-                  const updatedCache = cache.filter((item: any) => !((item.id === recordId || item.id_local === recordId) && item.type === 'attendance_control'));
-                  await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                }
-
-                Alert.alert('Modo Offline', 'Control de asistencia marcado para eliminación localmente. Se sincronizará cuando haya conexión.');
-                fetchControls();
+                Alert.alert('Sin conexión', 'Este módulo funciona exclusivamente con internet.');
               }
             } catch (err) {
               console.error('Error deleting control:', err);
@@ -1658,20 +1594,64 @@ export default function AttendanceControlScreen() {
                     {formatDateDMY(record.fecha)}
                   </ThemedText>
                   <ThemedText style={styles.listItemSubtitle}>
-                    Cliente: {record.cliente || 'N/A'}
+                    Sucursal: {record.sucursal_nombre || 'N/A'}
                   </ThemedText>
                   <ThemedText style={styles.listItemSubtitle}>
-                    Área / Piso: {record.area_piso || 'N/A'}
-                  </ThemedText>
-                  <ThemedText style={styles.listItemSubtitle}>
-                    Tipo de turno: {record.turno || 'N/A'}
+                    Tipo de turno: {formatTurnoLabel(record.turno)}
                   </ThemedText>
                   <ThemedText style={styles.listItemSubtitle}>
                     Total Presentes: {record.total_presentes || 'N/A'}
                   </ThemedText>
-                  <ThemedText style={styles.listItemSubtitle}>
-                    Fijos: {record.fijos || 'N/A'}
-                  </ThemedText>
+                  {!!(record.id || record.id_local) && ((record.images && record.images.length > 0) || (record.images_local && record.images_local.length > 0)) && (
+                    <>
+                      <TouchableOpacity
+                        style={styles.collapseButton}
+                        onPress={() => {
+                          const itemKey = record.id || record.id_local;
+                          setExpandedImagesById((prev) => ({ ...prev, [itemKey]: !prev[itemKey] }));
+                        }}
+                        activeOpacity={0.8}
+                      >
+                        <ThemedText style={styles.collapseButtonText}>
+                          Imágenes ({((record.images || []).length + (record.images_local || []).length)})
+                        </ThemedText>
+                        <Ionicons
+                          name={expandedImagesById[record.id || record.id_local] ? 'chevron-up' : 'chevron-down'}
+                          size={18}
+                          color="#007AFF"
+                        />
+                      </TouchableOpacity>
+                      {expandedImagesById[record.id || record.id_local] && (
+                        <ThemedView style={styles.collapsableContent}>
+                          {(record.images || []).map((img: any) => (
+                            <ThemedView key={`${record.id || record.id_local}-img-r-${img?.id ?? img?.name ?? Math.random()}`} style={styles.photoItemMini}>
+                              <Image
+                                source={{ uri: appendTokenAndCacheToUrl(String(img?.url || '')) }}
+                                style={styles.photoPreviewMini}
+                                resizeMode="contain"
+                              />
+                              {!!String(img?.original_name || '').trim() && (
+                                <ThemedText style={styles.photoCaption}>{String(img.original_name).trim()}</ThemedText>
+                              )}
+                            </ThemedView>
+                          ))}
+                          {(record.images_local || []).map((img: any) => {
+                            const extRaw = String(img?.extension || 'jpg').replace('.', '').toLowerCase();
+                            const mime = extRaw === 'jpg' ? 'jpeg' : extRaw;
+                            const uri = `data:image/${mime};base64,${String(img?.base64 || '')}`;
+                            return (
+                              <ThemedView key={`${record.id || record.id_local}-img-l-${img?.id_local ?? img?.original_name ?? Math.random()}`} style={styles.photoItemMini}>
+                                <Image source={{ uri }} style={styles.photoPreviewMini} resizeMode="contain" />
+                                {!!String(img?.original_name || '').trim() && (
+                                  <ThemedText style={styles.photoCaption}>{String(img.original_name).trim()}</ThemedText>
+                                )}
+                              </ThemedView>
+                            );
+                          })}
+                        </ThemedView>
+                      )}
+                    </>
+                  )}
                 </ThemedView>
               </ThemedView>
 
@@ -1684,6 +1664,17 @@ export default function AttendanceControlScreen() {
                     {getActionIcon('edit')}
                     <ThemedText style={styles.listItemButtonText}>Editar</ThemedText>
                   </TouchableOpacity>
+                  {!!record.id && (
+                    <TouchableOpacity
+                      style={[styles.listItemButton, styles.changesButton]}
+                      onPress={() => refreshColaboradoresFromServer(String(record.id), true)}
+                    >
+                      <Ionicons name="list-outline" size={20} color="#FFFFFF" />
+                      <ThemedText style={styles.listItemButtonText}>
+                        {isRefreshingColaboradores ? 'Actualizando...' : 'Ver lista'}
+                      </ThemedText>
+                    </TouchableOpacity>
+                  )}
                   {!(record.id_local || String(record.id).startsWith('local-') || String(record.id) === '0') && (
                     <TouchableOpacity
                       style={[styles.listItemButton, styles.changesButton]}
@@ -1708,261 +1699,6 @@ export default function AttendanceControlScreen() {
             </ThemedView>
           );
         })}
-      </ThemedView>
-    );
-  };
-
-  const renderColaborador = (colaborador: Colaborador, index: number) => {
-    const isExpanded = expandedColaboradorIndices.includes(index);
-
-    return (
-      <ThemedView key={index} style={styles.colaboradorItem}>
-        <TouchableOpacity
-          style={styles.colaboradorHeader}
-          onPress={() => toggleColaboradorExpansion(index)}
-        >
-          <ThemedView style={styles.colaboradorHeaderContent}>
-            <ThemedText style={styles.colaboradorHeaderText}>
-              {colaborador.nombre_colaborador || 'Sin nombre'}
-            </ThemedText>
-          </ThemedView>
-          <ThemedView style={styles.colaboradorHeaderActions}>
-            <TouchableOpacity
-              onPress={(e) => {
-                e.stopPropagation();
-                removeColaborador(index);
-              }}
-              style={styles.removeColaboradorButton}
-            >
-              <Ionicons name="trash" size={20} color="#FF3B30" />
-            </TouchableOpacity>
-            <Ionicons
-              name={isExpanded ? 'chevron-up' : 'chevron-down'}
-              size={24}
-              color="#000000"
-            />
-          </ThemedView>
-        </TouchableOpacity>
-
-        {isExpanded && (
-          <ThemedView style={styles.colaboradorContent}>
-            {/* Selector colaborador */}
-            <ThemedView style={styles.formGroup}>
-              <ThemedText style={styles.formLabel}>Colaborador</ThemedText>
-              <ThemedView style={styles.pickerWrapper}>
-                <Picker
-                  selectedValue={colaborador.empleado_id ?? ''}
-                  onValueChange={(value) => {
-                    const idNum = value ? parseInt(String(value), 10) : null;
-                    const emp = empleadosOptions.find((e) => e.id === idNum);
-                    const newColaboradores = [...colaboradores];
-                    newColaboradores[index] = {
-                      ...newColaboradores[index],
-                      empleado_id: idNum,
-                      nombre_colaborador: emp?.nombre || '',
-                      cedula: emp?.cedula || '',
-                    };
-                    setColaboradores(newColaboradores);
-                  }}
-                >
-                  <Picker.Item label="Seleccionar colaborador" value="" />
-                  {empleadosOptions.map((e) => (
-                    <Picker.Item key={e.id} label={e.nombre} value={e.id} />
-                  ))}
-                </Picker>
-              </ThemedView>
-            </ThemedView>
-
-            {/* Nombre colaborador */}
-            <ThemedView style={styles.formGroup}>
-              <ThemedText style={styles.formLabel}>Nombre colaborador</ThemedText>
-              <TextInput
-                style={styles.formInput}
-                placeholder="Nombre colaborador"
-                placeholderTextColor="#999"
-                value={colaborador.nombre_colaborador}
-                editable={false}
-              />
-            </ThemedView>
-
-            {/* Cédula */}
-            <ThemedView style={styles.formGroup}>
-              <ThemedText style={styles.formLabel}>Cédula</ThemedText>
-              <TextInput
-                style={styles.formInput}
-                placeholder="Cédula"
-                placeholderTextColor="#999"
-                value={colaborador.cedula}
-                editable={false}
-                keyboardType="numeric"
-              />
-            </ThemedView>
-
-            {/* Firma/comentario */}
-            <ThemedView style={styles.formGroup}>
-              <ThemedText style={styles.formLabel}>Firma</ThemedText>
-              {!colaborador.firma_comentario ? (
-                <TouchableOpacity
-                  style={styles.qrButton}
-                  onPress={() => handleScanQR(index, 'firma_comentario')}
-                >
-                  {getActionIcon('qr')}
-                  <ThemedText style={styles.qrButtonText}>Escanear QR</ThemedText>
-                </TouchableOpacity>
-              ) : (
-                <ThemedView style={styles.qrInfoContainer}>
-                  <ThemedText style={styles.qrInfoTitle}>Información del QR escaneado:</ThemedText>
-                  {colaborador.firma_comentario_info && (
-                    <>
-                      <ThemedText style={styles.qrInfoText}>ID de sesión: {colaborador.firma_comentario_info.sessionId}</ThemedText>
-                      <ThemedText style={styles.qrInfoText}>ID del empleado: {colaborador.firma_comentario_info.empleadoId}</ThemedText>
-                      {colaborador.firma_comentario_info.empleadoDetalle && (
-                        <ThemedText style={styles.qrInfoText}>
-                          Empleado: {colaborador.firma_comentario_info.empleadoDetalle.nombre} {colaborador.firma_comentario_info.empleadoDetalle.primer_apellido} {colaborador.firma_comentario_info.empleadoDetalle.segundo_apellido}{colaborador.firma_comentario_info.empleadoDetalle.cedula_empleado ? ` (${colaborador.firma_comentario_info.empleadoDetalle.cedula_empleado})` : ''}
-                        </ThemedText>
-                      )}
-                      <ThemedText style={styles.qrInfoText}>Latitud: {colaborador.firma_comentario_info.latitud}</ThemedText>
-                      <ThemedText style={styles.qrInfoText}>Longitud: {colaborador.firma_comentario_info.longitud}</ThemedText>
-                      <ThemedText style={styles.qrInfoText}>Timestamp: {new Date(parseInt(colaborador.firma_comentario_info.timestamp)).toLocaleString()}</ThemedText>
-                    </>
-                  )}
-                  <TouchableOpacity
-                    style={styles.clearQRButton}
-                    onPress={() => {
-                      const newColaboradores = [...colaboradores];
-                      newColaboradores[index] = {
-                        ...newColaboradores[index],
-                        firma_comentario: '',
-                        firma_comentario_info: null,
-                      };
-                      setColaboradores(newColaboradores);
-                    }}
-                  >
-                    <Ionicons name="trash" size={16} color="#FF3B30" />
-                    <ThemedText style={styles.clearQRButtonText}>Eliminar QR</ThemedText>
-                  </TouchableOpacity>
-                </ThemedView>
-              )}
-            </ThemedView>
-
-            {/* Entrada */}
-            <ThemedView style={styles.formGroup}>
-              <ThemedText style={styles.formLabel}>Entrada</ThemedText>
-              <TouchableOpacity style={styles.dateButton} onPress={() => openTimePicker(index, 'entrada')}>
-                <ThemedText style={styles.dateButtonText}>{colaborador.entrada || 'Seleccionar hora'}</ThemedText>
-                <Ionicons name="time" size={20} color="#007AFF" />
-              </TouchableOpacity>
-            </ThemedView>
-
-            {/* Salida */}
-            <ThemedView style={styles.formGroup}>
-              <ThemedText style={styles.formLabel}>Salida</ThemedText>
-              <TouchableOpacity style={styles.dateButton} onPress={() => openTimePicker(index, 'salida')}>
-                <ThemedText style={styles.dateButtonText}>{colaborador.salida || 'Seleccionar hora'}</ThemedText>
-                <Ionicons name="time" size={20} color="#007AFF" />
-              </TouchableOpacity>
-            </ThemedView>
-
-            {/* Selector sustituto */}
-            <ThemedView style={styles.formGroup}>
-              <ThemedText style={styles.formLabel}>Sustituto</ThemedText>
-              <ThemedView style={styles.pickerWrapper}>
-                <Picker
-                  selectedValue={colaborador.sustituto_id ?? ''}
-                  onValueChange={(value) => {
-                    const idNum = value ? parseInt(String(value), 10) : null;
-                    const emp = empleadosOptions.find((e) => e.id === idNum);
-                    const newColaboradores = [...colaboradores];
-                    newColaboradores[index] = {
-                      ...newColaboradores[index],
-                      sustituto_id: idNum,
-                      nombre_sustituto: emp?.nombre || '',
-                      cedula_sustituto: emp?.cedula || '',
-                    };
-                    setColaboradores(newColaboradores);
-                  }}
-                >
-                  <Picker.Item label="Seleccionar sustituto" value="" />
-                  {empleadosOptions.map((e) => (
-                    <Picker.Item key={e.id} label={e.nombre} value={e.id} />
-                  ))}
-                </Picker>
-              </ThemedView>
-            </ThemedView>
-
-            {/* Nombre Sustituto */}
-            <ThemedView style={styles.formGroup}>
-              <ThemedText style={styles.formLabel}>Nombre Sustituto</ThemedText>
-              <TextInput
-                style={styles.formInput}
-                placeholder="Nombre Sustituto"
-                placeholderTextColor="#999"
-                value={colaborador.nombre_sustituto}
-                editable={false}
-              />
-            </ThemedView>
-
-            {/* Cédula Sustituto */}
-            <ThemedView style={styles.formGroup}>
-              <ThemedText style={styles.formLabel}>Cédula Sustituto</ThemedText>
-              <TextInput
-                style={styles.formInput}
-                placeholder="Cédula Sustituto"
-                placeholderTextColor="#999"
-                value={colaborador.cedula_sustituto}
-                editable={false}
-                keyboardType="numeric"
-              />
-            </ThemedView>
-
-            {/* Firma Sustituto */}
-            <ThemedView style={styles.formGroup}>
-              <ThemedText style={styles.formLabel}>Firma Sustituto</ThemedText>
-              {!colaborador.firma_sustituto ? (
-                <TouchableOpacity
-                  style={styles.qrButton}
-                  onPress={() => handleScanQR(index, 'firma_sustituto')}
-                >
-                  {getActionIcon('qr')}
-                  <ThemedText style={styles.qrButtonText}>Escanear QR</ThemedText>
-                </TouchableOpacity>
-              ) : (
-                <ThemedView style={styles.qrInfoContainer}>
-                  <ThemedText style={styles.qrInfoTitle}>Información del QR escaneado:</ThemedText>
-                  {colaborador.firma_sustituto_info && (
-                    <>
-                      <ThemedText style={styles.qrInfoText}>ID de sesión: {colaborador.firma_sustituto_info.sessionId}</ThemedText>
-                      <ThemedText style={styles.qrInfoText}>ID del empleado: {colaborador.firma_sustituto_info.empleadoId}</ThemedText>
-                      {colaborador.firma_sustituto_info.empleadoDetalle && (
-                        <ThemedText style={styles.qrInfoText}>
-                          Empleado: {colaborador.firma_sustituto_info.empleadoDetalle.nombre} {colaborador.firma_sustituto_info.empleadoDetalle.primer_apellido} {colaborador.firma_sustituto_info.empleadoDetalle.segundo_apellido}{colaborador.firma_sustituto_info.empleadoDetalle.cedula_empleado ? ` (${colaborador.firma_sustituto_info.empleadoDetalle.cedula_empleado})` : ''}
-                        </ThemedText>
-                      )}
-                      <ThemedText style={styles.qrInfoText}>Latitud: {colaborador.firma_sustituto_info.latitud}</ThemedText>
-                      <ThemedText style={styles.qrInfoText}>Longitud: {colaborador.firma_sustituto_info.longitud}</ThemedText>
-                      <ThemedText style={styles.qrInfoText}>Timestamp: {new Date(parseInt(colaborador.firma_sustituto_info.timestamp)).toLocaleString()}</ThemedText>
-                    </>
-                  )}
-                  <TouchableOpacity
-                    style={styles.clearQRButton}
-                    onPress={() => {
-                      const newColaboradores = [...colaboradores];
-                      newColaboradores[index] = {
-                        ...newColaboradores[index],
-                        firma_sustituto: '',
-                        firma_sustituto_info: null,
-                      };
-                      setColaboradores(newColaboradores);
-                    }}
-                  >
-                    <Ionicons name="trash" size={16} color="#FF3B30" />
-                    <ThemedText style={styles.clearQRButtonText}>Eliminar QR</ThemedText>
-                  </TouchableOpacity>
-                </ThemedView>
-              )}
-            </ThemedView>
-          </ThemedView>
-        )}
       </ThemedView>
     );
   };
@@ -2138,26 +1874,6 @@ export default function AttendanceControlScreen() {
 
           {isCreating || editingRecord ? (
             <ThemedView style={styles.formContainer}>
-              {/* Cliente (read-only desde current_marca) */}
-
-              {false && (
-                <>
-                  <ThemedView style={styles.formGroup}>
-                    <ThemedText style={styles.formLabel}>Cliente</ThemedText>
-                    <ThemedView style={styles.readonlyBox}>
-                      <ThemedText style={styles.readonlyText}>{marcaClienteName || 'N/A'}</ThemedText>
-                    </ThemedView>
-                  </ThemedView>
-
-                  <ThemedView style={styles.formGroup}>
-                    <ThemedText style={styles.formLabel}>Sucursal</ThemedText>
-                    <ThemedView style={styles.readonlyBox}>
-                      <ThemedText style={styles.readonlyText}>{marcaCorpoName || 'N/A'}</ThemedText>
-                    </ThemedView>
-                  </ThemedView>
-                </>
-              )}
-
               {/* Jerarquía del formulario */}
               <ThemedView style={styles.formGroup}>
                 <ThemedText style={styles.formLabel}>Empresa *</ThemedText>
@@ -2301,18 +2017,6 @@ export default function AttendanceControlScreen() {
                 </ThemedView>
               </ThemedView>
 
-              {/* Area/Piso */}
-              <ThemedView style={styles.formGroup}>
-                <ThemedText style={styles.formLabel}>Area/Piso</ThemedText>
-                <TextInput
-                  style={styles.formInput}
-                  placeholder="Area/Piso"
-                  placeholderTextColor="#999"
-                  value={areaPiso}
-                  onChangeText={setAreaPiso}
-                />
-              </ThemedView>
-
               {/* Total presentes */}
               <ThemedView style={styles.formGroup}>
                 <ThemedText style={styles.formLabel}>Total presentes</ThemedText>
@@ -2326,39 +2030,81 @@ export default function AttendanceControlScreen() {
                 />
               </ThemedView>
 
-              {/* Fijos */}
+              {/* Lista de colaboradores según marcas */}
               <ThemedView style={styles.formGroup}>
-                <ThemedText style={styles.formLabel}>Fijos</ThemedText>
-                <TextInput
-                  style={styles.formInput}
-                  placeholder="Fijos"
-                  placeholderTextColor="#999"
-                  value={fijos}
-                  onChangeText={setFijos}
-                  keyboardType="numeric"
-                />
+                <ThemedText style={styles.formLabel}>Colaboradores (marcas del día)</ThemedText>
+                {loadingMarcas ? (
+                  <ThemedView style={styles.marcasLoadingBox}>
+                    <ActivityIndicator size="small" color="#007AFF" />
+                    <ThemedText style={styles.marcasLoadingText}>Cargando marcas...</ThemedText>
+                  </ThemedView>
+                ) : errorMarcas ? (
+                  <ThemedView style={styles.marcasErrorBox}>
+                    <Ionicons name="alert-circle" size={20} color="#FF3B30" />
+                    <ThemedText style={styles.marcasErrorText}>{errorMarcas}</ThemedText>
+                  </ThemedView>
+                ) : previewColaboradores.length > 0 ? (
+                  <ThemedView style={styles.previewColaboradoresBox}>
+                    <ThemedText style={styles.previewColaboradoresSummary}>
+                      Total presentes: {previewColaboradores.filter((c: any) => !c?.ausente).length} / {previewColaboradores.length}
+                    </ThemedText>
+                    <ThemedText style={styles.previewColaboradoresSub}>Presentes:</ThemedText>
+                    {previewColaboradores.filter((c: any) => !c?.ausente).map((c: any, idx: number) => (
+                      <ThemedText key={`p-${idx}`} style={styles.previewColaboradorLine}>
+                        • {c?.nombre || c?.nombre_colaborador || '-'} {c?.cedula ? `(${c.cedula})` : ''}
+                        {`\n`}  Puesto: {c?.puesto || '-'} | Inicio: {formatHoraLabel(c?.hora_inicio)} | Fin: {formatHoraLabel(c?.hora_fin)}
+                      </ThemedText>
+                    ))}
+                    <ThemedText style={styles.previewColaboradoresSub}>Ausentes:</ThemedText>
+                    {previewColaboradores.filter((c: any) => c?.ausente).map((c: any, idx: number) => (
+                      <ThemedText key={`a-${idx}`} style={styles.previewColaboradorLine}>
+                        • {c?.nombre || c?.nombre_colaborador || '-'} {c?.cedula ? `(${c.cedula})` : ''}
+                        {`\n`}  Puesto: {c?.puesto || '-'} | Inicio: {formatHoraLabel(c?.hora_inicio)} | Fin: {formatHoraLabel(c?.hora_fin)}
+                      </ThemedText>
+                    ))}
+                  </ThemedView>
+                ) : formCorpoId && turno.trim() ? (
+                  <ThemedView style={styles.marcasEmptyBox}>
+                    <ThemedText style={styles.marcasEmptyText}>No hay marcas para la fecha, sucursal y turno seleccionados.</ThemedText>
+                  </ThemedView>
+                ) : (
+                  <ThemedText style={styles.formSubLabel}>
+                    Seleccione fecha, sucursal y turno para cargar las marcas de empleados.
+                  </ThemedText>
+                )}
               </ThemedView>
 
-              {/* Lista de colaboradores */}
-              {colaboradores.map((colaborador, index) => renderColaborador(colaborador, index))}
-
-              {/* Time picker global para colaboradores */}
-              {showTimePicker && (
-                <DateTimePicker
-                  value={timePickerValue}
-                  mode="time"
-                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                  onChange={handleTimeChange}
-                />
-              )}
-
-              <TouchableOpacity
-                style={styles.addColaboradorButton}
-                onPress={addColaborador}
-              >
-                <Ionicons name="add-circle" size={24} color="#4CAF50" />
-                <ThemedText style={styles.addColaboradorButtonText}>Agregar Colaborador</ThemedText>
-              </TouchableOpacity>
+              {/* Fotografías */}
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formLabel}>Fotografías</ThemedText>
+                <ThemedText style={styles.formSubLabel}>
+                  Tome fotografías del control de asistencia
+                </ThemedText>
+                <TouchableOpacity style={styles.cameraButton} onPress={openCamera}>
+                  <Ionicons name="camera" size={24} color="#FFFFFF" />
+                  <ThemedText style={styles.cameraButtonText}>Tomar Foto</ThemedText>
+                </TouchableOpacity>
+                {(imagenesRemote.length > 0 || imagenesLocal.length > 0) && (
+                  <ThemedView style={styles.photosContainer}>
+                    {imagenesRemote.map((img) => (
+                      <ThemedView key={`r-${img.id}`} style={styles.photoItem}>
+                        <Image source={{ uri: appendTokenAndCacheToUrl(String(img.url || '')) }} style={styles.photoPreview} resizeMode="contain" />
+                        <TouchableOpacity style={styles.removePhotoButton} onPress={() => removeRemoteImage(img.id)}>
+                          <Ionicons name="trash" size={20} color="#FF3B30" />
+                        </TouchableOpacity>
+                      </ThemedView>
+                    ))}
+                    {imagenesLocal.map((img) => (
+                      <ThemedView key={`l-${img.id_local}`} style={styles.photoItem}>
+                        <Image source={{ uri: `data:image/jpeg;base64,${img.base64}` }} style={styles.photoPreview} resizeMode="contain" />
+                        <TouchableOpacity style={styles.removePhotoButton} onPress={() => removeLocalImage(img.id_local)}>
+                          <Ionicons name="trash" size={20} color="#FF3B30" />
+                        </TouchableOpacity>
+                      </ThemedView>
+                    ))}
+                  </ThemedView>
+                )}
+              </ThemedView>
 
               {/* Firma responsable (generada) */}
               <ThemedView style={styles.formGroup}>
@@ -2430,13 +2176,26 @@ export default function AttendanceControlScreen() {
                     {getActionIcon('cancel')}
                   </ThemedText>
                 </TouchableOpacity>
+                {submitResponse && (
+                  <ThemedView style={[styles.responseContainer, submitResponse.type === 'success' ? styles.responseSuccess : styles.responseError]}>
+                    <ThemedText style={styles.responseText}>
+                      {submitResponse.type === 'success' ? '✓ ' : '✗ '}
+                      {submitResponse.message}
+                    </ThemedText>
+                  </ThemedView>
+                )}
                 <TouchableOpacity
-                  style={styles.confirmButton}
+                  style={[styles.confirmButton, isSubmitting && styles.buttonDisabled]}
                   onPress={editingRecord ? updateControlHandler : saveControlHandler}
+                  disabled={isSubmitting}
                 >
-                  <ThemedText style={styles.confirmButtonText}>
-                    {getActionIcon('confirm')}
-                  </ThemedText>
+                  {isSubmitting ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <ThemedText style={styles.confirmButtonText}>
+                      {getActionIcon('confirm')}
+                    </ThemedText>
+                  )}
                 </TouchableOpacity>
               </ThemedView>
             </ThemedView>
@@ -2534,6 +2293,96 @@ export default function AttendanceControlScreen() {
               )}
             </ScrollView>
           </ThemedView>
+        </View>
+      </Modal>
+
+      {/* Modal: resumen colaboradores */}
+      <Modal
+        visible={isResumenModalVisible}
+        animationType="fade"
+        transparent
+        presentationStyle="overFullScreen"
+        onRequestClose={() => setIsResumenModalVisible(false)}
+      >
+        <View style={styles.overlay}>
+          <ThemedView style={styles.floatModalCardMovimientos}>
+            <ThemedView style={styles.floatModalHeader}>
+              <ThemedText style={styles.modalTitle}>{resumenModalTitle}</ThemedText>
+              <TouchableOpacity onPress={() => setIsResumenModalVisible(false)}>
+                <Ionicons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+            </ThemedView>
+
+            <ScrollView style={{ maxHeight: Dimensions.get('window').height * 0.75 }} contentContainerStyle={{ padding: 16 }}>
+              {resumenColaboradores.length === 0 ? (
+                <ThemedText style={styles.emptyText}>No hay colaboradores para mostrar.</ThemedText>
+              ) : (
+                resumenColaboradores.map((c: any, idx: number) => (
+                  <ThemedView key={`res-col-${idx}`} style={styles.cambioCollapsableMain}>
+                    <ThemedView style={styles.cambioCollapsableContent}>
+                      <ThemedText style={styles.changeDescription}>
+                        <ThemedText style={{ fontWeight: '800' }}>Empleado: </ThemedText>
+                        {c?.nombre || c?.nombre_colaborador || '-'}
+                      </ThemedText>
+                      <ThemedText style={styles.changeDescription}>
+                        <ThemedText style={{ fontWeight: '800' }}>Cédula: </ThemedText>
+                        {c?.cedula || '-'}
+                      </ThemedText>
+                      <ThemedText style={styles.changeDescription}>
+                        <ThemedText style={{ fontWeight: '800' }}>Marca ID: </ThemedText>
+                        {String(c?.marca_id ?? '-')}
+                      </ThemedText>
+                      <ThemedText style={styles.changeDescription}>
+                        <ThemedText style={{ fontWeight: '800' }}>Puesto: </ThemedText>
+                        {c?.puesto || '-'}
+                      </ThemedText>
+                      <ThemedText style={styles.changeDescription}>
+                        <ThemedText style={{ fontWeight: '800' }}>Hora inicio: </ThemedText>
+                        {formatHoraLabel(c?.hora_inicio)}
+                      </ThemedText>
+                      <ThemedText style={styles.changeDescription}>
+                        <ThemedText style={{ fontWeight: '800' }}>Hora fin: </ThemedText>
+                        {formatHoraLabel(c?.hora_fin)}
+                      </ThemedText>
+                      <ThemedText style={styles.changeDescription}>
+                        <ThemedText style={{ fontWeight: '800' }}>Estado: </ThemedText>
+                        {c?.ausente ? 'Ausente' : 'Presente'}
+                      </ThemedText>
+                    </ThemedView>
+                  </ThemedView>
+                ))
+              )}
+            </ScrollView>
+          </ThemedView>
+        </View>
+      </Modal>
+
+      {/* Camera Modal */}
+      <Modal
+        visible={isCameraVisible}
+        animationType="slide"
+        onRequestClose={() => setIsCameraVisible(false)}
+      >
+        <View style={styles.cameraContainer}>
+          <CameraView
+            ref={cameraRef}
+            style={styles.camera}
+            facing="back"
+          />
+          <View style={styles.cameraControls}>
+            <TouchableOpacity
+              style={styles.cameraCancelButton}
+              onPress={() => setIsCameraVisible(false)}
+            >
+              <Ionicons name="close" size={30} color="#FFFFFF" />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.cameraCaptureButton}
+              onPress={capturePhoto}
+            >
+              <View style={styles.cameraCaptureButtonInner} />
+            </TouchableOpacity>
+          </View>
         </View>
       </Modal>
 
@@ -2672,20 +2521,6 @@ const styles = StyleSheet.create({
     height: 50,
     width: '100%',
   },
-  readonlyBox: {
-    borderWidth: 2,
-    borderColor: '#007AFF',
-    borderRadius: 8,
-    padding: 14,
-    backgroundColor: '#E3F2FD',
-    marginBottom: 15,
-  },
-  readonlyText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#007AFF',
-    textAlign: 'left',
-  },
   // Filtros jerárquicos
   filtersContainer: {
     backgroundColor: '#FFFFFF',
@@ -2731,21 +2566,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
   },
-  compactInfoRow: {
-    flexDirection: 'column',
-    gap: 8,
-    backgroundColor: '#E3F2FD',
-  },
-  compactInfoItem: {
-    width: '100%',
-    backgroundColor: '#E3F2FD',
-  },
-  compactInfoLabel: {
-    fontSize: 11,
-    fontWeight: '600',
-    marginBottom: 3,
-    color: '#000000',
-  },
   signatureButtons: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -2771,59 +2591,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     marginLeft: 8,
-  },
-  colaboradorItem: {
-    marginBottom: 15,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#E0E0E0',
-    overflow: 'hidden',
-  },
-  colaboradorHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 15,
-    backgroundColor: '#F5F5F5',
-  },
-  colaboradorHeaderContent: {
-    flex: 1,
-    marginRight: 10,
-  },
-  colaboradorHeaderText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#000000',
-    backgroundColor: '#F5F5F5',
-  },
-  colaboradorHeaderActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    backgroundColor: '#F5F5F5',
-  },
-  removeColaboradorButton: {
-    padding: 4,
-  },
-  colaboradorContent: {
-    padding: 15,
-  },
-  qrButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 12,
-    backgroundColor: '#E3F2FD',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#2196F3',
-    gap: 8,
-  },
-  qrButtonText: {
-    fontSize: 14,
-    color: '#2196F3',
-    fontWeight: '600',
   },
   qrInfoContainer: {
     padding: 12,
@@ -2857,22 +2624,6 @@ const styles = StyleSheet.create({
     color: '#FF3B30',
     fontWeight: '600',
   },
-  addColaboradorButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 12,
-    backgroundColor: '#E8F5E9',
-    borderRadius: 8,
-    marginTop: 10,
-    marginBottom: 20,
-    gap: 8,
-  },
-  addColaboradorButtonText: {
-    color: '#4CAF50',
-    fontSize: 14,
-    fontWeight: '600',
-  },
   actionButtons: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -2888,6 +2639,28 @@ const styles = StyleSheet.create({
   },
   confirmButtonText: {
     color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  buttonDisabled: {
+    opacity: 0.6,
+  },
+  responseContainer: {
+    padding: 12,
+    borderRadius: 6,
+    marginBottom: 12,
+  },
+  responseSuccess: {
+    backgroundColor: '#D4EDDA',
+    borderWidth: 1,
+    borderColor: '#C3E6CB',
+  },
+  responseError: {
+    backgroundColor: '#F8D7DA',
+    borderWidth: 1,
+    borderColor: '#F5C6CB',
+  },
+  responseText: {
     fontSize: 14,
     fontWeight: '600',
   },
@@ -2959,11 +2732,12 @@ const styles = StyleSheet.create({
   },
   listItemButtons: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     justifyContent: 'space-between',
     gap: 12,
   },
   listItemButton: {
-    flex: 1,
+    width: '48%',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -2974,7 +2748,7 @@ const styles = StyleSheet.create({
   editButton: {
     backgroundColor: '#007AFF',
   },
-  changesButton: { backgroundColor: '#5856D6', flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 12, borderRadius: 8, gap: 8 },
+  changesButton: { backgroundColor: '#5856D6', width: '48%', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 12, borderRadius: 8, gap: 8 },
   deleteButton: {
     backgroundColor: '#FF3B30',
   },
@@ -3029,5 +2803,204 @@ const styles = StyleSheet.create({
   cambioCollapsableContent: { padding: 12, gap: 8, backgroundColor: '#F8F9FA' },
   changeDescription: { fontSize: 14, lineHeight: 20, color: '#666', marginBottom: 8 },
   filterGroupSearch: { marginBottom: 12 },
+  // Image styles
+  formSubLabel: {
+    fontSize: 12,
+    color: '#666',
+    marginBottom: 10,
+  },
+  marcasLoadingBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    padding: 14,
+    backgroundColor: '#F0F8FF',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#007AFF',
+  },
+  marcasLoadingText: {
+    fontSize: 14,
+    color: '#007AFF',
+    fontWeight: '600',
+  },
+  marcasErrorBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    padding: 14,
+    backgroundColor: '#FFEBEE',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#FF3B30',
+  },
+  marcasErrorText: {
+    fontSize: 14,
+    color: '#C62828',
+    fontWeight: '600',
+    flex: 1,
+  },
+  marcasEmptyBox: {
+    padding: 14,
+    backgroundColor: '#FFF8E1',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#FFA000',
+  },
+  marcasEmptyText: {
+    fontSize: 14,
+    color: '#E65100',
+  },
+  previewColaboradoresBox: {
+    padding: 12,
+    backgroundColor: '#F5F5F5',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+  },
+  previewColaboradoresSummary: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#000',
+    marginBottom: 10,
+  },
+  previewColaboradoresSub: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#333',
+    marginTop: 8,
+    marginBottom: 4,
+  },
+  previewColaboradorLine: {
+    fontSize: 13,
+    color: '#555',
+    marginLeft: 8,
+    marginBottom: 2,
+  },
+  cameraButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#007AFF',
+    padding: 15,
+    borderRadius: 8,
+    marginTop: 10,
+    gap: 10,
+  },
+  cameraButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  photosContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    marginTop: 15,
+  },
+  photoItem: {
+    width: '48%',
+    position: 'relative',
+    borderRadius: 8,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+  },
+  photoPreview: {
+    width: '100%',
+    height: 200,
+    backgroundColor: '#F8F9FA',
+  },
+  removePhotoButton: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    backgroundColor: 'rgba(255, 59, 48, 0.9)',
+    borderRadius: 20,
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  photoItemMini: {
+    width: '100%',
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    padding: 8,
+    backgroundColor: '#FFFFFF',
+  },
+  photoPreviewMini: {
+    width: '100%',
+    height: 200,
+    borderRadius: 8,
+    backgroundColor: '#F8F9FA',
+  },
+  photoCaption: {
+    marginTop: 8,
+    fontSize: 12,
+    color: '#000',
+    opacity: 0.7,
+  },
+  collapseButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    marginTop: 8,
+    backgroundColor: '#FAFAFA',
+  },
+  collapseButtonText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#007AFF',
+  },
+  collapsableContent: {
+    marginTop: 8,
+    padding: 10,
+    borderRadius: 8,
+    backgroundColor: '#F8F9FA',
+  },
+  cameraContainer: {
+    flex: 1,
+    backgroundColor: '#000',
+  },
+  camera: {
+    flex: 1,
+  },
+  cameraControls: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 20,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+  },
+  cameraCancelButton: {
+    padding: 10,
+  },
+  cameraCaptureButton: {
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    backgroundColor: '#fff',
+    padding: 5,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cameraCaptureButtonInner: {
+    flex: 1,
+    borderRadius: 30,
+    backgroundColor: '#007AFF',
+    width: '100%',
+  },
 });
 

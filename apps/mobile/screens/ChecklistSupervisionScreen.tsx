@@ -287,12 +287,18 @@ const SEGURIDAD_SECTIONS: EvaluationSection[] = [
             id: 'car-0-cal',
             type: 'select' as const,
             title: 'Respuesta',
-            value: 'Bueno',
-            options: ['Bueno', 'Malo', 'No existe'],
+            value: 'Vigente',
+            options: ['Vencido', 'Vigente'],
+          },
+          {
+            id: 'car-0-fecha-vencimiento',
+            type: 'date' as const,
+            title: 'Fecha de vencimiento',
+            value: '',
           },
           {
             id: 'car-0-photo',
-            type: 'text' as const,
+            type: 'photo' as const,
             title: 'Foto',
             value: '',
           }
@@ -306,12 +312,18 @@ const SEGURIDAD_SECTIONS: EvaluationSection[] = [
             id: 'car-1-cal',
             type: 'select' as const,
             title: 'Respuesta',
-            value: 'Bueno',
-            options: ['Bueno', 'Malo', 'No existe'],
+            value: 'Vigente',
+            options: ['Vencido', 'Vigente'],
+          },
+          {
+            id: 'car-1-fecha-vencimiento',
+            type: 'date' as const,
+            title: 'Fecha de vencimiento',
+            value: '',
           },
           {
             id: 'car-1-photo',
-            type: 'text' as const,
+            type: 'photo' as const,
             title: 'Foto',
             value: '',
           }
@@ -331,6 +343,31 @@ const SEGURIDAD_SECTIONS: EvaluationSection[] = [
           {
             id: 'car-2-photo',
             type: 'text' as const,
+            title: 'Foto',
+            value: '',
+          }
+        ]
+      },
+      {
+        id: 'car-sub-3',
+        title: 'Licencia de conducción',
+        inputs: [
+          {
+            id: 'car-3-cal',
+            type: 'select' as const,
+            title: 'Respuesta',
+            value: 'Vigente',
+            options: ['Vencido', 'Vigente'],
+          },
+          {
+            id: 'car-3-fecha-vencimiento',
+            type: 'date' as const,
+            title: 'Fecha de vencimiento',
+            value: '',
+          },
+          {
+            id: 'car-3-photo',
+            type: 'photo' as const,
             title: 'Foto',
             value: '',
           }
@@ -730,8 +767,15 @@ function decodeFirmaHash(hash: string): { sessionId?: string; empleadoId?: strin
 
 export default function ChecklistSupervisionScreen() {
   const navigation = useNavigation<any>();
-  const { employee, refreshAccessToken, logout } = useAuth();
+  const { employee, refreshAccessToken, logout, accessToken } = useAuth();
   const { scanQR, QRScannerComponent } = useQRScanner();
+  const appendTokenToUrl = (url: string) => {
+    if (!url) return '';
+    if (!accessToken || accessToken.trim().length === 0) return url;
+    if (/[?&]token=/.test(url)) return url;
+    const sep = url.includes('?') ? '&' : '?';
+    return `${url}${sep}token=${encodeURIComponent(accessToken)}`;
+  };
 
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const handleMenuPress = () => setIsMenuVisible(true);
@@ -764,6 +808,8 @@ export default function ChecklistSupervisionScreen() {
   // Estados para formulario
   const [isCreating, setIsCreating] = useState(false);
   const [editing, setEditing] = useState<ChecklistSupervisionUI | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitResponse, setSubmitResponse] = useState<{ type: 'success' | 'error', message: string } | null>(null);
   const [fecha, setFecha] = useState<Date>(new Date());
   const [showFechaPicker, setShowFechaPicker] = useState(false);
   const [ejecutivoCuenta, setEjecutivoCuenta] = useState('');
@@ -789,6 +835,10 @@ export default function ChecklistSupervisionScreen() {
   const [cameraTarget, setCameraTarget] = useState<string | null>(null);
   const cameraRef = useRef<CameraView | null>(null);
   const [permission, requestPermission] = useCameraPermissions();
+
+  // Estado para date pickers de inputs de evaluación
+  const [datePickerInput, setDatePickerInput] = useState<{ sectionId: string; subsectionId: string; inputId: string } | null>(null);
+  const [datePickerValue, setDatePickerValue] = useState<Date>(new Date());
 
   // Estados para modal de agregar subsección
   const [isAddSubsectionModalVisible, setIsAddSubsectionModalVisible] = useState(false);
@@ -1080,16 +1130,20 @@ export default function ChecklistSupervisionScreen() {
     useCallback(() => {
       fetchMainStructure();
       fetchChecklists();
-    }, [fetchMainStructure, fetchChecklists])
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [])
   );
 
   useEffect(() => {
-    const handler = () => fetchChecklists();
+    const handler = () => {
+      fetchChecklists();
+    };
     eventBus.on('connectionRestored', handler);
     return () => {
       eventBus.off('connectionRestored', handler);
     };
-  }, [fetchChecklists]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Cuando cambia la división seleccionada, cargar evaluación (solo si no estamos editando)
   useEffect(() => {
@@ -1097,7 +1151,7 @@ export default function ChecklistSupervisionScreen() {
     if (editing) return;
 
     if (selectedDivisionId && isCreating) {
-      // Buscar la división seleccionada por nombre
+      // Buscar la división seleccionada por nombre (usar divisiones del useMemo)
       const selectedDivision = divisiones.find((d: any) => d.id === selectedDivisionId);
       if (selectedDivision) {
         const divisionName = (selectedDivision.nombre || '').toLowerCase();
@@ -1114,7 +1168,8 @@ export default function ChecklistSupervisionScreen() {
     } else if (!selectedDivisionId && isCreating) {
       setEvaluation([]);
     }
-  }, [selectedDivisionId, isCreating, divisiones, editing]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDivisionId, isCreating, editing]);
 
   // Cargar artículos del puesto cuando se selecciona un puesto (solo si no estamos editando)
   useEffect(() => {
@@ -1122,7 +1177,7 @@ export default function ChecklistSupervisionScreen() {
     if (editing) return;
 
     if (selectedPuestoId && isCreating && selectedDivisionId) {
-      // Buscar el puesto en la estructura
+      // Buscar el puesto en la estructura (usar sucursales del useMemo)
       const sucursal = sucursales.find((s: any) => s.id === selectedCorpoId);
       const puesto = sucursal?.puestos?.find((p: any) => p.id === selectedPuestoId);
 
@@ -1162,7 +1217,8 @@ export default function ChecklistSupervisionScreen() {
     } else if (!selectedPuestoId && isCreating) {
       setArticulos([]);
     }
-  }, [selectedPuestoId, selectedCorpoId, selectedDivisionId, isCreating, sucursales, editing]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedPuestoId, selectedCorpoId, selectedDivisionId, isCreating, editing]);
 
   // Funciones para manejar evaluación dinámica
   const addSection = () => {
@@ -1463,7 +1519,7 @@ export default function ChecklistSupervisionScreen() {
     if (editing?.id && editing.id > 0 && input.file_name) {
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (apiUrl) {
-        return `${apiUrl}/api/checklist-supervision/${editing.id}/get-image/${encodeURIComponent(input.file_name)}`;
+        return appendTokenToUrl(`${apiUrl}/api/checklist-supervision/${editing.id}/get-image/${encodeURIComponent(input.file_name)}`);
       }
     }
 
@@ -1471,7 +1527,7 @@ export default function ChecklistSupervisionScreen() {
     if (input.file_name && editing?.id && editing.id > 0) {
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (apiUrl) {
-        return `${apiUrl}/api/checklist-supervision/${editing.id}/get-image/${encodeURIComponent(input.file_name)}`;
+        return appendTokenToUrl(`${apiUrl}/api/checklist-supervision/${editing.id}/get-image/${encodeURIComponent(input.file_name)}`);
       }
     }
 
@@ -1659,54 +1715,57 @@ export default function ChecklistSupervisionScreen() {
   const handleSave = async () => {
     if (!validateForm()) return;
 
-    // Verificar que las imágenes estén en la evaluación antes de enviar (como StaffEvaluationsScreen)
-    const evaluationWithImages = JSON.parse(JSON.stringify(evaluation));
-    let hasImages = false;
-    let imageCount = 0;
-    const checkForImages = (obj: any) => {
-      if (Array.isArray(obj)) {
-        obj.forEach(item => checkForImages(item));
-      } else if (obj && typeof obj === 'object') {
-        // Buscar imágenes en value (data URI) como StaffEvaluationsScreen
-        if (obj.type === 'photo' && obj.value && typeof obj.value === 'string' && obj.value.startsWith('data:image/')) {
-          hasImages = true;
-          imageCount++;
-          console.log(`Imagen #${imageCount} encontrada en evaluación:`, {
-            id: obj.id,
-            hasValue: !!obj.value,
-            valueLength: obj.value.length,
-            imageOrientation: obj.imageOrientation
-          });
-        }
-        Object.values(obj).forEach(value => checkForImages(value));
-      }
-    };
-    checkForImages(evaluationWithImages);
-    console.log(`Evaluación a enviar tiene ${imageCount} imagen(es):`, hasImages);
-
-    // Log del tamaño del JSON para verificar que las imágenes estén incluidas
-    const evaluationString = JSON.stringify(evaluationWithImages);
-    console.log('Tamaño del JSON de evaluación:', evaluationString.length, 'caracteres');
-
-    const articulosPuesto = articulos && articulos.length > 0 ? JSON.stringify(articulos) : '[]';
-
-    const requestData = {
-      cliente_id: selectedClienteId,
-      division_id: selectedDivisionId,
-      corpo_id: selectedCorpoId,
-      puesto_id: selectedPuestoId,
-      division: selectedDivisionId,
-      fecha: fecha.toISOString(),
-      ejecutivo_cuenta: ejecutivoCuenta,
-      evaluacion: JSON.stringify(evaluationWithImages),
-      articulos_puesto: articulosPuesto,
-      firma_supervisor: firmaSupervisor,
-      firma_responsable: firmaResponsable,
-    };
-
-    const isConnected = await getConnectionStatus();
+    setIsSubmitting(true);
+    setSubmitResponse(null);
 
     try {
+      // Verificar que las imágenes estén en la evaluación antes de enviar (como StaffEvaluationsScreen)
+      const evaluationWithImages = JSON.parse(JSON.stringify(evaluation));
+      let hasImages = false;
+      let imageCount = 0;
+      const checkForImages = (obj: any) => {
+        if (Array.isArray(obj)) {
+          obj.forEach(item => checkForImages(item));
+        } else if (obj && typeof obj === 'object') {
+          // Buscar imágenes en value (data URI) como StaffEvaluationsScreen
+          if (obj.type === 'photo' && obj.value && typeof obj.value === 'string' && obj.value.startsWith('data:image/')) {
+            hasImages = true;
+            imageCount++;
+            console.log(`Imagen #${imageCount} encontrada en evaluación:`, {
+              id: obj.id,
+              hasValue: !!obj.value,
+              valueLength: obj.value.length,
+              imageOrientation: obj.imageOrientation
+            });
+          }
+          Object.values(obj).forEach(value => checkForImages(value));
+        }
+      };
+      checkForImages(evaluationWithImages);
+      console.log(`Evaluación a enviar tiene ${imageCount} imagen(es):`, hasImages);
+
+      // Log del tamaño del JSON para verificar que las imágenes estén incluidas
+      const evaluationString = JSON.stringify(evaluationWithImages);
+      console.log('Tamaño del JSON de evaluación:', evaluationString.length, 'caracteres');
+
+      const articulosPuesto = articulos && articulos.length > 0 ? JSON.stringify(articulos) : '[]';
+
+      const requestData = {
+        cliente_id: selectedClienteId,
+        division_id: selectedDivisionId,
+        corpo_id: selectedCorpoId,
+        puesto_id: selectedPuestoId,
+        division: selectedDivisionId,
+        fecha: fecha.toISOString(),
+        ejecutivo_cuenta: ejecutivoCuenta,
+        evaluacion: JSON.stringify(evaluationWithImages),
+        articulos_puesto: articulosPuesto,
+        firma_supervisor: firmaSupervisor,
+        firma_responsable: firmaResponsable,
+      };
+
+      const isConnected = await getConnectionStatus();
+
       if (editing && editing.id && editing.id !== 0) {
         // Actualizar
         if (isConnected) {
@@ -1717,11 +1776,13 @@ export default function ChecklistSupervisionScreen() {
             logout,
           });
           if (result.status) {
-            Alert.alert('Éxito', 'Checklist actualizado correctamente');
-            await fetchChecklists();
-            cancelCreating();
+            setSubmitResponse({ type: 'success', message: result.message || 'Checklist actualizado correctamente' });
+            setTimeout(async () => {
+              await fetchChecklists();
+              cancelCreating();
+            }, 2000);
           } else {
-            Alert.alert('Error', result.message || 'No se pudo actualizar');
+            setSubmitResponse({ type: 'error', message: result.message || 'No se pudo actualizar' });
           }
         } else {
           // Offline: guardar acción
@@ -1743,8 +1804,10 @@ export default function ChecklistSupervisionScreen() {
           setChecklists(updated);
           await AsyncStorage.setItem('checklist_supervision_cache', JSON.stringify(updated));
 
-          Alert.alert('Modo Offline', 'Checklist guardado localmente. Se sincronizará cuando haya conexión.');
-          cancelCreating();
+          setSubmitResponse({ type: 'success', message: 'Checklist guardado localmente. Se sincronizará cuando haya conexión.' });
+          setTimeout(() => {
+            cancelCreating();
+          }, 2000);
         }
       } else {
         // Crear
@@ -1755,11 +1818,13 @@ export default function ChecklistSupervisionScreen() {
             logout,
           });
           if (result.status) {
-            Alert.alert('Éxito', 'Checklist creado correctamente');
-            await fetchChecklists();
-            cancelCreating();
+            setSubmitResponse({ type: 'success', message: result.message || 'Checklist creado correctamente' });
+            setTimeout(async () => {
+              await fetchChecklists();
+              cancelCreating();
+            }, 2000);
           } else {
-            Alert.alert('Error', result.message || 'No se pudo crear');
+            setSubmitResponse({ type: 'error', message: result.message || 'No se pudo crear' });
           }
         } else {
           // Offline: guardar acción
@@ -1775,7 +1840,8 @@ export default function ChecklistSupervisionScreen() {
 
           // Agregar a cache
           if (!selectedClienteId || !selectedDivisionId || !selectedCorpoId || !selectedPuestoId) {
-            Alert.alert('Error', 'Debes completar todos los campos requeridos');
+            setSubmitResponse({ type: 'error', message: 'Debes completar todos los campos requeridos' });
+            setIsSubmitting(false);
             return;
           }
           const newItem: ChecklistSupervisionUI = {
@@ -1797,12 +1863,16 @@ export default function ChecklistSupervisionScreen() {
           setChecklists(updated);
           await AsyncStorage.setItem('checklist_supervision_cache', JSON.stringify(updated));
 
-          Alert.alert('Modo Offline', 'Checklist guardado localmente. Se sincronizará cuando haya conexión.');
-          cancelCreating();
+          setSubmitResponse({ type: 'success', message: 'Checklist guardado localmente. Se sincronizará cuando haya conexión.' });
+          setTimeout(() => {
+            cancelCreating();
+          }, 2000);
         }
       }
     } catch (err: any) {
-      Alert.alert('Error', err.message || 'No se pudo guardar');
+      setSubmitResponse({ type: 'error', message: err.message || 'No se pudo guardar' });
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -1912,7 +1982,24 @@ export default function ChecklistSupervisionScreen() {
           <View style={styles.pickerContainer}>
             <Picker
               selectedValue={input.value || ''}
-              onValueChange={(value) => updateInput(sectionId, subsectionId, input.id, { value })}
+              onValueChange={(value) => {
+                updateInput(sectionId, subsectionId, input.id, { value });
+                // Si el select es de un carné y cambia a "Vencido", limpiar la fecha de vencimiento
+                if (input.id.includes('-cal') && value === 'Vencido') {
+                  const prefixMatch = input.id.match(/^(car-\d+)/);
+                  if (prefixMatch) {
+                    const prefix = prefixMatch[1];
+                    const fechaInputId = `${prefix}-fecha-vencimiento`;
+                    // Buscar y limpiar el input de fecha correspondiente
+                    const section = evaluation.find(s => s.id === sectionId);
+                    const subsection = section?.subsections.find(sub => sub.id === subsectionId);
+                    const fechaInput = subsection?.inputs.find(inp => inp.id === fechaInputId);
+                    if (fechaInput) {
+                      updateInput(sectionId, subsectionId, fechaInputId, { value: '' });
+                    }
+                  }
+                }
+              }}
               style={styles.picker}
             >
               <Picker.Item label="Seleccionar opción..." value="" />
@@ -1923,18 +2010,42 @@ export default function ChecklistSupervisionScreen() {
           </View>
         );
       case 'date':
+        const dateValue = input.value ? new Date(input.value) : new Date();
         return (
-          <TouchableOpacity
-            style={styles.dateButton}
-            onPress={() => {
-              // Implementar date picker
-            }}
-          >
-            <ThemedText style={styles.dateButtonText}>
-              {input.value ? formatYMDToDMY(input.value) : 'Seleccionar fecha'}
-            </ThemedText>
-            <Ionicons name="calendar-outline" size={18} color="#007AFF" />
-          </TouchableOpacity>
+          <View>
+            <TouchableOpacity
+              style={styles.dateButton}
+              onPress={() => {
+                setDatePickerValue(dateValue);
+                setDatePickerInput({ sectionId, subsectionId, inputId: input.id });
+              }}
+            >
+              <ThemedText style={styles.dateButtonText}>
+                {input.value ? formatYMDToDMY(input.value) : 'Seleccionar fecha'}
+              </ThemedText>
+              <Ionicons name="calendar-outline" size={18} color="#007AFF" />
+            </TouchableOpacity>
+            {datePickerInput?.sectionId === sectionId && datePickerInput?.subsectionId === subsectionId && datePickerInput?.inputId === input.id && (
+              <DateTimePicker
+                value={datePickerValue}
+                mode="date"
+                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                onChange={(event, selectedDate) => {
+                  if (Platform.OS === 'android') {
+                    setDatePickerInput(null);
+                  }
+                  if (selectedDate) {
+                    setDatePickerValue(selectedDate);
+                    const isoDate = selectedDate.toISOString();
+                    updateInput(sectionId, subsectionId, input.id, { value: isoDate });
+                    if (Platform.OS === 'ios') {
+                      setDatePickerInput(null);
+                    }
+                  }
+                }}
+              />
+            )}
+          </View>
         );
       case 'photo':
         return null; // Las fotos se manejan fuera de renderEvaluationInput
@@ -2002,7 +2113,7 @@ export default function ChecklistSupervisionScreen() {
     if (input.file_name && typeof checklistId === 'number' && checklistId > 0) {
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (apiUrl) {
-        return `${apiUrl}/api/checklist-supervision/${checklistId}/get-image/${encodeURIComponent(input.file_name)}`;
+        return appendTokenToUrl(`${apiUrl}/api/checklist-supervision/${checklistId}/get-image/${encodeURIComponent(input.file_name)}`);
       }
     }
     return '';
@@ -2558,68 +2669,86 @@ export default function ChecklistSupervisionScreen() {
                             {subsection.title}
                           </ThemedText>
                         )}
-                        {subsection.inputs.map((input) => (
-                          <ThemedView key={input.id} style={styles.inputCard}>
-                            {input.title && input.title.trim() !== '' && input.title !== subsection.title && (
-                              <ThemedText style={styles.questionTitleList}>
-                                {input.title}
-                              </ThemedText>
-                            )}
-                            {input.type === 'photo' || (input.type === 'text' && input.title?.toLowerCase().includes('foto')) ? (
-                              <View>
-                                {((input.value && input.value.startsWith('data:image/')) || input.file_name) ? (
-                                  <View>
-                                    <Image
-                                      source={{ uri: getImageUri(input) }}
-                                      style={[
-                                        styles.questionImagePreview,
-                                        input.imageOrientation === 'vertical'
-                                          ? styles.questionImagePreviewVertical
-                                          : styles.questionImagePreviewHorizontal,
-                                      ]}
-                                      resizeMode="contain"
-                                      onError={(e) => {
-                                        console.error('Error loading image:', e.nativeEvent.error);
-                                      }}
-                                    />
-                                    <TouchableOpacity
-                                      style={styles.cameraSmallButton}
-                                      onPress={() => {
-                                        updateInputField(section.id, subsection.id, input.id, 'value', '');
-                                        updateInputField(section.id, subsection.id, input.id, 'imageOrientation', null);
-                                        updateInput(section.id, subsection.id, input.id, { file_name: undefined });
-                                      }}
-                                    >
-                                      <Ionicons name="trash" size={16} color="#FF3B30" />
-                                      <ThemedText style={styles.cameraSmallButtonText}>Eliminar imagen</ThemedText>
-                                    </TouchableOpacity>
-                                  </View>
-                                ) : null}
-                                <TouchableOpacity
-                                  style={styles.cameraSmallButton}
-                                  onPress={() => handleAddPhoto(`${section.id}-${subsection.id}-${input.id}`)}
-                                >
-                                  <Ionicons name="camera" size={16} color="#000000" />
-                                  <ThemedText style={styles.cameraSmallButtonText}>
-                                    {(input.value && input.value.startsWith('data:image/')) || input.file_name ? 'Cambiar imagen' : 'Tomar foto'}
-                                  </ThemedText>
-                                </TouchableOpacity>
-                              </View>
-                            ) : (
-                              <View>
-                                {renderEvaluationInput(input, section.id, subsection.id)}
-                                {!section.isPredefined && (
+                        {subsection.inputs.map((input) => {
+                          // Verificar si este input de fecha debe mostrarse (solo si el select anterior es "Vigente")
+                          if (input.type === 'date' && input.id.includes('fecha-vencimiento')) {
+                            // Extraer el prefijo del ID (car-0, car-1, car-3)
+                            const prefixMatch = input.id.match(/^(car-\d+)/);
+                            if (prefixMatch) {
+                              const prefix = prefixMatch[1];
+                              // Buscar el input select correspondiente en la misma subsección
+                              const selectInput = subsection.inputs.find(inp =>
+                                inp.type === 'select' && inp.id === `${prefix}-cal`
+                              );
+                              // Si el select no es "Vigente", no mostrar el input de fecha
+                              if (!selectInput || selectInput.value !== 'Vigente') {
+                                return null;
+                              }
+                            }
+                          }
+                          return (
+                            <ThemedView key={input.id} style={styles.inputCard}>
+                              {input.title && input.title.trim() !== '' && input.title !== subsection.title && (
+                                <ThemedText style={styles.questionTitleList}>
+                                  {input.title}
+                                </ThemedText>
+                              )}
+                              {input.type === 'photo' || (input.type === 'text' && input.title?.toLowerCase().includes('foto')) ? (
+                                <View>
+                                  {((input.value && input.value.startsWith('data:image/')) || input.file_name) ? (
+                                    <View>
+                                      <Image
+                                        source={{ uri: getImageUri(input) }}
+                                        style={[
+                                          styles.questionImagePreview,
+                                          input.imageOrientation === 'vertical'
+                                            ? styles.questionImagePreviewVertical
+                                            : styles.questionImagePreviewHorizontal,
+                                        ]}
+                                        resizeMode="contain"
+                                        onError={(e) => {
+                                          console.error('Error loading image:', e.nativeEvent.error);
+                                        }}
+                                      />
+                                      <TouchableOpacity
+                                        style={styles.cameraSmallButton}
+                                        onPress={() => {
+                                          updateInputField(section.id, subsection.id, input.id, 'value', '');
+                                          updateInputField(section.id, subsection.id, input.id, 'imageOrientation', null);
+                                          updateInput(section.id, subsection.id, input.id, { file_name: undefined });
+                                        }}
+                                      >
+                                        <Ionicons name="trash" size={16} color="#FF3B30" />
+                                        <ThemedText style={styles.cameraSmallButtonText}>Eliminar imagen</ThemedText>
+                                      </TouchableOpacity>
+                                    </View>
+                                  ) : null}
                                   <TouchableOpacity
-                                    style={styles.deleteInputButtonSmall}
-                                    onPress={() => deleteInput(section.id, subsection.id, input.id)}
+                                    style={styles.cameraSmallButton}
+                                    onPress={() => handleAddPhoto(`${section.id}-${subsection.id}-${input.id}`)}
                                   >
-                                    <Ionicons name="close-circle" size={18} color="#FF3B30" />
+                                    <Ionicons name="camera" size={16} color="#000000" />
+                                    <ThemedText style={styles.cameraSmallButtonText}>
+                                      {(input.value && input.value.startsWith('data:image/')) || input.file_name ? 'Cambiar imagen' : 'Tomar foto'}
+                                    </ThemedText>
                                   </TouchableOpacity>
-                                )}
-                              </View>
-                            )}
-                          </ThemedView>
-                        ))}
+                                </View>
+                              ) : (
+                                <View>
+                                  {renderEvaluationInput(input, section.id, subsection.id)}
+                                  {!section.isPredefined && (
+                                    <TouchableOpacity
+                                      style={styles.deleteInputButtonSmall}
+                                      onPress={() => deleteInput(section.id, subsection.id, input.id)}
+                                    >
+                                      <Ionicons name="close-circle" size={18} color="#FF3B30" />
+                                    </TouchableOpacity>
+                                  )}
+                                </View>
+                              )}
+                            </ThemedView>
+                          );
+                        })}
                         {!section.isPredefined && (
                           <TouchableOpacity
                             style={styles.cameraSmallButton}
@@ -2847,14 +2976,36 @@ export default function ChecklistSupervisionScreen() {
                 </ThemedView>
               )}
 
+              {submitResponse && (
+                <ThemedView style={[styles.responseContainer, submitResponse.type === 'success' ? styles.responseSuccess : styles.responseError]}>
+                  <ThemedText style={styles.responseText}>
+                    {submitResponse.type === 'success' ? '✓ ' : '✗ '}
+                    {submitResponse.message}
+                  </ThemedText>
+                </ThemedView>
+              )}
               <ThemedView style={styles.formActions}>
-                <TouchableOpacity style={[styles.formActionButton, styles.formActionCancel]} onPress={cancelCreating}>
+                <TouchableOpacity
+                  style={[styles.formActionButton, styles.formActionCancel]}
+                  onPress={cancelCreating}
+                  disabled={isSubmitting}
+                >
                   <Ionicons name="close" size={18} color="#000" />
                   <ThemedText style={styles.formActionCancelText}>Cancelar</ThemedText>
                 </TouchableOpacity>
-                <TouchableOpacity style={[styles.formActionButton, styles.formActionSave]} onPress={handleSave}>
-                  <Ionicons name="save" size={18} color="#fff" />
-                  <ThemedText style={styles.formActionSaveText}>Guardar</ThemedText>
+                <TouchableOpacity
+                  style={[styles.formActionButton, styles.formActionSave, isSubmitting && styles.buttonDisabled]}
+                  onPress={handleSave}
+                  disabled={isSubmitting}
+                >
+                  {isSubmitting ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <>
+                      <Ionicons name="save" size={18} color="#fff" />
+                      <ThemedText style={styles.formActionSaveText}>Guardar</ThemedText>
+                    </>
+                  )}
                 </TouchableOpacity>
               </ThemedView>
             </ThemedView>
@@ -3369,6 +3520,28 @@ const styles = StyleSheet.create({
     backgroundColor: '#34C759',
   },
   formActionCancelText: { color: '#000', fontSize: 14, fontWeight: '700' },
+  buttonDisabled: {
+    opacity: 0.6,
+  },
+  responseContainer: {
+    padding: 12,
+    borderRadius: 6,
+    marginBottom: 12,
+  },
+  responseSuccess: {
+    backgroundColor: '#D4EDDA',
+    borderWidth: 1,
+    borderColor: '#C3E6CB',
+  },
+  responseError: {
+    backgroundColor: '#F8D7DA',
+    borderWidth: 1,
+    borderColor: '#F5C6CB',
+  },
+  responseText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
   formActionSaveText: { color: '#FFFFFF', fontSize: 14, fontWeight: '700' },
   loadingContainer: {
     padding: 40,

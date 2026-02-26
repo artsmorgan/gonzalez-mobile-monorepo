@@ -166,6 +166,8 @@ export default function OpeningClosingPositionScreen() {
   // Editing state
   const [editingRecord, setEditingRecord] = useState<EditingOpeningClosingPosition | null>(null);
   const [isCreating, setIsCreating] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitResponse, setSubmitResponse] = useState<{ type: 'success' | 'error', message: string } | null>(null);
 
   // Marca context (para division automática)
   const [marcaId, setMarcaId] = useState<number | null>(null);
@@ -1092,209 +1094,268 @@ export default function OpeningClosingPositionScreen() {
   const savePositionHandler = async () => {
     const currentMarca = await AsyncStorage.getItem('current_marca');
     if (!currentMarca) {
-      Alert.alert('Error', 'No se encontró la marca actual');
+      setSubmitResponse({ type: 'error', message: 'No se encontró la marca actual' });
       return;
     }
 
-    const currentMarcaData = JSON.parse(currentMarca);
+    setIsSubmitting(true);
+    setSubmitResponse(null);
 
-    Alert.alert(
-      'Confirmar',
-      '¿Estás seguro de que deseas guardar esta apertura-cierre de puesto?',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Confirmar',
-          onPress: async () => {
-            try {
-              if (!selectedClienteId || !selectedSucursalId || !selectedPuestoId || !selectedDivisionId) {
-                Alert.alert('Error', 'Debes seleccionar Cliente / División / Contrato / Sucursal / Puesto');
-                return;
-              }
-              if (!nombreRepresentanteCliente.trim() || !nombreRepresentanteEmpresaEntrante.trim() || !nombreRepresentanteEmpresaSaliente.trim()) {
-                Alert.alert('Error', 'Debes completar los nombres de representantes');
-                return;
-              }
-              const fCliente = getBase64Only(firmaRepresentanteCliente);
-              const fEntrante = getBase64Only(firmaRepresentanteEmpresaEntrante);
-              const fSaliente = getBase64Only(firmaRepresentanteEmpresaSaliente);
-              if (!fCliente || !fEntrante || !fSaliente) {
-                Alert.alert('Error', 'Debes registrar las 3 firmas dibujadas');
-                return;
-              }
-              if (!firmaResponsable) {
-                Alert.alert('Error', 'Debes registrar la firma del responsable (QR)');
-                return;
-              }
+    try {
+      const currentMarcaData = JSON.parse(currentMarca);
 
-              const actividadesStr = JSON.stringify(actividades || []);
-              const inventarioStr = JSON.stringify(isSeguridadDivision ? (inventario || []) : []);
+      if (!selectedClienteId || !selectedSucursalId || !selectedPuestoId || !selectedDivisionId) {
+        setSubmitResponse({ type: 'error', message: 'Debes seleccionar Cliente / División / Contrato / Sucursal / Puesto' });
+        setIsSubmitting(false);
+        return;
+      }
+      if (!nombreRepresentanteCliente.trim() || !nombreRepresentanteEmpresaEntrante.trim() || !nombreRepresentanteEmpresaSaliente.trim()) {
+        setSubmitResponse({ type: 'error', message: 'Debes completar los nombres de representantes' });
+        setIsSubmitting(false);
+        return;
+      }
+      const fCliente = getBase64Only(firmaRepresentanteCliente);
+      const fEntrante = getBase64Only(firmaRepresentanteEmpresaEntrante);
+      const fSaliente = getBase64Only(firmaRepresentanteEmpresaSaliente);
+      if (!fCliente || !fEntrante || !fSaliente) {
+        setSubmitResponse({ type: 'error', message: 'Debes registrar las 3 firmas dibujadas' });
+        setIsSubmitting(false);
+        return;
+      }
+      if (!firmaResponsable) {
+        setSubmitResponse({ type: 'error', message: 'Debes registrar la firma del responsable (QR)' });
+        setIsSubmitting(false);
+        return;
+      }
 
-              const imagenesStr =
-                imagenesLocal.length > 0
-                  ? JSON.stringify(
-                    imagenesLocal.map((img) => ({
-                      file_base64: img.base64,
-                      extension: img.extension,
-                      original_name: img.original_name,
-                    }))
-                  )
-                  : null;
+      const actividadesStr = JSON.stringify(actividades || []);
+      const inventarioStr = JSON.stringify(isSeguridadDivision ? (inventario || []) : []);
 
-              const requestData: any = {
-                marca_id: currentMarcaData.id,
-                cliente_id: selectedClienteId,
-                corpo_id: selectedSucursalId,
-                puesto_id: selectedPuestoId,
-                division_id: selectedDivisionId,
-                fecha: formatDate(fechaRealizado),
-                tipo,
-                nombre_representante_cliente: nombreRepresentanteCliente.trim(),
-                nombre_representante_empresa_entrante: nombreRepresentanteEmpresaEntrante.trim(),
-                nombre_representante_empresa_saliente: nombreRepresentanteEmpresaSaliente.trim(),
-                actividades: actividadesStr,
-                inventario: inventarioStr,
-                otras_observaciones: otrasObservaciones.trim() || null,
-                firma_representante_cliente: fCliente,
-                firma_representante_empresa_entrante: fEntrante,
-                firma_representante_empresa_saliente: fSaliente,
-                firma_responsable: firmaResponsable,
-                ...(imagenesStr ? { imagenes: imagenesStr } : {}),
-              };
+      const imagenesStr =
+        imagenesLocal.length > 0
+          ? JSON.stringify(
+            imagenesLocal.map((img) => ({
+              file_base64: img.base64,
+              extension: img.extension,
+              original_name: img.original_name,
+            }))
+          )
+          : null;
 
-              const isConnected = await getConnectionStatus();
+      const requestData: any = {
+        marca_id: currentMarcaData.id,
+        cliente_id: selectedClienteId,
+        corpo_id: selectedSucursalId,
+        puesto_id: selectedPuestoId,
+        division_id: selectedDivisionId,
+        fecha: formatDate(fechaRealizado),
+        tipo,
+        nombre_representante_cliente: nombreRepresentanteCliente.trim(),
+        nombre_representante_empresa_entrante: nombreRepresentanteEmpresaEntrante.trim(),
+        nombre_representante_empresa_saliente: nombreRepresentanteEmpresaSaliente.trim(),
+        actividades: actividadesStr,
+        inventario: inventarioStr,
+        otras_observaciones: otrasObservaciones.trim() || null,
+        firma_representante_cliente: fCliente,
+        firma_representante_empresa_entrante: fEntrante,
+        firma_representante_empresa_saliente: fSaliente,
+        firma_responsable: firmaResponsable,
+        ...(imagenesStr ? { imagenes: imagenesStr } : {}),
+      };
 
-              if (isConnected) {
-                const result = await createOpeningClosingPosition({
-                  requestData,
-                  refreshAccessToken,
-                  logout,
-                });
+      const isConnected = await getConnectionStatus();
 
-                if (result.status) {
-                  Alert.alert('Éxito', 'Apertura-Cierre de Puesto guardado correctamente');
-                  cancelCreating();
-                  fetchPositions();
-                } else {
-                  Alert.alert('Error', result.message || 'Error al guardar la apertura-cierre de puesto');
-                }
-              } else {
-                const localId = generateRandomId();
+      if (isConnected) {
+        const result = await createOpeningClosingPosition({
+          requestData,
+          refreshAccessToken,
+          logout,
+        });
 
-                const actionsStr = await AsyncStorage.getItem('evaluations_actions');
-                const actions = actionsStr ? JSON.parse(actionsStr) : [];
-                actions.push({
-                  id: localId,
-                  action: 'create',
-                  type: 'opening_closing_position',
-                  payload: requestData,
-                  synced: false,
-                });
-                await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+        if (result.status) {
+          setSubmitResponse({ type: 'success', message: result.message || 'Apertura-Cierre de Puesto guardado correctamente' });
+          setTimeout(() => {
+            cancelCreating();
+            fetchPositions();
+          }, 2000);
+        } else {
+          setSubmitResponse({ type: 'error', message: result.message || 'Error al guardar la apertura-cierre de puesto' });
+        }
+      } else {
+        const localId = generateRandomId();
 
-                const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                const cache = cacheStr ? JSON.parse(cacheStr) : [];
+        const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+        const actions = actionsStr ? JSON.parse(actionsStr) : [];
+        actions.push({
+          id: localId,
+          action: 'create',
+          type: 'opening_closing_position',
+          payload: requestData,
+          synced: false,
+        });
+        await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
 
-                const newRecordCache: OpeningClosingPosition = {
-                  id: null,
-                  id_local: localId,
-                  cliente_id: selectedClienteId,
-                  corpo_id: selectedSucursalId,
-                  puesto_id: selectedPuestoId,
-                  division_id: selectedDivisionId,
-                  fecha: formatDate(fechaRealizado),
-                  tipo,
-                  nombre_representante_cliente: nombreRepresentanteCliente.trim(),
-                  nombre_representante_empresa_entrante: nombreRepresentanteEmpresaEntrante.trim(),
-                  nombre_representante_empresa_saliente: nombreRepresentanteEmpresaSaliente.trim(),
-                  actividades: actividadesStr,
-                  inventario: inventarioStr,
-                  otras_observaciones: otrasObservaciones.trim() || null,
-                  firma_representante_cliente: fCliente,
-                  firma_representante_empresa_entrante: fEntrante,
-                  firma_representante_empresa_saliente: fSaliente,
-                  firma_responsable: firmaResponsable,
-                  cliente_nombre: selectedClienteNode?.nombre || null,
-                  corpo_nombre: selectedSucursalNode?.nombre || null,
-                  puesto_nombre: (selectedSucursalNode?.puestos || []).find((p) => p.id === selectedPuestoId)?.nombre || null,
-                  division_nombre: selectedDivisionNode?.nombre || null,
-                  images_local: imagenesLocal,
-                  created_at: new Date().toISOString(),
-                  synced: false,
-                };
+        const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+        const cache = cacheStr ? JSON.parse(cacheStr) : [];
 
-                cache.push({ ...newRecordCache, type: 'opening_closing_position' });
-                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(cache));
+        const newRecordCache: OpeningClosingPosition = {
+          id: null,
+          id_local: localId,
+          cliente_id: selectedClienteId,
+          corpo_id: selectedSucursalId,
+          puesto_id: selectedPuestoId,
+          division_id: selectedDivisionId,
+          fecha: formatDate(fechaRealizado),
+          tipo,
+          nombre_representante_cliente: nombreRepresentanteCliente.trim(),
+          nombre_representante_empresa_entrante: nombreRepresentanteEmpresaEntrante.trim(),
+          nombre_representante_empresa_saliente: nombreRepresentanteEmpresaSaliente.trim(),
+          actividades: actividadesStr,
+          inventario: inventarioStr,
+          otras_observaciones: otrasObservaciones.trim() || null,
+          firma_representante_cliente: fCliente,
+          firma_representante_empresa_entrante: fEntrante,
+          firma_representante_empresa_saliente: fSaliente,
+          firma_responsable: firmaResponsable,
+          cliente_nombre: selectedClienteNode?.nombre || null,
+          corpo_nombre: selectedSucursalNode?.nombre || null,
+          puesto_nombre: (selectedSucursalNode?.puestos || []).find((p) => p.id === selectedPuestoId)?.nombre || null,
+          division_nombre: selectedDivisionNode?.nombre || null,
+          images_local: imagenesLocal,
+          created_at: new Date().toISOString(),
+          synced: false,
+        };
 
-                Alert.alert('Modo Offline', 'Apertura-Cierre de Puesto registrado localmente. Se sincronizará cuando haya conexión.');
-                cancelCreating();
-                fetchPositions();
-              }
-            } catch (err) {
-              console.error('Error saving position:', err);
-              Alert.alert('Error', 'No se pudo guardar la apertura-cierre de puesto');
-            }
-          },
-        },
-      ]
-    );
+        cache.push({ ...newRecordCache, type: 'opening_closing_position' });
+        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(cache));
+
+        setSubmitResponse({ type: 'success', message: 'Apertura-Cierre de Puesto registrado localmente. Se sincronizará cuando haya conexión.' });
+        setTimeout(() => {
+          cancelCreating();
+          fetchPositions();
+        }, 2000);
+      }
+    } catch (err) {
+      console.error('Error saving position:', err);
+      setSubmitResponse({ type: 'error', message: 'No se pudo guardar la apertura-cierre de puesto' });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const updatePositionHandler = async () => {
     if (!editingRecord) return;
 
-    const recordId = editingRecord.id || editingRecord.id_local;
-    if (!recordId) {
-      Alert.alert('Error', 'ID de registro no encontrado para actualizar');
-      return;
-    }
+    setIsSubmitting(true);
+    setSubmitResponse(null);
 
-    const recordIdStr = typeof recordId === 'number' ? String(recordId) : recordId;
+    try {
+      const recordId = editingRecord.id || editingRecord.id_local;
+      if (!recordId) {
+        setSubmitResponse({ type: 'error', message: 'ID de registro no encontrado para actualizar' });
+        setIsSubmitting(false);
+        return;
+      }
 
-    Alert.alert(
-      'Confirmar',
-      '¿Estás seguro de que deseas actualizar esta apertura-cierre de puesto?',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Confirmar',
-          onPress: async () => {
-            try {
-              if (!selectedClienteId || !selectedSucursalId || !selectedPuestoId || !selectedDivisionId) {
-                Alert.alert('Error', 'Debes seleccionar Cliente / División / Contrato / Sucursal / Puesto');
-                return;
-              }
-              if (!nombreRepresentanteCliente.trim() || !nombreRepresentanteEmpresaEntrante.trim() || !nombreRepresentanteEmpresaSaliente.trim()) {
-                Alert.alert('Error', 'Debes completar los nombres de representantes');
-                return;
-              }
-              const fCliente = getBase64Only(firmaRepresentanteCliente);
-              const fEntrante = getBase64Only(firmaRepresentanteEmpresaEntrante);
-              const fSaliente = getBase64Only(firmaRepresentanteEmpresaSaliente);
-              if (!fCliente || !fEntrante || !fSaliente) {
-                Alert.alert('Error', 'Debes registrar las 3 firmas dibujadas');
-                return;
-              }
-              if (!firmaResponsable) {
-                Alert.alert('Error', 'Debes registrar la firma del responsable (QR)');
-                return;
-              }
+      const recordIdStr = typeof recordId === 'number' ? String(recordId) : recordId;
 
-              const actividadesStr = JSON.stringify(actividades || []);
-              const inventarioStr = JSON.stringify(isSeguridadDivision ? (inventario || []) : []);
+      if (!selectedClienteId || !selectedSucursalId || !selectedPuestoId || !selectedDivisionId) {
+        setSubmitResponse({ type: 'error', message: 'Debes seleccionar Cliente / División / Contrato / Sucursal / Puesto' });
+        setIsSubmitting(false);
+        return;
+      }
+      if (!nombreRepresentanteCliente.trim() || !nombreRepresentanteEmpresaEntrante.trim() || !nombreRepresentanteEmpresaSaliente.trim()) {
+        setSubmitResponse({ type: 'error', message: 'Debes completar los nombres de representantes' });
+        setIsSubmitting(false);
+        return;
+      }
+      const fCliente = getBase64Only(firmaRepresentanteCliente);
+      const fEntrante = getBase64Only(firmaRepresentanteEmpresaEntrante);
+      const fSaliente = getBase64Only(firmaRepresentanteEmpresaSaliente);
+      if (!fCliente || !fEntrante || !fSaliente) {
+        setSubmitResponse({ type: 'error', message: 'Debes registrar las 3 firmas dibujadas' });
+        setIsSubmitting(false);
+        return;
+      }
+      if (!firmaResponsable) {
+        setSubmitResponse({ type: 'error', message: 'Debes registrar la firma del responsable (QR)' });
+        setIsSubmitting(false);
+        return;
+      }
 
-              const imagenesStr =
-                imagenesLocal.length > 0
-                  ? JSON.stringify(
-                    imagenesLocal.map((img) => ({
-                      file_base64: img.base64,
-                      extension: img.extension,
-                      original_name: img.original_name,
-                    }))
-                  )
-                  : null;
+      const actividadesStr = JSON.stringify(actividades || []);
+      const inventarioStr = JSON.stringify(isSeguridadDivision ? (inventario || []) : []);
 
-              const requestData: any = {
+      const imagenesStr =
+        imagenesLocal.length > 0
+          ? JSON.stringify(
+            imagenesLocal.map((img) => ({
+              file_base64: img.base64,
+              extension: img.extension,
+              original_name: img.original_name,
+            }))
+          )
+          : null;
+
+      const requestData: any = {
+        cliente_id: selectedClienteId,
+        corpo_id: selectedSucursalId,
+        puesto_id: selectedPuestoId,
+        division_id: selectedDivisionId,
+        fecha: formatDate(fechaRealizado),
+        tipo,
+        nombre_representante_cliente: nombreRepresentanteCliente.trim(),
+        nombre_representante_empresa_entrante: nombreRepresentanteEmpresaEntrante.trim(),
+        nombre_representante_empresa_saliente: nombreRepresentanteEmpresaSaliente.trim(),
+        actividades: actividadesStr,
+        inventario: inventarioStr,
+        otras_observaciones: otrasObservaciones.trim() || null,
+        firma_representante_cliente: fCliente,
+        firma_representante_empresa_entrante: fEntrante,
+        firma_representante_empresa_saliente: fSaliente,
+        firma_responsable: firmaResponsable,
+        ...(imagenesStr ? { imagenes: imagenesStr } : {}),
+        ...(deletedRemoteImageIds.length > 0 ? { delete_imagenes: JSON.stringify(deletedRemoteImageIds) } : {}),
+      };
+
+      const isConnected = await getConnectionStatus();
+
+      if (isConnected) {
+        const result = await updateOpeningClosingPosition({
+          id: recordIdStr,
+          requestData,
+          refreshAccessToken,
+          logout,
+        });
+
+        if (result.status) {
+          setSubmitResponse({ type: 'success', message: result.message || 'Apertura-Cierre de Puesto actualizado correctamente' });
+          setTimeout(() => {
+            cancelEditing();
+            fetchPositions();
+          }, 2000);
+        } else {
+          setSubmitResponse({ type: 'error', message: result.message || 'Error al actualizar la apertura-cierre de puesto' });
+        }
+      } else {
+        const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+        const actions = actionsStr ? JSON.parse(actionsStr) : [];
+        actions.push({
+          id: recordIdStr,
+          action: 'update',
+          type: 'opening_closing_position',
+          payload: requestData,
+          synced: false,
+        });
+        await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+
+        const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+        if (cacheStr) {
+          const cache = JSON.parse(cacheStr);
+          const updatedCache = cache.map((item: any) => {
+            if ((item.id === recordIdStr || String(item.id) === recordIdStr || item.id_local === recordIdStr) && item.type === 'opening_closing_position') {
+              return {
+                ...item,
                 cliente_id: selectedClienteId,
                 corpo_id: selectedSucursalId,
                 puesto_id: selectedPuestoId,
@@ -1304,95 +1365,39 @@ export default function OpeningClosingPositionScreen() {
                 nombre_representante_cliente: nombreRepresentanteCliente.trim(),
                 nombre_representante_empresa_entrante: nombreRepresentanteEmpresaEntrante.trim(),
                 nombre_representante_empresa_saliente: nombreRepresentanteEmpresaSaliente.trim(),
-                actividades: actividadesStr,
-                inventario: inventarioStr,
+                actividades: JSON.stringify(actividades || []),
+                inventario: JSON.stringify(isSeguridadDivision ? (inventario || []) : []),
                 otras_observaciones: otrasObservaciones.trim() || null,
-                firma_representante_cliente: fCliente,
-                firma_representante_empresa_entrante: fEntrante,
-                firma_representante_empresa_saliente: fSaliente,
+                firma_representante_cliente: getBase64Only(firmaRepresentanteCliente),
+                firma_representante_empresa_entrante: getBase64Only(firmaRepresentanteEmpresaEntrante),
+                firma_representante_empresa_saliente: getBase64Only(firmaRepresentanteEmpresaSaliente),
                 firma_responsable: firmaResponsable,
-                ...(imagenesStr ? { imagenes: imagenesStr } : {}),
-                ...(deletedRemoteImageIds.length > 0 ? { delete_imagenes: JSON.stringify(deletedRemoteImageIds) } : {}),
+                cliente_nombre: selectedClienteNode?.nombre || item.cliente_nombre || null,
+                corpo_nombre: selectedSucursalNode?.nombre || item.corpo_nombre || null,
+                puesto_nombre: (selectedSucursalNode?.puestos || []).find((p) => p.id === selectedPuestoId)?.nombre || item.puesto_nombre || null,
+                division_nombre: selectedDivisionNode?.nombre || item.division_nombre || null,
+                images_local: imagenesLocal,
+                images: imagenesRemote,
+                synced: false,
               };
-
-              const isConnected = await getConnectionStatus();
-
-              if (isConnected) {
-                const result = await updateOpeningClosingPosition({
-                  id: recordIdStr,
-                  requestData,
-                  refreshAccessToken,
-                  logout,
-                });
-
-                if (result.status) {
-                  Alert.alert('Éxito', 'Apertura-Cierre de Puesto actualizado correctamente');
-                  cancelEditing();
-                  fetchPositions();
-                } else {
-                  Alert.alert('Error', result.message || 'Error al actualizar la apertura-cierre de puesto');
-                }
-              } else {
-                const actionsStr = await AsyncStorage.getItem('evaluations_actions');
-                const actions = actionsStr ? JSON.parse(actionsStr) : [];
-                actions.push({
-                  id: recordIdStr,
-                  action: 'update',
-                  type: 'opening_closing_position',
-                  payload: requestData,
-                  synced: false,
-                });
-                await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
-
-                const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                if (cacheStr) {
-                  const cache = JSON.parse(cacheStr);
-                  const updatedCache = cache.map((item: any) => {
-                    if ((item.id === recordIdStr || String(item.id) === recordIdStr || item.id_local === recordIdStr) && item.type === 'opening_closing_position') {
-                      return {
-                        ...item,
-                        cliente_id: selectedClienteId,
-                        corpo_id: selectedSucursalId,
-                        puesto_id: selectedPuestoId,
-                        division_id: selectedDivisionId,
-                        fecha: formatDate(fechaRealizado),
-                        tipo,
-                        nombre_representante_cliente: nombreRepresentanteCliente.trim(),
-                        nombre_representante_empresa_entrante: nombreRepresentanteEmpresaEntrante.trim(),
-                        nombre_representante_empresa_saliente: nombreRepresentanteEmpresaSaliente.trim(),
-                        actividades: JSON.stringify(actividades || []),
-                        inventario: JSON.stringify(isSeguridadDivision ? (inventario || []) : []),
-                        otras_observaciones: otrasObservaciones.trim() || null,
-                        firma_representante_cliente: getBase64Only(firmaRepresentanteCliente),
-                        firma_representante_empresa_entrante: getBase64Only(firmaRepresentanteEmpresaEntrante),
-                        firma_representante_empresa_saliente: getBase64Only(firmaRepresentanteEmpresaSaliente),
-                        firma_responsable: firmaResponsable,
-                        cliente_nombre: selectedClienteNode?.nombre || item.cliente_nombre || null,
-                        corpo_nombre: selectedSucursalNode?.nombre || item.corpo_nombre || null,
-                        puesto_nombre: (selectedSucursalNode?.puestos || []).find((p) => p.id === selectedPuestoId)?.nombre || item.puesto_nombre || null,
-                        division_nombre: selectedDivisionNode?.nombre || item.division_nombre || null,
-                        images_local: imagenesLocal,
-                        images: imagenesRemote,
-                        synced: false,
-                      };
-                    }
-                    return item;
-                  });
-                  await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                }
-
-                Alert.alert('Modo Offline', 'Apertura-Cierre de Puesto actualizado localmente. Se sincronizará cuando haya conexión.');
-                cancelEditing();
-                fetchPositions();
-              }
-            } catch (err) {
-              console.error('Error updating position:', err);
-              Alert.alert('Error', 'No se pudo actualizar la apertura-cierre de puesto');
             }
-          },
-        },
-      ]
-    );
+            return item;
+          });
+          await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+        }
+
+        setSubmitResponse({ type: 'success', message: 'Apertura-Cierre de Puesto actualizado localmente. Se sincronizará cuando haya conexión.' });
+        setTimeout(() => {
+          cancelEditing();
+          fetchPositions();
+        }, 2000);
+      }
+    } catch (err) {
+      console.error('Error updating position:', err);
+      setSubmitResponse({ type: 'error', message: 'No se pudo actualizar la apertura-cierre de puesto' });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const deletePositionHandler = async (record: OpeningClosingPosition) => {
@@ -2405,14 +2410,29 @@ export default function OpeningClosingPositionScreen() {
                   {getActionIcon('cancel')}
                   <ThemedText style={[styles.actionButtonText, styles.actionButtonTextDark]}>Cancelar</ThemedText>
                 </TouchableOpacity>
+                {submitResponse && (
+                  <ThemedView style={[styles.responseContainer, submitResponse.type === 'success' ? styles.responseSuccess : styles.responseError]}>
+                    <ThemedText style={styles.responseText}>
+                      {submitResponse.type === 'success' ? '✓ ' : '✗ '}
+                      {submitResponse.message}
+                    </ThemedText>
+                  </ThemedView>
+                )}
                 <TouchableOpacity
-                  style={[styles.actionButton, styles.saveButton]}
+                  style={[styles.actionButton, styles.saveButton, isSubmitting && styles.buttonDisabled]}
                   onPress={editingRecord ? updatePositionHandler : savePositionHandler}
+                  disabled={isSubmitting}
                 >
-                  {getActionIcon('confirm')}
-                  <ThemedText style={[styles.actionButtonText, styles.actionButtonTextLight]}>
-                    {editingRecord ? 'Actualizar' : 'Guardar'}
-                  </ThemedText>
+                  {isSubmitting ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <>
+                      {getActionIcon('confirm')}
+                      <ThemedText style={[styles.actionButtonText, styles.actionButtonTextLight]}>
+                        {editingRecord ? 'Actualizar' : 'Guardar'}
+                      </ThemedText>
+                    </>
+                  )}
                 </TouchableOpacity>
               </ThemedView>
             </ThemedView>
@@ -3015,6 +3035,28 @@ const styles = StyleSheet.create({
   actionButtonText: { fontSize: 16, fontWeight: '800' },
   actionButtonTextDark: { color: '#000000' },
   actionButtonTextLight: { color: '#FFFFFF' },
+  buttonDisabled: {
+    opacity: 0.6,
+  },
+  responseContainer: {
+    padding: 12,
+    borderRadius: 6,
+    marginBottom: 12,
+  },
+  responseSuccess: {
+    backgroundColor: '#D4EDDA',
+    borderWidth: 1,
+    borderColor: '#C3E6CB',
+  },
+  responseError: {
+    backgroundColor: '#F8D7DA',
+    borderWidth: 1,
+    borderColor: '#F5C6CB',
+  },
+  responseText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
   listSection: {
     width: '100%',
   },

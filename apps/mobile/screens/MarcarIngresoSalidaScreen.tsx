@@ -74,6 +74,10 @@ interface AttendanceSuccessResponse {
       id: number;
       nombre: string;
       tiene_relevo: boolean;
+      ubicacion: {
+        lat: number | null;
+        lng: number | null;
+      };
     };
     plaza: {
       id: number;
@@ -297,8 +301,8 @@ export default function MarcarIngresoSalidaScreen() {
         }
       }
 
-      if (marca_send && marca_send.corpo && marca_send.corpo.ubicacion && marca_send.corpo.ubicacion.lat && marca_send.corpo.ubicacion.lng) {
-        const distance = getDistanceFromLatLonInMeters(lat, long, marca_send.corpo.ubicacion.lat, marca_send.corpo.ubicacion.lng);
+      if (marca_send && marca_send.puesto && marca_send.puesto.ubicacion && marca_send.puesto.ubicacion.lat && marca_send.puesto.ubicacion.lng) {
+        const distance = getDistanceFromLatLonInMeters(lat, long, marca_send.puesto.ubicacion.lat, marca_send.puesto.ubicacion.lng);
         if (distance > 50) {
           result = false;
           marca_send = null;
@@ -491,6 +495,7 @@ export default function MarcarIngresoSalidaScreen() {
               getActivities(attendanceData.marca.id),
               getNotes(attendanceData.marca.id),
               getCategories(),
+              getTiposProductoNoConforme(),
               getTipoActivo(),
               getEmployeesCorpo(attendanceData.marca.corpo.id),
               getIncidentsClassifications(),
@@ -502,6 +507,8 @@ export default function MarcarIngresoSalidaScreen() {
               getArticulos(),
               getJobManuals(attendanceData.marca.id),
               getLlaves(attendanceData.marca.id),
+              getLlaveros(attendanceData.marca.id),
+              getCategoriesMantenimiento(),
               getMainStructure()
             ]);
           }
@@ -672,6 +679,35 @@ export default function MarcarIngresoSalidaScreen() {
       await AsyncStorage.setItem('llaves_cache', JSON.stringify(data.data));
     }
   }
+  
+  const getLlaveros = async (marcaId: number) => {
+    // Eliminar actions
+    await AsyncStorage.removeItem('llaveros_actions');
+    await AsyncStorage.removeItem('llaveros_cache');
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+    const response = await authedFetch({
+      url: `${apiUrl}/api/llaveros?m=${marcaId}`,
+      init: {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      },
+      refreshAccessToken,
+      logout,
+    });
+    if (!response) return;
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status} getLlaves`);
+    }
+    const data = await response.json();
+    if (data.status) {
+      await AsyncStorage.setItem('llaveros_cache', JSON.stringify(data.data));
+    }
+  }
 
   const getTrainings = async (marcaId: number) => {
     // Eliminar actions
@@ -756,6 +792,61 @@ export default function MarcarIngresoSalidaScreen() {
     const data = await response.json();
     if (data.status) {
       await AsyncStorage.setItem('categories_cache', JSON.stringify(data.categories));
+    }
+  }
+
+  const getCategoriesMantenimiento = async () => {
+    await AsyncStorage.removeItem('categoria_mantenimiento_cache');
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+    const response = await authedFetch({
+      url: `${apiUrl}/api/categoria-mantenimiento`,
+      init: {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      },
+      refreshAccessToken,
+      logout,
+    });
+    if (!response) return;
+    console.log("getCategoriesMantenimiento");
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status} getCategoriesMantenimiento`);
+    }
+    const data = await response.json();
+    if (data.status) {
+      await AsyncStorage.setItem('categoria_mantenimiento_cache', JSON.stringify(data.categorias));
+    }
+  }
+
+  const getTiposProductoNoConforme = async () => {
+    await AsyncStorage.removeItem('tipos_producto_no_conforme_cache');
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+    const response = await authedFetch({
+      url: `${apiUrl}/api/non-conforming-product/types`,
+      init: {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      },
+      refreshAccessToken,
+      logout,
+    });
+    if (!response) return;
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status} getTiposProductoNoConforme`);
+    }
+    const data = await response.json();
+    if (data.status) {
+      await AsyncStorage.setItem('tipos_producto_no_conforme_cache', JSON.stringify(data.data || []));
     }
   }
 
@@ -1197,6 +1288,7 @@ export default function MarcarIngresoSalidaScreen() {
 
   const getLunchTimeConfig = async (marcaId: number) => {
     await AsyncStorage.removeItem('lunch_time_config');
+    await AsyncStorage.setItem('alert_lunch_time', 'false');
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) {
       throw new Error('Server URL not configured');
@@ -1222,6 +1314,7 @@ export default function MarcarIngresoSalidaScreen() {
 
     if (data.status) {
       await AsyncStorage.setItem('lunch_time_config', JSON.stringify(data));
+      await AsyncStorage.setItem('alert_lunch_time', 'true');
     }
   }
 

@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../../../utils/verifyToken";
-import { prisma } from "../../../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
+import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 
 export async function POST(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
@@ -58,8 +57,9 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
                 break;
         }
 
-        const newMarca = await prisma.c_marca_dia.create({
-            data: {
+        const newMarca = await callDynamicPrisma({
+            req,
+            data: { action: "POST", table: "c_marca_dia", operation: "create", data: {
                 fecha: toZonedTime(new Date(), "America/Costa_Rica"),
                 cliente_id: info_laboral.cliente_id,
                 contrato_id: info_laboral.contrato_id,
@@ -79,7 +79,7 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
                 is_reposicion_de_horas: false,
                 teorico: false,
                 tipo_turno: tipo_turno,
-            }
+            }}
         });
 
         return NextResponse.json({ status: true, message: "Marca creada correctamente", data: newMarca }, { status: 200 });

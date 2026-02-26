@@ -127,12 +127,21 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         }),
       });
 
-      if (!response.ok) {
-        const responseData = await response.json();
-        return { success: false, error: responseData.message };
+      let responseData;
+      try {
+        const responseText = await response.text();
+        if (!responseText || responseText.trim().length === 0) {
+          return { success: false, error: 'Respuesta vacía del servidor' };
+        }
+        responseData = JSON.parse(responseText);
+      } catch (parseError) {
+        console.error('Error parsing login response:', parseError);
+        return { success: false, error: 'Error al procesar la respuesta del servidor' };
       }
 
-      const responseData = await response.json();
+      if (!response.ok) {
+        return { success: false, error: responseData?.message || 'Error de autenticación' };
+      }
 
       if (!responseData.status) {
         return { success: false, passwordExpired: responseData.passwordExpired || false, error: responseData.message || 'Error de autenticación' };

@@ -22,8 +22,11 @@ interface CreateActivityParams {
 interface UpdateRevisionEquipoParams {
   requestData: {
     e: number;
+    articulo_id: number;
     es_correcto: boolean;
     motivo_incorrecto: string;
+    estado?: 'Bueno' | 'Malo' | 'No está';
+    cantidad_real?: number;
   };
   revisionEquipoId: number;
   refreshAccessToken: () => Promise<boolean>;

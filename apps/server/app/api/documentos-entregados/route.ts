@@ -1,8 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../utils/verifyToken";
-import { prisma } from "../../../utils/prismaClient";
-import { getUserMarca } from "../../../utils/getUserMarca";
+import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
 import { toZonedTime } from "date-fns-tz";
 
@@ -16,7 +15,7 @@ function parseDateOnly(value: any): Date | null {
 
 export async function GET(req: NextRequest) {
   try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
+    const { valid, expired, message } = await verifyAccessTokenByApi(req);
     if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
     const marcaIdStr = req.nextUrl.searchParams.get("m");
@@ -24,34 +23,100 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
     }
 
-    const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(marcaIdStr) } });
-    if (!marcaDia) {
+    const marcaDia = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "c_marca_dia",
+        operation: "findUnique",
+        where: { id: parseInt(marcaIdStr) },
+      },
+    });
+    if (!marcaDia || !marcaDia.id) {
       return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
     }
     if (!marcaDia.empleadoFijo_id) {
       return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 200 });
     }
 
-    const lastMarca = await getUserMarca(marcaDia.empleadoFijo_id);
-    if (!lastMarca) {
+    // Obtener última marca usando callDynamicPrisma directamente
+    const now = toZonedTime(new Date(), "America/Costa_Rica");
+    const nowPlus15 = new Date(now.getTime() + 15 * 60 * 1000);
+    const currentDate = new Date(now.toISOString().split("T")[0]);
+    const currentTime = new Date("1970-01-01 " + now.toTimeString().slice(0, 8));
+
+    const proximo = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "c_marca_dia",
+        operation: "findFirst",
+        where: {
+          empleadoFijo_id: marcaDia.empleadoFijo_id,
+          OR: [
+            { fecha: { gt: now } },
+            {
+              fecha: { equals: currentDate },
+              hora_inicio: { gte: currentTime },
+            },
+          ],
+        },
+        orderBy: [{ fecha: "asc" }, { hora_inicio: "asc" }],
+      },
+    });
+
+    let lastMarca = null;
+    if (proximo && proximo.id) {
+      const proximoFecha = proximo.fecha instanceof Date ? proximo.fecha : new Date(proximo.fecha);
+      const proximoHoraInicio = proximo.hora_inicio instanceof Date ? proximo.hora_inicio : (proximo.hora_inicio ? new Date("1970-01-01T" + String(proximo.hora_inicio)) : null);
+      if (proximoHoraInicio && !isNaN(proximoHoraInicio.getTime())) {
+        const proximoDateTime = new Date(`${proximoFecha.toISOString().split("T")[0]}T${proximoHoraInicio.toTimeString().slice(0, 8)}`);
+        if (!isNaN(proximoDateTime.getTime()) && proximoDateTime <= nowPlus15) {
+          lastMarca = proximo;
+        }
+      }
+    }
+
+    if (!lastMarca || !lastMarca.id) {
+      const ultimo = await callDynamicPrisma({
+        req,
+        data: {
+          action: "GET",
+          table: "c_marca_dia",
+          operation: "findFirst",
+          where: { empleadoFijo_id: marcaDia.empleadoFijo_id },
+          orderBy: [{ fecha: "desc" }, { hora_inicio: "desc" }],
+        },
+      });
+      lastMarca = ultimo;
+    }
+
+    if (!lastMarca || !lastMarca.id) {
       return NextResponse.json({ status: false, message: "No se encontró la última marca" }, { status: 200 });
     }
     if (marcaDia.id !== lastMarca.id) {
       return NextResponse.json({ status: false, message: "Hay una nueva marca más reciente" }, { status: 200 });
     }
 
-    const rows = await prisma.e_control_documento_entregado_cliente.findMany({
-      where: {
-        corpo_id: marcaDia.corpo_id,
+    const rows = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "e_control_documento_entregado_cliente",
+        operation: "findMany",
+        where: {
+          corpo_id: marcaDia.corpo_id,
+        },
+        orderBy: { id: "desc" },
       },
-      orderBy: { id: "desc" },
     });
 
-    const mapped = rows.map((r) => ({
+    const rowsArray = Array.isArray(rows) ? rows : [];
+    const mapped = rowsArray.map((r: any) => ({
       id: r.id,
       cliente_id: r.cliente_id,
       corpo_id: r.corpo_id,
-      fecha: r.fecha,
+      fecha: r.fecha instanceof Date ? r.fecha.toISOString() : r.fecha,
       nombre_oficial_entrega: r.nombre_oficial_entrega,
       nombre_oficial_recibe: r.nombre_oficial_recibe,
       tipo_documento: r.tipo_documento,
@@ -71,7 +136,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
     if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
     const body = await req.json();
@@ -99,8 +164,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 200 });
     }
 
-    const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(String(marca_id)) } });
-    if (!marcaDia) {
+    const marcaDia = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "c_marca_dia",
+        operation: "findUnique",
+        where: { id: parseInt(String(marca_id)) },
+      },
+    });
+    if (!marcaDia || !marcaDia.id) {
       return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
     }
 
@@ -109,70 +182,105 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ status: false, message: "Fecha inválida" }, { status: 200 });
     }
 
-    const created = await prisma.e_control_documento_entregado_cliente.create({
+    const created = await callDynamicPrisma({
+      req,
       data: {
-        cliente_id: marcaDia.cliente_id,
-        corpo_id: marcaDia.corpo_id,
-        fecha: fechaDate,
-        nombre_oficial_entrega: String(nombre_oficial_entrega),
-        nombre_oficial_recibe: String(nombre_oficial_recibe),
-        tipo_documento: String(tipo_documento),
-        descripcion: String(descripcion),
-        firma_representante_cliente: String(firma_representante_cliente),
-        firma_responsable: String(firma_responsable),
+        action: "POST",
+        table: "e_control_documento_entregado_cliente",
+        data: {
+          cliente_id: marcaDia.cliente_id,
+          corpo_id: marcaDia.corpo_id,
+          fecha: fechaDate.toISOString(),
+          nombre_oficial_entrega: String(nombre_oficial_entrega),
+          nombre_oficial_recibe: String(nombre_oficial_recibe),
+          tipo_documento: String(tipo_documento),
+          descripcion: String(descripcion),
+          firma_representante_cliente: String(firma_representante_cliente),
+          firma_responsable: String(firma_responsable),
+        },
       },
     });
 
-    if (created) {
-      const payload = (req.body as any)?.payload;
+    if (created && created.id) {
       let empleadoNombre = "Desconocido";
-      if (payload.id) {
-        const empleado = await prisma.c_empleado.findUnique({ where: { id: payload.id } });
-        if (empleado) {
-          empleadoNombre = empleado.nombre + " " + empleado.primer_apellido + " " + empleado.segundo_apellido;
+      const empleadoId = payload?.id || payload?.empleadoId;
+      if (empleadoId) {
+        const empleado = await callDynamicPrisma({
+          req,
+          data: {
+            action: "GET",
+            table: "c_empleado",
+            operation: "findUnique",
+            where: { id: typeof empleadoId === 'number' ? empleadoId : parseInt(String(empleadoId)) },
+          },
+        });
+        if (empleado && empleado.id) {
+          empleadoNombre = (empleado.nombre || "") + " " + (empleado.primer_apellido || "") + " " + (empleado.segundo_apellido || "");
         }
       }
       let sucursalNombre = "Desconocida";
       let clienteNombre = "Desconocido";
       if (marcaDia.cliente_id) {
-        const cliente = await prisma.e_estructura_cliente.findUnique({ where: { id: marcaDia.cliente_id } });
-        if (cliente) {
-          clienteNombre = cliente.nombre;
+        const cliente = await callDynamicPrisma({
+          req,
+          data: {
+            action: "GET",
+            table: "e_estructura_cliente",
+            operation: "findUnique",
+            where: { id: marcaDia.cliente_id },
+          },
+        });
+        if (cliente && cliente.id) {
+          clienteNombre = cliente.nombre || "Desconocido";
         }
       }
       if (marcaDia.corpo_id) {
-        const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: marcaDia.corpo_id } });
-        if (sucursal) {
-          sucursalNombre = sucursal.nombre;
+        const sucursal = await callDynamicPrisma({
+          req,
+          data: {
+            action: "GET",
+            table: "e_estructura_sucursal",
+            operation: "findUnique",
+            where: { id: marcaDia.corpo_id },
+          },
+        });
+        if (sucursal && sucursal.id) {
+          sucursalNombre = sucursal.nombre || "Desconocida";
         }
       }
-      const descriptionNotificacion = "El empleado " + empleadoNombre + " ha registrado un documento entregado para la sucursal del cliente " + clienteNombre + " con la fecha " + fechaDate.toISOString().split("T")[0];
-      sendNotificationByRole(marcaDia.corpo_id, [parseInt(String(payload?.id ?? "0"), 10)], "Documento entregado registrado", descriptionNotificacion, ["ADMINISTRATIVO", "SUPERVISOR"]);
+      const fechaFormatted = fechaDate.toISOString().split("T")[0];
+      const descriptionNotificacion = "El empleado " + empleadoNombre + " ha registrado un documento entregado para la sucursal del cliente " + clienteNombre + " con la fecha " + fechaFormatted;
+      await sendNotificationByRole(req, marcaDia.corpo_id, [typeof empleadoId === 'number' ? empleadoId : parseInt(String(empleadoId || "0"), 10)], "Documento entregado registrado", descriptionNotificacion, ["ADMINISTRATIVO", "SUPERVISOR"]);
     }
 
     // Registrar cambio de creación
-    const createdBy = parseInt(String(payload?.id ?? 0), 10) || 0;
+    const createdBy = typeof payload?.id === 'number' ? payload.id : (payload?.id ? parseInt(String(payload.id), 10) : 0);
     const createdAt = toZonedTime(new Date(), "America/Costa_Rica");
-    await prisma.c_cambios_apps_modules.create({
+    await callDynamicPrisma({
+      req,
       data: {
-        nombre_tabla: "e_control_documento_entregado_cliente",
-        registro_id: created.id,
-        cambios: JSON.stringify([{
-          prop: "__created__",
-          before: null,
-          after: {
-            id: created.id,
-            cliente_id: created.cliente_id,
-            corpo_id: created.corpo_id,
-            fecha: created.fecha.toISOString(),
-            nombre_oficial_entrega: created.nombre_oficial_entrega,
-            nombre_oficial_recibe: created.nombre_oficial_recibe,
-            tipo_documento: created.tipo_documento,
-            descripcion: created.descripcion,
-          },
-        }]),
-        created_at: createdAt,
-        created_by: createdBy,
+        action: "POST",
+        table: "c_cambios_apps_modules",
+        data: {
+          nombre_tabla: "e_control_documento_entregado_cliente",
+          registro_id: created.id,
+          cambios: JSON.stringify([{
+            prop: "__created__",
+            before: null,
+            after: {
+              id: created.id,
+              cliente_id: created.cliente_id,
+              corpo_id: created.corpo_id,
+              fecha: fechaDate.toISOString(),
+              nombre_oficial_entrega: created.nombre_oficial_entrega,
+              nombre_oficial_recibe: created.nombre_oficial_recibe,
+              tipo_documento: created.tipo_documento,
+              descripcion: created.descripcion,
+            },
+          }]),
+          created_at: createdAt.toISOString(),
+          created_by: createdBy,
+        },
       },
     });
 

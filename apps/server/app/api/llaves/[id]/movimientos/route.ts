@@ -1,8 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../../../utils/verifyToken";
-import { prisma } from "../../../../../utils/prismaClient";
-import { getUserMarca } from "../../../../../utils/getUserMarca";
+import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { sendNotificationByRole } from "../../../../../utils/sendNotification";
 import { toZonedTime } from "date-fns-tz";
 
@@ -22,23 +21,38 @@ function parseTimeOnly(value: any): Date | null {
   return d;
 }
 
-async function getMarcaDiaOrFail(marcaId: number) {
-  const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: marcaId } });
+async function getMarcaDiaOrFail(req: NextRequest, marcaId: number) {
+  const marcaDia = await callDynamicPrisma({
+    req,
+    data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: marcaId } }
+  });
   if (!marcaDia) return { ok: false as const, marcaDia: null, message: "Marca no encontrada" };
   if (!marcaDia.empleadoFijo_id) return { ok: false as const, marcaDia: null, message: "Empleado no encontrado" };
 
-  const lastMarca = await getUserMarca(marcaDia.empleadoFijo_id);
+  const lastMarca = await callDynamicPrisma({
+    req,
+    data: {
+      action: "GET",
+      table: "c_marca_dia",
+      operation: "findFirst",
+      where: { empleadoFijo_id: marcaDia.empleadoFijo_id },
+      orderBy: [{ fecha: "desc" }, { hora_inicio: "desc" }]
+    }
+  });
   if (!lastMarca) return { ok: false as const, marcaDia: null, message: "No se encontró la última marca" };
   if (marcaDia.id !== lastMarca.id) return { ok: false as const, marcaDia: null, message: "Hay una nueva marca más reciente" };
   return { ok: true as const, marcaDia, message: "" };
 }
 
-async function validateLlaveOwnership(llaveId: number, marcaId: number) {
-  const marcaRes = await getMarcaDiaOrFail(marcaId);
+async function validateLlaveOwnership(req: NextRequest, llaveId: number, marcaId: number) {
+  const marcaRes = await getMarcaDiaOrFail(req, marcaId);
   if (!marcaRes.ok) return { ok: false as const, llave: null, message: marcaRes.message };
   const marcaDia = marcaRes.marcaDia!;
 
-  const llave = await prisma.e_llave.findUnique({ where: { id: llaveId } });
+  const llave = await callDynamicPrisma({
+    req,
+    data: { action: "GET", table: "e_llave", operation: "findUnique", where: { id: llaveId } }
+  });
   if (!llave) return { ok: false as const, llave: null, message: "Llave no encontrada" };
   if (llave.cliente_id !== marcaDia.cliente_id || llave.corpo_id !== marcaDia.corpo_id) {
     return { ok: false as const, llave: null, message: "No autorizado" };
@@ -48,7 +62,7 @@ async function validateLlaveOwnership(llaveId: number, marcaId: number) {
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
     if (!valid) return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
 
     const resolvedParams = await context.params;
@@ -59,12 +73,18 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
     if (!marcaIdStr) return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
     const marcaId = parseInt(marcaIdStr);
 
-    const own = await validateLlaveOwnership(llaveId, marcaId);
+    const own = await validateLlaveOwnership(req, llaveId, marcaId);
     if (!own.ok) return NextResponse.json({ status: false, message: own.message }, { status: 200 });
 
-    const rows = await prisma.e_movimiento_llave.findMany({
-      where: { llave_id: llaveId },
-      orderBy: { id: "desc" },
+    const rows = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "e_movimiento_llave",
+        operation: "findMany",
+        where: { llave_id: llaveId },
+        orderBy: { id: "desc" }
+      }
     });
 
     return NextResponse.json({ status: true, data: rows }, { status: 200 });
@@ -77,14 +97,17 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
 export async function POST(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
     if (!valid) return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
 
     const resolvedParams = await context.params;
     const llaveId = parseInt(resolvedParams.id);
     if (!llaveId) return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
 
-    const llave = await prisma.e_llave.findUnique({ where: { id: llaveId } });
+    const llave = await callDynamicPrisma({
+      req,
+      data: { action: "GET", table: "e_llave", operation: "findUnique", where: { id: llaveId } }
+    });
     if (!llave) return NextResponse.json({ status: false, message: "Llave no encontrada" }, { status: 200 });
 
     const body = await req.json();
@@ -94,8 +117,6 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
       nombre_persona_entrega,
       departamento,
       telefono,
-      entrega,
-      recibe,
       fecha,
       hora,
       firma_entrega,
@@ -105,7 +126,7 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
 
     if (!marca_id) return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
 
-    const own = await validateLlaveOwnership(llaveId, parseInt(String(marca_id)));
+    const own = await validateLlaveOwnership(req, llaveId, parseInt(String(marca_id)));
     if (!own.ok) return NextResponse.json({ status: false, message: own.message }, { status: 200 });
 
     const fechaDate = parseDateOnly(fecha);
@@ -117,8 +138,6 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
       nombre_persona_entrega,
       departamento,
       telefono,
-      entrega,
-      recibe,
       firma_entrega,
       firma_recibe,
       firma_responsable,
@@ -127,21 +146,24 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
       return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 200 });
     }
 
-    const created = await prisma.e_movimiento_llave.create({
+    const created = await callDynamicPrisma({
+      req,
       data: {
-        llave_id: llaveId,
-        nombre_persona_recibe: String(nombre_persona_recibe),
-        nombre_persona_entrega: String(nombre_persona_entrega),
-        departamento: String(departamento),
-        telefono: String(telefono),
-        entrega: String(entrega),
-        recibe: String(recibe),
-        fecha: fechaDate,
-        hora: horaDate,
-        firma_entrega: String(firma_entrega),
-        firma_recibe: String(firma_recibe),
-        firma_responsable: String(firma_responsable),
-      },
+        action: "POST",
+        table: "e_movimiento_llave",
+        data: {
+          llave_id: llaveId,
+          nombre_persona_recibe: String(nombre_persona_recibe),
+          nombre_persona_entrega: String(nombre_persona_entrega),
+          departamento: String(departamento),
+          telefono: String(telefono),
+          fecha: fechaDate.toISOString(),
+          hora: horaDate.toISOString(),
+          firma_entrega: String(firma_entrega),
+          firma_recibe: String(firma_recibe),
+          firma_responsable: String(firma_responsable),
+        }
+      }
     });
 
     if (created) {
@@ -152,42 +174,48 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
       let horaRegistro = horaDate.toISOString().split("T")[1].split(".")[0];
 
       if (llave.corpo_id) {
-        const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: llave.corpo_id } });
+        const sucursal = await callDynamicPrisma({
+          req,
+          data: { action: "GET", table: "e_estructura_sucursal", operation: "findUnique", where: { id: llave.corpo_id } }
+        });
         if (sucursal) {
           sucursalNombre = sucursal.nombre;
         }
       }
 
       const description = "Se ha registrado un movimiento de la llave " + llave.lugar_abre + " (" + llave.cantidad_copias + " copias) de la sucursal " + sucursalNombre + " el día " + fechaRegistro + " a las " + horaRegistro + "(Del empleado " + nombre_persona_entrega + " a " + nombre_persona_recibe + ")";
-      sendNotificationByRole(llave.corpo_id, [], "Movimiento de llave registrado", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+      await sendNotificationByRole(req, llave.corpo_id, [], "Movimiento de llave registrado", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
     }
 
     // Registrar cambio de creación
     const createdBy = parseInt(String((payload as any)?.id ?? 0)) || 0;
     const createdAt = toZonedTime(new Date(), "America/Costa_Rica") as Date;
-    await prisma.c_cambios_apps_modules.create({
+    await callDynamicPrisma({
+      req,
       data: {
-        nombre_tabla: "e_movimiento_llave",
-        registro_id: created.id,
-        cambios: JSON.stringify([{
-          prop: "__created__",
-          before: null,
-          after: {
-            id: created.id,
-            llave_id: created.llave_id,
-            nombre_persona_recibe: created.nombre_persona_recibe,
-            nombre_persona_entrega: created.nombre_persona_entrega,
-            departamento: created.departamento,
-            telefono: created.telefono,
-            entrega: created.entrega,
-            recibe: created.recibe,
-            fecha: created.fecha.toISOString(),
-            hora: created.hora.toISOString(),
-          },
-        }]),
-        created_at: createdAt,
-        created_by: createdBy,
-      },
+        action: "POST",
+        table: "c_cambios_apps_modules",
+        data: {
+          nombre_tabla: "e_movimiento_llave",
+          registro_id: created.id,
+          cambios: JSON.stringify([{
+            prop: "__created__",
+            before: null,
+            after: {
+              id: created.id,
+              llave_id: created.llave_id,
+              nombre_persona_recibe: created.nombre_persona_recibe,
+              nombre_persona_entrega: created.nombre_persona_entrega,
+              departamento: created.departamento,
+              telefono: created.telefono,
+              fecha: created.fecha instanceof Date ? created.fecha.toISOString() : created.fecha,
+              hora: created.hora instanceof Date ? created.hora.toISOString() : created.hora,
+            },
+          }]),
+          created_at: createdAt.toISOString(),
+          created_by: createdBy,
+        }
+      }
     });
 
     return NextResponse.json(

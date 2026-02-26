@@ -50,6 +50,7 @@ type MainStructureDivisionNode = { id: number; nombre: string; contratos: MainSt
 type MainStructureClienteNode = { id: number; nombre: string; division: MainStructureDivisionNode[] };
 type MainStructureEmpresaNode = { id: number; nombre: string; clientes: MainStructureClienteNode[] };
 type MainStructureTree = MainStructureEmpresaNode[];
+type TipoProductoNoConforme = { id: number; nombre: string };
 
 type LocalFile = {
   id: string;
@@ -163,8 +164,15 @@ const decodeFirmaHash = (hash?: string | null) => {
 
 export default function NonConformingProductScreen() {
   const navigation = useNavigation<Nav>();
-  const { employee, refreshAccessToken, logout } = useAuth();
+  const { employee, refreshAccessToken, logout, accessToken } = useAuth();
   const { scanQR, QRScannerComponent } = useQRScanner();
+  const appendTokenToUrl = (url: string) => {
+    if (!url) return '';
+    if (!accessToken || accessToken.trim().length === 0) return url;
+    if (/[?&]token=/.test(url)) return url;
+    const sep = url.includes('?') ? '&' : '?';
+    return `${url}${sep}token=${encodeURIComponent(accessToken)}`;
+  };
 
   const [isMenuVisible, setIsMenuVisible] = useState(false);
 
@@ -178,6 +186,7 @@ export default function NonConformingProductScreen() {
   // estructura
   const [structure, setStructure] = useState<MainStructureTree>([]);
   const [isStructureLoading, setIsStructureLoading] = useState(false);
+  const [tiposProductoNoConforme, setTiposProductoNoConforme] = useState<TipoProductoNoConforme[]>([]);
 
   const [selectedEmpresaId, setSelectedEmpresaId] = useState<number | null>(null);
   const [selectedClienteId, setSelectedClienteId] = useState<number | null>(null);
@@ -199,6 +208,8 @@ export default function NonConformingProductScreen() {
   // crear/editar
   const [isCreating, setIsCreating] = useState(false);
   const [editing, setEditing] = useState<{ id: number | string; id_local?: string } | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitResponse, setSubmitResponse] = useState<{ type: 'success' | 'error', message: string } | null>(null);
 
   // form
   const [fechaIdentificacion, setFechaIdentificacion] = useState<Date>(new Date());
@@ -395,6 +406,49 @@ export default function NonConformingProductScreen() {
     }
   }, [refreshAccessToken, logout]);
 
+  const fetchTiposProductoNoConforme = useCallback(async () => {
+    try {
+      const cacheStr = await AsyncStorage.getItem('tipos_producto_no_conforme_cache');
+      if (cacheStr) {
+        try {
+          const parsed = JSON.parse(cacheStr);
+          if (Array.isArray(parsed)) setTiposProductoNoConforme(parsed);
+        } catch {
+          // ignore
+        }
+      }
+
+      const isConnected = await getConnectionStatus();
+      if (!isConnected) return;
+
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) return;
+
+      const response = await authedFetch({
+        url: `${apiUrl}/api/non-conforming-product/types`,
+        init: {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        },
+        refreshAccessToken,
+        logout,
+      });
+
+      if (!response || !response.ok) return;
+      const data = await response.json().catch(() => ({}));
+      const incoming = Array.isArray(data?.data) ? data.data : [];
+
+      if (data?.status) {
+        setTiposProductoNoConforme(incoming);
+        await AsyncStorage.setItem('tipos_producto_no_conforme_cache', JSON.stringify(incoming));
+      }
+    } catch (e) {
+      console.error('Error fetching non conforming product types:', e);
+    }
+  }, [refreshAccessToken, logout]);
+
   // --------- estructura: opciones ---------
   const empresaOptions = useMemo(() => structure.map((e) => ({ id: e.id, nombre: e.nombre })), [structure]);
 
@@ -562,10 +616,14 @@ export default function NonConformingProductScreen() {
   useFocusEffect(
     useCallback(() => {
       fetchRecords();
-      const handler = () => fetchRecords();
+      fetchTiposProductoNoConforme();
+      const handler = () => {
+        fetchRecords();
+        fetchTiposProductoNoConforme();
+      };
       eventBus.on('connectionRestored', handler);
       return () => eventBus.off('connectionRestored', handler);
-    }, [fetchRecords])
+    }, [fetchRecords, fetchTiposProductoNoConforme])
   );
 
   const resetForm = () => {
@@ -804,10 +862,10 @@ export default function NonConformingProductScreen() {
 
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (apiUrl && pncId) {
-      if (file.type === 'image') return `${apiUrl}/api/non-conforming-product/${pncId}/get-image/${encodeURIComponent(file.name)}`;
-      if (file.type === 'audio') return `${apiUrl}/api/non-conforming-product/${pncId}/get-audio/${encodeURIComponent(file.name)}`;
-      if (file.type === 'video') return `${apiUrl}/api/non-conforming-product/${pncId}/get-video/${encodeURIComponent(file.name)}`;
-      return `${apiUrl}/api/non-conforming-product/${pncId}/get-file/${encodeURIComponent(file.name)}`;
+      if (file.type === 'image') return appendTokenToUrl(`${apiUrl}/api/non-conforming-product/${pncId}/get-image/${encodeURIComponent(file.name)}`);
+      if (file.type === 'audio') return appendTokenToUrl(`${apiUrl}/api/non-conforming-product/${pncId}/get-audio/${encodeURIComponent(file.name)}`);
+      if (file.type === 'video') return appendTokenToUrl(`${apiUrl}/api/non-conforming-product/${pncId}/get-video/${encodeURIComponent(file.name)}`);
+      return appendTokenToUrl(`${apiUrl}/api/non-conforming-product/${pncId}/get-file/${encodeURIComponent(file.name)}`);
     }
     return '';
   };
@@ -818,7 +876,7 @@ export default function NonConformingProductScreen() {
     if (!selectedEmpresaId || !selectedClienteId || !selectedSucursalId) return 'Empresa, Cliente y Sucursal son obligatorios';
     if (!selectedDivisionId) return 'No se pudo determinar la división (marca actual)';
     if (!responsableCuenta.trim()) return 'Responsable de la cuenta es requerido';
-    if (!tipoServicioNoConforme.trim()) return 'Tipo de servicio no conforme es requerido';
+    if (!tipoServicioNoConforme.trim()) return 'Tipo de producto no conforme es requerido';
     if (!personaIdentifico.trim()) return 'Persona que identificó el PNC es requerida';
     if (!getBase64Only(firmaPersonaIdentifico)) return 'Firma de persona que identificó el PNC es requerida';
     if (!descripcion.trim()) return 'Descripción es requerida';
@@ -863,118 +921,136 @@ export default function NonConformingProductScreen() {
       return;
     }
 
-    const requestData: any = buildRequestData();
-    const isConnected = await getConnectionStatus();
+    setIsSubmitting(true);
+    setSubmitResponse(null);
 
-    // CREATE
-    if (!editing) {
-      if (isConnected) {
-        const res = await createNonConformingProduct({ requestData, refreshAccessToken, logout });
-        if (res.status) {
-          Alert.alert('Éxito', 'Registro creado correctamente');
+    try {
+      const requestData: any = buildRequestData();
+      const isConnected = await getConnectionStatus();
+
+      // CREATE
+      if (!editing) {
+        if (isConnected) {
+          const res = await createNonConformingProduct({ requestData, refreshAccessToken, logout });
+          if (res.status) {
+            setSubmitResponse({ type: 'success', message: res.message || 'Registro creado correctamente' });
+            setTimeout(() => {
+              cancelCreateOrEdit();
+              fetchRecords();
+            }, 2000);
+          } else {
+            setSubmitResponse({ type: 'error', message: res.message || 'No se pudo crear el registro' });
+          }
+          return;
+        }
+
+        const localId = `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        const nowIso = new Date().toISOString();
+
+        const localFiles: PncFile[] = (requestData.archivos || []).map((f: any) => ({
+          id_local: `local_file_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
+          type: f.type,
+          extension: f.extension,
+          name: f.original_name || `archivo.${f.extension || 'dat'}`,
+          original_name: f.original_name,
+          base64: f.file_base64,
+          mimeType: f.mimeType,
+        }));
+
+        const localItem: PncRecord = {
+          id: '',
+          id_local: localId,
+          cliente_id: requestData.cliente_id,
+          corpo_id: requestData.corpo_id,
+          fecha_identificacion: requestData.fecha_identificacion,
+          responsable_cuenta: requestData.responsable_cuenta,
+          tipo_servicio_no_conforme: requestData.tipo_servicio_no_conforme,
+          persona_identifico_pnc: requestData.persona_identifico_pnc,
+          firma_persona_identifico_pnc: requestData.firma_persona_identifico_pnc,
+          descripcion: requestData.descripcion,
+          persona_origino_pnc: requestData.persona_origino_pnc,
+          firma_persona_origino_pnc: requestData.firma_persona_origino_pnc,
+          accion_implementada: requestData.accion_implementada,
+          fecha_solucion: requestData.fecha_solucion,
+          responsable_aprobar: requestData.responsable_aprobar,
+          firma_responsable: requestData.firma_responsable,
+          created_at: nowIso,
+          files: localFiles,
+          synced: false,
+        };
+
+        const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+        const actions = actionsStr ? JSON.parse(actionsStr) : [];
+        actions.push({ id: localId, action: 'create', type: 'non_conforming_product', payload: requestData, synced: false });
+        await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+
+        const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+        const cache = cacheStr ? JSON.parse(cacheStr) : [];
+        cache.push({ ...localItem, type: 'non_conforming_product' });
+        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(cache));
+
+        setSubmitResponse({ type: 'success', message: 'El registro se sincronizará cuando vuelva la conexión.' });
+        setTimeout(() => {
           cancelCreateOrEdit();
-          await fetchRecords();
+          fetchRecords();
+        }, 2000);
+        return;
+      }
+
+      // UPDATE
+      const recordId = editing.id || editing.id_local;
+      const isLocal = String(editing.id).startsWith('local-') || (editing.id_local && String(editing.id_local).startsWith('local-'));
+      const willReplaceFiles = (imageFiles.length + audioFiles.length + videoFiles.length + documentFiles.length) > 0;
+
+      const requestDataUpdate: any = {
+        ...buildRequestData(),
+      };
+      if (!willReplaceFiles) {
+        // no mandar archivos para no disparar reemplazo total
+        delete requestDataUpdate.archivos;
+      }
+
+      if (isConnected && !isLocal && editing.id && !String(editing.id).startsWith('local-')) {
+        const res = await updateNonConformingProduct({ id: String(editing.id), requestData: requestDataUpdate, refreshAccessToken, logout });
+        if (res.status) {
+          setSubmitResponse({ type: 'success', message: res.message || 'Registro actualizado correctamente' });
+          setTimeout(() => {
+            cancelCreateOrEdit();
+            fetchRecords();
+          }, 2000);
         } else {
-          Alert.alert('Error', res.message || 'No se pudo crear el registro');
+          setSubmitResponse({ type: 'error', message: res.message || 'No se pudo actualizar el registro' });
         }
         return;
       }
 
-      const localId = `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-      const nowIso = new Date().toISOString();
+      // offline update (incluye local)
+      {
+        const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+        const actions = actionsStr ? JSON.parse(actionsStr) : [];
+        actions.push({ id: recordId, action: 'update', type: 'non_conforming_product', payload: requestDataUpdate, synced: false });
+        await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
 
-      const localFiles: PncFile[] = (requestData.archivos || []).map((f: any) => ({
-        id_local: `local_file_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
-        type: f.type,
-        extension: f.extension,
-        name: f.original_name || `archivo.${f.extension || 'dat'}`,
-        original_name: f.original_name,
-        base64: f.file_base64,
-        mimeType: f.mimeType,
-      }));
+        const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+        const cache = cacheStr ? JSON.parse(cacheStr) : [];
+        const updatedCache = cache.map((item: any) => {
+          if (item.type !== 'non_conforming_product') return item;
+          if (!(item.id === recordId || item.id_local === recordId)) return item;
+          return { ...item, ...requestDataUpdate, synced: false };
+        });
+        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
 
-      const localItem: PncRecord = {
-        id: '',
-        id_local: localId,
-        cliente_id: requestData.cliente_id,
-        corpo_id: requestData.corpo_id,
-        fecha_identificacion: requestData.fecha_identificacion,
-        responsable_cuenta: requestData.responsable_cuenta,
-        tipo_servicio_no_conforme: requestData.tipo_servicio_no_conforme,
-        persona_identifico_pnc: requestData.persona_identifico_pnc,
-        firma_persona_identifico_pnc: requestData.firma_persona_identifico_pnc,
-        descripcion: requestData.descripcion,
-        persona_origino_pnc: requestData.persona_origino_pnc,
-        firma_persona_origino_pnc: requestData.firma_persona_origino_pnc,
-        accion_implementada: requestData.accion_implementada,
-        fecha_solucion: requestData.fecha_solucion,
-        responsable_aprobar: requestData.responsable_aprobar,
-        firma_responsable: requestData.firma_responsable,
-        created_at: nowIso,
-        files: localFiles,
-        synced: false,
-      };
-
-      const actionsStr = await AsyncStorage.getItem('evaluations_actions');
-      const actions = actionsStr ? JSON.parse(actionsStr) : [];
-      actions.push({ id: localId, action: 'create', type: 'non_conforming_product', payload: requestData, synced: false });
-      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
-
-      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-      const cache = cacheStr ? JSON.parse(cacheStr) : [];
-      cache.push({ ...localItem, type: 'non_conforming_product' });
-      await AsyncStorage.setItem('evaluations_cache', JSON.stringify(cache));
-
-      Alert.alert('Guardado (offline)', 'El registro se sincronizará cuando vuelva la conexión.');
-      cancelCreateOrEdit();
-      await fetchRecords();
-      return;
-    }
-
-    // UPDATE
-    const recordId = editing.id || editing.id_local;
-    const isLocal = String(editing.id).startsWith('local-') || (editing.id_local && String(editing.id_local).startsWith('local-'));
-    const willReplaceFiles = (imageFiles.length + audioFiles.length + videoFiles.length + documentFiles.length) > 0;
-
-    const requestDataUpdate: any = {
-      ...buildRequestData(),
-    };
-    if (!willReplaceFiles) {
-      // no mandar archivos para no disparar reemplazo total
-      delete requestDataUpdate.archivos;
-    }
-
-    if (isConnected && !isLocal && editing.id && !String(editing.id).startsWith('local-')) {
-      const res = await updateNonConformingProduct({ id: String(editing.id), requestData: requestDataUpdate, refreshAccessToken, logout });
-      if (res.status) {
-        Alert.alert('Éxito', 'Registro actualizado correctamente');
-        cancelCreateOrEdit();
-        await fetchRecords();
-      } else {
-        Alert.alert('Error', res.message || 'No se pudo actualizar el registro');
+        setSubmitResponse({ type: 'success', message: 'Los cambios se sincronizarán cuando vuelva la conexión.' });
+        setTimeout(() => {
+          cancelCreateOrEdit();
+          fetchRecords();
+        }, 2000);
       }
-      return;
-    }
-
-    // offline update (incluye local)
-    {
-      const actionsStr = await AsyncStorage.getItem('evaluations_actions');
-      const actions = actionsStr ? JSON.parse(actionsStr) : [];
-      actions.push({ id: recordId, action: 'update', type: 'non_conforming_product', payload: requestDataUpdate, synced: false });
-      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
-
-      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-      const cache = cacheStr ? JSON.parse(cacheStr) : [];
-      const updatedCache = cache.map((item: any) => {
-        if (item.type !== 'non_conforming_product') return item;
-        if (!(item.id === recordId || item.id_local === recordId)) return item;
-        return { ...item, ...requestDataUpdate, synced: false };
-      });
-      await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-
-      Alert.alert('Guardado (offline)', 'Los cambios se sincronizarán cuando vuelva la conexión.');
-      cancelCreateOrEdit();
-      await fetchRecords();
+    } catch (error) {
+      console.error('Error saving non conforming product:', error);
+      setSubmitResponse({ type: 'error', message: 'Error al guardar el registro' });
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -1194,8 +1270,23 @@ export default function NonConformingProductScreen() {
         <ThemedText style={styles.label}>Responsable de la cuenta *</ThemedText>
         <TextInput style={styles.input} value={responsableCuenta} onChangeText={setResponsableCuenta} placeholder="Responsable de la cuenta" placeholderTextColor="#999" />
 
-        <ThemedText style={styles.label}>Tipo de servicio no conforme *</ThemedText>
-        <TextInput style={styles.input} value={tipoServicioNoConforme} onChangeText={setTipoServicioNoConforme} placeholder="Tipo de servicio no conforme" placeholderTextColor="#999" />
+        <ThemedText style={styles.label}>Tipo de producto no conforme *</ThemedText>
+        {tiposProductoNoConforme.length > 0 ? (
+          <ThemedView style={styles.pickerWrapper}>
+            <Picker
+              selectedValue={tipoServicioNoConforme}
+              onValueChange={(v) => setTipoServicioNoConforme(String(v))}
+              style={styles.picker}
+            >
+              <Picker.Item label="Seleccione tipo de producto no conforme..." value="" />
+              {tiposProductoNoConforme.map((tipo) => (
+                <Picker.Item key={tipo.id} label={tipo.nombre} value={tipo.nombre} />
+              ))}
+            </Picker>
+          </ThemedView>
+        ) : (
+          <TextInput style={styles.input} value={tipoServicioNoConforme} onChangeText={setTipoServicioNoConforme} placeholder="Tipo de producto no conforme" placeholderTextColor="#999" />
+        )}
 
         <ThemedText style={styles.label}>Persona que identificó el PNC *</ThemedText>
         <TextInput style={styles.input} value={personaIdentifico} onChangeText={setPersonaIdentifico} placeholder="Nombre" placeholderTextColor="#999" />
@@ -1284,12 +1375,34 @@ export default function NonConformingProductScreen() {
           <ThemedText style={styles.helpText}>Pendiente</ThemedText>
         )}
 
+        {submitResponse && (
+          <ThemedView style={[styles.responseContainer, submitResponse.type === 'success' ? styles.responseSuccess : styles.responseError]}>
+            <ThemedText style={styles.responseText}>
+              {submitResponse.type === 'success' ? '✓ ' : '✗ '}
+              {submitResponse.message}
+            </ThemedText>
+          </ThemedView>
+        )}
         <ThemedView style={styles.actionButtons}>
-          <TouchableOpacity style={[styles.actionButton, styles.cancelButton]} onPress={cancelCreateOrEdit} activeOpacity={0.85}>
+          <TouchableOpacity 
+            style={[styles.actionButton, styles.cancelButton]} 
+            onPress={cancelCreateOrEdit} 
+            activeOpacity={0.85}
+            disabled={isSubmitting}
+          >
             <Ionicons name="close" size={22} color="#FFFFFF" />
           </TouchableOpacity>
-          <TouchableOpacity style={[styles.actionButton, styles.saveButton]} onPress={handleSave} activeOpacity={0.85}>
-            <Ionicons name="checkmark" size={22} color="#FFFFFF" />
+          <TouchableOpacity 
+            style={[styles.actionButton, styles.saveButton, isSubmitting && styles.buttonDisabled]} 
+            onPress={handleSave} 
+            activeOpacity={0.85}
+            disabled={isSubmitting}
+          >
+            {isSubmitting ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <Ionicons name="checkmark" size={22} color="#FFFFFF" />
+            )}
           </TouchableOpacity>
         </ThemedView>
       </ThemedView>
@@ -1358,7 +1471,7 @@ export default function NonConformingProductScreen() {
 
               {isExpanded && (
                 <ThemedView style={styles.collapseContent}>
-                  <ThemedText style={styles.sectionTitle}>Tipo servicio no conforme</ThemedText>
+                  <ThemedText style={styles.sectionTitle}>Tipo producto no conforme</ThemedText>
                   <ThemedText style={styles.detailText}>{r.tipo_servicio_no_conforme || '—'}</ThemedText>
 
                   <ThemedText style={styles.sectionTitle}>Descripción</ThemedText>
@@ -1804,6 +1917,28 @@ const styles = StyleSheet.create({
   actionButton: { flex: 1, paddingVertical: 12, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   cancelButton: { backgroundColor: '#FF3B30' },
   saveButton: { backgroundColor: '#34C759' },
+  buttonDisabled: {
+    opacity: 0.6,
+  },
+  responseContainer: {
+    padding: 12,
+    borderRadius: 6,
+    marginBottom: 12,
+  },
+  responseSuccess: {
+    backgroundColor: '#D4EDDA',
+    borderWidth: 1,
+    borderColor: '#C3E6CB',
+  },
+  responseError: {
+    backgroundColor: '#F8D7DA',
+    borderWidth: 1,
+    borderColor: '#F5C6CB',
+  },
+  responseText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
 
   // Lista (tarjetas estilo MutuosAcuerdosScreen)
   listContainer: { gap: 12 },

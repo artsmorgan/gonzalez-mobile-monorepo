@@ -1,12 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../utils/verifyToken";
-import { prisma } from "../../../utils/prismaClient";
+import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
-import { v4 as uuidv4 } from "uuid";
-import fs from "fs";
-import path from "path";
-import { getUserMarca } from "../../../utils/getUserMarca";
 import { sendNotificationByPlaza } from "../../../utils/sendNotification";
+import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
 
 type ManualFileInput = {
     type: string; // 'image' | 'audio' | 'video' | 'document' | etc
@@ -17,7 +14,7 @@ type ManualFileInput = {
 
 export async function GET(req: NextRequest) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         const marcaId = req.nextUrl.searchParams.get("m");
@@ -28,8 +25,14 @@ export async function GET(req: NextRequest) {
             );
         }
 
-        const marca = await prisma.c_marca_dia.findUnique({
-            where: { id: parseInt(marcaId) }
+        const marca = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_marca_dia",
+                operation: "findUnique",
+                where: { id: parseInt(marcaId) },
+            },
         });
         if (!marca) {
             return NextResponse.json(
@@ -38,14 +41,65 @@ export async function GET(req: NextRequest) {
             );
         }
 
-        if (!marca.empleadoFijo_id) {
+        const marcaObj = marca as any;
+        if (!marcaObj.empleadoFijo_id) {
             return NextResponse.json(
                 { status: false, message: "Empleado no encontrado" },
                 { status: 200 }
             );
         }
 
-        const lastMarca = await getUserMarca(marca.empleadoFijo_id);
+        // Obtener la última marca usando callDynamicPrisma directamente
+        const now = toZonedTime(new Date(), "America/Costa_Rica");
+        const nowPlus15 = new Date(now.getTime() + 15 * 60 * 1000);
+        const currentDate = new Date(now.toISOString().split("T")[0]);
+        const currentTime = new Date("1970-01-01 " + now.toTimeString().slice(0, 8));
+
+        const proximo = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_marca_dia",
+                operation: "findFirst",
+                where: {
+                    empleadoFijo_id: marcaObj.empleadoFijo_id,
+                    OR: [
+                        { fecha: { gt: now } },
+                        { fecha: { equals: currentDate }, hora_inicio: { gte: currentTime } },
+                    ],
+                },
+                orderBy: [{ fecha: "asc" }, { hora_inicio: "asc" }],
+            },
+        });
+
+        let lastMarca: any = null;
+        if (proximo) {
+            const proximoObj = proximo as any;
+            const proximoDateTime = new Date(`${proximoObj.fecha}T${proximoObj.hora_inicio}`);
+            if (proximoDateTime <= nowPlus15) {
+                lastMarca = proximo;
+            }
+        }
+
+        if (!lastMarca) {
+            const ultimo = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "c_marca_dia",
+                    operation: "findFirst",
+                    where: {
+                        empleadoFijo_id: marcaObj.empleadoFijo_id,
+                        OR: [
+                            { fecha: { lt: now } },
+                            { fecha: { equals: currentDate }, hora_inicio: { lt: currentTime } },
+                        ],
+                    },
+                    orderBy: [{ fecha: "desc" }, { hora_inicio: "desc" }],
+                },
+            });
+            lastMarca = ultimo;
+        }
 
         if (!lastMarca) {
             return NextResponse.json(
@@ -54,15 +108,22 @@ export async function GET(req: NextRequest) {
             );
         }
 
-        if (marca.id !== lastMarca.id) {
+        const lastMarcaObj = lastMarca as any;
+        if (marcaObj.id !== lastMarcaObj.id) {
             return NextResponse.json(
                 { status: false, message: "Hay una nueva marca más reciente" },
                 { status: 200 }
             );
         }
 
-        const puesto = await prisma.e_estructura_puesto.findUnique({
-            where: { id: marca.puesto_id }
+        const puesto = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "e_estructura_puesto",
+                operation: "findUnique",
+                where: { id: marcaObj.puesto_id },
+            },
         });
 
         if (!puesto) {
@@ -72,25 +133,40 @@ export async function GET(req: NextRequest) {
             );
         }
 
-        const employeeId = payload.id as number;
+        const puestoObj = puesto as any;
+        const employeeId = payload?.id as number;
 
         // Obtener manuales asociados al puesto mediante la tabla de relación
-        const manualLinks = await (prisma as any).e_puestos_manual_puesto.findMany({
-            where: { puesto_id: puesto.id }
+        const manualLinks = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "e_puestos_manual_puesto",
+                operation: "findMany",
+                where: { puesto_id: puestoObj.id },
+            },
         });
 
         const manualIdsSet = new Set<number>();
-        (manualLinks as any[]).forEach((link) => {
+        const manualLinksArray = Array.isArray(manualLinks) ? manualLinks : [];
+        manualLinksArray.forEach((link: any) => {
             if (link.manual_puesto_id) {
                 manualIdsSet.add(link.manual_puesto_id);
             }
         });
 
         // Compatibilidad hacia atrás: también incluir manuales que tengan puesto_id directamente
-        const directManuals = await (prisma as any).e_manual_puesto.findMany({
-            where: { puesto_id: puesto.id }
+        const directManuals = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "e_manual_puesto",
+                operation: "findMany",
+                where: { puesto_id: puestoObj.id },
+            },
         });
-        (directManuals as any[]).forEach((manual) => {
+        const directManualsArray = Array.isArray(directManuals) ? directManuals : [];
+        directManualsArray.forEach((manual: any) => {
             if (manual.id) {
                 manualIdsSet.add(manual.id);
             }
@@ -105,31 +181,51 @@ export async function GET(req: NextRequest) {
             );
         }
 
-        const manuals = await (prisma as any).e_manual_puesto.findMany({
-            where: { id: { in: manualIds } },
-            orderBy: { created_at: "desc" }
+        const manuals = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "e_manual_puesto",
+                operation: "findMany",
+                where: { id: { in: manualIds } },
+                orderBy: { created_at: "desc" },
+            },
         });
+        const manualsArray = Array.isArray(manuals) ? manuals : [];
 
         // Usar el origin de la petición para construir URLs absolutas accesibles desde el móvil
         const baseUrl = req.nextUrl.origin;
 
         const manualsWithFiles = await Promise.all(
-            (manuals as any[]).map(async (manual) => {
-                const files = await (prisma as any).e_archivos_manual_puesto.findMany({
-                    where: { manual_puesto_id: manual.id }
+            manualsArray.map(async (manual: any) => {
+                const files = await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "GET",
+                        table: "e_archivos_manual_puesto",
+                        operation: "findMany",
+                        where: { manual_puesto_id: manual.id },
+                    },
                 });
 
-                const visualizaciones = await (prisma as any)
-                    .e_empleado_visualizacion_manual_puesto.findMany({
+                const visualizaciones = await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "GET",
+                        table: "e_empleado_visualizacion_manual_puesto",
+                        operation: "findMany",
                         where: { manual_puesto_id: manual.id },
                         include: { e_empleado_visualizacion_archivos: true },
-                    });
+                    },
+                });
+                const visualizacionesArray = Array.isArray(visualizaciones) ? visualizaciones : [];
+                const filesArray = Array.isArray(files) ? files : [];
 
-                const currentEmployeeSigned = (visualizaciones as any[]).some(
+                const currentEmployeeSigned = visualizacionesArray.some(
                     (v: any) => v.empleado_id === employeeId
                 );
 
-                const filesMapped = (files as any[]).map((file) => {
+                const filesMapped = filesArray.map((file: any) => {
                     const fileName = file.name;
 
                     // Construir URLs hacia las APIs específicas, similar a incidents
@@ -157,9 +253,9 @@ export async function GET(req: NextRequest) {
                 });
 
                 const visFilesMappedByVisId = new Map<number, any[]>();
-                (visualizaciones as any[]).forEach((v: any) => {
+                visualizacionesArray.forEach((v: any) => {
                     const arr = (v?.e_empleado_visualizacion_archivos || []) as any[];
-                    const mapped = arr.map((file) => {
+                    const mapped = arr.map((file: any) => {
                         const fileName = file.name;
                         let urlPath = `/uploads/job-manuals/${manual.id}/visualizaciones/${v.id}/${fileName}`;
                         if (file.type === 'image') {
@@ -200,7 +296,7 @@ export async function GET(req: NextRequest) {
                     created_by: manual.created_by,
                     created_at: manual.created_at,
                     files: filesMapped,
-                    visualizaciones: (visualizaciones as any[]).map((v: any) => ({
+                    visualizaciones: visualizacionesArray.map((v: any) => ({
                         id: v.id,
                         empleado_id: v.empleado_id,
                         manual_puesto_id: v.manual_puesto_id,
@@ -234,7 +330,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         const {
@@ -254,14 +350,19 @@ export async function POST(req: NextRequest) {
             );
         }
 
-        // Quiz: almacenar como string (array de objetos). Si viene vacío o inválido, guardar null.
+        // Quiz: almacenar como string (objeto con questions y minApprovalPercentage, o array para compatibilidad). Si viene vacío o inválido, guardar null.
         let quizToStore: string | null = null;
         if (typeof quiz === "string") {
             const trimmed = quiz.trim();
             if (trimmed.length > 0) {
                 try {
                     const parsed = JSON.parse(trimmed);
-                    if (Array.isArray(parsed) && parsed.length > 0) {
+                    // Nuevo formato: objeto con questions y minApprovalPercentage
+                    if (typeof parsed === "object" && parsed !== null && Array.isArray(parsed.questions) && parsed.questions.length > 0) {
+                        quizToStore = trimmed;
+                    }
+                    // Formato antiguo: array de preguntas (compatibilidad)
+                    else if (Array.isArray(parsed) && parsed.length > 0) {
                         quizToStore = trimmed;
                     } else {
                         quizToStore = null;
@@ -273,8 +374,14 @@ export async function POST(req: NextRequest) {
             }
         }
 
-        const marca = await prisma.c_marca_dia.findUnique({
-            where: { id: parseInt(marca_id) }
+        const marca = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_marca_dia",
+                operation: "findUnique",
+                where: { id: parseInt(marca_id) },
+            },
         });
         if (!marca) {
             return NextResponse.json(
@@ -282,6 +389,7 @@ export async function POST(req: NextRequest) {
                 { status: 200 }
             );
         }
+        const marcaObj = marca as any;
 
         const created_at = toZonedTime(
             new Date(),
@@ -290,7 +398,7 @@ export async function POST(req: NextRequest) {
 
         const puestosParsed: number[] = puestos
             ? JSON.parse(puestos)
-            : [marca.puesto_id];
+            : [marcaObj.puesto_id];
 
         let filesParsed: ManualFileInput[] = [];
         if (files) {
@@ -308,111 +416,126 @@ export async function POST(req: NextRequest) {
             }
         }
 
-        const plazasIds: number[] = [];
-        // Validar que todos los puestos existen
-        for (const puestoId of puestosParsed) {
-            const puesto = await prisma.e_estructura_puesto.findUnique({
-                where: { id: puestoId }
-            });
-            if (!puesto) {
-                return NextResponse.json(
-                    { status: false, message: "Puesto no encontrado" },
-                    { status: 200 }
-                );
-            }
-            const plazas = await prisma.e_estructura_plazas.findMany({
-                where: { puesto_id: puestoId }
-            });
-            for (const plaza of plazas) {
-                if (!plazasIds.includes(plaza.id)) plazasIds.push(plaza.id);
-            }
-        }
+        let plazasIds: number[] = [];
 
         // Crear un único manual y luego asociarlo a múltiples puestos mediante e_puestos_manual_puesto
+        if (puestosParsed.length === 0) {
+            return NextResponse.json(
+                { status: false, message: "Debe especificarse al menos un puesto" },
+                { status: 200 }
+            );
+        }
         const primaryPuestoId = puestosParsed[0];
+        if (!primaryPuestoId || isNaN(primaryPuestoId)) {
+            return NextResponse.json(
+                { status: false, message: "Puesto inválido" },
+                { status: 200 }
+            );
+        }
 
-        const manual = await (prisma as any).e_manual_puesto.create({
+        const manual = await callDynamicPrisma({
+            req,
             data: {
-                title,
-                description,
-                quiz: quizToStore,
-                firma: firma_responsable,
-                // Se mantiene el campo puesto_id por compatibilidad, usando el primer puesto
-                puesto_id: primaryPuestoId,
-                created_by: String(payload.id),
-                created_at
+                action: "POST",
+                table: "e_manual_puesto",
+                operation: "create",
+                data: {
+                    title,
+                    description,
+                    quiz: quizToStore,
+                    firma: firma_responsable,
+                    // Se mantiene el campo puesto_id por compatibilidad, usando el primer puesto
+                    puesto_id: primaryPuestoId,
+                    created_by: String(payload?.id),
+                    created_at: created_at.toISOString(),
+                }
             }
         });
+        const manualObj = manual as any;
 
         // Crear relaciones en e_puestos_manual_puesto para cada puesto seleccionado
         for (const puestoId of puestosParsed) {
-            await (prisma as any).e_puestos_manual_puesto.create({
+            const resp = await callDynamicPrisma({
+                req,
                 data: {
-                    manual_puesto_id: manual.id,
-                    puesto_id: puestoId
+                    action: "POST",
+                    table: "e_puestos_manual_puesto",
+                    operation: "create",
+                    data: {
+                        manual_puesto_id: manualObj.id,
+                        puesto_id: puestoId
+                    }
                 }
             });
+
+            if (!resp.status) {
+                console.error("Error creating relationship in e_puestos_manual_puesto:", resp.message);
+                continue;
+            }
         }
 
-        // Guardar archivos una sola vez para el manual
+        // Guardar archivos una sola vez para el manual, delegando a /api/dynamic-prisma/files
         if (filesParsed.length > 0) {
-            const dir = path.join(
-                process.cwd(),
-                "public",
-                "uploads",
-                "job-manuals",
-                `${manual.id}`
-            );
-            if (!fs.existsSync(dir)) {
-                fs.mkdirSync(dir, { recursive: true });
-            }
+            const uploadResp = await uploadDynamicFiles({
+                req,
+                folderPath: `job-manuals/${manualObj.id}`,
+                files: filesParsed.map((file) => ({
+                    type: file.type,
+                    extension: file.extension,
+                    original_name: file.original_name,
+                    file_base64: file.file_base64,
+                })),
+            });
 
-            for (const file of filesParsed) {
-                if (!file.file_base64 || !file.extension || !file.type) {
-                    continue;
-                }
-
-                // Decodificar base64 directamente y capturar errores (evita regex/call stack con strings grandes)
-                let buffer: Buffer;
-                try {
-                    buffer = Buffer.from(file.file_base64, "base64");
-                } catch {
-                    console.warn("Formato de archivo inválido, se omite uno de los archivos");
-                    continue;
-                }
-
-                const fileName = `${uuidv4()}.${file.extension}`;
-                const filePath = path.join(dir, fileName);
-                fs.writeFileSync(filePath, buffer);
-
-                const originalName =
-                    (typeof file.original_name === "string" && file.original_name.trim().length > 0)
-                        ? file.original_name.trim()
-                        : fileName;
-                console.log(4);
-                await (prisma as any).e_archivos_manual_puesto.create({
+            const uploadedFiles = Array.isArray(uploadResp?.files) ? uploadResp.files : [];
+            for (const uploaded of uploadedFiles) {
+                await callDynamicPrisma({
+                    req,
                     data: {
-                        name: fileName,
-                        original_name: originalName,
-                        type: file.type,
-                        extension: file.extension,
-                        manual_puesto_id: manual.id
+                        action: "POST",
+                        table: "e_archivos_manual_puesto",
+                        operation: "create",
+                        data: {
+                            name: uploaded.name,
+                            original_name: uploaded.original_name || uploaded.name,
+                            type: uploaded.type,
+                            extension: uploaded.extension,
+                            manual_puesto_id: manualObj.id
+                        }
                     }
                 });
-                console.log(5);
             }
         }
+
+
+        const plazas = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "e_estructura_plazas",
+                operation: "findMany",
+                where: {
+                    puesto_id: { in: puestosParsed }, deleted: null,
+                    OR: [
+                        { fecha_inactivacion: null },
+                        { fecha_inactivacion: { gte: toZonedTime(new Date(), "America/Costa_Rica") } },
+                    ],
+                }, // In: puestosParsed
+            },
+        });
+
+        plazasIds = plazas.map((p: any) => p.id);
 
         const fecha_string = created_at.toISOString().split("T")[0];
         const hora_string = created_at.toISOString().split("T")[1].split(".")[0];
 
-        sendNotificationByPlaza(marca.id, "Manual creado", `Se ha creado el manual ${title} para tu puesto el día ${fecha_string} a las ${hora_string}`, plazasIds);
+        await sendNotificationByPlaza(req, marcaObj.id, "Manual creado", `Se ha creado el manual ${title} para tu puesto el día ${fecha_string} a las ${hora_string}`, plazasIds);
 
         return NextResponse.json(
             {
                 status: true,
                 message: "Manual creado con éxito",
-                manualIds: [manual.id]
+                manualIds: [manualObj.id]
             },
             { status: 200 }
         );

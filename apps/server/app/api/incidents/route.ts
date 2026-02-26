@@ -1,14 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../utils/verifyToken";
-import { prisma } from "../../../utils/prismaClient";
-import { getUserMarca } from "../../../utils/getUserMarca";
+import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
-import fs from "fs";
-import path from "path";
-import { v4 as uuidv4 } from "uuid";
 import { sendNotificationByEmployee, sendNotificationByRole } from "../../../utils/sendNotification";
 import { findContributionIncidents } from "../../../utils/findContributionIncidents";
+import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
 
 type IncidentFileInput = {
     type: string; // image | audio | video | document
@@ -31,17 +28,25 @@ function safeParseJson<T>(value: any, fallback: T): T {
     }
 }
 
-function normalizeBase64(b64: string): string {
-    // acepta "data:...;base64,AAAA" o "AAAA"
-    if (!b64) return "";
-    const idx = b64.indexOf("base64,");
-    if (idx !== -1) return b64.slice(idx + "base64,".length);
-    return b64;
+function buildIncidentFileUrl(baseUrl: string, incidentId: number, file: { name: string; type: string }): string {
+    const fileName = file.name;
+    const type = String(file.type || "file").toLowerCase();
+    let urlPath: string;
+    if (type === "image") {
+        urlPath = `/api/incidents/${incidentId}/get-image/${fileName}`;
+    } else if (type === "audio") {
+        urlPath = `/api/incidents/${incidentId}/get-audio/${fileName}`;
+    } else if (type === "video") {
+        urlPath = `/api/incidents/${incidentId}/get-video/${fileName}`;
+    } else {
+        urlPath = `/api/incidents/${incidentId}/get-file/${fileName}`;
+    }
+    return `${baseUrl}${urlPath}`;
 }
 
 export async function GET(req: NextRequest) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
         if (!valid) {
             return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
         }
@@ -51,7 +56,10 @@ export async function GET(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
         }
 
-        const marca = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(marcaIdStr) } });
+        const marca = await callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: parseInt(marcaIdStr) } }
+        });
         if (!marca) {
             return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
         }
@@ -60,7 +68,17 @@ export async function GET(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 200 });
         }
 
-        const lastMarca = await getUserMarca(marca.empleadoFijo_id);
+        // Obtener la última marca del empleado (simplificado: obtener la más reciente)
+        const lastMarca = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_marca_dia",
+                operation: "findFirst",
+                where: { empleadoFijo_id: marca.empleadoFijo_id },
+                orderBy: [{ fecha: "desc" }, { hora_inicio: "desc" }]
+            }
+        });
         if (!lastMarca) {
             return NextResponse.json({ status: false, message: "No se encontró la última marca" }, { status: 200 });
         }
@@ -69,19 +87,25 @@ export async function GET(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Hay una nueva marca más reciente" }, { status: 200 });
         }
 
-        const incidents = await prisma.c_incidente.findMany({
-            where: { corpo_id: marca.corpo_id },
-            orderBy: { id: "desc" },
-            include: {
-                n_ejecutivo_cuenta: true,
-                n_clasificacion_incidente: true,
-                c_archivos_incidente: true,
-                _count: {
-                    select: {
-                        c_contribucion_incidente: true,
+        const incidents = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_incidente",
+                operation: "findMany",
+                where: { corpo_id: marca.corpo_id },
+                orderBy: { id: "desc" },
+                include: {
+                    n_ejecutivo_cuenta: true,
+                    n_clasificacion_incidente: true,
+                    c_archivos_incidente: true,
+                    _count: {
+                        select: {
+                            c_contribucion_incidente: true,
+                        },
                     },
-                },
-            },
+                }
+            }
         });
 
         const incidentsMapped = [];
@@ -89,10 +113,13 @@ export async function GET(req: NextRequest) {
         for (const i of incidents) {
             const involucrados = safeParseJson<any[]>(i.involucrados, []);
             const fechaLibro = safeParseJson<any>(i.fecha_libro_novedades, { numero: "", fecha: "" });
-            const empleado = await prisma.c_empleado.findUnique({ where: { id: marca.empleadoFijo_id } });
+            const empleado = await callDynamicPrisma({
+                req,
+                data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: marca.empleadoFijo_id } }
+            });
             if (empleado) {
                 const ejecutivo = empleado.supervisor_id;
-                const aportes = await findContributionIncidents(i.id);
+                const aportes = await findContributionIncidents(req, i.id);
                 incidentsMapped.push({
                     id: i.id,
                     estado: Boolean(i.estado),
@@ -100,8 +127,8 @@ export async function GET(req: NextRequest) {
                         id: i.n_ejecutivo_cuenta?.id ?? i.ejecutivo_cuenta,
                         name: i.n_ejecutivo_cuenta?.nombre ?? "",
                     },
-                    fecha_incidente: i.fecha_incidente ? new Date(i.fecha_incidente).toISOString() : "",
-                    fecha_reporte: i.fecha_reporte ? new Date(i.fecha_reporte).toISOString() : "",
+                    fecha_incidente: i.fecha_incidente instanceof Date ? i.fecha_incidente.toISOString() : (i.fecha_incidente || ""),
+                    fecha_reporte: i.fecha_reporte instanceof Date ? i.fecha_reporte.toISOString() : (i.fecha_reporte || ""),
                     nombre_responsable: i.nombre_responsable ?? "",
                     clasificacion: {
                         id: i.n_clasificacion_incidente?.id ?? i.clasificacion,
@@ -112,8 +139,8 @@ export async function GET(req: NextRequest) {
                     fecha_libro_novedades: fechaLibro,
                     nombre_responsable_atencion: i.nombre_responsable_atencion ?? "",
                     solucion: i.solucion ?? "",
-                    fecha_solucion: i.fecha_solucion ? new Date(i.fecha_solucion).toISOString() : "",
-                    fecha_solucion_real: i.fecha_real_solucion ? new Date(i.fecha_real_solucion).toISOString() : "",
+                    fecha_solucion: i.fecha_solucion instanceof Date ? i.fecha_solucion.toISOString() : (i.fecha_solucion || ""),
+                    fecha_solucion_real: i.fecha_real_solucion instanceof Date ? i.fecha_real_solucion.toISOString() : (i.fecha_real_solucion || ""),
                     costo_asociado: i.costo_asociado ?? "",
                     consecutivo_informe: i.consecutivo_informe ?? "",
                     link_informe: i.link_informe ?? "",
@@ -123,6 +150,7 @@ export async function GET(req: NextRequest) {
                         original_name: f.original_name,
                         type: f.type,
                         extension: f.extension,
+                        url: buildIncidentFileUrl(req.nextUrl.origin, i.id, f),
                     })),
                     aportes: aportes ?? [],
                     owned: ejecutivo === i.ejecutivo_cuenta ? true : false,
@@ -141,7 +169,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
         if (!valid) {
             return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
         }
@@ -181,7 +209,10 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 200 });
         }
 
-        const marca = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(String(marca_id)) } });
+        const marca = await callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: parseInt(String(marca_id)) } }
+        });
         if (!marca) {
             return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
         }
@@ -196,82 +227,93 @@ export async function POST(req: NextRequest) {
 
         const createdAt = toZonedTime(new Date(), "America/Costa_Rica") as Date;
 
-        const incident = await prisma.c_incidente.create({
+        const incident = await callDynamicPrisma({
+            req,
             data: {
-                corpo_id: marca.corpo_id,
-                ejecutivo_cuenta: parseInt(String(empleado_id)),
-                fecha_incidente: new Date(fecha_incidente),
-                fecha_reporte: new Date(fecha_reporte),
-                nombre_responsable: String(nombre_responsable),
-                clasificacion: parseInt(String(clasificacion_id)),
-                descripcion: String(descripcion),
-                involucrados: JSON.stringify(invParsed ?? []),
-                fecha_libro_novedades: JSON.stringify(fechaLibroParsed ?? { numero: "", fecha: "" }),
-                nombre_responsable_atencion: String(nombre_responsable_atencion),
-                solucion: (typeof solucion === "string" && solucion.trim().length > 0) ? solucion : null,
-                fecha_solucion: (typeof fecha_solucion === "string" && fecha_solucion.trim().length > 0) ? new Date(fecha_solucion) : null,
-                fecha_real_solucion: (typeof fecha_real_solucion === "string" && fecha_real_solucion.trim().length > 0) ? new Date(fecha_real_solucion) : null,
-                costo_asociado: (typeof costo_asociado === "string" && costo_asociado.trim().length > 0) ? costo_asociado : null,
-                consecutivo_informe: (typeof consecutivo_informe === "string" && consecutivo_informe.trim().length > 0) ? consecutivo_informe : null,
-                link_informe: (typeof link_informe === "string" && link_informe.trim().length > 0) ? link_informe : null,
-                cliente_id: marca.cliente_id,
-                empresa_id: marca.empresa_id,
-                estado: true,
-                created_at: createdAt,
-                created_by: parseInt(String(payload?.id ?? "0")),
-            },
+                action: "POST",
+                table: "c_incidente",
+                data: {
+                    corpo_id: marca.corpo_id,
+                    ejecutivo_cuenta: parseInt(String(empleado_id)),
+                    fecha_incidente: new Date(fecha_incidente).toISOString(),
+                    fecha_reporte: new Date(fecha_reporte).toISOString(),
+                    nombre_responsable: String(nombre_responsable),
+                    clasificacion: parseInt(String(clasificacion_id)),
+                    descripcion: String(descripcion),
+                    involucrados: JSON.stringify(invParsed ?? []),
+                    fecha_libro_novedades: JSON.stringify(fechaLibroParsed ?? { numero: "", fecha: "" }),
+                    nombre_responsable_atencion: String(nombre_responsable_atencion),
+                    solucion: (typeof solucion === "string" && solucion.trim().length > 0) ? solucion : null,
+                    fecha_solucion: (typeof fecha_solucion === "string" && fecha_solucion.trim().length > 0) ? new Date(fecha_solucion).toISOString() : null,
+                    fecha_real_solucion: (typeof fecha_real_solucion === "string" && fecha_real_solucion.trim().length > 0) ? new Date(fecha_real_solucion).toISOString() : null,
+                    costo_asociado: (typeof costo_asociado === "string" && costo_asociado.trim().length > 0) ? costo_asociado : null,
+                    consecutivo_informe: (typeof consecutivo_informe === "string" && consecutivo_informe.trim().length > 0) ? consecutivo_informe : null,
+                    link_informe: (typeof link_informe === "string" && link_informe.trim().length > 0) ? link_informe : null,
+                    cliente_id: marca.cliente_id,
+                    empresa_id: marca.empresa_id,
+                    estado: true,
+                    created_at: createdAt.toISOString(),
+                    created_by: parseInt(String(payload?.id ?? "0")),
+                }
+            }
         });
 
         if (filesParsed.length > 0) {
-            const dir = path.join(process.cwd(), "public", "uploads", "incidents", `${incident.id}`);
-            if (!fs.existsSync(dir)) {
-                fs.mkdirSync(dir, { recursive: true });
-            }
+            const uploadResp = await uploadDynamicFiles({
+                req,
+                folderPath: `incidents/${incident.id}`,
+                files: filesParsed
+                    .filter((f) => f?.file_base64 && f?.extension && f?.type)
+                    .map((f) => ({
+                        type: f.type,
+                        extension: f.extension,
+                        original_name: f.original_name,
+                        file_base64: f.file_base64,
+                    })),
+            });
 
-            for (const f of filesParsed) {
-                if (!f.file_base64 || !f.extension || !f.type) continue;
-
-                let buffer: Buffer;
-                try {
-                    buffer = Buffer.from(normalizeBase64(String(f.file_base64)), "base64");
-                } catch {
-                    console.warn("Formato de archivo inválido, se omite uno de los archivos");
-                    continue;
-                }
-
-                const ext = String(f.extension).replace(".", "").trim() || "dat";
-                const fileName = `${uuidv4()}.${ext}`;
-                const filePath = path.join(dir, fileName);
-                fs.writeFileSync(filePath, buffer);
-
-                const originalName =
-                    (typeof f.original_name === "string" && f.original_name.trim().length > 0)
-                        ? f.original_name.trim()
-                        : fileName;
-
-                await prisma.c_archivos_incidente.create({
+            const uploadedFiles = Array.isArray(uploadResp?.files) ? uploadResp.files : [];
+            for (const uploaded of uploadedFiles) {
+                await callDynamicPrisma({
+                    req,
                     data: {
-                        name: fileName,
-                        original_name: originalName,
-                        type: String(f.type),
-                        extension: ext,
-                        incidente_id: incident.id,
+                        action: "POST",
+                        table: "c_archivos_incidente",
+                        data: {
+                            name: uploaded.name,
+                            original_name: uploaded.original_name || uploaded.name,
+                            type: uploaded.type,
+                            extension: uploaded.extension,
+                            incidente_id: incident.id,
+                        },
                     },
                 });
             }
         }
 
-        const clasificacion = await prisma.n_clasificacion_incidente.findUnique({ where: { id: parseInt(String(clasificacion_id)) } });
-        const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: marca.corpo_id } });
-        const cliente = await prisma.e_estructura_cliente.findUnique({ where: { id: marca.cliente_id } });
+        const clasificacion = await callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "n_clasificacion_incidente", operation: "findUnique", where: { id: parseInt(String(clasificacion_id)) } }
+        });
+        const sucursal = await callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "e_estructura_sucursal", operation: "findUnique", where: { id: marca.corpo_id } }
+        });
+        const cliente = await callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "e_estructura_cliente", operation: "findUnique", where: { id: marca.cliente_id } }
+        });
         if (clasificacion && sucursal && cliente) {
             const fecha_string = fecha_incidente.split("T")[0];
             const hora_string = fecha_incidente.split("T")[1].split(".")[0];
             const description = `Se ha reportado un incidente de tipo ${clasificacion.nombre} en la sucursal ${sucursal.nombre} de la empresa ${cliente.nombre} el día ${fecha_string} a las ${hora_string}`;
-            const supervisors = await prisma.c_empleado.findMany({ where: { supervisor_id: empleado_id } });
-            const supervisorIds = supervisors.map(s => s.id);
-            sendNotificationByRole(marca.corpo_id, [marca.plaza_id], "Incidente reportado", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
-            sendNotificationByEmployee(marca.corpo_id, [empleado_id], "Incidente reportado", description, supervisorIds);
+            const supervisors = await callDynamicPrisma({
+                req,
+                data: { action: "GET", table: "c_empleado", operation: "findMany", where: { supervisor_id: empleado_id } }
+            });
+            const supervisorIds = supervisors.map((s: any) => s.id);
+            await sendNotificationByRole(req, marca.corpo_id, [marca.plaza_id], "Incidente reportado", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+            await sendNotificationByEmployee(req, marca.corpo_id, [empleado_id], "Incidente reportado", description, supervisorIds);
         }
 
         return NextResponse.json(

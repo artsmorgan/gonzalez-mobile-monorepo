@@ -94,6 +94,38 @@ interface EditingInductionTourRecord {
   firma_responsable: string;
 }
 
+// Main structure types
+type MainStructureEmpleado = {
+  id: number;
+  nombre?: string | null;
+  primer_apellido?: string | null;
+  segundo_apellido?: string | null;
+  cedula: string;
+  fecha_contratacion?: string | null;
+};
+
+type MainStructurePlaza = { id: number; nombre: string; empleados?: MainStructureEmpleado[] };
+type MainStructurePuesto = { id: number; nombre: string; plazas?: MainStructurePlaza[] };
+type MainStructureSucursal = { id: number; nombre: string; puestos?: MainStructurePuesto[] };
+type MainStructureContrato = { id: number; nombre: string; sucursales?: MainStructureSucursal[] };
+type MainStructureDivision = { id: number; nombre: string; contratos?: MainStructureContrato[] };
+type MainStructureCliente = { id: number; nombre: string; division?: MainStructureDivision[] };
+type MainStructureEmpresa = { id: number; nombre: string; clientes?: MainStructureCliente[] };
+
+interface FirmaEmpleadoData {
+  sessionId: string;
+  empleadoId: string;
+  latitud: string;
+  longitud: string;
+  timestamp: string;
+  empleadoDetalle?: {
+    nombre: string;
+    primer_apellido: string;
+    segundo_apellido: string;
+    cedula_empleado: string;
+  };
+}
+
 const TEMAS_PREDEFINIDOS = [
   "Revisión de los documentos del expediente del aspirante.",
   "Prueba de cepillo.",
@@ -137,15 +169,30 @@ export default function InductionTourRecordScreen() {
   const [hasCurrentMarca, setHasCurrentMarca] = useState<boolean>(false);
 
   // Main structure y filtros jerárquicos
-  const [structure, setStructure] = useState<any[]>([]);
+  const [structure, setStructure] = useState<MainStructureEmpresa[]>([]);
   const [isStructureLoading, setIsStructureLoading] = useState(false);
   const [filterEmpresaId, setFilterEmpresaId] = useState<number | null>(null);
   const [filterClienteId, setFilterClienteId] = useState<number | null>(null);
+  const [filterDivisionId, setFilterDivisionId] = useState<number | null>(null);
   const [filterContratoId, setFilterContratoId] = useState<number | null>(null);
   const [filterCorpoId, setFilterCorpoId] = useState<number | null>(null);
   const [filterPuestoId, setFilterPuestoId] = useState<number | null>(null);
   const [filterPlazaId, setFilterPlazaId] = useState<number | null>(null);
   const [isHierarchyFiltersExpanded, setIsHierarchyFiltersExpanded] = useState(false);
+
+  // Empleado selection states
+  const [selectedEmpleadoId, setSelectedEmpleadoId] = useState<number | null>(null);
+  const empleadoIdRef = useRef<number | null>(null);
+
+  // Firma empleado states
+  const [firmaEmpleado, setFirmaEmpleado] = useState<FirmaEmpleadoData | null>(null);
+  const [firmaEmpleadoHash, setFirmaEmpleadoHash] = useState<string | null>(null);
+  const [firmaEmpleadoManual, setFirmaEmpleadoManual] = useState<string | null>(null);
+  const [firmaEmpleadoWarning, setFirmaEmpleadoWarning] = useState<string | null>(null);
+  const [isFirmaEmpleadoManualModalVisible, setIsFirmaEmpleadoManualModalVisible] = useState(false);
+  const [isReadingFirmaEmpleadoManual, setIsReadingFirmaEmpleadoManual] = useState(false);
+  const signatureEmpleadoRef = useRef<any>(null);
+  const [signatureEmpleadoKey, setSignatureEmpleadoKey] = useState(0);
 
   // IDs de current_marca para inicialización
   const [marcaEmpresaId, setMarcaEmpresaId] = useState<number | null>(null);
@@ -158,6 +205,9 @@ export default function InductionTourRecordScreen() {
   // Editing state
   const [editingRecord, setEditingRecord] = useState<EditingInductionTourRecord | null>(null);
   const [isCreating, setIsCreating] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitResponse, setSubmitResponse] = useState<{ type: 'success' | 'error', message: string } | null>(null);
+  const [isLoadingStructure, setIsLoadingStructure] = useState(true);
 
   // Form states - Jerarquía
   const [formEmpresaId, setFormEmpresaId] = useState<number | null>(null);
@@ -516,6 +566,142 @@ export default function InductionTourRecordScreen() {
     }
   };
 
+  // Funciones para manejo de empleado y firma del empleado
+  const onEmpleadoSelected = (id: number | null) => {
+    setSelectedEmpleadoId(id);
+    empleadoIdRef.current = id;
+    if (!id) {
+      setFirmaEmpleadoWarning(null);
+      return;
+    }
+
+    if (firmaEmpleado?.empleadoId && String(firmaEmpleado.empleadoId) !== String(id)) {
+      const emp = formEmpleados.find((e: MainStructureEmpleado) => e.id === id);
+      setFirmaEmpleadoWarning(
+        `La firma corresponde al empleado ID ${firmaEmpleado.empleadoId}, pero el empleado seleccionado es ${emp?.nombre || 'otro'}.`
+      );
+    } else {
+      setFirmaEmpleadoWarning(null);
+    }
+  };
+
+  const handleScanFirmaEmpleado = async () => {
+    try {
+      const qrData = await scanQR();
+      if (!qrData) return;
+
+      try {
+        const decoded = atob(qrData);
+        const parts = decoded.split(':');
+        if (parts.length !== 5) {
+          Alert.alert('Error', 'El QR no tiene la estructura esperada');
+          return;
+        }
+        const [sessionId, empleadoId, latitud, longitud, timestamp] = parts;
+
+        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        let empleadoDetalle: FirmaEmpleadoData['empleadoDetalle'] = undefined;
+        const isConnected = await getConnectionStatus();
+        if (isConnected && apiUrl) {
+          const response = await authedFetch({
+            url: `${apiUrl}/api/empleados/${empleadoId}`,
+            init: {
+              method: 'GET',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+            },
+            refreshAccessToken,
+            logout,
+          });
+          if (!response) return;
+
+          if (response.ok) {
+            const empleadoData = await response.json();
+            empleadoDetalle = {
+              nombre: empleadoData.nombre,
+              primer_apellido: empleadoData.primer_apellido,
+              segundo_apellido: empleadoData.segundo_apellido,
+              cedula_empleado: empleadoData.cedula,
+            };
+          }
+        }
+
+        setFirmaEmpleado({
+          sessionId,
+          empleadoId,
+          latitud,
+          longitud,
+          timestamp,
+          empleadoDetalle,
+        });
+        setFirmaEmpleadoHash(qrData);
+
+        if (selectedEmpleadoId) {
+          if (String(selectedEmpleadoId) !== String(empleadoId)) {
+            const empleadoSel = formEmpleados.find((e: MainStructureEmpleado) => e.id === selectedEmpleadoId);
+            setFirmaEmpleadoWarning(
+              `La firma corresponde al empleado ID ${empleadoId}, pero el empleado seleccionado es ${empleadoSel?.nombre || 'otro'}.`
+            );
+          } else {
+            setFirmaEmpleadoWarning(null);
+          }
+        } else {
+          setFirmaEmpleadoWarning(null);
+        }
+      } catch (err) {
+        console.error('Error decoding employee signature QR:', err);
+        Alert.alert('Error', 'El QR escaneado no es válido');
+      }
+    } catch (error) {
+      console.error('Error scanning QR for employee signature:', error);
+      Alert.alert('Error', 'No se pudo escanear la firma del empleado');
+    }
+  };
+
+  const openFirmaEmpleadoManualModal = () => {
+    setIsReadingFirmaEmpleadoManual(false);
+    setSignatureEmpleadoKey((k) => k + 1);
+    setIsFirmaEmpleadoManualModalVisible(true);
+  };
+
+  const closeFirmaEmpleadoManualModal = () => {
+    setIsFirmaEmpleadoManualModalVisible(false);
+    setIsReadingFirmaEmpleadoManual(false);
+  };
+
+  const clearFirmaEmpleadoManualInModal = () => {
+    try {
+      signatureEmpleadoRef.current?.clearSignature?.();
+    } catch { }
+    setIsReadingFirmaEmpleadoManual(false);
+    setSignatureEmpleadoKey((k) => k + 1);
+  };
+
+  const acceptFirmaEmpleadoManual = () => {
+    try {
+      setIsReadingFirmaEmpleadoManual(true);
+      signatureEmpleadoRef.current?.readSignature?.();
+    } catch {
+      setIsReadingFirmaEmpleadoManual(false);
+      Alert.alert('Error', 'No se pudo leer la firma. Intenta nuevamente.');
+    }
+  };
+
+  const handleFirmaEmpleadoManualRead = (signature: string) => {
+    const sig = String(signature || '').trim();
+    if (!sig || sig.length < 10) {
+      Alert.alert('Error', 'No se detectó la firma. Intenta de nuevo.');
+      setIsReadingFirmaEmpleadoManual(false);
+      return;
+    }
+
+    // Guardar la firma tal como viene del SignatureScreen (ya incluye el prefijo data:image/png;base64,)
+    setFirmaEmpleadoManual(sig);
+    setIsReadingFirmaEmpleadoManual(false);
+    closeFirmaEmpleadoManualModal();
+  };
+
   const safeParseJsonArray = <T,>(value?: string | null): T[] => {
     if (!value) return [];
     try {
@@ -572,26 +758,70 @@ export default function InductionTourRecordScreen() {
 
   const fetchMainStructure = useCallback(async () => {
     setIsStructureLoading(true);
+    setIsLoadingStructure(true);
     try {
-      const cacheStr = await AsyncStorage.getItem('main_structure_cache');
-      if (cacheStr) {
-        try {
-          const parsed = JSON.parse(cacheStr);
-          if (Array.isArray(parsed)) setStructure(parsed);
-        } catch {
-          // ignore
+      const isConnected = await getConnectionStatus();
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) {
+        throw new Error('Server URL not configured');
+      }
+
+      if (isConnected) {
+        const structureRes = await authedFetch({
+          url: `${apiUrl}/api/main-structure`,
+          init: {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+          },
+          refreshAccessToken,
+          logout,
+        });
+        if (structureRes && structureRes.ok) {
+          const structureData = await structureRes.json();
+          if (structureData.status && Array.isArray(structureData.structure)) {
+            setStructure(structureData.structure as MainStructureEmpresa[]);
+            await AsyncStorage.setItem('main_structure_cache', JSON.stringify(structureData.structure));
+          } else {
+            setStructure([]);
+          }
+        } else {
+          const structureCacheStr = await AsyncStorage.getItem('main_structure_cache');
+          if (structureCacheStr) setStructure(JSON.parse(structureCacheStr));
+          else setStructure([]);
+        }
+      } else {
+        const structureCacheStr = await AsyncStorage.getItem('main_structure_cache');
+        if (structureCacheStr) {
+          try {
+            const parsed = JSON.parse(structureCacheStr);
+            if (Array.isArray(parsed)) setStructure(parsed);
+          } catch {
+            setStructure([]);
+          }
+        } else {
+          setStructure([]);
         }
       }
-      const isConnected = await getConnectionStatus();
-      if (!isConnected) {
-        setIsStructureLoading(false);
-        return;
+    } catch (error) {
+      console.error('Error fetching main structure:', error);
+      const structureCacheStr = await AsyncStorage.getItem('main_structure_cache');
+      if (structureCacheStr) {
+        try {
+          const parsed = JSON.parse(structureCacheStr);
+          if (Array.isArray(parsed)) setStructure(parsed);
+        } catch {
+          setStructure([]);
+        }
+      } else {
+        setStructure([]);
       }
-      // La estructura ya se guarda desde otras pantallas, aquí solo usamos cache
     } finally {
       setIsStructureLoading(false);
+      setIsLoadingStructure(false);
     }
-  }, []);
+  }, [refreshAccessToken, logout]);
 
   // Nodos computados para filtros jerárquicos
   const filterEmpresas = useMemo(() => (Array.isArray(structure) ? structure : []), [structure]);
@@ -611,7 +841,14 @@ export default function InductionTourRecordScreen() {
     const cliente = filterClientes.find((c: any) => c.id === filterClienteId);
     if (!cliente) return [];
     const divisiones = cliente?.division || [];
-    // Recopilar todos los contratos de todas las divisiones del cliente
+
+    // Si hay división seleccionada, solo mostrar contratos de esa división
+    if (filterDivisionId) {
+      const division = divisiones.find((d: any) => d.id === filterDivisionId);
+      return division?.contratos || [];
+    }
+
+    // Si no hay división seleccionada, recopilar todos los contratos de todas las divisiones del cliente
     const contratos: any[] = [];
     divisiones.forEach((division: any) => {
       division.contratos?.forEach((contrato: any) => {
@@ -621,7 +858,7 @@ export default function InductionTourRecordScreen() {
       });
     });
     return contratos;
-  }, [filterClientes, filterClienteId]);
+  }, [filterClientes, filterClienteId, filterDivisionId]);
 
   const filterSucursales = useMemo(() => {
     const contrato = filterContratos.find((c: any) => c.id === filterContratoId);
@@ -682,6 +919,11 @@ export default function InductionTourRecordScreen() {
     const puesto = formPuestos.find((p: any) => p.id === formPuestoId);
     return puesto?.plazas || [];
   }, [formPuestos, formPuestoId]);
+
+  const formEmpleados = useMemo(() => {
+    const plaza = formPlazas.find((p: MainStructurePlaza) => p.id === formPlazaId);
+    return plaza?.empleados || [];
+  }, [formPlazas, formPlazaId]);
 
   const fetchRecords = useCallback(async () => {
     try {
@@ -757,7 +999,7 @@ export default function InductionTourRecordScreen() {
     } finally {
       setIsLoading(false);
     }
-  }, [refreshAccessToken, logout, filterEmpresaId, filterClienteId, filterContratoId, filterCorpoId, filterPuestoId, filterPlazaId, marcaEmpresaId, marcaClienteId, marcaContratoId, marcaCorpoId, marcaPuestoId, marcaPlazaId]);
+  }, [refreshAccessToken, logout, filterEmpresaId, filterClienteId, filterDivisionId, filterContratoId, filterCorpoId, filterPuestoId, filterPlazaId, marcaEmpresaId, marcaClienteId, marcaContratoId, marcaCorpoId, marcaPuestoId, marcaPlazaId]);
 
   // Inicializar filtros jerárquicos con current_marca
   useEffect(() => {
@@ -770,12 +1012,13 @@ export default function InductionTourRecordScreen() {
     if (marcaPlazaId && !filterPlazaId) setFilterPlazaId(marcaPlazaId);
   }, [structure, marcaEmpresaId, marcaClienteId, marcaContratoId, marcaCorpoId, marcaPuestoId, marcaPlazaId]);
 
-  // Trigger fetch cuando cambien los filtros jerárquicos (excepto División)
+
+  // Trigger fetch cuando cambien los filtros jerárquicos
   useEffect(() => {
-    if (structure && structure.length > 0 && (filterEmpresaId || filterClienteId || filterContratoId || filterCorpoId || filterPuestoId || filterPlazaId)) {
+    if (structure && structure.length > 0 && (filterEmpresaId || filterClienteId || filterDivisionId || filterContratoId || filterCorpoId || filterPuestoId || filterPlazaId)) {
       fetchRecords();
     }
-  }, [filterEmpresaId, filterClienteId, filterContratoId, filterCorpoId, filterPuestoId, filterPlazaId]);
+  }, [filterEmpresaId, filterClienteId, filterDivisionId, filterContratoId, filterCorpoId, filterPuestoId, filterPlazaId]);
 
   useFocusEffect(
     useCallback(() => {
@@ -803,10 +1046,17 @@ export default function InductionTourRecordScreen() {
     setFormCorpoId(null);
     setFormPuestoId(null);
     setFormPlazaId(null);
+    // Resetear empleado y firma
+    setSelectedEmpleadoId(null);
+    empleadoIdRef.current = null;
+    setFirmaEmpleado(null);
+    setFirmaEmpleadoHash(null);
+    setFirmaEmpleadoManual(null);
+    setFirmaEmpleadoWarning(null);
     // Cargar temas predefinidos
     const temasPredefinidos: TemaDesarrollado[] = TEMAS_PREDEFINIDOS.map(tema => ({
       tema: tema,
-      respuesta: '',
+      respuesta: 'SI',
       comentarios: '',
     }));
     setTemasDesarrollados(temasPredefinidos);
@@ -814,7 +1064,7 @@ export default function InductionTourRecordScreen() {
     // Cargar aspectos predefinidos
     const aspectosPredefinidos: AspectoEspecifico[] = ASPECTOS_PREDEFINIDOS.map(aspecto => ({
       aspecto: aspecto,
-      respuesta: '',
+      respuesta: 'SI',
       comentarios: '',
     }));
     setAspectosEspecificos(aspectosPredefinidos);
@@ -916,6 +1166,30 @@ export default function InductionTourRecordScreen() {
     setParticipantes(participantesArray);
     setFirmaSupervisor(formatSignatureForDisplay(record.firma_supervisor));
     setFirmaResponsableHash(record.firma_responsable || '');
+
+    // Cargar empleado_id y firma_empleado si existen
+    const recordAny = record as any;
+    if (recordAny.empleado_id) {
+      const empId = Number(recordAny.empleado_id);
+      setSelectedEmpleadoId(empId);
+      empleadoIdRef.current = empId;
+    } else {
+      setSelectedEmpleadoId(null);
+      empleadoIdRef.current = null;
+    }
+
+    // firma_empleado ahora contiene la firma manual dibujada (no el hash QR)
+    if (recordAny.firma_empleado) {
+      setFirmaEmpleadoManual(formatSignatureForDisplay(recordAny.firma_empleado));
+    } else {
+      setFirmaEmpleadoManual(null);
+    }
+
+    // Limpiar estados de QR ya que no se guarda
+    setFirmaEmpleado(null);
+    setFirmaEmpleadoHash(null);
+
+    setFirmaEmpleadoWarning(null);
     setExpandedTemaIndices(temasArray.map((_, i) => i));
     setExpandedAspectoIndices(aspectosArray.map((_, i) => i));
     setExpandedParticipanteIndices(participantesArray.map((_, i) => i));
@@ -938,7 +1212,7 @@ export default function InductionTourRecordScreen() {
   const addTema = () => {
     const newTema: TemaDesarrollado = {
       tema: '',
-      respuesta: '',
+      respuesta: 'SI',
       comentarios: '',
     };
     setTemasDesarrollados([...temasDesarrollados, newTema]);
@@ -981,7 +1255,7 @@ export default function InductionTourRecordScreen() {
   const addAspecto = () => {
     const newAspecto: AspectoEspecifico = {
       aspecto: '',
-      respuesta: '',
+      respuesta: 'SI',
       comentarios: '',
     };
     setAspectosEspecificos([...aspectosEspecificos, newAspecto]);
@@ -1126,6 +1400,16 @@ export default function InductionTourRecordScreen() {
       return;
     }
 
+    if (!selectedEmpleadoId || !empleadoIdRef.current) {
+      Alert.alert('Error', 'Empleado es obligatorio');
+      return;
+    }
+
+    if (!firmaEmpleadoManual || !firmaEmpleadoManual.trim()) {
+      Alert.alert('Error', 'Firma del empleado es obligatoria');
+      return;
+    }
+
     const currentMarcaData = JSON.parse(currentMarca);
 
     Alert.alert(
@@ -1136,6 +1420,8 @@ export default function InductionTourRecordScreen() {
         {
           text: 'Confirmar',
           onPress: async () => {
+            setIsSubmitting(true);
+            setSubmitResponse(null);
             try {
               const requestData = {
                 marca_id: currentMarcaData.id,
@@ -1145,6 +1431,7 @@ export default function InductionTourRecordScreen() {
                 corpo_id: formCorpoId,
                 puesto_id: formPuestoId || null,
                 plaza_id: formPlazaId,
+                empleado_id: empleadoIdRef.current,
                 fecha: formatDateForRequest(fecha) || null,
                 division: division.trim(),
                 renglon_edificio: renglonEdificio.trim() || null,
@@ -1157,6 +1444,7 @@ export default function InductionTourRecordScreen() {
                   firma: getBase64Only(p.firma),
                 }))) : null,
                 firma_supervisor: getBase64Only(firmaSupervisor),
+                firma_empleado: firmaEmpleadoManual ? String(firmaEmpleadoManual).trim() : '',
                 firma_responsable: firmaResponsableHash.trim(),
               };
 
@@ -1170,11 +1458,13 @@ export default function InductionTourRecordScreen() {
                 });
 
                 if (result.status) {
-                  Alert.alert('Éxito', 'Registro de inducción y recorrido guardado correctamente');
-                  cancelCreating();
-                  fetchRecords();
+                  setSubmitResponse({ type: 'success', message: result.message || 'Registro de inducción y recorrido guardado correctamente' });
+                  setTimeout(() => {
+                    cancelCreating();
+                    fetchRecords();
+                  }, 2000);
                 } else {
-                  Alert.alert('Error', result.message || 'Error al guardar el registro de inducción y recorrido');
+                  setSubmitResponse({ type: 'error', message: result.message || 'Error al guardar el registro de inducción y recorrido' });
                 }
               } else {
                 const localId = generateRandomId();
@@ -1212,17 +1502,24 @@ export default function InductionTourRecordScreen() {
                   created_at: new Date().toISOString(),
                   synced: false,
                 };
+                // Agregar empleado_id y firma_empleado al cache (aunque no estén en el tipo, se guardan en el objeto)
+                (newRecordCache as any).empleado_id = empleadoIdRef.current;
+                (newRecordCache as any).firma_empleado = firmaEmpleadoManual ? String(firmaEmpleadoManual).trim() : '';
 
                 cache.push({ ...newRecordCache, type: 'induction_tour_record' });
                 await AsyncStorage.setItem('evaluations_cache', JSON.stringify(cache));
 
-                Alert.alert('Modo Offline', 'Registro de inducción y recorrido registrado localmente. Se sincronizará cuando haya conexión.');
-                cancelCreating();
-                fetchRecords();
+                setSubmitResponse({ type: 'success', message: 'Registro de inducción y recorrido registrado localmente. Se sincronizará cuando haya conexión.' });
+                setTimeout(() => {
+                  cancelCreating();
+                  fetchRecords();
+                }, 2000);
               }
             } catch (err) {
               console.error('Error saving record:', err);
-              Alert.alert('Error', 'No se pudo guardar el registro de inducción y recorrido');
+              setSubmitResponse({ type: 'error', message: 'No se pudo guardar el registro de inducción y recorrido' });
+            } finally {
+              setIsSubmitting(false);
             }
           },
         },
@@ -1249,6 +1546,16 @@ export default function InductionTourRecordScreen() {
       return;
     }
 
+    if (!selectedEmpleadoId || !empleadoIdRef.current) {
+      Alert.alert('Error', 'Empleado es obligatorio');
+      return;
+    }
+
+    if (!firmaEmpleadoManual || !firmaEmpleadoManual.trim()) {
+      Alert.alert('Error', 'Firma del empleado es obligatoria');
+      return;
+    }
+
     Alert.alert(
       'Confirmar',
       '¿Estás seguro de que deseas actualizar este registro de inducción y recorrido?',
@@ -1257,6 +1564,8 @@ export default function InductionTourRecordScreen() {
         {
           text: 'Confirmar',
           onPress: async () => {
+            setIsSubmitting(true);
+            setSubmitResponse(null);
             try {
               const requestData = {
                 empresa_id: formEmpresaId,
@@ -1265,6 +1574,7 @@ export default function InductionTourRecordScreen() {
                 corpo_id: formCorpoId,
                 puesto_id: formPuestoId || null,
                 plaza_id: formPlazaId,
+                empleado_id: empleadoIdRef.current,
                 fecha: formatDateForRequest(fecha) || null,
                 division: division.trim(),
                 renglon_edificio: renglonEdificio.trim() || null,
@@ -1277,6 +1587,7 @@ export default function InductionTourRecordScreen() {
                   firma: getBase64Only(p.firma),
                 }))) : null,
                 firma_supervisor: getBase64Only(firmaSupervisor),
+                firma_empleado: firmaEmpleadoManual ? String(firmaEmpleadoManual).trim() : '',
                 firma_responsable: firmaResponsableHash.trim(),
               };
 
@@ -1291,11 +1602,13 @@ export default function InductionTourRecordScreen() {
                 });
 
                 if (result.status) {
-                  Alert.alert('Éxito', 'Registro de inducción y recorrido actualizado correctamente');
-                  cancelEditing();
-                  fetchRecords();
+                  setSubmitResponse({ type: 'success', message: result.message || 'Registro de inducción y recorrido actualizado correctamente' });
+                  setTimeout(() => {
+                    cancelEditing();
+                    fetchRecords();
+                  }, 2000);
                 } else {
-                  Alert.alert('Error', result.message || 'Error al actualizar el registro de inducción y recorrido');
+                  setSubmitResponse({ type: 'error', message: result.message || 'Error al actualizar el registro de inducción y recorrido' });
                 }
               } else {
                 const actionsStr = await AsyncStorage.getItem('evaluations_actions');
@@ -1351,13 +1664,17 @@ export default function InductionTourRecordScreen() {
                   await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
                 }
 
-                Alert.alert('Modo Offline', 'Registro de inducción y recorrido actualizado localmente. Se sincronizará cuando haya conexión.');
-                cancelEditing();
-                fetchRecords();
+                setSubmitResponse({ type: 'success', message: 'Registro de inducción y recorrido actualizado localmente. Se sincronizará cuando haya conexión.' });
+                setTimeout(() => {
+                  cancelEditing();
+                  fetchRecords();
+                }, 2000);
               }
             } catch (err) {
               console.error('Error updating record:', err);
-              Alert.alert('Error', 'No se pudo actualizar el registro de inducción y recorrido');
+              setSubmitResponse({ type: 'error', message: 'No se pudo actualizar el registro de inducción y recorrido' });
+            } finally {
+              setIsSubmitting(false);
             }
           },
         },
@@ -1569,6 +1886,39 @@ export default function InductionTourRecordScreen() {
     );
   };
 
+  // Función helper para obtener el nombre del empleado desde la estructura
+  const getEmpleadoNombre = useCallback((empleadoId: number | string | null | undefined): string => {
+    if (!empleadoId || !structure || structure.length === 0) return 'N/A';
+
+    const empId = Number(empleadoId);
+    if (Number.isNaN(empId)) return 'N/A';
+
+    // Buscar el empleado en toda la estructura
+    for (const empresa of structure) {
+      for (const cliente of empresa.clientes || []) {
+        for (const division of cliente.division || []) {
+          for (const contrato of division.contratos || []) {
+            for (const sucursal of contrato.sucursales || []) {
+              for (const puesto of sucursal.puestos || []) {
+                for (const plaza of puesto.plazas || []) {
+                  const empleado = plaza.empleados?.find((emp: MainStructureEmpleado) => emp.id === empId);
+                  if (empleado) {
+                    const nombre = empleado.nombre || '';
+                    const primerApellido = empleado.primer_apellido || '';
+                    const segundoApellido = empleado.segundo_apellido || '';
+                    const nombreCompleto = `${nombre} ${primerApellido} ${segundoApellido}`.trim();
+                    return nombreCompleto || empleado.cedula || 'N/A';
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    return 'N/A';
+  }, [structure]);
+
   const renderRecordList = () => {
     if (isLoading) {
       return (
@@ -1597,63 +1947,69 @@ export default function InductionTourRecordScreen() {
 
     return (
       <ThemedView style={styles.listContainer}>
-        {records.map((record) => (
-          <ThemedView key={record.id || record.id_local} style={styles.listItem}>
-            <ThemedView style={styles.listItemHeader}>
-              <ThemedView style={styles.listItemContent}>
-                <ThemedText style={styles.listItemTitle}>
-                  {record.renglon_edificio || 'N/A'}
-                </ThemedText>
-                <ThemedText style={styles.listItemSubtitle}>
-                  División: {record.division || 'N/A'}
-                </ThemedText>
-                <ThemedText style={styles.listItemSubtitle}>
-                  Supervisor (Cliente): {record.supervisor_cliente || 'N/A'}
-                </ThemedText>
-                <ThemedText style={styles.listItemSubtitle}>
-                  Supervisor (Corporación): {record.supervisor_corporacion || 'N/A'}
-                </ThemedText>
-                <ThemedText style={styles.listItemSubtitle}>
-                  Fecha: {formatDateForDisplay(record.fecha)}
-                </ThemedText>
-              </ThemedView>
-              <ThemedView style={styles.listItemActions}>
-              </ThemedView>
-            </ThemedView>
+        {records.map((record) => {
+          const recordAny = record as any;
+          const empleadoId = recordAny.empleado_id;
+          const empleadoNombre = getEmpleadoNombre(empleadoId);
 
-            {renderFirmaResponsablePreview(record)}
-            {renderTemasDesarrolladosPreview(record)}
-            {renderAspectosEspecificosPreview(record)}
+          return (
+            <ThemedView key={record.id || record.id_local} style={styles.listItem}>
+              <ThemedView style={styles.listItemHeader}>
+                <ThemedView style={styles.listItemContent}>
+                  <ThemedText style={styles.listItemTitle}>
+                    {empleadoNombre}
+                  </ThemedText>
+                  <ThemedText style={styles.listItemSubtitle}>
+                    División: {record.division || 'N/A'}
+                  </ThemedText>
+                  <ThemedText style={styles.listItemSubtitle}>
+                    Supervisor (Cliente): {record.supervisor_cliente || 'N/A'}
+                  </ThemedText>
+                  <ThemedText style={styles.listItemSubtitle}>
+                    Supervisor (Corporación): {record.supervisor_corporacion || 'N/A'}
+                  </ThemedText>
+                  <ThemedText style={styles.listItemSubtitle}>
+                    Fecha: {formatDateForDisplay(record.fecha)}
+                  </ThemedText>
+                </ThemedView>
+                <ThemedView style={styles.listItemActions}>
+                </ThemedView>
+              </ThemedView>
 
-            <ThemedView style={styles.listItemDetails}>
-              <ThemedView style={styles.listItemButtons}>
-                <TouchableOpacity
-                  style={[styles.listItemButton, styles.editButton]}
-                  onPress={() => startEditing(record)}
-                >
-                  {getActionIcon('edit')}
-                </TouchableOpacity>
-                {!(record.id_local || String(record.id).startsWith('local-') || record.id === 0) && (
+              {renderFirmaResponsablePreview(record)}
+              {renderTemasDesarrolladosPreview(record)}
+              {renderAspectosEspecificosPreview(record)}
+
+              <ThemedView style={styles.listItemDetails}>
+                <ThemedView style={styles.listItemButtons}>
                   <TouchableOpacity
-                    style={[styles.listItemButton, styles.changesButton]}
-                    onPress={() => {
-                      setCambiosTitle(`Cambios - Registro #${record.id}`);
-                      fetchCambios('c_registro_induccion_recorrido', Number(record.id));
-                    }}
+                    style={[styles.listItemButton, styles.editButton]}
+                    onPress={() => startEditing(record)}
                   >
-                    <Ionicons name="list-outline" size={20} color="#FFFFFF" />
+                    {getActionIcon('edit')}
                   </TouchableOpacity>
-                )}
-                <TouchableOpacity
-                  style={[styles.listItemButton, styles.deleteButton]}
-                  onPress={() => deleteRecordHandler(record)}
-                >
-                  {getActionIcon('delete')}
-                </TouchableOpacity>
+                  {!(record.id_local || String(record.id).startsWith('local-') || record.id === 0) && (
+                    <TouchableOpacity
+                      style={[styles.listItemButton, styles.changesButton]}
+                      onPress={() => {
+                        setCambiosTitle(`Cambios - Registro #${record.id}`);
+                        fetchCambios('c_registro_induccion_recorrido', Number(record.id));
+                      }}
+                    >
+                      <Ionicons name="list-outline" size={20} color="#FFFFFF" />
+                    </TouchableOpacity>
+                  )}
+                  <TouchableOpacity
+                    style={[styles.listItemButton, styles.deleteButton]}
+                    onPress={() => deleteRecordHandler(record)}
+                  >
+                    {getActionIcon('delete')}
+                  </TouchableOpacity>
+                </ThemedView>
               </ThemedView>
             </ThemedView>
-          </ThemedView>
-        ))}
+          );
+        })}
       </ThemedView>
     );
   };
@@ -1974,187 +2330,239 @@ export default function InductionTourRecordScreen() {
               </ThemedView>
 
               {/* Jerarquía */}
-              <ThemedView style={styles.formGroup}>
-                <ThemedText style={styles.formLabel}>Empresa *</ThemedText>
-                <View style={styles.pickerContainer}>
-                  <Picker
-                    selectedValue={formEmpresaId || ''}
-                    onValueChange={(value) => {
-                      setFormEmpresaId(value && value !== '' ? Number(value) : null);
-                      setFormClienteId(null);
-                      setFormDivisionId(null);
-                      setFormContratoId(null);
-                      setFormCorpoId(null);
-                      setFormPuestoId(null);
-                      setFormPlazaId(null);
-                      setDivision('Otros');
-                    }}
-                    style={styles.picker}
-                  >
-                    <Picker.Item label="Seleccionar..." value="" />
-                    {formEmpresas.map((e: any) => (
-                      <Picker.Item key={e.id} label={e.nombre} value={e.id} />
-                    ))}
-                  </Picker>
-                </View>
-              </ThemedView>
-
-              {formEmpresaId && (
+              {isLoadingStructure ? (
                 <ThemedView style={styles.formGroup}>
-                  <ThemedText style={styles.formLabel}>Cliente *</ThemedText>
-                  <View style={styles.pickerContainer}>
-                    <Picker
-                      selectedValue={formClienteId || ''}
-                      onValueChange={(value) => {
-                        setFormClienteId(value && value !== '' ? Number(value) : null);
-                        setFormDivisionId(null);
-                        setFormContratoId(null);
-                        setFormCorpoId(null);
-                        setFormPuestoId(null);
-                        setFormPlazaId(null);
-                        setDivision('Otros');
-                      }}
-                      style={styles.picker}
-                    >
-                      <Picker.Item label="Seleccionar..." value="" />
-                      {formClientes.map((c: any) => (
-                        <Picker.Item key={c.id} label={c.nombre} value={c.id} />
-                      ))}
-                    </Picker>
-                  </View>
+                  <ThemedView style={styles.loadingContainer}>
+                    <ActivityIndicator size="large" color="#007AFF" />
+                    <ThemedText style={styles.loadingText}>Cargando empresas...</ThemedText>
+                  </ThemedView>
                 </ThemedView>
-              )}
-
-              {formClienteId && (
-                <ThemedView style={styles.formGroup}>
-                  <ThemedText style={styles.formLabel}>División *</ThemedText>
-                  <View style={styles.pickerContainer}>
-                    <Picker
-                      selectedValue={formDivisionId || ''}
-                      onValueChange={(value) => {
-                        const divisionId = value && value !== '' ? Number(value) : null;
-                        setFormDivisionId(divisionId);
-                        // Mapear ID de división al nombre
-                        if (divisionId === 4) {
-                          setDivision('Seguridad');
-                        } else if (divisionId === 5) {
-                          setDivision('Aseo y limpieza');
-                        } else {
+              ) : (
+                <>
+                  <ThemedView style={styles.formGroup}>
+                    <ThemedText style={styles.formLabel}>Empresa *</ThemedText>
+                    <View style={styles.pickerContainer}>
+                      <Picker
+                        enabled={formEmpresas.length > 0}
+                        selectedValue={formEmpresaId || ''}
+                        onValueChange={(value) => {
+                          setFormEmpresaId(value && value !== '' ? Number(value) : null);
+                          setFormClienteId(null);
+                          setFormDivisionId(null);
+                          setFormContratoId(null);
+                          setFormCorpoId(null);
+                          setFormPuestoId(null);
+                          setFormPlazaId(null);
                           setDivision('Otros');
-                        }
-                        // Resetear temas y aspectos cuando cambia la división
-                        const temasPredefinidos: TemaDesarrollado[] = TEMAS_PREDEFINIDOS.map(tema => ({
-                          tema: tema,
-                          respuesta: '',
-                          comentarios: '',
-                        }));
-                        setTemasDesarrollados(temasPredefinidos);
-                        setExpandedTemaIndices(temasPredefinidos.map((_, i) => i));
-                        const aspectosPredefinidos: AspectoEspecifico[] = ASPECTOS_PREDEFINIDOS.map(aspecto => ({
-                          aspecto: aspecto,
-                          respuesta: '',
-                          comentarios: '',
-                        }));
-                        setAspectosEspecificos(aspectosPredefinidos);
-                        setExpandedAspectoIndices(aspectosPredefinidos.map((_, i) => i));
-                      }}
-                      style={styles.picker}
-                    >
-                      <Picker.Item label="Seleccionar..." value="" />
-                      {formDivisiones.map((d: any) => (
-                        <Picker.Item key={d.id} label={d.nombre} value={d.id} />
-                      ))}
-                    </Picker>
-                  </View>
-                </ThemedView>
-              )}
+                        }}
+                        style={styles.picker}
+                      >
+                        <Picker.Item label="Seleccionar..." value="" />
+                        {formEmpresas.map((e: any) => (
+                          <Picker.Item key={e.id} label={e.nombre} value={e.id} />
+                        ))}
+                      </Picker>
+                    </View>
+                  </ThemedView>
 
-              {formClienteId && (
-                <ThemedView style={styles.formGroup}>
-                  <ThemedText style={styles.formLabel}>Contrato *</ThemedText>
-                  <View style={styles.pickerContainer}>
-                    <Picker
-                      selectedValue={formContratoId || ''}
-                      onValueChange={(value) => {
-                        setFormContratoId(value && value !== '' ? Number(value) : null);
-                        setFormCorpoId(null);
-                        setFormPuestoId(null);
-                        setFormPlazaId(null);
-                      }}
-                      style={styles.picker}
-                    >
-                      <Picker.Item label="Seleccionar..." value="" />
-                      {formContratos.map((c: any) => (
-                        <Picker.Item key={c.id} label={c.nombre} value={c.id} />
-                      ))}
-                    </Picker>
-                  </View>
-                </ThemedView>
-              )}
+                  <ThemedView style={styles.formGroup}>
+                    <ThemedText style={styles.formLabel}>Cliente *</ThemedText>
+                    <View style={styles.pickerContainer}>
+                      <Picker
+                        enabled={formEmpresaId !== null}
+                        selectedValue={formClienteId || ''}
+                        onValueChange={(value) => {
+                          setFormClienteId(value && value !== '' ? Number(value) : null);
+                          setFormDivisionId(null);
+                          setFormContratoId(null);
+                          setFormCorpoId(null);
+                          setFormPuestoId(null);
+                          setFormPlazaId(null);
+                          setDivision('Otros');
+                        }}
+                        style={styles.picker}
+                      >
+                        <Picker.Item label={formEmpresaId ? "Seleccionar..." : "Seleccione empresa primero"} value="" />
+                        {formClientes.map((c: any) => (
+                          <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                        ))}
+                      </Picker>
+                    </View>
+                  </ThemedView>
 
-              {formContratoId && (
-                <ThemedView style={styles.formGroup}>
-                  <ThemedText style={styles.formLabel}>Sucursal *</ThemedText>
-                  <View style={styles.pickerContainer}>
-                    <Picker
-                      selectedValue={formCorpoId || ''}
-                      onValueChange={(value) => {
-                        setFormCorpoId(value && value !== '' ? Number(value) : null);
-                        setFormPuestoId(null);
-                        setFormPlazaId(null);
-                      }}
-                      style={styles.picker}
-                    >
-                      <Picker.Item label="Seleccionar..." value="" />
-                      {formSucursales.map((s: any) => (
-                        <Picker.Item key={s.id} label={s.nombre} value={s.id} />
-                      ))}
-                    </Picker>
-                  </View>
-                </ThemedView>
-              )}
+                  <ThemedView style={styles.formGroup}>
+                    <ThemedText style={styles.formLabel}>División *</ThemedText>
+                    <View style={styles.pickerContainer}>
+                      <Picker
+                        enabled={formClienteId !== null}
+                        selectedValue={formDivisionId || ''}
+                        onValueChange={(value) => {
+                          const divisionId = value && value !== '' ? Number(value) : null;
+                          setFormDivisionId(divisionId);
+                          // Mapear ID de división al nombre
+                          if (divisionId === 4) {
+                            setDivision('Seguridad');
+                          } else if (divisionId === 5) {
+                            setDivision('Aseo y limpieza');
+                          } else {
+                            setDivision('Otros');
+                          }
+                          // Resetear temas y aspectos cuando cambia la división
+                          const temasPredefinidos: TemaDesarrollado[] = TEMAS_PREDEFINIDOS.map(tema => ({
+                            tema: tema,
+                            respuesta: '',
+                            comentarios: '',
+                          }));
+                          setTemasDesarrollados(temasPredefinidos);
+                          setExpandedTemaIndices(temasPredefinidos.map((_, i) => i));
+                          const aspectosPredefinidos: AspectoEspecifico[] = ASPECTOS_PREDEFINIDOS.map(aspecto => ({
+                            aspecto: aspecto,
+                            respuesta: '',
+                            comentarios: '',
+                          }));
+                          setAspectosEspecificos(aspectosPredefinidos);
+                          setExpandedAspectoIndices(aspectosPredefinidos.map((_, i) => i));
+                        }}
+                        style={styles.picker}
+                      >
+                        <Picker.Item label={formClienteId ? "Seleccionar..." : "Seleccione cliente primero"} value="" />
+                        {formDivisiones.map((d: any) => (
+                          <Picker.Item key={d.id} label={d.nombre} value={d.id} />
+                        ))}
+                      </Picker>
+                    </View>
+                  </ThemedView>
 
-              {formCorpoId && (
-                <ThemedView style={styles.formGroup}>
-                  <ThemedText style={styles.formLabel}>Puesto</ThemedText>
-                  <View style={styles.pickerContainer}>
-                    <Picker
-                      selectedValue={formPuestoId || ''}
-                      onValueChange={(value) => {
-                        setFormPuestoId(value && value !== '' ? Number(value) : null);
-                        setFormPlazaId(null);
-                      }}
-                      style={styles.picker}
-                    >
-                      <Picker.Item label="Seleccionar..." value="" />
-                      {formPuestos.map((p: any) => (
-                        <Picker.Item key={p.id} label={p.nombre} value={p.id} />
-                      ))}
-                    </Picker>
-                  </View>
-                </ThemedView>
-              )}
+                  <ThemedView style={styles.formGroup}>
+                    <ThemedText style={styles.formLabel}>Contrato *</ThemedText>
+                    <View style={styles.pickerContainer}>
+                      <Picker
+                        enabled={formClienteId !== null}
+                        selectedValue={formContratoId || ''}
+                        onValueChange={(value) => {
+                          setFormContratoId(value && value !== '' ? Number(value) : null);
+                          setFormCorpoId(null);
+                          setFormPuestoId(null);
+                          setFormPlazaId(null);
+                        }}
+                        style={styles.picker}
+                      >
+                        <Picker.Item label={formClienteId ? "Seleccionar..." : "Seleccione cliente primero"} value="" />
+                        {formContratos.map((c: any) => (
+                          <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                        ))}
+                      </Picker>
+                    </View>
+                  </ThemedView>
 
-              {formPuestoId && (
-                <ThemedView style={styles.formGroup}>
-                  <ThemedText style={styles.formLabel}>Plaza *</ThemedText>
-                  <View style={styles.pickerContainer}>
-                    <Picker
-                      selectedValue={formPlazaId || ''}
-                      onValueChange={(value) => {
-                        setFormPlazaId(value && value !== '' ? Number(value) : null);
-                      }}
-                      style={styles.picker}
-                    >
-                      <Picker.Item label="Seleccionar..." value="" />
-                      {formPlazas.map((p: any) => (
-                        <Picker.Item key={p.id} label={p.nombre} value={p.id} />
-                      ))}
-                    </Picker>
-                  </View>
-                </ThemedView>
-              )}
+                  <ThemedView style={styles.formGroup}>
+                    <ThemedText style={styles.formLabel}>Sucursal *</ThemedText>
+                    <View style={styles.pickerContainer}>
+                      <Picker
+                        enabled={formContratoId !== null}
+                        selectedValue={formCorpoId || ''}
+                        onValueChange={(value) => {
+                          setFormCorpoId(value && value !== '' ? Number(value) : null);
+                          setFormPuestoId(null);
+                          setFormPlazaId(null);
+                        }}
+                        style={styles.picker}
+                      >
+                        <Picker.Item label={formContratoId ? "Seleccionar..." : "Seleccione contrato primero"} value="" />
+                        {formSucursales.map((s: any) => (
+                          <Picker.Item key={s.id} label={s.nombre} value={s.id} />
+                        ))}
+                      </Picker>
+                    </View>
+                  </ThemedView>
 
+                  <ThemedView style={styles.formGroup}>
+                    <ThemedText style={styles.formLabel}>Puesto</ThemedText>
+                    <View style={styles.pickerContainer}>
+                      <Picker
+                        enabled={formCorpoId !== null}
+                        selectedValue={formPuestoId || ''}
+                        onValueChange={(value) => {
+                          setFormPuestoId(value && value !== '' ? Number(value) : null);
+                          setFormPlazaId(null);
+                        }}
+                        style={styles.picker}
+                      >
+                        <Picker.Item label={formCorpoId ? "Seleccionar..." : "Seleccione sucursal primero"} value="" />
+                        {formPuestos.map((p: any) => (
+                          <Picker.Item key={p.id} label={p.nombre} value={p.id} />
+                        ))}
+                      </Picker>
+                    </View>
+                  </ThemedView>
+
+                  <ThemedView style={styles.formGroup}>
+                    <ThemedText style={styles.formLabel}>Plaza *</ThemedText>
+                    <View style={styles.pickerContainer}>
+                      <Picker
+                        enabled={formCorpoId !== null}
+                        selectedValue={formPlazaId || ''}
+                        onValueChange={(value) => {
+                          setFormPlazaId(value && value !== '' ? Number(value) : null);
+                          setSelectedEmpleadoId(null);
+                          empleadoIdRef.current = null;
+                          setFirmaEmpleado(null);
+                          setFirmaEmpleadoHash(null);
+                          setFirmaEmpleadoManual(null);
+                          setFirmaEmpleadoWarning(null);
+                        }}
+                        style={styles.picker}
+                      >
+                        <Picker.Item label={formCorpoId ? (formPuestoId ? "Seleccionar..." : "Seleccione puesto primero (opcional)") : "Seleccione sucursal primero"} value="" />
+                        {formPlazas.map((p: any) => (
+                          <Picker.Item key={p.id} label={p.nombre} value={p.id} />
+                        ))}
+                      </Picker>
+                    </View>
+                  </ThemedView>
+
+                  {/* Empleado */}
+                  <ThemedView style={styles.formGroup}>
+                    <ThemedText style={styles.formLabel}>Empleado *</ThemedText>
+                    <View style={styles.pickerContainer}>
+                      <Picker
+                        enabled={formPlazaId !== null}
+                        selectedValue={selectedEmpleadoId ?? 0}
+                        onValueChange={(value) => onEmpleadoSelected(value ? Number(value) : null)}
+                        style={styles.picker}
+                      >
+                        <Picker.Item label={formPlazaId ? 'Seleccionar empleado...' : 'Seleccione plaza primero'} value={0} />
+                        {formEmpleados.map((emp: MainStructureEmpleado) => (
+                          <Picker.Item key={emp.id} label={`${emp.nombre || ''} ${emp.primer_apellido || ''} ${emp.segundo_apellido || ''} - ${emp.cedula}`} value={emp.id} />
+                        ))}
+                      </Picker>
+                    </View>
+                  </ThemedView>
+
+                  {/* Firma del empleado */}
+                  <ThemedView style={styles.formGroup}>
+                    <ThemedText style={styles.formLabel}>Firma del empleado *</ThemedText>
+                    {firmaEmpleadoManual ? (
+                      <ThemedView style={styles.signaturePreviewContainer}>
+                        <Image source={{ uri: firmaEmpleadoManual }} style={styles.signaturePreview} resizeMode="contain" />
+                        <TouchableOpacity style={styles.removeSignatureButton} onPress={() => setFirmaEmpleadoManual(null)}>
+                          <Ionicons name="trash" size={18} color="#FFFFFF" />
+                        </TouchableOpacity>
+                      </ThemedView>
+                    ) : null}
+                    <TouchableOpacity
+                      style={[styles.openSignatureButton, formPlazaId === null && styles.disabledButton]}
+                      onPress={openFirmaEmpleadoManualModal}
+                      disabled={formPlazaId === null}
+                    >
+                      <Ionicons name="create-outline" size={20} color={formPlazaId === null ? "#999" : "#000000"} />
+                      <ThemedText style={[styles.openSignatureButtonText, formPlazaId === null && styles.disabledText]}>
+                        {firmaEmpleadoManual ? 'Modificar firma' : formPlazaId ? 'Dibujar firma' : 'Seleccione plaza primero'}
+                      </ThemedText>
+                    </TouchableOpacity>
+                  </ThemedView>
+                </>
+              )}
 
               {/* Renglón o Edificio */}
               <ThemedView style={styles.formGroup}>
@@ -2309,18 +2717,32 @@ export default function InductionTourRecordScreen() {
                 )}
               </ThemedView>
 
+              {submitResponse && (
+                <ThemedView style={[styles.responseContainer, submitResponse.type === 'success' ? styles.responseSuccess : styles.responseError]}>
+                  <ThemedText style={styles.responseText}>
+                    {submitResponse.type === 'success' ? '✓ ' : '✗ '}
+                    {submitResponse.message}
+                  </ThemedText>
+                </ThemedView>
+              )}
               <ThemedView style={styles.actionButtons}>
                 <TouchableOpacity
                   style={[styles.actionButton, styles.cancelButton]}
                   onPress={editingRecord ? cancelEditing : cancelCreating}
+                  disabled={isSubmitting}
                 >
                   {getActionIcon('cancel')}
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[styles.actionButton, styles.saveButton]}
+                  style={[styles.actionButton, styles.saveButton, isSubmitting && styles.buttonDisabled]}
                   onPress={editingRecord ? updateRecordHandler : saveRecordHandler}
+                  disabled={isSubmitting}
                 >
-                  {getActionIcon('confirm')}
+                  {isSubmitting ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    getActionIcon('confirm')
+                  )}
                 </TouchableOpacity>
               </ThemedView>
             </ThemedView>
@@ -2370,6 +2792,7 @@ export default function InductionTourRecordScreen() {
                             onValueChange={(value) => {
                               setFilterEmpresaId(value && value !== '' ? Number(value) : null);
                               setFilterClienteId(null);
+                              setFilterDivisionId(null);
                               setFilterContratoId(null);
                               setFilterCorpoId(null);
                               setFilterPuestoId(null);
@@ -2393,6 +2816,7 @@ export default function InductionTourRecordScreen() {
                               selectedValue={filterClienteId || ''}
                               onValueChange={(value) => {
                                 setFilterClienteId(value && value !== '' ? Number(value) : null);
+                                setFilterDivisionId(null);
                                 setFilterContratoId(null);
                                 setFilterCorpoId(null);
                                 setFilterPuestoId(null);
@@ -2414,8 +2838,15 @@ export default function InductionTourRecordScreen() {
                           <ThemedText style={styles.filterLabel}>División:</ThemedText>
                           <View style={styles.pickerWrapper}>
                             <Picker
-                              selectedValue={''}
-                              enabled={false}
+                              enabled={filterClienteId !== null}
+                              selectedValue={filterDivisionId || ''}
+                              onValueChange={(value) => {
+                                setFilterDivisionId(value && value !== '' ? Number(value) : null);
+                                setFilterContratoId(null);
+                                setFilterCorpoId(null);
+                                setFilterPuestoId(null);
+                                setFilterPlazaId(null);
+                              }}
                               style={styles.picker}
                             >
                               <Picker.Item label="Seleccionar..." value="" />
@@ -2653,6 +3084,61 @@ export default function InductionTourRecordScreen() {
                 })
               )}
             </ScrollView>
+          </ThemedView>
+        </View>
+      </Modal>
+
+      {/* Modal de firma manual del empleado */}
+      <Modal
+        visible={isFirmaEmpleadoManualModalVisible}
+        animationType="fade"
+        transparent
+        onRequestClose={closeFirmaEmpleadoManualModal}
+      >
+        <View style={styles.modalOverlay}>
+          <ThemedView style={styles.modalContainer}>
+            <ThemedView style={styles.modalHeader}>
+              <ThemedText style={styles.modalTitle}>Firma manual del empleado</ThemedText>
+              <TouchableOpacity onPress={closeFirmaEmpleadoManualModal}>
+                <Ionicons name="close" size={24} color="#000000" />
+              </TouchableOpacity>
+            </ThemedView>
+            <View style={styles.modalSignatureContainer}>
+              <SignatureScreen
+                ref={signatureEmpleadoRef}
+                onOK={handleFirmaEmpleadoManualRead}
+                onEmpty={() => {
+                  setIsReadingFirmaEmpleadoManual(false);
+                  Alert.alert('Error', 'No se detectó la firma. Intenta de nuevo.');
+                }}
+                descriptionText=""
+                clearText=""
+                confirmText=""
+                webStyle={`
+                  .m-signature-pad--footer {display: none; margin: 0px;}
+                  .m-signature-pad {box-shadow: none; border: none;}
+                  body,html {width: 100%; height: 100%; background: #ffffff;}
+                `}
+                key={signatureEmpleadoKey}
+              />
+            </View>
+            <ThemedView style={styles.modalActions}>
+              <TouchableOpacity style={styles.modalClearButton} onPress={clearFirmaEmpleadoManualInModal}>
+                <Ionicons name="trash" size={20} color="#000000" />
+                <ThemedText style={styles.modalClearButtonText}>Limpiar</ThemedText>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalAcceptButton, isReadingFirmaEmpleadoManual && { opacity: 0.7 }]}
+                onPress={acceptFirmaEmpleadoManual}
+                disabled={isReadingFirmaEmpleadoManual}
+              >
+                {isReadingFirmaEmpleadoManual ? (
+                  <ActivityIndicator size="small" color="#000000" />
+                ) : (
+                  <ThemedText style={styles.modalAcceptButtonText}>Aceptar</ThemedText>
+                )}
+              </TouchableOpacity>
+            </ThemedView>
           </ThemedView>
         </View>
       </Modal>
@@ -3009,6 +3495,80 @@ const styles = StyleSheet.create({
   },
   signatureInfoTitle: { fontSize: 14, fontWeight: '700', marginBottom: 8, color: '#333' },
   signatureInfoValue: { fontSize: 13, color: '#333', marginBottom: 4 },
+  signatureButtonPrimary: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#007AFF',
+    borderRadius: 8,
+    padding: 12,
+    gap: 8,
+  },
+  signatureInfo: {
+    backgroundColor: '#F5F5F5',
+    borderRadius: 8,
+    padding: 12,
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+  },
+  signatureInfoText: {
+    fontSize: 13,
+    color: '#333',
+    marginBottom: 4,
+  },
+  signatureInfoDetail: {
+    backgroundColor: '#E8F5E9',
+    borderRadius: 6,
+    padding: 8,
+    marginTop: 8,
+    marginBottom: 8,
+  },
+  signatureInfoDetailText: {
+    fontSize: 13,
+    color: '#2E7D32',
+    fontWeight: '600',
+  },
+  openSignatureButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F5F5F5',
+    borderRadius: 8,
+    padding: 12,
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    gap: 8,
+  },
+  openSignatureButtonText: {
+    fontSize: 14,
+    color: '#000000',
+    fontWeight: '600',
+  },
+  removeSignatureButton: {
+    position: 'absolute',
+    top: 5,
+    right: 5,
+    backgroundColor: '#FF3B30',
+    borderRadius: 20,
+    width: 30,
+    height: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  warningText: {
+    color: '#D32F2F',
+    fontSize: 13,
+    marginTop: 8,
+    fontStyle: 'italic',
+  },
+  disabledButton: {
+    opacity: 0.5,
+  },
+  disabledText: {
+    color: '#999',
+  },
   clearSignatureButtonTiny: {
     width: 38,
     height: 38,
@@ -3088,6 +3648,28 @@ const styles = StyleSheet.create({
   },
   saveButton: {
     backgroundColor: '#007AFF',
+  },
+  buttonDisabled: {
+    opacity: 0.6,
+  },
+  responseContainer: {
+    padding: 12,
+    borderRadius: 6,
+    marginBottom: 12,
+  },
+  responseSuccess: {
+    backgroundColor: '#D4EDDA',
+    borderWidth: 1,
+    borderColor: '#C3E6CB',
+  },
+  responseError: {
+    backgroundColor: '#F8D7DA',
+    borderWidth: 1,
+    borderColor: '#F5C6CB',
+  },
+  responseText: {
+    fontSize: 14,
+    fontWeight: '600',
   },
   actionButtonText: {
     color: '#FFFFFF',

@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../../utils/verifyToken";
-import { prisma } from "../../../../utils/prismaClient";
+import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
 import fs from "fs";
 import path from "path";
-import { v4 as uuidv4 } from "uuid";
+import { uploadDynamicFiles } from "../../../../utils/callDynamicFilesApi";
 
 export const runtime = "nodejs";
 
@@ -28,19 +28,12 @@ function safeParseJson<T>(value: any, fallback: T): T {
     }
 }
 
-function normalizeBase64(b64: string): string {
-    if (!b64) return "";
-    const idx = b64.indexOf("base64,");
-    if (idx !== -1) return b64.slice(idx + "base64,".length);
-    return b64;
-}
-
 export async function PUT(
     req: NextRequest,
     context: { params: Promise<{ id: string }> }
 ) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
 
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
@@ -74,13 +67,21 @@ export async function PUT(
         // Manejo de imágenes: opcionalmente borrar por IDs, y agregar nuevas
         const deleteIds: number[] = delete_imagenes ? safeParseJson<number[]>(delete_imagenes, []) : [];
         if (deleteIds.length > 0) {
-            const imagesToDelete = await prisma.c_imagenes_apertura_cierre_puesto.findMany({
-                where: { apetura_cierre_id: id, id: { in: deleteIds } },
+            const imagesToDelete = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "c_imagenes_apertura_cierre_puesto",
+                    operation: "findMany",
+                    where: { apetura_cierre_id: id, id: { in: deleteIds } },
+                },
             });
 
+            const imagesArray = Array.isArray(imagesToDelete) ? imagesToDelete : [];
             const dir = path.join(process.cwd(), "public", "uploads", "opening-closing-position", `${id}`);
-            for (const img of imagesToDelete) {
-                const p = path.join(dir, img.name);
+            for (const img of imagesArray) {
+                const imgObj = img as any;
+                const p = path.join(dir, imgObj.name);
                 try {
                     if (fs.existsSync(p)) fs.rmSync(p, { force: true });
                 } catch {
@@ -88,72 +89,82 @@ export async function PUT(
                 }
             }
 
-            await prisma.c_imagenes_apertura_cierre_puesto.deleteMany({
-                where: { apetura_cierre_id: id, id: { in: deleteIds } },
+            await callDynamicPrisma({
+                req,
+                data: {
+                    action: "DELETE",
+                    table: "c_imagenes_apertura_cierre_puesto",
+                    operation: "deleteMany",
+                    where: { apetura_cierre_id: id, id: { in: deleteIds } },
+                },
             });
         }
 
         let imagesParsed: OpeningClosingImageInput[] = [];
         if (imagenes) imagesParsed = safeParseJson<OpeningClosingImageInput[]>(imagenes, []);
         if (imagesParsed.length > 0) {
-            const dir = path.join(process.cwd(), "public", "uploads", "opening-closing-position", `${id}`);
-            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+            const uploadResp = await uploadDynamicFiles({
+                req,
+                folderPath: `opening-closing-position/${id}`,
+                files: imagesParsed
+                    .filter((img) => img?.file_base64)
+                    .map((img) => ({
+                        type: "image",
+                        extension: String(img.extension || "jpg").replace(".", "").trim() || "jpg",
+                        original_name: img.original_name,
+                        file_base64: img.file_base64,
+                    })),
+            });
 
-            for (const img of imagesParsed) {
-                if (!img?.file_base64) continue;
-                let buffer: Buffer;
-                try {
-                    buffer = Buffer.from(normalizeBase64(String(img.file_base64)), "base64");
-                } catch {
-                    continue;
-                }
-                const ext = String(img.extension || "jpg").replace(".", "").trim() || "jpg";
-                const fileName = `${uuidv4()}.${ext}`;
-                fs.writeFileSync(path.join(dir, fileName), buffer);
-
-                const originalName =
-                    typeof img.original_name === "string" && img.original_name.trim().length > 0
-                        ? img.original_name.trim()
-                        : fileName;
-
-                await prisma.c_imagenes_apertura_cierre_puesto.create({
-                    data: { name: fileName, original_name: originalName, apetura_cierre_id: id },
+            const uploadedFiles = Array.isArray(uploadResp?.files) ? uploadResp.files : [];
+            for (const uploaded of uploadedFiles) {
+                await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "POST",
+                        table: "c_imagenes_apertura_cierre_puesto",
+                        operation: "create",
+                        data: {
+                            name: uploaded.name,
+                            original_name: uploaded.original_name || uploaded.name,
+                            apetura_cierre_id: id,
+                        },
+                    },
                 });
             }
         }
 
-        const existing = await prisma.c_apertura_cierre_puesto.findUnique({
-            where: { id }
+        const existing = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_apertura_cierre_puesto",
+                operation: "findUnique",
+                where: { id },
+            },
         });
         if (!existing) {
             return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
         }
+        const existingObj = existing as any;
 
-        const updateData: any = {
-            cliente_id: cliente_id !== undefined ? parseInt(String(cliente_id), 10) : undefined,
-            corpo_id: corpo_id !== undefined ? parseInt(String(corpo_id), 10) : undefined,
-            puesto_id: puesto_id !== undefined ? parseInt(String(puesto_id), 10) : undefined,
-            division_id: division_id !== undefined ? parseInt(String(division_id), 10) : undefined,
-            fecha: fecha !== undefined ? new Date(String(fecha)) : undefined,
-            tipo: tipo !== undefined ? String(tipo) : undefined,
-            nombre_representante_cliente: nombre_representante_cliente !== undefined ? String(nombre_representante_cliente) : undefined,
-            nombre_representante_empresa_entrante: nombre_representante_empresa_entrante !== undefined ? String(nombre_representante_empresa_entrante) : undefined,
-            nombre_representante_empresa_saliente: nombre_representante_empresa_saliente !== undefined ? String(nombre_representante_empresa_saliente) : undefined,
-            actividades: actividades !== undefined ? String(actividades) : undefined,
-            inventario: inventario !== undefined ? String(inventario) : undefined,
-            otras_observaciones: otras_observaciones !== undefined ? (otras_observaciones ? String(otras_observaciones) : null) : undefined,
-            firma_representante_cliente: firma_representante_cliente !== undefined ? String(firma_representante_cliente) : undefined,
-            firma_representante_empresa_entrante: firma_representante_empresa_entrante !== undefined ? String(firma_representante_empresa_entrante) : undefined,
-            firma_representante_empresa_saliente: firma_representante_empresa_saliente !== undefined ? String(firma_representante_empresa_saliente) : undefined,
-            firma_responsable: firma_responsable !== undefined ? String(firma_responsable) : undefined,
-        };
-
-        // Eliminar campos undefined
-        Object.keys(updateData).forEach(key => {
-            if (updateData[key] === undefined) {
-                delete updateData[key];
-            }
-        });
+        const updateData: any = {};
+        if (cliente_id !== undefined) updateData.cliente_id = parseInt(String(cliente_id), 10);
+        if (corpo_id !== undefined) updateData.corpo_id = parseInt(String(corpo_id), 10);
+        if (puesto_id !== undefined) updateData.puesto_id = parseInt(String(puesto_id), 10);
+        if (division_id !== undefined) updateData.division_id = parseInt(String(division_id), 10);
+        if (fecha !== undefined) updateData.fecha = new Date(String(fecha)).toISOString();
+        if (tipo !== undefined) updateData.tipo = String(tipo);
+        if (nombre_representante_cliente !== undefined) updateData.nombre_representante_cliente = String(nombre_representante_cliente);
+        if (nombre_representante_empresa_entrante !== undefined) updateData.nombre_representante_empresa_entrante = String(nombre_representante_empresa_entrante);
+        if (nombre_representante_empresa_saliente !== undefined) updateData.nombre_representante_empresa_saliente = String(nombre_representante_empresa_saliente);
+        if (actividades !== undefined) updateData.actividades = String(actividades);
+        if (inventario !== undefined) updateData.inventario = String(inventario);
+        if (otras_observaciones !== undefined) updateData.otras_observaciones = otras_observaciones ? String(otras_observaciones) : null;
+        if (firma_representante_cliente !== undefined) updateData.firma_representante_cliente = String(firma_representante_cliente);
+        if (firma_representante_empresa_entrante !== undefined) updateData.firma_representante_empresa_entrante = String(firma_representante_empresa_entrante);
+        if (firma_representante_empresa_saliente !== undefined) updateData.firma_representante_empresa_saliente = String(firma_representante_empresa_saliente);
+        if (firma_responsable !== undefined) updateData.firma_responsable = String(firma_responsable);
 
         // Registrar cambios (solo campos actualizados, excluyendo firmas)
         const eq = (a: any, b: any) => {
@@ -169,49 +180,67 @@ export async function PUT(
         for (const [k, v] of Object.entries(updateData)) {
             if (k.startsWith("firma_")) continue; // Excluir firmas
 
-            const before = (existing as any)[k];
+            const before = existingObj[k];
             const after = v;
             if (!eq(before, after)) {
+                const beforeValue = before instanceof Date ? before.toISOString() : (typeof before === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(before) ? before : before);
+                const afterValue = after instanceof Date ? after.toISOString() : (typeof after === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(after) ? after : after);
                 cambiosArr.push({
                     prop: k,
-                    before: before instanceof Date ? before.toISOString() : before,
-                    after: after instanceof Date ? after.toISOString() : after,
+                    before: beforeValue,
+                    after: afterValue,
                 });
             }
         }
 
-        const updated_record = await prisma.c_apertura_cierre_puesto.update({
-            where: { id },
-            data: updateData
+        const updated_record = await callDynamicPrisma({
+            req,
+            data: {
+                action: "UPDATE",
+                table: "c_apertura_cierre_puesto",
+                operation: "update",
+                where: { id },
+                data: updateData
+            },
         });
 
         if (cambiosArr.length > 0) {
             const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
-            await prisma.c_cambios_apps_modules.create({
+            await callDynamicPrisma({
+                req,
                 data: {
-                    nombre_tabla: "c_apertura_cierre_puesto",
-                    registro_id: id,
-                    cambios: JSON.stringify(cambiosArr),
-                    created_at: toZonedTime(new Date(), "America/Costa_Rica"),
-                    created_by: createdBy,
+                    action: "POST",
+                    table: "c_cambios_apps_modules",
+                    operation: "create",
+                    data: {
+                        nombre_tabla: "c_apertura_cierre_puesto",
+                        registro_id: id,
+                        cambios: JSON.stringify(cambiosArr),
+                        created_at: toZonedTime(new Date(), "America/Costa_Rica").toISOString(),
+                        created_by: createdBy,
+                    },
                 },
             });
         }
 
-        const fullRecord = await prisma.c_apertura_cierre_puesto.findUnique({
-            where: { id },
-            include: {
-                c_imagenes_apertura_cierre_puesto: true,
-                e_estructura_cliente: { select: { nombre: true } },
-                e_estructura_sucursal: { select: { nombre: true } },
-                e_estructura_puesto: { select: { nombre: true } },
-                n_division: { select: { nombre: true } },
+        const fullRecord = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_apertura_cierre_puesto",
+                operation: "findUnique",
+                where: { id },
+                include: {
+                    c_imagenes_apertura_cierre_puesto: true,
+                    e_estructura_cliente: { select: { nombre: true } },
+                    e_estructura_sucursal: { select: { nombre: true } },
+                    e_estructura_puesto: { select: { nombre: true } },
+                    n_division: { select: { nombre: true } },
+                },
             },
         });
 
-        const proto = req.headers.get("x-forwarded-proto") || "http";
-        const host = req.headers.get("x-forwarded-host") || req.headers.get("host") || "";
-        const baseUrl = host ? `${proto}://${host}` : "";
+        const baseUrl = req.nextUrl.origin;
 
         return NextResponse.json({
             status: true,
@@ -244,7 +273,7 @@ export async function DELETE(
     context: { params: Promise<{ id: string }> }
 ) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
 
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
@@ -255,41 +284,55 @@ export async function DELETE(
             return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
         }
 
-        const existing = await prisma.c_apertura_cierre_puesto.findUnique({
-            where: { id }
+        const existing = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_apertura_cierre_puesto",
+                operation: "findUnique",
+                where: { id },
+            },
         });
         if (!existing) {
             return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
         }
 
+        const existingObj = existing as any;
         // Registrar cambio de eliminación antes de eliminar
         const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
         const createdAt = toZonedTime(new Date(), "America/Costa_Rica");
-        await prisma.c_cambios_apps_modules.create({
+        const fechaValue = existingObj.fecha instanceof Date ? existingObj.fecha.toISOString() : (typeof existingObj.fecha === 'string' ? existingObj.fecha : null);
+        await callDynamicPrisma({
+            req,
             data: {
-                nombre_tabla: "c_apertura_cierre_puesto",
-                registro_id: id,
-                cambios: JSON.stringify([{
-                    prop: "__deleted__",
-                    before: {
-                        id: existing.id,
-                        cliente_id: existing.cliente_id,
-                        corpo_id: existing.corpo_id,
-                        puesto_id: existing.puesto_id,
-                        division_id: existing.division_id,
-                        fecha: existing.fecha.toISOString(),
-                        tipo: existing.tipo,
-                        nombre_representante_cliente: existing.nombre_representante_cliente,
-                        nombre_representante_empresa_entrante: existing.nombre_representante_empresa_entrante,
-                        nombre_representante_empresa_saliente: existing.nombre_representante_empresa_saliente,
-                        actividades: existing.actividades,
-                        inventario: existing.inventario,
-                        otras_observaciones: existing.otras_observaciones,
-                    },
-                    after: null,
-                }]),
-                created_at: createdAt,
-                created_by: createdBy,
+                action: "POST",
+                table: "c_cambios_apps_modules",
+                operation: "create",
+                data: {
+                    nombre_tabla: "c_apertura_cierre_puesto",
+                    registro_id: id,
+                    cambios: JSON.stringify([{
+                        prop: "__deleted__",
+                        before: {
+                            id: existingObj.id,
+                            cliente_id: existingObj.cliente_id,
+                            corpo_id: existingObj.corpo_id,
+                            puesto_id: existingObj.puesto_id,
+                            division_id: existingObj.division_id,
+                            fecha: fechaValue,
+                            tipo: existingObj.tipo,
+                            nombre_representante_cliente: existingObj.nombre_representante_cliente,
+                            nombre_representante_empresa_entrante: existingObj.nombre_representante_empresa_entrante,
+                            nombre_representante_empresa_saliente: existingObj.nombre_representante_empresa_saliente,
+                            actividades: existingObj.actividades,
+                            inventario: existingObj.inventario,
+                            otras_observaciones: existingObj.otras_observaciones,
+                        },
+                        after: null,
+                    }]),
+                    created_at: createdAt.toISOString(),
+                    created_by: createdBy,
+                },
             },
         });
 
@@ -303,8 +346,14 @@ export async function DELETE(
             }
         }
 
-        await prisma.c_apertura_cierre_puesto.delete({
-            where: { id }
+        await callDynamicPrisma({
+            req,
+            data: {
+                action: "DELETE",
+                table: "c_apertura_cierre_puesto",
+                operation: "delete",
+                where: { id },
+            },
         });
 
         return NextResponse.json({

@@ -28,6 +28,10 @@ import getValidAccessTokenOrLogout from '@/hooks/getValidAccessTokenOrLogout';
 
 type ActivitiesScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Activities'>;
 
+type EstadoArticulo = 'Bueno' | 'Malo' | 'No está';
+
+type ArticleFormState = { estado: EstadoArticulo; cantidadReal: number; observaciones: string };
+
 // Inventory Item Component
 interface InventoryItemProps {
   activity: Actividad;
@@ -41,6 +45,8 @@ interface InventoryItemProps {
   onOpenCamera: (inventoryId: number) => void;
   inventoryImages: { [key: number]: string };
   onClearInventoryImage: (inventoryId: number) => void;
+  getArticleFormState: (activityId: number, inventory: Inventario) => ArticleFormState;
+  setArticleFormState: (activityId: number, inventory: Inventario, partial: Partial<ArticleFormState>) => void;
 }
 
 // Activity Item Component
@@ -56,6 +62,9 @@ interface ActivityItemProps {
   inventoryImages: { [key: number]: string };
   toggleActivity: (activity: Actividad) => void;
   onClearInventoryImage: (inventoryId: number) => void;
+  onGoToEntregaPuestos: () => void;
+  getArticleFormState: (activityId: number, inventory: Inventario) => ArticleFormState;
+  setArticleFormState: (activityId: number, inventory: Inventario, partial: Partial<ArticleFormState>) => void;
 }
 
 const ActivityItemComponent: React.FC<ActivityItemProps> = ({
@@ -70,6 +79,9 @@ const ActivityItemComponent: React.FC<ActivityItemProps> = ({
   inventoryImages,
   toggleActivity,
   onClearInventoryImage,
+  onGoToEntregaPuestos,
+  getArticleFormState,
+  setArticleFormState,
 }) => {
   const [cachedActivityImage, setCachedActivityImage] = React.useState<string | null>(null);
   const [serverActivityImageBase64, setServerActivityImageBase64] = React.useState<string | null>(null);
@@ -98,7 +110,11 @@ const ActivityItemComponent: React.FC<ActivityItemProps> = ({
     if (!apiUrl || !activity.id) return;
 
     try {
-      const imageUrl = `${apiUrl}/api/activities/${activity.id}/get-image?t=${Date.now()}`;
+      const token = (await AsyncStorage.getItem('access_token')) || '';
+      const baseImageUrl = `${apiUrl}/api/activities/${activity.id}/get-image?t=${Date.now()}`;
+      const imageUrl = token
+        ? `${baseImageUrl}&token=${encodeURIComponent(token)}`
+        : baseImageUrl;
       const response = await authedFetch({
         url: imageUrl,
         init: { method: 'GET' },
@@ -175,21 +191,19 @@ const ActivityItemComponent: React.FC<ActivityItemProps> = ({
           <ThemedText style={activity.is_pendiente ? styles.activityFrecuenciaPending : styles.activityFrecuencia}>{activity.is_pendiente ? 'Pendiente' : activity.frecuencia}</ThemedText>
         </ThemedView>
 
-        {!activity.is_revision_equipo && (
-          <ThemedView style={styles.checkboxContainer}>
-            <TouchableOpacity
-              style={[
-                styles.checkbox,
-                activity.is_marcada ? styles.checkboxChecked : styles.checkboxUnchecked
-              ]}
-              onPress={() => toggleActivity(activity)}
-            >
-              {activity.is_marcada && (
-                <Ionicons name="checkmark" size={16} color="#fff" />
-              )}
-            </TouchableOpacity>
-          </ThemedView>
-        )}
+        <ThemedView style={styles.checkboxContainer}>
+          <TouchableOpacity
+            style={[
+              styles.checkbox,
+              activity.is_marcada ? styles.checkboxChecked : styles.checkboxUnchecked
+            ]}
+            onPress={() => toggleActivity(activity)}
+          >
+            {activity.is_marcada && (
+              <Ionicons name="checkmark" size={16} color="#fff" />
+            )}
+          </TouchableOpacity>
+        </ThemedView>
       </ThemedView>
 
       <ThemedView style={styles.activityBody}>
@@ -197,25 +211,70 @@ const ActivityItemComponent: React.FC<ActivityItemProps> = ({
           {activity.descripcion_actividad}
         </ThemedText>
 
-        {activity.is_revision_equipo && activity.inventario && (
+        {activity.is_revision_equipo && activity.inventario && activity.inventario.length > 0 && (
           <ThemedView style={styles.inventoryContainer}>
-            <ThemedText style={styles.inventoryTitle}>Inventario:</ThemedText>
-            {activity.inventario.map(inventory => (
-              <InventoryItemComponent
-                key={inventory.id}
-                activity={activity}
-                inventory={inventory}
-                employee={employee}
-                refreshAccessToken={refreshAccessToken}
-                logout={logout}
-                fetchActivities={fetchActivities}
-                getActionIcon={getActionIcon}
-                getConnectionStatus={getConnectionStatus}
-                onOpenCamera={openCameraForInventory}
-                inventoryImages={inventoryImages}
-                onClearInventoryImage={onClearInventoryImage}
-              />
-            ))}
+            <ThemedText style={styles.inventoryTitle}>Artículos</ThemedText>
+            <TouchableOpacity style={styles.goEntregaButton} onPress={onGoToEntregaPuestos} activeOpacity={0.85}>
+              <Ionicons name="open-outline" size={16} color="#007AFF" />
+              <ThemedText style={styles.goEntregaButtonText}>Revisa el equipo en la entrega de puestos</ThemedText>
+            </TouchableOpacity>
+            <View style={styles.tableWrapper}>
+              <View style={styles.tableFixedColumn}>
+                <View style={styles.tableHeaderFixed}>
+                  <View style={styles.tableHeaderCellFirst}>
+                    <ThemedText style={styles.tableHeaderText}>Artículo</ThemedText>
+                  </View>
+                </View>
+                {activity.inventario.map((articulo) => (
+                  <View key={articulo.id} style={styles.tableRowFixed}>
+                    <View style={styles.tableCellFirst}>
+                      <ThemedText style={styles.tableCellFirstText}>{articulo.nombre}</ThemedText>
+                    </View>
+                  </View>
+                ))}
+              </View>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={true}
+                contentContainerStyle={styles.articulosScrollContent}
+                style={styles.articulosScrollView}
+              >
+                <View style={styles.tableScrollableContainer}>
+                  <View style={styles.tableHeader}>
+                    <View style={styles.tableHeaderCell}>
+                      <ThemedText style={styles.tableHeaderText}>Estado</ThemedText>
+                    </View>
+                    <View style={styles.tableHeaderCell}>
+                      <ThemedText style={styles.tableHeaderText}>Cant. Requerida</ThemedText>
+                    </View>
+                    <View style={styles.tableHeaderCell}>
+                      <ThemedText style={styles.tableHeaderText}>Cant. Real</ThemedText>
+                    </View>
+                    <View style={styles.tableHeaderCell}>
+                      <ThemedText style={styles.tableHeaderText}>Observaciones</ThemedText>
+                    </View>
+                  </View>
+                  {activity.inventario.map((inventory) => (
+                    <InventoryItemComponent
+                      key={inventory.id}
+                      activity={activity}
+                      inventory={inventory}
+                      employee={employee}
+                      refreshAccessToken={refreshAccessToken}
+                      logout={logout}
+                      fetchActivities={fetchActivities}
+                      getActionIcon={getActionIcon}
+                      getConnectionStatus={getConnectionStatus}
+                      onOpenCamera={openCameraForInventory}
+                      inventoryImages={inventoryImages}
+                      onClearInventoryImage={onClearInventoryImage}
+                      getArticleFormState={getArticleFormState}
+                      setArticleFormState={setArticleFormState}
+                    />
+                  ))}
+                </View>
+              </ScrollView>
+            </View>
           </ThemedView>
         )}
 
@@ -246,6 +305,14 @@ const ActivityItemComponent: React.FC<ActivityItemProps> = ({
   );
 };
 
+const getDefaultArticleFormState = (inventory: Inventario): ArticleFormState => ({
+  estado: (inventory.estado as EstadoArticulo) || (inventory.revision_equipo?.marcada
+    ? (inventory.revision_equipo.es_correcto ? 'Bueno' : 'Malo')
+    : 'Bueno'),
+  cantidadReal: typeof inventory.cantidad_real === 'number' ? inventory.cantidad_real : (inventory.cantidad_requerida ?? 0),
+  observaciones: inventory.observaciones ?? inventory.revision_equipo?.motivo_incorrecto ?? '',
+});
+
 const InventoryItemComponent: React.FC<InventoryItemProps> = ({
   activity,
   inventory,
@@ -258,162 +325,31 @@ const InventoryItemComponent: React.FC<InventoryItemProps> = ({
   onOpenCamera,
   inventoryImages,
   onClearInventoryImage,
+  getArticleFormState,
+  setArticleFormState,
 }) => {
-  const [isCorrect, setIsCorrect] = useState<boolean | undefined>(
-    inventory.revision_equipo?.marcada ? inventory.revision_equipo.es_correcto : undefined
-  );
-  const [motivo, setMotivo] = useState<string>(
-    inventory.revision_equipo?.motivo_incorrecto || ''
-  );
-  const [showMotivoInput, setShowMotivoInput] = useState<boolean>(true);
-  const [showConfirmButton, setShowConfirmButton] = useState<boolean>(false);
-  const [showImageCapture, setShowImageCapture] = useState<boolean>(false);
+  const formState = getArticleFormState(activity.id, inventory);
 
-  const handleRadioChange = (value: boolean) => {
-    setIsCorrect(value);
-    setShowMotivoInput(true);
-    setShowConfirmButton(true);
-    setShowImageCapture(true);
+  const estado = formState.estado;
+  const cantidadReal = formState.cantidadReal;
+  const observaciones = formState.observaciones;
 
-    if (value) {
-      setMotivo('');
-    }
+  const handleEstadoChange = (value: EstadoArticulo) => {
+    setArticleFormState(activity.id, inventory, {
+      estado: value,
+      cantidadReal: value === 'No está' ? 0 : formState.cantidadReal,
+    });
   };
 
-  const submitInventory = async () => {
-    if (!employee?.id) {
-      Alert.alert('Error', 'No se encontró la información del empleado.');
-      return;
-    }
+  const handleCantidadRealChange = (num: number) => {
+    setArticleFormState(activity.id, inventory, {
+      cantidadReal: num,
+      estado: num === 0 ? 'No está' : formState.estado,
+    });
+  };
 
-    if (isCorrect === undefined) {
-      Alert.alert('Error', 'Por favor, selecciona una opción.');
-      return;
-    }
-
-    if (!isCorrect && (!motivo || motivo.trim() === '')) {
-      Alert.alert('Error', 'Por favor, ingresa el motivo de por qué es incorrecto.');
-      return;
-    }
-
-    const revisionEquipoId = inventory.revision_equipo?.id;
-    if (!revisionEquipoId) {
-      Alert.alert('Error', 'No se encontró el ID de revisión del equipo');
-      return;
-    }
-
-    const isConnected = await getConnectionStatus();
-
-    const requestData: any = {
-      e: parseInt(employee.id),
-      es_correcto: isCorrect,
-      motivo_incorrecto: (isCorrect && (!motivo || motivo.trim() === '')) ? '-' : motivo,
-    };
-
-    // Add image if captured
-    const inventoryImage = inventoryImages[inventory.id];
-    if (inventoryImage) {
-      requestData.file = inventoryImage;
-    } else {
-      requestData.file = null;
-    }
-
-    if (isConnected) {
-      // Online: call API
-      try {
-        const { updateRevisionEquipo } = await import('@/hooks/activitiesFunctions');
-        const result = await updateRevisionEquipo({
-          requestData,
-          revisionEquipoId,
-          refreshAccessToken,
-          logout,
-        });
-
-        if (result.status) {
-          Alert.alert('Éxito', result.message);
-          setShowConfirmButton(false);
-          // Clear captured image from state after successful submission
-          if (inventoryImages[inventory.id]) {
-            onClearInventoryImage(inventory.id);
-          }
-          await fetchActivities();
-          // Force reload of server image
-          setImageRefreshKey(prev => prev + 1);
-        } else {
-          Alert.alert('Error', result.message);
-        }
-      } catch (err) {
-        console.error('Error submitting inventory:', err);
-        Alert.alert('Error', 'No se pudo actualizar el inventario');
-      }
-    } else {
-      // Offline: queue action and update cache
-      try {
-        const actionsStr = await AsyncStorage.getItem('activities_actions');
-        let actions = actionsStr ? JSON.parse(actionsStr) : [];
-
-        // Check if there's already an action for this revision
-        const existingActionIndex = actions.findIndex(
-          (action: any) => action.revisionEquipo_id === revisionEquipoId && action.type === 'update-equipo'
-        );
-
-        const horaAccion = await getHoraAccion();
-
-        if (existingActionIndex !== -1) {
-          // Replace existing action with new one
-          actions[existingActionIndex] = {
-            type: 'update-equipo',
-            revisionEquipo_id: revisionEquipoId,
-            activity_id: activity.id,
-            inventory_id: inventory.id,
-            requestData,
-            timestamp: horaAccion,
-          };
-          Alert.alert('Acción actualizada', 'La acción se sincronizará cuando recuperes la conexión.');
-          setShowConfirmButton(false);
-        } else {
-          // Add new action
-          actions.push({
-            type: 'update-equipo',
-            revisionEquipo_id: revisionEquipoId,
-            activity_id: activity.id,
-            inventory_id: inventory.id,
-            requestData,
-            timestamp: horaAccion,
-          });
-          Alert.alert('Guardado offline', 'La acción se sincronizará cuando recuperes la conexión.');
-          setShowConfirmButton(false);
-        }
-
-        await AsyncStorage.setItem('activities_actions', JSON.stringify(actions));
-
-        // Update cache - always apply the change (whether new or replacement)
-        const cachedActivities = await AsyncStorage.getItem('activities_cache');
-        if (cachedActivities) {
-          let activities = JSON.parse(cachedActivities);
-          const activityIndex = activities.findIndex((a: Actividad) => a.id === activity.id);
-
-          if (activityIndex !== -1) {
-            const inventoryIndex = activities[activityIndex].inventario.findIndex(
-              (inv: Inventario) => inv.id === inventory.id
-            );
-
-            if (inventoryIndex !== -1) {
-              // Always apply the current change
-              activities[activityIndex].inventario[inventoryIndex].revision_equipo.marcada = true;
-              activities[activityIndex].inventario[inventoryIndex].revision_equipo.es_correcto = isCorrect;
-              activities[activityIndex].inventario[inventoryIndex].revision_equipo.motivo_incorrecto = isCorrect ? '-' : motivo;
-
-              await AsyncStorage.setItem('activities_cache', JSON.stringify(activities));
-              await fetchActivities();
-            }
-          }
-        }
-      } catch (error) {
-        console.error('Error en modo offline:', error);
-        Alert.alert('Error', 'No se pudo guardar la acción offline');
-      }
-    }
+  const handleObservacionesChange = (text: string) => {
+    setArticleFormState(activity.id, inventory, { observaciones: text });
   };
 
   // Function to get cached image from offline actions
@@ -424,7 +360,8 @@ const InventoryItemComponent: React.FC<InventoryItemProps> = ({
         const actions = JSON.parse(actionsStr);
         const action = actions.find((a: any) =>
           a.type === 'update-equipo' &&
-          a.revisionEquipo_id === inventory.revision_equipo?.id
+          a.revisionEquipo_id === inventory.revision_equipo?.id &&
+          a.inventory_id === inventory.id
         );
         return action?.requestData?.file || null;
       }
@@ -444,7 +381,11 @@ const InventoryItemComponent: React.FC<InventoryItemProps> = ({
     if (!apiUrl || !inventory.revision_equipo?.id) return;
 
     try {
-      const imageUrl = `${apiUrl}/api/activities/equipo/${inventory.revision_equipo.id}/get-image?t=${Date.now()}`;
+      const token = (await AsyncStorage.getItem('access_token')) || '';
+      const baseImageUrl = `${apiUrl}/api/activities/equipo/${inventory.revision_equipo.id}/get-image?article_id=${inventory.id}&t=${Date.now()}`;
+      const imageUrl = token
+        ? `${baseImageUrl}&token=${encodeURIComponent(token)}`
+        : baseImageUrl;
       const response = await authedFetch({
         url: imageUrl,
         init: { method: 'GET' },
@@ -515,122 +456,69 @@ const InventoryItemComponent: React.FC<InventoryItemProps> = ({
   }, [inventory.revision_equipo?.id, imageRefreshKey, loadImageFromServer]);
 
   return (
-    <ThemedView style={styles.inventoryItem}>
-      <ThemedText style={styles.inventoryName}>{inventory.nombre}</ThemedText>
-
-      {/* Reglas */}
-      {inventory.reglas && inventory.reglas.length > 0 && (
-        <ThemedView style={styles.reglasContainer}>
-          <ThemedText style={styles.reglasTitle}>Especificaciones:</ThemedText>
-          {inventory.reglas.map((regla, index) => (
-            <ThemedView key={index} style={styles.reglaItem}>
-              <ThemedText style={styles.reglaNombre}>{regla.nombre}:</ThemedText>
-              <ThemedText style={styles.reglaValor}>{regla.valor}</ThemedText>
-            </ThemedView>
-          ))}
-        </ThemedView>
-      )}
-
-      <ThemedView style={styles.radioContainer}>
-        <TouchableOpacity
-          style={styles.radioButton}
-          onPress={() => handleRadioChange(true)}
-        >
-          <ThemedView style={[
-            styles.radioCircle,
-            isCorrect === true ? styles.radioSelected : styles.radioUnselected
-          ]}>
-            {isCorrect === true && <ThemedView style={styles.radioInner} />}
-          </ThemedView>
-          <ThemedText style={styles.radioLabel}>Correcto</ThemedText>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.radioButton}
-          onPress={() => handleRadioChange(false)}
-        >
-          <ThemedView style={[
-            styles.radioCircle,
-            isCorrect === false ? styles.radioSelected : styles.radioUnselected
-          ]}>
-            {isCorrect === false && <ThemedView style={styles.radioInner} />}
-          </ThemedView>
-          <ThemedText style={styles.radioLabel}>Incorrecto</ThemedText>
-        </TouchableOpacity>
-      </ThemedView>
-
-      {showMotivoInput && (
+    <View style={styles.tableRow}>
+      <View style={styles.tableCell}>
+        <View style={styles.pickerContainerTable}>
+          <Picker
+            selectedValue={estado}
+            onValueChange={(value) => handleEstadoChange(value as EstadoArticulo)}
+            style={styles.pickerTable}
+            itemStyle={styles.pickerItemStyle}
+          >
+            <Picker.Item label="Bueno" value="Bueno" />
+            <Picker.Item label="Malo" value="Malo" />
+            <Picker.Item label="No está" value="No está" />
+          </Picker>
+        </View>
+      </View>
+      <View style={styles.tableCell}>
+        <ThemedText style={styles.tableCellText}>
+          {typeof inventory.cantidad_requerida === 'number' ? String(inventory.cantidad_requerida) : '-'}
+        </ThemedText>
+      </View>
+      <View style={styles.tableCell}>
         <TextInput
-          style={styles.motivoInput}
-          value={motivo}
-          onChangeText={setMotivo}
-          placeholder={isCorrect === false ? "Motivo de por qué es incorrecto..." : "Motivo (opcional)..."}
+          style={styles.inputTable}
+          value={String(cantidadReal)}
+          onChangeText={(text) => {
+            const num = parseInt(text, 10) || 0;
+            handleCantidadRealChange(num);
+          }}
+          keyboardType="numeric"
           placeholderTextColor="#999"
-          multiline={true}
-          numberOfLines={2}
-          textAlignVertical="top"
         />
-      )}
-
-      {/* Image capture button */}
-      {showImageCapture && (
-        <TouchableOpacity
-          style={styles.captureImageButton}
-          onPress={() => onOpenCamera(inventory.id)}
-        >
-          <Ionicons name="camera" size={20} color="#007AFF" />
-          <ThemedText style={styles.captureImageButtonText}>
-            {inventoryImages[inventory.id] ? 'Cambiar imagen' : 'Capturar imagen'}
-          </ThemedText>
-        </TouchableOpacity>
-      )}
-
-      {/* Show captured image preview */}
-      {inventoryImages[inventory.id] && (
-        <ThemedView style={styles.imagePreviewContainer}>
-          <ThemedText style={styles.imagePreviewTitle}>Imagen capturada:</ThemedText>
-          <Image
-            source={{ uri: inventoryImages[inventory.id].startsWith('data:') ? inventoryImages[inventory.id] : `data:image/jpeg;base64,${inventoryImages[inventory.id]}` }}
-            style={styles.imagePreview}
-            resizeMode="contain"
-          />
-        </ThemedView>
-      )}
-
-      {/* Show existing image from server or cache */}
-      {!inventoryImages[inventory.id] && !showConfirmButton && inventory.revision_equipo?.imagen_adjunta && (
-        <ThemedView style={styles.imagePreviewContainer}>
-          <ThemedText style={styles.imagePreviewTitle}>Imagen adjunta:</ThemedText>
-          {(() => {
-            const imageToShow = serverImageBase64 || cachedImage;
-            if (!imageToShow) return null;
-
-            const imageUri = imageToShow.startsWith('data:')
-              ? imageToShow
-              : `data:image/jpeg;base64,${imageToShow}`;
-
-            return (
-              <Image
-                source={{ uri: imageUri }}
-                style={styles.imagePreview}
-                resizeMode="contain"
-              />
-            );
-          })()}
-        </ThemedView>
-      )}
-
-      {showConfirmButton && (
-        <TouchableOpacity
-          style={styles.confirmInventoryButton}
-          onPress={submitInventory}
-        >
-          <ThemedText style={styles.confirmInventoryButtonText}>
-            {getActionIcon('confirm')}
-          </ThemedText>
-        </TouchableOpacity>
-      )}
-    </ThemedView>
+      </View>
+      <View style={styles.tableCell}>
+        <TextInput
+          style={[styles.inputTable, styles.textAreaTable]}
+          value={observaciones}
+          onChangeText={handleObservacionesChange}
+          placeholder="Observaciones..."
+          placeholderTextColor="#999"
+          multiline
+          numberOfLines={3}
+        />
+        {inventoryImages[inventory.id] && (
+          <ThemedView style={styles.imagePreviewContainer}>
+            <Image
+              source={{ uri: inventoryImages[inventory.id].startsWith('data:') ? inventoryImages[inventory.id] : `data:image/jpeg;base64,${inventoryImages[inventory.id]}` }}
+              style={styles.imagePreview}
+              resizeMode="contain"
+            />
+          </ThemedView>
+        )}
+        {!inventoryImages[inventory.id] && inventory.revision_equipo?.imagen_adjunta && (
+          <ThemedView style={styles.imagePreviewContainer}>
+            {(() => {
+              const imageToShow = serverImageBase64 || cachedImage;
+              if (!imageToShow) return null;
+              const imageUri = imageToShow.startsWith('data:') ? imageToShow : `data:image/jpeg;base64,${imageToShow}`;
+              return <Image source={{ uri: imageUri }} style={styles.imagePreview} resizeMode="contain" />;
+            })()}
+          </ThemedView>
+        )}
+      </View>
+    </View>
   );
 };
 
@@ -649,6 +537,10 @@ interface Actividad {
 interface Inventario {
   id: number;
   nombre: string;
+  cantidad_requerida?: number;
+  cantidad_real?: number;
+  estado?: 'Bueno' | 'Malo' | 'No está';
+  observaciones?: string;
   reglas: Reglas[];
   revision_equipo: RevisionEquipo;
 }
@@ -774,6 +666,18 @@ export default function ActivitiesScreen() {
   const [cameraTarget, setCameraTarget] = useState<'activity' | 'inventory'>('activity');
   const [targetInventoryId, setTargetInventoryId] = useState<number | null>(null);
   const [inventoryImages, setInventoryImages] = useState<{ [key: number]: string }>({});
+  const [articleFormState, setArticleFormState] = useState<Record<string, ArticleFormState>>({});
+  const getArticleFormState = useCallback((activityId: number, inventory: Inventario) => {
+    const key = `${activityId}-${inventory.id}`;
+    return articleFormState[key] ?? getDefaultArticleFormState(inventory);
+  }, [articleFormState]);
+  const setArticleFormStateCallback = useCallback((activityId: number, inventory: Inventario, partial: Partial<ArticleFormState>) => {
+    setArticleFormState(prev => {
+      const key = `${activityId}-${inventory.id}`;
+      const current = prev[key] ?? getDefaultArticleFormState(inventory);
+      return { ...prev, [key]: { ...current, ...partial } };
+    });
+  }, []);
   // Repetition config modal state
   const [isCreateActivityVisible, setIsCreateActivityVisible] = useState(false);
   const [repetitionType, setRepetitionType] = useState<'daily' | 'weekly' | 'monthly-weekday' | 'monthly-last' | 'yearly' | 'weekdays' | 'custom'>('custom');
@@ -2053,35 +1957,27 @@ export default function ActivitiesScreen() {
   };
 
   const toggleActivity = (activity: Actividad) => {
-    const action = activity.is_marcada ? 'desmarcar' : 'marcar';
-    const actionText = activity.is_marcada ? 'desmarcar' : 'marcar';
-
-    if (action === 'marcar') {
-      // Para marcar, mostrar modal de bitácora
-      setSelectedActivity(activity);
-      setBitacoraText('');
-      setActivityImageBase64(null);
-      setIsBitacoraModalVisible(true);
-    } else {
-      // Para desmarcar, confirmar directamente
-      Alert.alert(
-        'Confirmar acción',
-        `¿Estás seguro de que deseas ${actionText} esta actividad?`,
-        [
-          { text: 'Cancelar', style: 'cancel' },
-          {
-            text: 'Confirmar',
-            onPress: () => executeToggleActivity(activity, 'desmarcar', "-", null),
-          },
-        ]
-      );
-    }
+    if (activity.is_marcada) return;
+    setSelectedActivity(activity);
+    setBitacoraText('');
+    setActivityImageBase64(null);
+    setIsBitacoraModalVisible(true);
   };
 
   const executeToggleActivity = async (activity: Actividad, estado: 'marcar' | 'desmarcar', bitacora: string | null, imageBase64: string | null) => {
     if (!employee?.id) {
       Alert.alert('Error', 'No se encontró la información necesaria del empleado.');
       return;
+    }
+
+    if (estado === 'marcar' && activity.is_revision_equipo && activity.inventario?.length) {
+      for (const inv of activity.inventario) {
+        const form = getArticleFormState(activity.id, inv);
+        if (form.estado !== 'Bueno' && (!form.observaciones || !form.observaciones.trim())) {
+          Alert.alert('Observaciones requeridas', `El artículo "${inv.nombre}" tiene estado "${form.estado}". Ingresa observaciones antes de marcar la actividad.`);
+          return;
+        }
+      }
     }
 
     const isConnected = await getConnectionStatus();
@@ -2111,6 +2007,34 @@ export default function ActivitiesScreen() {
         });
 
         if (result.status) {
+          if (estado === 'marcar' && activity.is_revision_equipo && activity.inventario?.length && employee?.id) {
+            const { updateRevisionEquipo } = await import('@/hooks/activitiesFunctions');
+            for (const inv of activity.inventario) {
+              const form = getArticleFormState(activity.id, inv);
+              const revisionEquipoId = inv.revision_equipo?.id;
+              if (!revisionEquipoId) continue;
+              const requestData: any = {
+                e: parseInt(employee.id),
+                articulo_id: inv.id,
+                es_correcto: form.estado === 'Bueno',
+                motivo_incorrecto: form.estado === 'Bueno' ? '-' : (form.observaciones.trim() || '-'),
+                estado: form.estado,
+                cantidad_real: form.cantidadReal,
+              };
+              const img = inventoryImages[inv.id];
+              requestData.file = img ?? null;
+              try {
+                await updateRevisionEquipo({
+                  requestData,
+                  revisionEquipoId,
+                  refreshAccessToken,
+                  logout,
+                });
+              } catch (e) {
+                console.error('Error actualizando artículo revisión:', e);
+              }
+            }
+          }
           Alert.alert('Éxito', result.message);
           await fetchActivities();
         } else {
@@ -2153,6 +2077,48 @@ export default function ActivitiesScreen() {
           Alert.alert('Guardado offline', 'La acción se sincronizará cuando recuperes la conexión.');
         }
 
+        // Si es revisión de equipo, también encolar el estado de los artículos
+        if (estado === 'marcar' && activity.is_revision_equipo && activity.inventario?.length && employee?.id) {
+          for (const inv of activity.inventario) {
+            const form = getArticleFormState(activity.id, inv);
+            const revisionEquipoId = inv.revision_equipo?.id;
+            if (!revisionEquipoId) continue;
+
+            const req: any = {
+              e: parseInt(employee.id),
+              articulo_id: inv.id,
+              es_correcto: form.estado === 'Bueno',
+              motivo_incorrecto: form.estado === 'Bueno' ? '-' : (form.observaciones.trim() || '-'),
+              estado: form.estado,
+              cantidad_real: form.cantidadReal,
+            };
+            const img = inventoryImages[inv.id];
+            req.file = img ?? null;
+
+            const existingEquipIndex = actions.findIndex(
+              (a: any) =>
+                a.type === 'update-equipo' &&
+                a.revisionEquipo_id === revisionEquipoId &&
+                a.inventory_id === inv.id
+            );
+
+            const newAction = {
+              type: 'update-equipo',
+              revisionEquipo_id: revisionEquipoId,
+              activity_id: activity.id,
+              inventory_id: inv.id,
+              requestData: req,
+              timestamp: horaAccion,
+            };
+
+            if (existingEquipIndex !== -1) {
+              actions[existingEquipIndex] = newAction;
+            } else {
+              actions.push(newAction);
+            }
+          }
+        }
+
         await AsyncStorage.setItem('activities_actions', JSON.stringify(actions));
 
         // Update cache
@@ -2162,7 +2128,7 @@ export default function ActivitiesScreen() {
           const activityIndex = activities.findIndex((a: Actividad) => a.id === activity.id);
 
           if (activityIndex !== -1) {
-            // Apply the change (marcar or desmarcar)
+            // Apply the change (marcar o dejar marcada)
             activities[activityIndex].is_marcada = estado === 'marcar';
 
             await AsyncStorage.setItem('activities_cache', JSON.stringify(activities));
@@ -2210,6 +2176,7 @@ export default function ActivitiesScreen() {
         openCameraForInventory={openCameraForInventory}
         inventoryImages={inventoryImages}
         toggleActivity={toggleActivity}
+        onGoToEntregaPuestos={() => navigation.navigate('EntregaPuestos')}
         onClearInventoryImage={(inventoryId) => {
           setInventoryImages((prev: { [key: number]: string }) => {
             const updated = { ...prev };
@@ -2217,6 +2184,8 @@ export default function ActivitiesScreen() {
             return updated;
           });
         }}
+        getArticleFormState={getArticleFormState}
+        setArticleFormState={setArticleFormStateCallback}
       />
     );
   };
@@ -3777,7 +3746,6 @@ const styles = StyleSheet.create({
   // Inventory styles
   inventoryContainer: {
     marginTop: 16,
-    gap: 12,
     backgroundColor: '#fff',
   },
   inventoryTitle: {
@@ -3786,18 +3754,148 @@ const styles = StyleSheet.create({
     color: '#333',
     marginBottom: 8,
   },
-  inventoryItem: {
-    backgroundColor: '#F8F9FA',
+  goEntregaButton: {
+    borderWidth: 1,
+    borderColor: '#007AFF',
     borderRadius: 8,
-    padding: 16,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#F4F9FF',
+    marginBottom: 8,
+  },
+  goEntregaButtonText: {
+    color: '#007AFF',
+    fontWeight: '700',
+    fontSize: 12,
+  },
+  tableWrapper: {
+    flexDirection: 'row',
+    marginTop: 10,
+  },
+  tableFixedColumn: {
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
     borderColor: '#E0E0E0',
+    borderRightWidth: 0,
   },
-  inventoryName: {
-    fontSize: 16,
-    fontWeight: '600',
+  tableHeaderFixed: {
+    backgroundColor: '#F5F5F5',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+    height: 50,
+  },
+  tableRowFixed: {
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+    height: 70,
+  },
+  articulosScrollView: {
+    flex: 1,
+  },
+  articulosScrollContent: {
+    paddingRight: 16,
+  },
+  tableScrollableContainer: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderLeftWidth: 0,
+  },
+  tableHeader: {
+    flexDirection: 'row',
+    backgroundColor: '#F5F5F5',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+    height: 50,
+  },
+  tableHeaderCell: {
+    padding: 10,
+    borderRightWidth: 1,
+    borderRightColor: '#E0E0E0',
+    width: 150,
+    justifyContent: 'center',
+    height: 50,
+  },
+  tableHeaderCellFirst: {
+    padding: 10,
+    borderRightWidth: 1,
+    borderRightColor: '#E0E0E0',
+    width: 100,
+    justifyContent: 'center',
+    height: 50,
+  },
+  tableHeaderText: {
     color: '#333',
-    marginBottom: 12,
+    fontWeight: '600',
+    fontSize: 13,
+    textAlign: 'center',
+  },
+  tableRow: {
+    flexDirection: 'row',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+    height: 70,
+  },
+  tableCell: {
+    padding: 10,
+    borderRightWidth: 1,
+    borderRightColor: '#E0E0E0',
+    width: 150,
+    justifyContent: 'center',
+    height: 70,
+  },
+  tableCellFirst: {
+    padding: 10,
+    borderRightWidth: 1,
+    borderRightColor: '#E0E0E0',
+    width: 100,
+    justifyContent: 'center',
+    height: 70,
+  },
+  tableCellFirstText: {
+    color: '#000',
+    fontSize: 10,
+    textAlign: 'center',
+    flexShrink: 1,
+  },
+  tableCellText: {
+    color: '#000',
+    fontSize: 13,
+    textAlign: 'center',
+    flexShrink: 1,
+  },
+  pickerContainerTable: {
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 4,
+    backgroundColor: '#fff',
+    overflow: 'hidden',
+  },
+  pickerTable: {
+    height: 50,
+    color: '#000',
+  },
+  pickerItemStyle: {
+    color: '#000',
+    fontSize: 13,
+  },
+  inputTable: {
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 4,
+    padding: 8,
+    fontSize: 13,
+    backgroundColor: '#fff',
+    minHeight: 35,
+    textAlign: 'center',
+  },
+  textAreaTable: {
+    minHeight: 50,
+    textAlignVertical: 'top',
+    textAlign: 'left',
   },
   reglasContainer: {
     marginBottom: 16,

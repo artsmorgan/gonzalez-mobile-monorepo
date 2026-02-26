@@ -1,29 +1,36 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../../../utils/verifyToken";
-import { prisma } from "../../../../../utils/prismaClient";
+import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 
 export async function GET(
     req: NextRequest,
     context: { params: Promise<{ corpo_id: string }> }
 ) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
 
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         const resolvedParams = await context.params;
         const { corpo_id } = resolvedParams;
 
-        const records = await prisma.c_solicitud_permiso.findMany({
-            where: {
-                corpo_id: corpo_id
+        const records = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_solicitud_permiso",
+                operation: "findMany",
+                where: {
+                    corpo_id: corpo_id
+                },
+                orderBy: {
+                    created_at: 'desc'
+                }
             },
-            orderBy: {
-                created_at: 'desc'
-            }
         });
 
-        const recordsWithIdLocal = records.map(record => ({
+        const recordsArray = Array.isArray(records) ? records : [];
+        const recordsWithIdLocal = recordsArray.map((record: any) => ({
             ...record,
             id_local: ""
         }));

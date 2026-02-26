@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../../../utils/verifyToken";
-import { prisma } from "../../../../../utils/prismaClient";
+import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByEmployee } from "../../../../../utils/sendNotification";
 
@@ -9,7 +9,7 @@ export async function PUT(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
     if (!valid) {
       return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
     }
@@ -23,11 +23,25 @@ export async function PUT(
       );
     }
 
-    const manual = await prisma.e_manual_puesto.findUnique({
-      where: { id: manualId }
+    const manual = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "e_manual_puesto",
+        operation: "findUnique",
+        where: { id: manualId },
+      },
     });
 
-    if (!manual || manual.quiz === null) {
+    if (!manual) {
+      return NextResponse.json(
+        { status: false, message: "Manual o quiz no encontrado" },
+        { status: 200 }
+      );
+    }
+
+    const manualObj = manual as any;
+    if (manualObj.quiz === null) {
       return NextResponse.json(
         { status: false, message: "Manual o quiz no encontrado" },
         { status: 200 }
@@ -60,10 +74,16 @@ export async function PUT(
       );
     }
 
-    const existing = await prisma.e_empleado_visualizacion_manual_puesto.findFirst({
-      where: {
-        manual_puesto_id: manualId,
-        empleado_id: empleado_id,
+    const existing = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "e_empleado_visualizacion_manual_puesto",
+        operation: "findFirst",
+        where: {
+          manual_puesto_id: manualId,
+          empleado_id: empleado_id,
+        },
       },
     });
 
@@ -74,17 +94,32 @@ export async function PUT(
       );
     }
 
+    const existingObj = existing as any;
     const nowCR = toZonedTime(new Date(), "America/Costa_Rica") as Date;
 
-    await prisma.e_empleado_visualizacion_manual_puesto.update({
-      where: { id: existing.id },
+    await callDynamicPrisma({
+      req,
       data: {
-        approved,
-        updated_at: nowCR,
+        action: "UPDATE",
+        table: "e_empleado_visualizacion_manual_puesto",
+        operation: "update",
+        where: { id: existingObj.id },
+        data: {
+          approved,
+          updated_at: nowCR.toISOString(),
+        },
       },
     });
 
-    const marca = await prisma.c_marca_dia.findUnique({ where: { id: marca_id } });
+    const marca = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "c_marca_dia",
+        operation: "findUnique",
+        where: { id: marca_id },
+      },
+    });
     if (!marca) {
       return NextResponse.json(
         { status: false, message: "Marca no encontrada" },
@@ -92,12 +127,13 @@ export async function PUT(
       );
     }
 
+    const marcaObj = marca as any;
     // Notificar al usuario que respondió el quiz
     const notifTitle = "Resultado del quiz";
     const notifDesc = approved
-      ? `Tu quiz del manual ${manual.title} fue aprobado.`
-      : `Tu quiz del manual ${manual.title} fue reprobado. Podrás intentarlo nuevamente cuando corresponda.`;
-    await sendNotificationByEmployee(marca.corpo_id, [empleado_id], notifTitle, notifDesc, [empleado_id]);
+      ? `Tu quiz del manual ${manualObj.title} fue aprobado.`
+      : `Tu quiz del manual ${manualObj.title} fue reprobado. Podrás intentarlo nuevamente cuando corresponda.`;
+    await sendNotificationByEmployee(req, marcaObj.corpo_id, [empleado_id], notifTitle, notifDesc, [empleado_id]);
 
     return NextResponse.json(
       { status: true, message: "Resultado del quiz actualizado" },

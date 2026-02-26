@@ -44,6 +44,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
   const [hasCurrentMarca, setHasCurrentMarca] = React.useState<boolean>(false);
   const [expandedSections, setExpandedSections] = React.useState<{ [key: string]: boolean }>({});
   const [permissions, setPermissions] = React.useState<Permission[]>([{ nombre: 'Acciones', actions: [] }]);
+  const [hasLunchTime, setHasLunchTime] = React.useState<boolean>(false);
 
   React.useEffect(() => {
     if (isVisible) {
@@ -60,6 +61,14 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
           setRole(currentMarcaData.roleDivision.role.nombre);
           setDivision(currentMarcaData.roleDivision.division.nombre);
           setHasCurrentMarca(true);
+          const lunchTime = await AsyncStorage.getItem('lunch_time_config');
+          if (lunchTime) {
+            const lunchTimeData = JSON.parse(lunchTime);
+            setHasLunchTime(lunchTimeData.tiene_almuerzo);
+          }
+          else {
+            setHasLunchTime(false);
+          }
         }
         else {
           setRole(null);
@@ -364,6 +373,11 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
     navigation.navigate('EntregaPuestos');
   };
 
+  const handlePuestoUbicacionPress = () => {
+    onClose();
+    navigation.navigate('PuestoUbicacion');
+  };
+
   const isActiveRoute = (route: string) => {
     return currentRoute === route;
   };
@@ -407,6 +421,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
       case 'acta-entrega-productos': return <Ionicons name="clipboard" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'physical-minute-agenda': return <Ionicons name="document-text" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'checklist-supervision': return <Ionicons name="checkmark-circle" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'puesto-ubicacion': return <Ionicons name="location" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'traslado-plazas': return <Ionicons name="swap-horizontal" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'logout': return <Ionicons name="log-out" size={20} color={isActive ? '#007AFF' : '#ffffff'} />;
     }
@@ -493,7 +508,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                 Perfil de Usuario
               </ThemedText>
             </TouchableOpacity>
-            {hasCurrentMarca && (
+            {hasCurrentMarca && hasLunchTime && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -780,7 +795,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                     isActiveRoute('TrasladoPlazas') && styles.activeMenuItemText
                   ]}
                 >
-                  Traslado de plazas
+                  Archivos de acciones
                 </ThemedText>
               </TouchableOpacity>
             )}
@@ -807,7 +822,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                     isActiveRoute('BitacoraVehiculosDetenidos') && styles.activeMenuItemText
                   ]}
                 >
-                  Bitácora de vehículos detenidos
+                  Revisión de vehículos
                 </ThemedText>
               </TouchableOpacity>
             )}
@@ -1245,7 +1260,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && (role === 'OPERATIVO' || role === 'SUPERVISOR') && division === 'Aseo y Limpieza' && (
+            {hasCurrentMarca && (role === 'OPERATIVO' || role === 'SUPERVISOR') && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -1350,6 +1365,33 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                   ]}
                 >
                   Acta de entrega de productos
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+
+            {hasCurrentMarca && (role === 'ADMINISTRATIVO' || role === 'SUPERVISOR') && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('PuestoUbicacion') && styles.activeMenuItem
+                ]}
+                onPress={handlePuestoUbicacionPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('PuestoUbicacion') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('puesto-ubicacion', isActiveRoute('PuestoUbicacion'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('PuestoUbicacion') && styles.activeMenuItemText
+                  ]}
+                >
+                  Ubicación del puesto
                 </ThemedText>
               </TouchableOpacity>
             )}

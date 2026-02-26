@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 import { NextRequest, NextResponse } from "next/server";
 import { v4 as uuidv4 } from "uuid";
-import { prisma } from "../../../../utils/prismaClient";
+import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 const jwt = require("jsonwebtoken");
 import crypto from "crypto";
 import { toZonedTime } from "date-fns-tz";
@@ -47,8 +47,15 @@ export async function POST(request: NextRequest) {
 
 
     // 2️⃣ Buscar token en BD (no revocado)
-    const storedToken = await prisma.refresh_token.findFirst({
-      where: { token: hashToken(refreshToken) },
+    const storedToken = await callDynamicPrisma({
+      req: request,
+      shouldVerifyAccessToken: false,
+      data: {
+        action: "GET",
+        table: "refresh_token",
+        operation: "findFirst",
+        where: { token: hashToken(refreshToken) },
+      }
     });
 
     if (!storedToken || storedToken.revoked) {
@@ -105,24 +112,34 @@ export async function POST(request: NextRequest) {
     );
 
     // 6️⃣ Transacción atómica
-    await prisma.$transaction(async (tx) => {
-      // Revocar SOLO el token usado
-      await tx.refresh_token.update({
+    await callDynamicPrisma({
+      req: request,
+      shouldVerifyAccessToken: false,
+      data: {
+        action: "UPDATE",
+        table: "refresh_token",
         where: { id: storedToken.id },
         data: { revoked: true },
-      });
+        returning: false
+      }
+    });
 
-      // Crear nuevo refresh token
-      await tx.refresh_token.create({
+    await callDynamicPrisma({
+      req: request,
+      shouldVerifyAccessToken: false,
+      data: {
+        action: "POST",
+        table: "refresh_token",
         data: {
           token: hashToken(newRefreshToken),
           empleadoId: payload.id,
           sessionId: newSessionId,
           expiresAt: new Date(
             Date.now() + 7 * 24 * 60 * 60 * 1000
-          ),
+          ).toISOString(),
         },
-      });
+        returning: false
+      }
     });
 
     console.log("Token renovado con éxito");

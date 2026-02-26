@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -31,6 +31,7 @@ import { Picker } from '@react-native-picker/picker';
 import { useQRScanner } from '@/hooks/useQRScanner';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import SignatureScreen from 'react-native-signature-canvas';
 import { createStaffEvaluation, deleteStaffEvaluation } from '@/hooks/staffEvaluationsFunctions';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import authedFetch from '@/hooks/authedFetch';
@@ -55,6 +56,23 @@ interface CorpoEmployee {
   cedula: string;
   fecha_contratacion: string;
 }
+
+type MainStructureEmpleado = {
+  id: number;
+  nombre?: string | null;
+  primer_apellido?: string | null;
+  segundo_apellido?: string | null;
+  cedula: string;
+  fecha_contratacion?: string | null;
+};
+
+type MainStructurePlaza = { id: number; nombre: string; empleados?: MainStructureEmpleado[] };
+type MainStructurePuesto = { id: number; nombre: string; plazas?: MainStructurePlaza[] };
+type MainStructureSucursal = { id: number; nombre: string; puestos?: MainStructurePuesto[] };
+type MainStructureContrato = { id: number; nombre: string; sucursales?: MainStructureSucursal[] };
+type MainStructureDivision = { id: number; nombre: string; contratos?: MainStructureContrato[] };
+type MainStructureCliente = { id: number; nombre: string; division?: MainStructureDivision[] };
+type MainStructureEmpresa = { id: number; nombre: string; clientes?: MainStructureCliente[] };
 
 interface FirmaData {
   sessionId: string;
@@ -103,6 +121,7 @@ interface StaffEvaluation {
   tipo: string;
   firma_evaluador: string;
   firma_empleado: string;
+  firma_empleado_manual?: string | null;
   id_local: string;
 }
 
@@ -124,8 +143,15 @@ const monthNames = [
 ];
 
 export default function StaffEvaluationsScreen() {
-  const { employee, refreshAccessToken, logout } = useAuth();
+  const { employee, refreshAccessToken, logout, accessToken } = useAuth();
   const navigation = useNavigation<StaffEvaluationsNavigationProp>();
+  const appendTokenToUrl = (url: string) => {
+    if (!url) return '';
+    if (!accessToken || accessToken.trim().length === 0) return url;
+    if (/[?&]token=/.test(url)) return url;
+    const sep = url.includes('?') ? '&' : '?';
+    return `${url}${sep}token=${encodeURIComponent(accessToken)}`;
+  };
   const [isMenuVisible, setIsMenuVisible] = useState(false);
 
   // Marca / corpo
@@ -136,7 +162,8 @@ export default function StaffEvaluationsScreen() {
 
   // Datos remotos / cache
   const [evaluaciones, setEvaluaciones] = useState<StaffEvaluation[]>([]);
-  const [empleados, setEmpleados] = useState<CorpoEmployee[]>([]);
+  const [structure, setStructure] = useState<MainStructureEmpresa[]>([]);
+  const [isStructureLoading, setIsStructureLoading] = useState(false);
 
   // Expand / detalles
   const [expandedEvaluations, setExpandedEvaluations] = useState<Set<string>>(new Set());
@@ -145,6 +172,14 @@ export default function StaffEvaluationsScreen() {
   // Formulario de nueva evaluación
   const [isCreating, setIsCreating] = useState(false);
   const [formKey, setFormKey] = useState(0);
+  const [selectedEmpresaId, setSelectedEmpresaId] = useState<number | null>(null);
+  const [selectedClienteId, setSelectedClienteId] = useState<number | null>(null);
+  const [selectedDivisionId, setSelectedDivisionId] = useState<number | null>(null);
+  const [selectedContratoId, setSelectedContratoId] = useState<number | null>(null);
+  const [selectedCorpoId, setSelectedCorpoId] = useState<number | null>(null);
+  const [selectedPuestoId, setSelectedPuestoId] = useState<number | null>(null);
+  const [selectedPlazaId, setSelectedPlazaId] = useState<number | null>(null);
+  const isRestoringHierarchyRef = useRef(false);
   const [selectedEmpleadoId, setSelectedEmpleadoId] = useState<number | null>(null);
   const [nombreColaborador, setNombreColaborador] = useState('');
   const [cedulaColaborador, setCedulaColaborador] = useState('');
@@ -183,6 +218,7 @@ export default function StaffEvaluationsScreen() {
   const [firmaEvaluadorHash, setFirmaEvaluadorHash] = useState<string | null>(null);
   const [firmaEmpleado, setFirmaEmpleado] = useState<FirmaData | null>(null);
   const [firmaEmpleadoHash, setFirmaEmpleadoHash] = useState<string | null>(null);
+  const [firmaEmpleadoManual, setFirmaEmpleadoManual] = useState<string | null>(null);
   const [firmaEmpleadoWarning, setFirmaEmpleadoWarning] = useState<string | null>(null);
 
   // QR
@@ -193,6 +229,12 @@ export default function StaffEvaluationsScreen() {
   const [cameraVisible, setCameraVisible] = useState(false);
   const cameraRef = useRef<any>(null);
   const [currentQuestionKey, setCurrentQuestionKey] = useState<string | null>(null);
+
+  // Firma manual de empleado
+  const [isFirmaManualModalVisible, setIsFirmaManualModalVisible] = useState(false);
+  const signatureManualRef = useRef<any>(null);
+  const [signatureManualKey, setSignatureManualKey] = useState(0);
+  const [isReadingManualSignature, setIsReadingManualSignature] = useState(false);
 
   // Date pickers
   const [showFechaIngresoPicker, setShowFechaIngresoPicker] = useState(false);
@@ -248,6 +290,59 @@ export default function StaffEvaluationsScreen() {
     return `${y}-${m}-${day}`;
   };
 
+  const formatEmpleadoNombre = (emp: MainStructureEmpleado): string => {
+    const fullName = [emp.nombre, emp.primer_apellido, emp.segundo_apellido]
+      .map((v) => String(v || '').trim())
+      .filter((v) => v.length > 0)
+      .join(' ')
+      .trim();
+    return fullName || `Empleado #${emp.id}`;
+  };
+
+  const empresaNode = useMemo(
+    () => structure.find((e) => e.id === selectedEmpresaId) ?? null,
+    [structure, selectedEmpresaId]
+  );
+  const clienteNodes = useMemo(() => empresaNode?.clientes ?? [], [empresaNode]);
+  const clienteNode = useMemo(
+    () => clienteNodes.find((c) => c.id === selectedClienteId) ?? null,
+    [clienteNodes, selectedClienteId]
+  );
+  const divisionNodes = useMemo(() => clienteNode?.division ?? [], [clienteNode]);
+  const divisionNode = useMemo(
+    () => divisionNodes.find((d) => d.id === selectedDivisionId) ?? null,
+    [divisionNodes, selectedDivisionId]
+  );
+  const contratoNodes = useMemo(() => divisionNode?.contratos ?? [], [divisionNode]);
+  const contratoNode = useMemo(
+    () => contratoNodes.find((c) => c.id === selectedContratoId) ?? null,
+    [contratoNodes, selectedContratoId]
+  );
+  const sucursalNodes = useMemo(() => contratoNode?.sucursales ?? [], [contratoNode]);
+  const sucursalNode = useMemo(
+    () => sucursalNodes.find((s) => s.id === selectedCorpoId) ?? null,
+    [sucursalNodes, selectedCorpoId]
+  );
+  const puestoNodes = useMemo(() => sucursalNode?.puestos ?? [], [sucursalNode]);
+  const puestoNode = useMemo(
+    () => puestoNodes.find((p) => p.id === selectedPuestoId) ?? null,
+    [puestoNodes, selectedPuestoId]
+  );
+  const plazaNodes = useMemo(() => puestoNode?.plazas ?? [], [puestoNode]);
+  const plazaNode = useMemo(
+    () => plazaNodes.find((p) => p.id === selectedPlazaId) ?? null,
+    [plazaNodes, selectedPlazaId]
+  );
+
+  const empleados: CorpoEmployee[] = useMemo(() => {
+    return (plazaNode?.empleados ?? []).map((emp) => ({
+      id: emp.id,
+      nombre: formatEmpleadoNombre(emp),
+      cedula: String(emp.cedula || ''),
+      fecha_contratacion: String(emp.fecha_contratacion || ''),
+    }));
+  }, [plazaNode]);
+
   const initializeSectionsForTipo = (tipo: EvaluationTipo) => {
     tipoEvaluacionRef.current = tipo;
 
@@ -281,7 +376,7 @@ export default function StaffEvaluationsScreen() {
 
       const questions: EvaluationQuestion[] = baseQuestionsTitles.map((t) => ({
         title: t,
-        answear: '',
+        answear: '10', // Por defecto todas las estrellas seleccionadas
         image: null,
         editableTitle: false,
       }));
@@ -300,7 +395,7 @@ export default function StaffEvaluationsScreen() {
         for (let i = 0; i < count; i++) {
           arr.push({
             title: fixedTitles && fixedTitles[i] ? fixedTitles[i] : '',
-            answear: '',
+            answear: '10', // Por defecto todas las estrellas seleccionadas
             image: null,
             editableTitle: editableTitle,
           });
@@ -376,6 +471,62 @@ export default function StaffEvaluationsScreen() {
     }
   };
 
+  const resolveHierarchyByCurrentMarca = useCallback(
+    (mainStructure: MainStructureEmpresa[], current: any) => {
+      const marcaClienteId = current?.cliente?.id ?? current?.cliente_id ?? null;
+      const marcaCorpoId = current?.corpo?.id ?? current?.corpo_id ?? null;
+      const marcaPuestoId = current?.puesto?.id ?? current?.puesto_id ?? null;
+      const marcaPlazaId = current?.plaza?.id ?? current?.plaza_id ?? null;
+
+      for (const empresa of mainStructure) {
+        for (const cliente of empresa.clientes ?? []) {
+          if (marcaClienteId && Number(cliente.id) !== Number(marcaClienteId)) continue;
+          for (const division of cliente.division ?? []) {
+            for (const contrato of division.contratos ?? []) {
+              for (const sucursal of contrato.sucursales ?? []) {
+                if (marcaCorpoId && Number(sucursal.id) !== Number(marcaCorpoId)) continue;
+                for (const puesto of sucursal.puestos ?? []) {
+                  if (marcaPuestoId && Number(puesto.id) !== Number(marcaPuestoId)) continue;
+                  const plazas = puesto.plazas ?? [];
+                  const plaza =
+                    plazas.find((p) => marcaPlazaId && Number(p.id) === Number(marcaPlazaId)) ??
+                    plazas[0] ??
+                    null;
+                  return {
+                    empresaId: empresa.id,
+                    clienteId: cliente.id,
+                    divisionId: division.id,
+                    contratoId: contrato.id,
+                    corpoId: sucursal.id,
+                    puestoId: puesto.id,
+                    plazaId: plaza?.id ?? null,
+                  };
+                }
+              }
+            }
+          }
+        }
+      }
+      return null;
+    },
+    []
+  );
+
+  const clearSelectedEmpleadoState = () => {
+    setSelectedEmpleadoId(null);
+    empleadoIdRef.current = null;
+    nombreColaboradorRef.current = '';
+    cedulaColaboradorRef.current = '';
+    fechaIngresoRef.current = '';
+    setNombreColaborador('');
+    setCedulaColaborador('');
+    setFechaIngreso('');
+    setFirmaEmpleado(null);
+    setFirmaEmpleadoHash(null);
+    setFirmaEmpleadoWarning(null);
+    setFirmaEmpleadoManual(null);
+  };
+
   const fetchData = useCallback(async () => {
     try {
       setIsLoading(true);
@@ -405,6 +556,33 @@ export default function StaffEvaluationsScreen() {
       }
 
       if (hasConnection) {
+        setIsStructureLoading(true);
+        const structureRes = await authedFetch({
+          url: `${apiUrl}/api/main-structure`,
+          init: {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+          },
+          refreshAccessToken,
+          logout,
+        });
+        if (structureRes && structureRes.ok) {
+          const structureData = await structureRes.json();
+          if (structureData.status && Array.isArray(structureData.structure)) {
+            setStructure(structureData.structure as MainStructureEmpresa[]);
+            await AsyncStorage.setItem('main_structure_cache', JSON.stringify(structureData.structure));
+          } else {
+            setStructure([]);
+          }
+        } else {
+          const structureCacheStr = await AsyncStorage.getItem('main_structure_cache');
+          if (structureCacheStr) setStructure(JSON.parse(structureCacheStr));
+          else setStructure([]);
+        }
+        setIsStructureLoading(false);
+
         // Evaluaciones
         const evalRes = await authedFetch({
           url: `${apiUrl}/api/evaluation/corpo/${currentMarca.corpo.id}`,
@@ -430,32 +608,6 @@ export default function StaffEvaluationsScreen() {
         } else {
           setEvaluaciones([]);
         }
-
-        // Empleados
-        const empRes = await authedFetch({
-          url: `${apiUrl}/api/empleados/corpo/${currentMarca.corpo.id}`,
-          init: {
-            method: 'GET',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-          },
-          refreshAccessToken,
-          logout,
-        });
-        if (!empRes) return;
-
-        if (empRes.ok) {
-          const empData = await empRes.json();
-          if (empData.status && empData.empleados) {
-            setEmpleados(empData.empleados as CorpoEmployee[]);
-            await AsyncStorage.setItem('employees_corpo_cache', JSON.stringify(empData.empleados));
-          } else {
-            setEmpleados([]);
-          }
-        } else {
-          setEmpleados([]);
-        }
       } else {
         // Offline: cargar desde cache
         const evalCacheStr = await AsyncStorage.getItem('evaluations_staff_cache');
@@ -464,13 +616,9 @@ export default function StaffEvaluationsScreen() {
         } else {
           setEvaluaciones([]);
         }
-
-        const empCacheStr = await AsyncStorage.getItem('employees_corpo_cache');
-        if (empCacheStr) {
-          setEmpleados(JSON.parse(empCacheStr));
-        } else {
-          setEmpleados([]);
-        }
+        const structureCacheStr = await AsyncStorage.getItem('main_structure_cache');
+        if (structureCacheStr) setStructure(JSON.parse(structureCacheStr));
+        else setStructure([]);
       }
     } catch (error) {
       console.error('Error fetching staff evaluations:', error);
@@ -479,17 +627,16 @@ export default function StaffEvaluationsScreen() {
         if (evalCacheStr) {
           setEvaluaciones(JSON.parse(evalCacheStr));
         }
-        const empCacheStr = await AsyncStorage.getItem('employees_corpo_cache');
-        if (empCacheStr) {
-          setEmpleados(JSON.parse(empCacheStr));
-        }
+        const structureCacheStr = await AsyncStorage.getItem('main_structure_cache');
+        if (structureCacheStr) setStructure(JSON.parse(structureCacheStr));
       } catch (cacheErr) {
         console.error('Error loading staff evaluations from cache:', cacheErr);
       }
     } finally {
+      setIsStructureLoading(false);
       setIsLoading(false);
     }
-  }, [refreshAccessToken]);
+  }, [refreshAccessToken, logout]);
 
   useFocusEffect(
     useCallback(() => {
@@ -508,6 +655,62 @@ export default function StaffEvaluationsScreen() {
       eventBus.off('connectionRestored', handler);
     };
   }, [fetchData]);
+
+  useEffect(() => {
+    if (isRestoringHierarchyRef.current) return;
+    setSelectedClienteId(null);
+    setSelectedDivisionId(null);
+    setSelectedContratoId(null);
+    setSelectedCorpoId(null);
+    setSelectedPuestoId(null);
+    setSelectedPlazaId(null);
+    clearSelectedEmpleadoState();
+  }, [selectedEmpresaId]);
+
+  useEffect(() => {
+    if (isRestoringHierarchyRef.current) return;
+    setSelectedDivisionId(null);
+    setSelectedContratoId(null);
+    setSelectedCorpoId(null);
+    setSelectedPuestoId(null);
+    setSelectedPlazaId(null);
+    clearSelectedEmpleadoState();
+  }, [selectedClienteId]);
+
+  useEffect(() => {
+    if (isRestoringHierarchyRef.current) return;
+    setSelectedContratoId(null);
+    setSelectedCorpoId(null);
+    setSelectedPuestoId(null);
+    setSelectedPlazaId(null);
+    clearSelectedEmpleadoState();
+  }, [selectedDivisionId]);
+
+  useEffect(() => {
+    if (isRestoringHierarchyRef.current) return;
+    setSelectedCorpoId(null);
+    setSelectedPuestoId(null);
+    setSelectedPlazaId(null);
+    clearSelectedEmpleadoState();
+  }, [selectedContratoId]);
+
+  useEffect(() => {
+    if (isRestoringHierarchyRef.current) return;
+    setSelectedPuestoId(null);
+    setSelectedPlazaId(null);
+    clearSelectedEmpleadoState();
+  }, [selectedCorpoId]);
+
+  useEffect(() => {
+    if (isRestoringHierarchyRef.current) return;
+    setSelectedPlazaId(null);
+    clearSelectedEmpleadoState();
+  }, [selectedPuestoId]);
+
+  useEffect(() => {
+    if (isRestoringHierarchyRef.current) return;
+    clearSelectedEmpleadoState();
+  }, [selectedPlazaId]);
 
   // Cambio de tipo de evaluación
   const handleTipoChange = (tipo: EvaluationTipo) => {
@@ -550,8 +753,47 @@ export default function StaffEvaluationsScreen() {
     setFirmaEmpleado(null);
     setFirmaEvaluadorHash(null);
     setFirmaEmpleadoHash(null);
+    setFirmaEmpleadoManual(null);
     setFirmaEmpleadoWarning(null);
     initializeSectionsForTipo('Seguridad');
+
+    const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+    if (currentMarcaStr) {
+      try {
+        const currentMarca = JSON.parse(currentMarcaStr);
+        const resolved = resolveHierarchyByCurrentMarca(structure, currentMarca);
+        isRestoringHierarchyRef.current = true;
+        if (resolved) {
+          setSelectedEmpresaId(resolved.empresaId);
+          setSelectedClienteId(resolved.clienteId);
+          setSelectedDivisionId(resolved.divisionId);
+          setSelectedContratoId(resolved.contratoId);
+          setSelectedCorpoId(resolved.corpoId);
+          setSelectedPuestoId(resolved.puestoId);
+          setSelectedPlazaId(resolved.plazaId);
+        } else {
+          setSelectedEmpresaId(null);
+          setSelectedClienteId(null);
+          setSelectedDivisionId(null);
+          setSelectedContratoId(null);
+          setSelectedCorpoId(currentMarca?.corpo?.id ?? currentMarca?.corpo_id ?? null);
+          setSelectedPuestoId(currentMarca?.puesto?.id ?? currentMarca?.puesto_id ?? null);
+          setSelectedPlazaId(currentMarca?.plaza?.id ?? currentMarca?.plaza_id ?? null);
+        }
+        setTimeout(() => {
+          isRestoringHierarchyRef.current = false;
+        }, 0);
+      } catch {
+        isRestoringHierarchyRef.current = false;
+        setSelectedEmpresaId(null);
+        setSelectedClienteId(null);
+        setSelectedDivisionId(null);
+        setSelectedContratoId(null);
+        setSelectedCorpoId(null);
+        setSelectedPuestoId(null);
+        setSelectedPlazaId(null);
+      }
+    }
 
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
@@ -578,17 +820,34 @@ export default function StaffEvaluationsScreen() {
   const onEmpleadoSelected = (id: number | null) => {
     setSelectedEmpleadoId(id);
     empleadoIdRef.current = id;
-    if (id) {
-      const emp = empleados.find((e) => e.id === id);
-      if (emp) {
-        nombreColaboradorRef.current = emp.nombre || '';
-        cedulaColaboradorRef.current = emp.cedula || '';
-        fechaIngresoRef.current = emp.fecha_contratacion.split('T')[0];
+    if (!id) {
+      nombreColaboradorRef.current = '';
+      cedulaColaboradorRef.current = '';
+      fechaIngresoRef.current = '';
+      setNombreColaborador('');
+      setCedulaColaborador('');
+      setFechaIngreso('');
+      setFirmaEmpleadoWarning(null);
+      return;
+    }
 
-        setNombreColaborador(nombreColaboradorRef.current);
-        setCedulaColaborador(cedulaColaboradorRef.current);
-        setFechaIngreso(fechaIngresoRef.current);
-      }
+    const emp = empleados.find((e) => e.id === id);
+    if (emp) {
+      nombreColaboradorRef.current = emp.nombre || '';
+      cedulaColaboradorRef.current = emp.cedula || '';
+      fechaIngresoRef.current = String(emp.fecha_contratacion || '').split('T')[0];
+
+      setNombreColaborador(nombreColaboradorRef.current);
+      setCedulaColaborador(cedulaColaboradorRef.current);
+      setFechaIngreso(fechaIngresoRef.current);
+    }
+
+    if (firmaEmpleado?.empleadoId && String(firmaEmpleado.empleadoId) !== String(id)) {
+      setFirmaEmpleadoWarning(
+        `La firma corresponde al empleado ID ${firmaEmpleado.empleadoId}, pero el empleado seleccionado es otro.`
+      );
+    } else {
+      setFirmaEmpleadoWarning(null);
     }
   };
 
@@ -755,6 +1014,47 @@ export default function StaffEvaluationsScreen() {
     }
   };
 
+  const openFirmaEmpleadoManualModal = () => {
+    setIsReadingManualSignature(false);
+    setSignatureManualKey((k) => k + 1);
+    setIsFirmaManualModalVisible(true);
+  };
+
+  const closeFirmaEmpleadoManualModal = () => {
+    setIsFirmaManualModalVisible(false);
+    setIsReadingManualSignature(false);
+  };
+
+  const clearManualSignatureInModal = () => {
+    try {
+      signatureManualRef.current?.clearSignature?.();
+    } catch { }
+    setIsReadingManualSignature(false);
+    setSignatureManualKey((k) => k + 1);
+  };
+
+  const acceptManualSignature = () => {
+    try {
+      setIsReadingManualSignature(true);
+      signatureManualRef.current?.readSignature?.();
+    } catch {
+      setIsReadingManualSignature(false);
+      Alert.alert('Error', 'No se pudo leer la firma manual. Intenta nuevamente.');
+    }
+  };
+
+  const handleManualSignatureRead = (signature: string) => {
+    const sig = String(signature || '').trim();
+    if (!sig || sig.length < 10) {
+      Alert.alert('Error', 'No se detectó la firma. Intenta de nuevo.');
+      setIsReadingManualSignature(false);
+      return;
+    }
+    setFirmaEmpleadoManual(sig);
+    setIsReadingManualSignature(false);
+    closeFirmaEmpleadoManualModal();
+  };
+
   const updateQuestionField = (
     sectionIndex: number,
     questionIndex: number,
@@ -838,6 +1138,10 @@ export default function StaffEvaluationsScreen() {
   };
 
   const validateForm = (): boolean => {
+    if (!selectedEmpresaId || !selectedClienteId || !selectedDivisionId || !selectedContratoId || !selectedCorpoId || !selectedPuestoId || !selectedPlazaId) {
+      Alert.alert('Error', 'Debes completar la jerarquía hasta Plaza');
+      return false;
+    }
     if (!selectedEmpleadoId) {
       Alert.alert('Error', 'Debes seleccionar un empleado');
       return false;
@@ -918,6 +1222,9 @@ export default function StaffEvaluationsScreen() {
 
               const requestBody = {
                 marca_id: marcaId,
+                corpo_id: selectedCorpoId,
+                puesto_id: selectedPuestoId,
+                plaza_id: selectedPlazaId,
                 nombre_colaborador: nombreColaboradorRef.current,
                 cedula_colaborador: cedulaColaboradorRef.current,
                 empleado_id: empleadoIdRef.current,
@@ -929,6 +1236,7 @@ export default function StaffEvaluationsScreen() {
                 comentarios: comentariosGeneralesRef.current.trim() || '-',
                 firma_evaluador: firmaEvaluadorHash!,
                 firma_empleado: firmaEmpleadoHash!,
+                firma_empleado_manual: firmaEmpleadoManual || null,
               };
 
               const hasConnection = await checkConnection();
@@ -979,6 +1287,7 @@ export default function StaffEvaluationsScreen() {
                   tipo: tipoEvaluacionRef.current,
                   firma_evaluador: firmaEvaluadorHash!,
                   firma_empleado: firmaEmpleadoHash!,
+                  firma_empleado_manual: firmaEmpleadoManual || null,
                   id_local: localId,
                 };
 
@@ -1211,30 +1520,134 @@ export default function StaffEvaluationsScreen() {
       <ThemedView style={styles.formCard}>
         <ThemedText style={styles.formTitle}>Nueva Evaluación de personal</ThemedText>
 
-        {/* Empleados */}
+        <ThemedView style={styles.formGroup}>
+          <ThemedText style={styles.formLabel}>Estructura *</ThemedText>
+          {isStructureLoading && (
+            <ThemedView style={styles.inlineLoading}>
+              <ActivityIndicator size="small" color="#007AFF" />
+              <ThemedText style={styles.inlineLoadingText}>Cargando estructura...</ThemedText>
+            </ThemedView>
+          )}
+
+          <ThemedText style={styles.formLabel}>Empresa</ThemedText>
+          <ThemedView style={styles.pickerContainer}>
+            <Picker
+              selectedValue={selectedEmpresaId ?? 0}
+              onValueChange={(value) => setSelectedEmpresaId(value ? Number(value) : null)}
+              style={styles.picker}
+            >
+              <Picker.Item label="Seleccionar empresa..." value={0} />
+              {structure.map((empresa) => (
+                <Picker.Item key={empresa.id} label={empresa.nombre} value={empresa.id} />
+              ))}
+            </Picker>
+          </ThemedView>
+
+          <ThemedText style={styles.formLabel}>Cliente</ThemedText>
+          <ThemedView style={styles.pickerContainer}>
+            <Picker
+              enabled={selectedEmpresaId !== null}
+              selectedValue={selectedClienteId ?? 0}
+              onValueChange={(value) => setSelectedClienteId(value ? Number(value) : null)}
+              style={styles.picker}
+            >
+              <Picker.Item label="Seleccionar cliente..." value={0} />
+              {clienteNodes.map((cliente) => (
+                <Picker.Item key={cliente.id} label={cliente.nombre} value={cliente.id} />
+              ))}
+            </Picker>
+          </ThemedView>
+
+          <ThemedText style={styles.formLabel}>División</ThemedText>
+          <ThemedView style={styles.pickerContainer}>
+            <Picker
+              enabled={selectedClienteId !== null}
+              selectedValue={selectedDivisionId ?? 0}
+              onValueChange={(value) => setSelectedDivisionId(value ? Number(value) : null)}
+              style={styles.picker}
+            >
+              <Picker.Item label="Seleccionar división..." value={0} />
+              {divisionNodes.map((division) => (
+                <Picker.Item key={division.id} label={division.nombre} value={division.id} />
+              ))}
+            </Picker>
+          </ThemedView>
+
+          <ThemedText style={styles.formLabel}>Contrato</ThemedText>
+          <ThemedView style={styles.pickerContainer}>
+            <Picker
+              enabled={selectedDivisionId !== null}
+              selectedValue={selectedContratoId ?? 0}
+              onValueChange={(value) => setSelectedContratoId(value ? Number(value) : null)}
+              style={styles.picker}
+            >
+              <Picker.Item label="Seleccionar contrato..." value={0} />
+              {contratoNodes.map((contrato) => (
+                <Picker.Item key={contrato.id} label={contrato.nombre} value={contrato.id} />
+              ))}
+            </Picker>
+          </ThemedView>
+
+          <ThemedText style={styles.formLabel}>Sucursal (Corpo)</ThemedText>
+          <ThemedView style={styles.pickerContainer}>
+            <Picker
+              enabled={selectedContratoId !== null}
+              selectedValue={selectedCorpoId ?? 0}
+              onValueChange={(value) => setSelectedCorpoId(value ? Number(value) : null)}
+              style={styles.picker}
+            >
+              <Picker.Item label="Seleccionar sucursal..." value={0} />
+              {sucursalNodes.map((sucursal) => (
+                <Picker.Item key={sucursal.id} label={sucursal.nombre} value={sucursal.id} />
+              ))}
+            </Picker>
+          </ThemedView>
+
+          <ThemedText style={styles.formLabel}>Puesto</ThemedText>
+          <ThemedView style={styles.pickerContainer}>
+            <Picker
+              enabled={selectedCorpoId !== null}
+              selectedValue={selectedPuestoId ?? 0}
+              onValueChange={(value) => setSelectedPuestoId(value ? Number(value) : null)}
+              style={styles.picker}
+            >
+              <Picker.Item label="Seleccionar puesto..." value={0} />
+              {puestoNodes.map((puesto) => (
+                <Picker.Item key={puesto.id} label={puesto.nombre} value={puesto.id} />
+              ))}
+            </Picker>
+          </ThemedView>
+
+          <ThemedText style={styles.formLabel}>Plaza</ThemedText>
+          <ThemedView style={styles.pickerContainer}>
+            <Picker
+              enabled={selectedPuestoId !== null}
+              selectedValue={selectedPlazaId ?? 0}
+              onValueChange={(value) => setSelectedPlazaId(value ? Number(value) : null)}
+              style={styles.picker}
+            >
+              <Picker.Item label="Seleccionar plaza..." value={0} />
+              {plazaNodes.map((plaza) => (
+                <Picker.Item key={plaza.id} label={plaza.nombre} value={plaza.id} />
+              ))}
+            </Picker>
+          </ThemedView>
+        </ThemedView>
+
+        {/* Empleado de la plaza */}
         <ThemedView style={styles.formGroup}>
           <ThemedText style={styles.formLabel}>Empleado *</ThemedText>
-          <ThemedView style={[
-            styles.pickerContainer
-          ]}>
+          <ThemedView style={styles.pickerContainer}>
             <Picker
-              selectedValue={selectedEmpleadoId ?? undefined}
+              enabled={selectedPlazaId !== null}
+              selectedValue={selectedEmpleadoId ?? 0}
               onValueChange={(value) => onEmpleadoSelected(value ? Number(value) : null)}
               style={styles.picker}
               itemStyle={styles.pickerItem}
             >
-              <Picker.Item
-                label="Seleccionar empleado..."
-                value={undefined}
-                color={selectedEmpleadoId === null ? "#007AFF" : "#000000"}
-              />
+              <Picker.Item label={selectedPlazaId ? 'Seleccionar empleado...' : 'Seleccione plaza primero'} value={0} />
               {empleados.map((emp) => (
-                <Picker.Item
-                  key={emp.id}
-                  label={`${emp.nombre} - ${emp.cedula}`}
-                  value={emp.id}
-                  color={selectedEmpleadoId === emp.id ? "#007AFF" : "#000000"}
-                />
+                <Picker.Item key={emp.id} label={`${emp.nombre} - ${emp.cedula}`} value={emp.id} />
               ))}
             </Picker>
           </ThemedView>
@@ -1591,6 +2004,22 @@ export default function StaffEvaluationsScreen() {
           {firmaEmpleadoWarning && (
             <ThemedText style={styles.warningText}>{firmaEmpleadoWarning}</ThemedText>
           )}
+
+          <ThemedText style={[styles.formLabel, { marginTop: 10 }]}>Firma manual del funcionario</ThemedText>
+          {firmaEmpleadoManual ? (
+            <ThemedView style={styles.signaturePreviewContainer}>
+              <Image source={{ uri: firmaEmpleadoManual }} style={styles.signaturePreview} resizeMode="contain" />
+              <TouchableOpacity style={styles.removeSignatureButton} onPress={() => setFirmaEmpleadoManual(null)}>
+                <Ionicons name="trash" size={18} color="#FFFFFF" />
+              </TouchableOpacity>
+            </ThemedView>
+          ) : null}
+          <TouchableOpacity style={styles.openSignatureButton} onPress={openFirmaEmpleadoManualModal}>
+            <Ionicons name="create-outline" size={20} color="#000000" />
+            <ThemedText style={styles.openSignatureButtonText}>
+              {firmaEmpleadoManual ? 'Modificar firma manual' : 'Dibujar firma manual'}
+            </ThemedText>
+          </TouchableOpacity>
         </ThemedView>
 
         {/* Acciones */}
@@ -1691,7 +2120,7 @@ export default function StaffEvaluationsScreen() {
                           source={{
                             uri:
                               ev.id_local === '' && !q.image.startsWith('data:')
-                                ? `${Constants.expoConfig?.extra?.API_SERVER}/api/evaluation/${ev.id}/get-image/${q.image}`
+                                ? appendTokenToUrl(`${Constants.expoConfig?.extra?.API_SERVER}/api/evaluation/${ev.id}/get-image/${q.image}`)
                                 : q.image,
                           }}
                           style={[
@@ -1772,6 +2201,17 @@ export default function StaffEvaluationsScreen() {
               </>
             ) : (
               <ThemedText style={styles.emptyText}>No se pudo interpretar la firma</ThemedText>
+            )}
+
+            <ThemedText style={[styles.signatureInfoTitle, { marginTop: 12 }]}>
+              Firma manual del funcionario
+            </ThemedText>
+            {ev.firma_empleado_manual ? (
+              <ThemedView style={styles.signaturePreviewContainer}>
+                <Image source={{ uri: ev.firma_empleado_manual }} style={styles.signaturePreview} resizeMode="contain" />
+              </ThemedView>
+            ) : (
+              <ThemedText style={styles.emptyText}>No hay firma manual registrada</ThemedText>
             )}
           </ThemedView>
         )}
@@ -1989,6 +2429,63 @@ export default function StaffEvaluationsScreen() {
       />
       {QRScannerComponent}
 
+      <Modal
+        visible={isFirmaManualModalVisible}
+        animationType="fade"
+        transparent
+        presentationStyle="overFullScreen"
+        onRequestClose={closeFirmaEmpleadoManualModal}
+      >
+        <View style={styles.overlay}>
+          <ThemedView style={styles.floatModalCard}>
+            <ThemedView style={styles.floatModalHeader}>
+              <ThemedText style={styles.modalTitle}>Dibujar firma manual</ThemedText>
+              <TouchableOpacity onPress={closeFirmaEmpleadoManualModal}>
+                <Ionicons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+            </ThemedView>
+            <ThemedText style={styles.signatureModalHint}>Firma dentro del recuadro blanco.</ThemedText>
+            <View style={styles.signaturePadBox}>
+              <SignatureScreen
+                ref={signatureManualRef}
+                onOK={handleManualSignatureRead}
+                onEmpty={() => {
+                  setIsReadingManualSignature(false);
+                  Alert.alert('Error', 'No se detectó la firma. Intenta de nuevo.');
+                }}
+                descriptionText=""
+                clearText=""
+                confirmText=""
+                webStyle={`
+                  .m-signature-pad--footer {display: none; margin: 0px;}
+                  .m-signature-pad {box-shadow: none; border: none;}
+                  body,html {width: 100%; height: 100%; background: #ffffff;}
+                `}
+                key={signatureManualKey}
+              />
+            </View>
+            <ThemedView style={styles.modalActions}>
+              <TouchableOpacity style={styles.modalClearButton} onPress={clearManualSignatureInModal}>
+                <Ionicons name="trash" size={20} color="#000000" />
+                <ThemedText style={styles.modalClearButtonText}>Limpiar</ThemedText>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalAcceptButton, isReadingManualSignature && { opacity: 0.7 }]}
+                onPress={acceptManualSignature}
+                disabled={isReadingManualSignature}
+              >
+                {isReadingManualSignature ? (
+                  <ActivityIndicator size="small" color="#000000" />
+                ) : (
+                  <Ionicons name="checkmark" size={20} color="#000000" />
+                )}
+                <ThemedText style={styles.modalAcceptButtonText}>Aceptar</ThemedText>
+              </TouchableOpacity>
+            </ThemedView>
+          </ThemedView>
+        </View>
+      </Modal>
+
       {/* Camera modal */}
       <Modal
         visible={cameraVisible}
@@ -2183,6 +2680,17 @@ const styles = StyleSheet.create({
   pickerItem: {
     fontSize: 16,
     color: '#000000',
+  },
+  inlineLoading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+  },
+  inlineLoadingText: {
+    fontSize: 12,
+    color: '#000',
+    opacity: 0.6,
   },
   selectedEmployeeContainer: {
     marginTop: 8,
@@ -2548,11 +3056,91 @@ const styles = StyleSheet.create({
   signatureInfoDetailText: {
     fontSize: 12,
   },
+  signaturePreviewContainer: {
+    width: '100%',
+    aspectRatio: 1,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    backgroundColor: '#FFFFFF',
+    overflow: 'hidden',
+    marginTop: 10,
+    marginBottom: 10,
+    position: 'relative',
+  },
+  signaturePreview: { width: '100%', height: '100%' },
+  removeSignatureButton: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    width: 38,
+    height: 38,
+    borderRadius: 10,
+    backgroundColor: '#FF3B30',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  openSignatureButton: {
+    marginTop: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 10,
+    paddingVertical: 12,
+    backgroundColor: '#F8F9FA',
+    gap: 10,
+  },
+  openSignatureButtonText: { fontWeight: '800', color: '#000' },
   warningText: {
     marginTop: 6,
     fontSize: 12,
     color: '#FF9500',
   },
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+  },
+  floatModalCard: {
+    width: '100%',
+    maxWidth: 520,
+    borderRadius: 14,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    overflow: 'hidden',
+  },
+  floatModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+    backgroundColor: '#F8F9FA',
+  },
+  modalTitle: { fontSize: 18, fontWeight: '800', color: '#000' },
+  signatureModalHint: { paddingHorizontal: 16, paddingTop: 12, color: '#666', fontSize: 13 },
+  signaturePadBox: {
+    marginTop: 10,
+    marginHorizontal: 16,
+    height: 260,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 2,
+    borderColor: '#E0E0E0',
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  modalActions: { flexDirection: 'row', justifyContent: 'space-between', padding: 16, gap: 12, backgroundColor: '#FFFFFF' },
+  modalClearButton: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 12, borderRadius: 10, backgroundColor: '#EDEDED', gap: 8 },
+  modalClearButtonText: { fontWeight: '800', color: '#000' },
+  modalAcceptButton: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 12, borderRadius: 10, backgroundColor: '#D7F5E5', gap: 8 },
+  modalAcceptButtonText: { fontWeight: '800', color: '#000' },
   cameraCloseButton: {
     position: 'absolute',
     top: 40,

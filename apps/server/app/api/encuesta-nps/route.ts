@@ -1,15 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../utils/verifyToken";
+import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { toZonedTime, format } from "date-fns-tz";
 import { transporter } from '../../../transporter';
 
-import { prisma } from "../../../utils/prismaClient";
+import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
-import { getUserMarca } from "../../../utils/getUserMarca";
 
 export async function GET(req: NextRequest) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(req);
+        const { valid, expired, message } = await verifyAccessTokenByApi(req);
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         // Parámetros de la jerarquía completa
@@ -26,11 +25,18 @@ export async function GET(req: NextRequest) {
         // Solo se aplica si no hay filtro más específico de cliente
         if (empresaIdStr && !clienteIdStr) {
             const empresaId = parseInt(empresaIdStr);
-            const clientes = await prisma.e_estructura_cliente.findMany({
-                where: { empresa_id: empresaId },
-                select: { id: true },
+            const clientes = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "e_estructura_cliente",
+                    operation: "findMany",
+                    where: { empresa_id: empresaId },
+                    select: { id: true },
+                },
             });
-            const clienteIds = clientes.map((c) => c.id);
+            const clientesArray = Array.isArray(clientes) ? clientes : [];
+            const clienteIds = clientesArray.map((c: any) => c.id);
             if (clienteIds.length > 0) {
                 where.cliente_id = { in: clienteIds };
             } else {
@@ -53,11 +59,18 @@ export async function GET(req: NextRequest) {
         // Solo se aplica si no hay filtro más específico de corpo
         if (contratoIdStr && !corpoIdStr) {
             const contratoId = parseInt(contratoIdStr);
-            const sucursales = await prisma.e_estructura_sucursal.findMany({
-                where: { contrato_id: contratoId },
-                select: { id: true },
+            const sucursales = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "e_estructura_sucursal",
+                    operation: "findMany",
+                    where: { contrato_id: contratoId },
+                    select: { id: true },
+                },
             });
-            const sucursalIds = sucursales.map((s) => s.id);
+            const sucursalesArray = Array.isArray(sucursales) ? sucursales : [];
+            const sucursalIds = sucursalesArray.map((s: any) => s.id);
             if (sucursalIds.length > 0) {
                 where.corpo_id = { in: sucursalIds };
             } else {
@@ -76,69 +89,87 @@ export async function GET(req: NextRequest) {
             where.puesto_id = parseInt(puestoIdStr);
         }
 
-        const encuestas = await prisma.c_encuesta_cliente.findMany({
-            where,
-            orderBy: { created_at: "desc" },
-            include: {
-                e_estructura_empresa: { select: { id: true, nombre: true } },
-                e_estructura_cliente: { select: { id: true, nombre: true } },
-                e_estructura_sucursal: { select: { id: true, nombre: true } },
-                e_estructura_puesto: { select: { id: true, nombre: true } },
-                n_division: { select: { id: true, nombre: true } },
+        const encuestas = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_encuesta_cliente",
+                operation: "findMany",
+                where,
+                orderBy: { created_at: "desc" },
+                include: {
+                    e_estructura_empresa: { select: { id: true, nombre: true } },
+                    e_estructura_cliente: { select: { id: true, nombre: true } },
+                    e_estructura_sucursal: { select: { id: true, nombre: true } },
+                    e_estructura_puesto: { select: { id: true, nombre: true } },
+                    n_division: { select: { id: true, nombre: true } },
+                },
             },
         });
+        const encuestasArray = Array.isArray(encuestas) ? encuestas : [];
 
         const encuestas_return: { id: number, nombre_firma: string, persona_evaluada: string, cedula_persona_evaluada: string, empresa: { id: number, nombre: string }, cliente: { id: number, nombre: string }, sucursal: { id: number, nombre: string }, puesto: { id: number, nombre: string }, division: { id: number, nombre: string }, responsable_id: number, responsable: { nombre: string, cedula: string }, firma_responsable: string, fecha: string, evaluaciones: string }[] = [];
-        for (const encuesta of encuestas) {
+        for (const encuesta of encuestasArray) {
+            const encuestaObj = encuesta as any;
             let nombre_firma = "No disponible";
-            if (encuesta.firma_responsable) {
-                const id_firma = atob(encuesta.firma_responsable).split(":")[1];
-                const firma = await prisma.c_empleado.findUnique({ where: { id: parseInt(id_firma) } });
+            if (encuestaObj.firma_responsable) {
+                const id_firma = atob(encuestaObj.firma_responsable).split(":")[1];
+                const firma = await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "GET",
+                        table: "c_empleado",
+                        operation: "findUnique",
+                        where: { id: parseInt(id_firma) },
+                    },
+                });
                 if (firma) {
-                    nombre_firma = (firma.nombre || "") + " " + (firma.primer_apellido || "") + " " + (firma.segundo_apellido || "");
-                    if (firma.cedula) {
-                        nombre_firma += " (" + firma.cedula + ")";
+                    const firmaObj = firma as any;
+                    nombre_firma = (firmaObj.nombre || "") + " " + (firmaObj.primer_apellido || "") + " " + (firmaObj.segundo_apellido || "");
+                    if (firmaObj.cedula) {
+                        nombre_firma += " (" + firmaObj.cedula + ")";
                     }
                 }
             }
+            const fechaValue = encuestaObj.fecha instanceof Date ? encuestaObj.fecha : (typeof encuestaObj.fecha === 'string' ? new Date(encuestaObj.fecha) : new Date());
             const encuesta_return: { id: number, nombre_firma: string, empresa_evaluada: string, persona_evaluada: string, cedula_persona_evaluada: string, telefono_persona_evaluada: string, email_persona_evaluada: string, firma_persona_evaluada: string, empresa: { id: number, nombre: string }, cliente: { id: number, nombre: string }, sucursal: { id: number, nombre: string }, puesto: { id: number, nombre: string }, division: { id: number, nombre: string }, responsable_id: number, responsable: { nombre: string, cedula: string }, firma_responsable: string, fecha: string, evaluaciones: string, observations: string } = {
-                id: encuesta.id,
-                empresa_evaluada: encuesta.empresa_evaluado || "",
-                persona_evaluada: encuesta.nombre_evaluado || "",
-                cedula_persona_evaluada: encuesta.cedula_evaluado || "",
-                telefono_persona_evaluada: encuesta.telefono_evaluado || "",
-                email_persona_evaluada: encuesta.email_evaluado || "",
-                firma_persona_evaluada: encuesta.firma_evaluado || "",
+                id: encuestaObj.id,
+                empresa_evaluada: encuestaObj.empresa_evaluado || "",
+                persona_evaluada: encuestaObj.nombre_evaluado || "",
+                cedula_persona_evaluada: encuestaObj.cedula_evaluado || "",
+                telefono_persona_evaluada: encuestaObj.telefono_evaluado || "",
+                email_persona_evaluada: encuestaObj.email_evaluado || "",
+                firma_persona_evaluada: encuestaObj.firma_evaluado || "",
                 empresa: {
-                    id: (encuesta as any).e_estructura_empresa?.id || encuesta.empresa_id,
-                    nombre: (encuesta as any).e_estructura_empresa?.nombre || ""
+                    id: encuestaObj.e_estructura_empresa?.id || encuestaObj.empresa_id,
+                    nombre: encuestaObj.e_estructura_empresa?.nombre || ""
                 },
                 cliente: {
-                    id: (encuesta as any).e_estructura_cliente?.id || encuesta.cliente_id,
-                    nombre: (encuesta as any).e_estructura_cliente?.nombre || ""
+                    id: encuestaObj.e_estructura_cliente?.id || encuestaObj.cliente_id,
+                    nombre: encuestaObj.e_estructura_cliente?.nombre || ""
                 },
                 sucursal: {
-                    id: (encuesta as any).e_estructura_sucursal?.id || encuesta.corpo_id,
-                    nombre: (encuesta as any).e_estructura_sucursal?.nombre || ""
+                    id: encuestaObj.e_estructura_sucursal?.id || encuestaObj.corpo_id,
+                    nombre: encuestaObj.e_estructura_sucursal?.nombre || ""
                 },
                 puesto: {
-                    id: (encuesta as any).e_estructura_puesto?.id || encuesta.puesto_id,
-                    nombre: (encuesta as any).e_estructura_puesto?.nombre || ""
+                    id: encuestaObj.e_estructura_puesto?.id || encuestaObj.puesto_id,
+                    nombre: encuestaObj.e_estructura_puesto?.nombre || ""
                 },
                 division: {
-                    id: (encuesta as any).n_division?.id || encuesta.division_id,
-                    nombre: (encuesta as any).n_division?.nombre || ""
+                    id: encuestaObj.n_division?.id || encuestaObj.division_id,
+                    nombre: encuestaObj.n_division?.nombre || ""
                 },
-                responsable_id: encuesta.responsable_id,
+                responsable_id: encuestaObj.responsable_id,
                 responsable: {
-                    nombre: encuesta.nombre_responsable,
-                    cedula: encuesta.cedula_responsable || ""
+                    nombre: encuestaObj.nombre_responsable,
+                    cedula: encuestaObj.cedula_responsable || ""
                 },
-                firma_responsable: encuesta.firma_responsable || "",
+                firma_responsable: encuestaObj.firma_responsable || "",
                 nombre_firma: nombre_firma,
-                fecha: encuesta.fecha.toISOString(),
-                evaluaciones: encuesta.evaluaciones,
-                observations: encuesta.observaciones
+                fecha: fechaValue.toISOString(),
+                evaluaciones: encuestaObj.evaluaciones,
+                observations: encuestaObj.observaciones
             };
             encuestas_return.push(encuesta_return);
         }
@@ -154,7 +185,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         const {
@@ -203,72 +234,151 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ status: false, message: "IDs de jerarquía incompletos" }, { status: 200 });
         }
 
-        const marca = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(marca_id) } });
+        const marca = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_marca_dia",
+                operation: "findUnique",
+                where: { id: parseInt(marca_id) },
+            },
+        });
         if (!marca) {
             return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
         }
 
-        if (!marca.empleadoFijo_id) {
+        const marcaObj = marca as any;
+        if (!marcaObj.empleadoFijo_id) {
             return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 200 });
         }
 
-        const empleado = await prisma.c_empleado.findUnique({ where: { id: marca.empleadoFijo_id! } });
+        const empleado = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_empleado",
+                operation: "findUnique",
+                where: { id: marcaObj.empleadoFijo_id },
+            },
+        });
         if (!empleado) {
             return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 200 });
         }
 
         // Validar que los IDs existan en la base de datos
-        const empresa = await prisma.e_estructura_empresa.findUnique({ where: { id: parseInt(String(empresa_id)) } });
+        const empresa = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "e_estructura_empresa",
+                operation: "findUnique",
+                where: { id: parseInt(String(empresa_id)) },
+            },
+        });
         if (!empresa) {
             return NextResponse.json({ status: false, message: "Empresa no encontrada" }, { status: 200 });
         }
 
-        const cliente = await prisma.e_estructura_cliente.findUnique({ where: { id: parseInt(String(cliente_id)) } });
+        const cliente = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "e_estructura_cliente",
+                operation: "findUnique",
+                where: { id: parseInt(String(cliente_id)) },
+            },
+        });
         if (!cliente) {
             return NextResponse.json({ status: false, message: "Cliente no encontrado" }, { status: 200 });
         }
 
-        const corpo = await prisma.e_estructura_sucursal.findUnique({ where: { id: parseInt(String(corpo_id)) } });
+        const corpo = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "e_estructura_sucursal",
+                operation: "findUnique",
+                where: { id: parseInt(String(corpo_id)) },
+            },
+        });
         if (!corpo) {
             return NextResponse.json({ status: false, message: "Corpo no encontrado" }, { status: 200 });
         }
 
-        const puesto_db = await prisma.e_estructura_puesto.findUnique({ where: { id: parseInt(String(puesto_id)) } });
+        const puesto_db = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "e_estructura_puesto",
+                operation: "findUnique",
+                where: { id: parseInt(String(puesto_id)) },
+            },
+        });
         if (!puesto_db) {
             return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
         }
 
-        const division = await prisma.n_division.findUnique({ where: { id: parseInt(String(division_id)) } });
+        const division = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "n_division",
+                operation: "findUnique",
+                where: { id: parseInt(String(division_id)) },
+            },
+        });
         if (!division) {
             return NextResponse.json({ status: false, message: "Division no encontrada" }, { status: 200 });
         }
 
-        const responsable = await prisma.c_empleado.findUnique({ where: { id: marca.empleadoFijo_id } });
+        const responsable = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_empleado",
+                operation: "findUnique",
+                where: { id: marcaObj.empleadoFijo_id },
+            },
+        });
         if (!responsable) {
             return NextResponse.json({ status: false, message: "Responsable no encontrada" }, { status: 200 });
         }
 
-        const encuesta = await prisma.c_encuesta_cliente.create({
+        const empresaObj = empresa as any;
+        const clienteObj = cliente as any;
+        const corpoObj = corpo as any;
+        const puestoObj = puesto_db as any;
+        const divisionObj = division as any;
+        const responsableObj = responsable as any;
+
+        const fechaDate = fecha instanceof Date ? fecha : new Date(fecha);
+        const encuesta = await callDynamicPrisma({
+            req,
             data: {
-                empresa_id: empresa.id,
-                cliente_id: cliente.id,
-                corpo_id: corpo.id,
-                puesto_id: puesto_db.id,
-                division_id: division.id,
-                responsable_id: responsable.id,
-                empresa_evaluado: empresa_evaluada,
-                firma_responsable: firma_responsable,
-                created_at: toZonedTime(new Date(), "America/Costa_Rica"),
-                fecha: new Date(fecha),
-                evaluaciones: evaluaciones,
-                nombre_evaluado: persona_evaluada,
-                cedula_evaluado: cedula_persona_evaluada,
-                telefono_evaluado: telefono_persona_evaluada,
-                email_evaluado: email_persona_evaluada,
-                firma_evaluado: firma_persona_evaluada,
-                nombre_responsable: nombre_responsable,
-                cedula_responsable: cedula_responsable,
-                observaciones: observaciones
+                action: "POST",
+                table: "c_encuesta_cliente",
+                operation: "create",
+                data: {
+                    empresa_id: empresaObj.id,
+                    cliente_id: clienteObj.id,
+                    corpo_id: corpoObj.id,
+                    puesto_id: puestoObj.id,
+                    division_id: divisionObj.id,
+                    responsable_id: responsableObj.id,
+                    empresa_evaluado: empresa_evaluada,
+                    firma_responsable: firma_responsable,
+                    created_at: toZonedTime(new Date(), "America/Costa_Rica").toISOString(),
+                    fecha: fechaDate.toISOString(),
+                    evaluaciones: evaluaciones,
+                    nombre_evaluado: persona_evaluada,
+                    cedula_evaluado: cedula_persona_evaluada,
+                    telefono_evaluado: telefono_persona_evaluada,
+                    email_evaluado: email_persona_evaluada,
+                    firma_evaluado: firma_persona_evaluada,
+                    nombre_responsable: nombre_responsable,
+                    cedula_responsable: cedula_responsable,
+                    observaciones: observaciones
+                }
             }
         });
 
@@ -279,23 +389,34 @@ export async function POST(req: NextRequest) {
                 evaluaciones_html += `<p>${item.question}: ${item.result}</p><br>`;
             }
 
-            await transporter.sendMail({
-                from: `Encuesta NPS - <${process.env.EMAIL_USER}>`,
-                to: email_persona_evaluada,
-                subject: "Encuesta de satisfacción del puesto " + puesto_db.nombre,
-                html: `
-                    <h1>Buenos días, estimado(a) ${persona_evaluada} (${cedula_persona_evaluada}) de la organización ${empresa_evaluada}</h1>
-                    <p>Gracias por tu tiempo y esfuerzo en completar la encuesta de satisfacción del puesto ${puesto_db.nombre}.</p>
-                    <p>A continuación, te mostramos un resumen de la encuesta:</p><br>
-                    ${evaluaciones_html}
-                    <p>Gracias por tu colaboración.</p>
-                `
-            });
+            // Solo enviar correo si hay un email válido
+            if (email_persona_evaluada && email_persona_evaluada.trim() !== '') {
+                try {
+                    await transporter.sendMail({
+                        from: `Encuesta NPS - <${process.env.EMAIL_USER}>`,
+                        to: email_persona_evaluada,
+                        subject: "Encuesta de satisfacción del puesto " + puesto_db.nombre,
+                        html: `
+                            <h1>Buenos días, estimado(a) ${persona_evaluada} (${cedula_persona_evaluada}) de la organización ${empresa_evaluada}</h1>
+                            <p>Gracias por tu tiempo y esfuerzo en completar la encuesta de satisfacción del puesto ${puesto_db.nombre}.</p>
+                            <p>A continuación, te mostramos un resumen de la encuesta:</p><br>
+                            ${evaluaciones_html}
+                            <p>Gracias por tu colaboración.</p>
+                        `
+                    });
+                } catch (emailError) {
+                    console.error("Error al enviar correo:", emailError);
+                    // Continuar con el proceso aunque falle el envío del correo
+                }
+            }
 
-            const fecha_encuesta_string = fecha.toISOString().split('T')[0];
-            const hora_encuesta_string = fecha.toISOString().split('T')[1].split('.')[0];
-            const desc_notification = `La encuesta de satisfacción del puesto "${puesto_db.nombre}" realizada el día ${fecha_encuesta_string} a las ${hora_encuesta_string} por parte de "${persona_evaluada}" (${cedula_persona_evaluada}) de la empresa "${empresa_evaluada}" ha sido agregada. Se ha enviado un correo de confirmación a ${email_persona_evaluada}.`;
-            await sendNotificationByRole(marca.corpo_id, [marca.plaza_id], "Encuesta de satisfacción agregada", desc_notification, ["ADMINISTRATIVO", "SUPERVISOR"]);
+            const fecha_encuesta_string = fechaDate.toISOString().split('T')[0];
+            const hora_encuesta_string = fechaDate.toISOString().split('T')[1].split('.')[0];
+            const emailInfo = email_persona_evaluada && email_persona_evaluada.trim() !== ''
+                ? `Se ha enviado un correo de confirmación a ${email_persona_evaluada}.`
+                : 'No se envió correo de confirmación (no se proporcionó email).';
+            const desc_notification = `La encuesta de satisfacción del puesto "${puestoObj.nombre}" realizada el día ${fecha_encuesta_string} a las ${hora_encuesta_string} por parte de "${persona_evaluada}" (${cedula_persona_evaluada}) de la empresa "${empresa_evaluada}" ha sido agregada. ${emailInfo}`;
+            await sendNotificationByRole(req, marcaObj.corpo_id, [marcaObj.plaza_id], "Encuesta de satisfacción agregada", desc_notification, ["ADMINISTRATIVO", "SUPERVISOR"]);
         }
 
         return NextResponse.json({ status: true, message: "Encuesta creada correctamente" }, { status: 200 });

@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../../../utils/verifyToken";
-import { prisma } from "../../../../../utils/prismaClient";
+import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         const resolvedParams = await context.params;
@@ -14,16 +14,25 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             return NextResponse.json({ status: false, message: "Plaza no especificado" }, { status: 200 });
         }
 
-        const plaza = await prisma.e_estructura_plazas.findUnique({ where: { id } });
+        const plaza = await callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "e_estructura_plazas", operation: "findUnique", where: { id } }
+        });
         if (!plaza) {
             return NextResponse.json({ status: false, message: "Plaza no encontrada" }, { status: 200 });
         }
 
         // limit to 50 notifications at a time
-        const plaza_notifications = await prisma.c_plaza_notification.findMany({ where: { plazaId: id }, take: 100 });
+        const plaza_notifications = await callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "c_plaza_notification", operation: "findMany", where: { plazaId: id }, take: 100 }
+        });
         const notifications_return: { id: number, title: string, description: string, watched: boolean, created_at: string }[] = [];
         for (const plaza_notification of plaza_notifications) {
-            const notificationData = await prisma.c_notifications.findUnique({ where: { id: plaza_notification.notificationId } });
+            const notificationData = await callDynamicPrisma({
+                req,
+                data: { action: "GET", table: "c_notifications", operation: "findUnique", where: { id: plaza_notification.notificationId } }
+            });
             if (!notificationData) continue;
             notifications_return.push({
                 id: plaza_notification.id,

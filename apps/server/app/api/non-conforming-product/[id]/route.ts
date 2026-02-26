@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../../utils/verifyToken";
-import { prisma } from "../../../../utils/prismaClient";
+import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
 import fs from "fs";
 import path from "path";
-import { v4 as uuidv4 } from "uuid";
+import { uploadDynamicFiles } from "../../../../utils/callDynamicFilesApi";
 
 export const runtime = "nodejs";
 
@@ -29,11 +29,20 @@ function safeParseJson<T>(value: any, fallback: T): T {
     }
 }
 
-function normalizeBase64(b64: string): string {
-    if (!b64) return "";
-    const idx = b64.indexOf("base64,");
-    if (idx !== -1) return b64.slice(idx + "base64,".length);
-    return b64;
+function buildFileUrl(baseUrl: string, recordId: number, file: { name: string; type: string }): string {
+    const fileName = file.name;
+    const type = String(file.type || "file").toLowerCase();
+    let urlPath: string;
+    if (type === "image") {
+        urlPath = `/api/non-conforming-product/${recordId}/get-image/${fileName}`;
+    } else if (type === "audio") {
+        urlPath = `/api/non-conforming-product/${recordId}/get-audio/${fileName}`;
+    } else if (type === "video") {
+        urlPath = `/api/non-conforming-product/${recordId}/get-video/${fileName}`;
+    } else {
+        urlPath = `/api/non-conforming-product/${recordId}/get-file/${fileName}`;
+    }
+    return `${baseUrl}${urlPath}`;
 }
 
 function parseDateOnly(input: any): Date | null {
@@ -50,7 +59,7 @@ export async function PUT(
     context: { params: Promise<{ id: string }> }
 ) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
 
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
@@ -79,34 +88,52 @@ export async function PUT(
             archivos,
         } = await req.json();
 
-        const existingRecord = await prisma.c_producto_no_conforme.findUnique({
-            where: { id: pncId },
-            include: { e_archivos_producto_no_conforme: true },
+        const existingRecord = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_producto_no_conforme",
+                operation: "findUnique",
+                where: { id: pncId },
+                include: { e_archivos_producto_no_conforme: true },
+            },
         });
 
         if (!existingRecord) {
             return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
         }
+        const existingRecordObj = existingRecord as any;
+
+        const fechaIdentExisting = existingRecordObj.fecha_identificacion instanceof Date ? existingRecordObj.fecha_identificacion : (typeof existingRecordObj.fecha_identificacion === 'string' ? new Date(existingRecordObj.fecha_identificacion) : null);
+        const fechaSolExisting = existingRecordObj.fecha_solucion instanceof Date ? existingRecordObj.fecha_solucion : (typeof existingRecordObj.fecha_solucion === 'string' ? new Date(existingRecordObj.fecha_solucion) : null);
 
         const updateData: any = {
-            cliente_id: cliente_id !== undefined ? Number(cliente_id) : existingRecord.cliente_id,
-            corpo_id: corpo_id !== undefined ? Number(corpo_id) : existingRecord.corpo_id,
+            cliente_id: cliente_id !== undefined ? Number(cliente_id) : existingRecordObj.cliente_id,
+            corpo_id: corpo_id !== undefined ? Number(corpo_id) : existingRecordObj.corpo_id,
             fecha_identificacion:
-                fecha_identificacion !== undefined ? (parseDateOnly(fecha_identificacion) ?? existingRecord.fecha_identificacion) : existingRecord.fecha_identificacion,
-            responsable_cuenta: responsable_cuenta !== undefined ? String(responsable_cuenta ?? "") : existingRecord.responsable_cuenta,
-            tipo_servicio_no_conforme: tipo_servicio_no_conforme !== undefined ? String(tipo_servicio_no_conforme ?? "") : existingRecord.tipo_servicio_no_conforme,
-            persona_identifico_pnc: persona_identifico_pnc !== undefined ? String(persona_identifico_pnc ?? "") : existingRecord.persona_identifico_pnc,
+                fecha_identificacion !== undefined ? (parseDateOnly(fecha_identificacion) ?? fechaIdentExisting) : fechaIdentExisting,
+            responsable_cuenta: responsable_cuenta !== undefined ? String(responsable_cuenta ?? "") : existingRecordObj.responsable_cuenta,
+            tipo_servicio_no_conforme: tipo_servicio_no_conforme !== undefined ? String(tipo_servicio_no_conforme ?? "") : existingRecordObj.tipo_servicio_no_conforme,
+            persona_identifico_pnc: persona_identifico_pnc !== undefined ? String(persona_identifico_pnc ?? "") : existingRecordObj.persona_identifico_pnc,
             firma_persona_identifico_pnc:
-                firma_persona_identifico_pnc !== undefined ? String(firma_persona_identifico_pnc ?? "") : existingRecord.firma_persona_identifico_pnc,
-            descripcion: descripcion !== undefined ? String(descripcion ?? "") : existingRecord.descripcion,
-            persona_origino_pnc: persona_origino_pnc !== undefined ? String(persona_origino_pnc ?? "") : existingRecord.persona_origino_pnc,
+                firma_persona_identifico_pnc !== undefined ? String(firma_persona_identifico_pnc ?? "") : existingRecordObj.firma_persona_identifico_pnc,
+            descripcion: descripcion !== undefined ? String(descripcion ?? "") : existingRecordObj.descripcion,
+            persona_origino_pnc: persona_origino_pnc !== undefined ? String(persona_origino_pnc ?? "") : existingRecordObj.persona_origino_pnc,
             firma_persona_origino_pnc:
-                firma_persona_origino_pnc !== undefined ? String(firma_persona_origino_pnc ?? "") : existingRecord.firma_persona_origino_pnc,
-            accion_implementada: accion_implementada !== undefined ? String(accion_implementada ?? "") : existingRecord.accion_implementada,
-            fecha_solucion: fecha_solucion !== undefined ? (parseDateOnly(fecha_solucion) ?? existingRecord.fecha_solucion) : existingRecord.fecha_solucion,
-            responsable_aprobar: responsable_aprobar !== undefined ? String(responsable_aprobar ?? "") : existingRecord.responsable_aprobar,
-            firma_responsable: firma_responsable !== undefined ? String(firma_responsable ?? existingRecord.firma_responsable) : existingRecord.firma_responsable,
+                firma_persona_origino_pnc !== undefined ? String(firma_persona_origino_pnc ?? "") : existingRecordObj.firma_persona_origino_pnc,
+            accion_implementada: accion_implementada !== undefined ? String(accion_implementada ?? "") : existingRecordObj.accion_implementada,
+            fecha_solucion: fecha_solucion !== undefined ? (parseDateOnly(fecha_solucion) ?? fechaSolExisting) : fechaSolExisting,
+            responsable_aprobar: responsable_aprobar !== undefined ? String(responsable_aprobar ?? "") : existingRecordObj.responsable_aprobar,
+            firma_responsable: firma_responsable !== undefined ? String(firma_responsable ?? existingRecordObj.firma_responsable) : existingRecordObj.firma_responsable,
         };
+
+        // Convertir fechas a ISO strings para callDynamicPrisma
+        if (updateData.fecha_identificacion instanceof Date) {
+            updateData.fecha_identificacion = updateData.fecha_identificacion.toISOString();
+        }
+        if (updateData.fecha_solucion instanceof Date) {
+            updateData.fecha_solucion = updateData.fecha_solucion.toISOString();
+        }
 
         // Registrar cambios (solo campos actualizados, excluyendo firmas)
         const eq = (a: any, b: any) => {
@@ -123,33 +150,48 @@ export async function PUT(
             // Excluir firmas
             if (k.startsWith("firma_")) continue;
 
-            const before = (existingRecord as any)[k];
+            const before = existingRecordObj[k];
             const after = v;
             if (!eq(before, after)) {
+                const beforeValue = before instanceof Date ? before.toISOString() : (typeof before === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(before) ? before : before);
+                const afterValue = after instanceof Date ? after.toISOString() : (typeof after === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(after) ? after : after);
                 cambiosArr.push({
                     prop: k,
-                    before: before instanceof Date ? before.toISOString() : before,
-                    after: after instanceof Date ? after.toISOString() : after,
+                    before: beforeValue,
+                    after: afterValue,
                 });
             }
         }
 
-        const updatedRecord = await prisma.c_producto_no_conforme.update({
-            where: { id: pncId },
-            data: updateData,
-            include: { e_archivos_producto_no_conforme: true },
+        const updatedRecord = await callDynamicPrisma({
+            req,
+            data: {
+                action: "UPDATE",
+                table: "c_producto_no_conforme",
+                operation: "update",
+                where: { id: pncId },
+                data: updateData,
+                include: { e_archivos_producto_no_conforme: true },
+            },
         });
+        const updatedRecordObj = updatedRecord as any;
 
         // Registrar cambios si hay alguno
         if (cambiosArr.length > 0) {
             const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
-            await prisma.c_cambios_apps_modules.create({
+            await callDynamicPrisma({
+                req,
                 data: {
-                    nombre_tabla: "c_producto_no_conforme",
-                    registro_id: pncId,
-                    cambios: JSON.stringify(cambiosArr),
-                    created_at: toZonedTime(new Date(), "America/Costa_Rica"),
-                    created_by: createdBy,
+                    action: "POST",
+                    table: "c_cambios_apps_modules",
+                    operation: "create",
+                    data: {
+                        nombre_tabla: "c_producto_no_conforme",
+                        registro_id: pncId,
+                        cambios: JSON.stringify(cambiosArr),
+                        created_at: toZonedTime(new Date(), "America/Costa_Rica").toISOString(),
+                        created_by: createdBy,
+                    },
                 },
             });
         }
@@ -159,9 +201,17 @@ export async function PUT(
             let filesParsed: PncFileInput[] = [];
             filesParsed = safeParseJson<PncFileInput[]>(archivos, []);
 
-            const dir = path.join(process.cwd(), "public", "uploads", "non-conforming-product", `${updatedRecord.id}`);
+            const dir = path.join(process.cwd(), "public", "uploads", "non-conforming-product", `${updatedRecordObj.id}`);
 
-            await prisma.e_archivos_producto_no_conforme.deleteMany({ where: { pnc_id: updatedRecord.id } });
+            await callDynamicPrisma({
+                req,
+                data: {
+                    action: "DELETE",
+                    table: "e_archivos_producto_no_conforme",
+                    operation: "deleteMany",
+                    where: { pnc_id: updatedRecordObj.id },
+                },
+            });
             if (fs.existsSync(dir)) {
                 try {
                     fs.rmSync(dir, { recursive: true, force: true });
@@ -171,57 +221,68 @@ export async function PUT(
             }
 
             if (filesParsed.length > 0) {
-                if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+                const uploadResp = await uploadDynamicFiles({
+                    req,
+                    folderPath: `non-conforming-product/${updatedRecordObj.id}`,
+                    files: filesParsed
+                        .filter((f) => f?.file_base64 && f?.extension && f?.type)
+                        .map((f) => ({
+                            type: f.type,
+                            extension: f.extension,
+                            original_name: f.original_name,
+                            file_base64: f.file_base64,
+                        })),
+                });
 
-                for (const f of filesParsed) {
-                    if (!f?.file_base64 || !f?.extension || !f?.type) continue;
-                    let buffer: Buffer;
-                    try {
-                        buffer = Buffer.from(normalizeBase64(String(f.file_base64)), "base64");
-                    } catch {
-                        continue;
-                    }
-
-                    const ext = String(f.extension).replace(".", "").trim() || "dat";
-                    const fileName = `${uuidv4()}.${ext}`;
-                    fs.writeFileSync(path.join(dir, fileName), buffer);
-
-                    const originalName =
-                        typeof f.original_name === "string" && f.original_name.trim().length > 0
-                            ? f.original_name.trim()
-                            : fileName;
-
-                    await prisma.e_archivos_producto_no_conforme.create({
+                const uploadedFiles = Array.isArray(uploadResp?.files) ? uploadResp.files : [];
+                for (const uploaded of uploadedFiles) {
+                    await callDynamicPrisma({
+                        req,
                         data: {
-                            name: fileName,
-                            original_name: originalName,
-                            type: String(f.type),
-                            extension: ext,
-                            pnc_id: updatedRecord.id,
+                            action: "POST",
+                            table: "e_archivos_producto_no_conforme",
+                            operation: "create",
+                            data: {
+                                name: uploaded.name,
+                                original_name: uploaded.original_name || uploaded.name,
+                                type: uploaded.type,
+                                extension: uploaded.extension,
+                                pnc_id: updatedRecordObj.id,
+                            },
                         },
                     });
                 }
             }
         }
 
-        const fullRecord = await prisma.c_producto_no_conforme.findUnique({
-            where: { id: updatedRecord.id },
-            include: { e_archivos_producto_no_conforme: true },
+        const fullRecord = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_producto_no_conforme",
+                operation: "findUnique",
+                where: { id: updatedRecordObj.id },
+                include: { e_archivos_producto_no_conforme: true },
+            },
         });
 
+        const fullRecordObj = fullRecord as any;
+        const archivosArray = Array.isArray(fullRecordObj?.e_archivos_producto_no_conforme) ? fullRecordObj.e_archivos_producto_no_conforme : [];
+        const baseUrl = req.nextUrl.origin;
         return NextResponse.json(
             {
                 status: true,
                 message: "Producto no conforme actualizado correctamente",
                 data: {
-                    ...(fullRecord ?? updatedRecord),
+                    ...(fullRecordObj ?? updatedRecordObj),
                     id_local: "",
-                    files: ((fullRecord as any)?.e_archivos_producto_no_conforme || []).map((f: any) => ({
+                    files: archivosArray.map((f: any) => ({
                         id: f.id,
                         name: f.name,
                         original_name: f.original_name,
                         type: f.type,
                         extension: f.extension,
+                        url: buildFileUrl(baseUrl, updatedRecordObj.id, f),
                     })),
                 },
             },
@@ -239,7 +300,7 @@ export async function DELETE(
     context: { params: Promise<{ id: string }> }
 ) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
 
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
@@ -250,45 +311,68 @@ export async function DELETE(
             return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
         }
 
-        const existingRecord = await prisma.c_producto_no_conforme.findUnique({
-            where: { id: pncId },
+        const existingRecord = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_producto_no_conforme",
+                operation: "findUnique",
+                where: { id: pncId },
+            },
         });
 
         if (!existingRecord) {
             return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
         }
 
+        const existingRecordObj = existingRecord as any;
         // Registrar cambio de eliminación antes de eliminar
         const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
         const createdAt = toZonedTime(new Date(), "America/Costa_Rica");
-        await prisma.c_cambios_apps_modules.create({
+        const fechaIdentValue = existingRecordObj.fecha_identificacion instanceof Date ? existingRecordObj.fecha_identificacion.toISOString() : (typeof existingRecordObj.fecha_identificacion === 'string' ? existingRecordObj.fecha_identificacion : null);
+        const fechaSolValue = existingRecordObj.fecha_solucion instanceof Date ? existingRecordObj.fecha_solucion.toISOString() : (typeof existingRecordObj.fecha_solucion === 'string' ? existingRecordObj.fecha_solucion : null);
+        await callDynamicPrisma({
+            req,
             data: {
-                nombre_tabla: "c_producto_no_conforme",
-                registro_id: pncId,
-                cambios: JSON.stringify([{
-                    prop: "__deleted__",
-                    before: {
-                        id: existingRecord.id,
-                        cliente_id: existingRecord.cliente_id,
-                        corpo_id: existingRecord.corpo_id,
-                        fecha_identificacion: existingRecord.fecha_identificacion.toISOString(),
-                        responsable_cuenta: existingRecord.responsable_cuenta,
-                        tipo_servicio_no_conforme: existingRecord.tipo_servicio_no_conforme,
-                        persona_identifico_pnc: existingRecord.persona_identifico_pnc,
-                        descripcion: existingRecord.descripcion,
-                        persona_origino_pnc: existingRecord.persona_origino_pnc,
-                        accion_implementada: existingRecord.accion_implementada,
-                        fecha_solucion: existingRecord.fecha_solucion.toISOString(),
-                        responsable_aprobar: existingRecord.responsable_aprobar,
-                    },
-                    after: null,
-                }]),
-                created_at: createdAt,
-                created_by: createdBy,
+                action: "POST",
+                table: "c_cambios_apps_modules",
+                operation: "create",
+                data: {
+                    nombre_tabla: "c_producto_no_conforme",
+                    registro_id: pncId,
+                    cambios: JSON.stringify([{
+                        prop: "__deleted__",
+                        before: {
+                            id: existingRecordObj.id,
+                            cliente_id: existingRecordObj.cliente_id,
+                            corpo_id: existingRecordObj.corpo_id,
+                            fecha_identificacion: fechaIdentValue,
+                            responsable_cuenta: existingRecordObj.responsable_cuenta,
+                            tipo_servicio_no_conforme: existingRecordObj.tipo_servicio_no_conforme,
+                            persona_identifico_pnc: existingRecordObj.persona_identifico_pnc,
+                            descripcion: existingRecordObj.descripcion,
+                            persona_origino_pnc: existingRecordObj.persona_origino_pnc,
+                            accion_implementada: existingRecordObj.accion_implementada,
+                            fecha_solucion: fechaSolValue,
+                            responsable_aprobar: existingRecordObj.responsable_aprobar,
+                        },
+                        after: null,
+                    }]),
+                    created_at: createdAt.toISOString(),
+                    created_by: createdBy,
+                },
             },
         });
 
-        await prisma.c_producto_no_conforme.delete({ where: { id: pncId } });
+        await callDynamicPrisma({
+            req,
+            data: {
+                action: "DELETE",
+                table: "c_producto_no_conforme",
+                operation: "delete",
+                where: { id: pncId },
+            },
+        });
 
         const dir = path.join(process.cwd(), "public", "uploads", "non-conforming-product", `${pncId}`);
         if (fs.existsSync(dir)) {

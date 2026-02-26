@@ -52,11 +52,21 @@ type BoletaItem = {
   isOriginal: boolean;
 };
 
+type VulnerabilityLevel = 'alta' | 'media' | 'baja';
+
 type BoletaSection = {
   key: string;
   title: string;
   items: BoletaItem[];
+  vulnerabilityLevel?: VulnerabilityLevel;
 };
+
+const PORCENTAJE_SECTION_KEY = 'porcentaje_vulnerabilidad';
+const VULNERABILITY_LEVEL_OPTIONS: Array<{ value: VulnerabilityLevel; label: string }> = [
+  { value: 'alta', label: 'Alta' },
+  { value: 'media', label: 'Media' },
+  { value: 'baja', label: 'Baja' },
+];
 
 const BOLETA_DEFAULTS: { key: string; title: string; items: string[] }[] = [
   {
@@ -137,7 +147,7 @@ const BOLETA_DEFAULTS: { key: string; title: string; items: string[] }[] = [
   {
     key: 'porcentaje_vulnerabilidad',
     title: 'Porcentaje de vulnerabilidad',
-    items: ['Vulnerabilidad alta', 'Vulnerabilidad media', 'Vulnerabilidad baja'],
+    items: [],
   },
 ];
 
@@ -151,7 +161,83 @@ const makeDefaultBoleta = (): BoletaSection[] =>
       answer: null,
       isOriginal: true,
     })),
+    ...(s.key === PORCENTAJE_SECTION_KEY ? { vulnerabilityLevel: 'baja' as VulnerabilityLevel } : {}),
   }));
+
+const normalizeVulnerabilityLevel = (value: any): VulnerabilityLevel => {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'alta') return 'alta';
+  if (normalized === 'media') return 'media';
+  return 'baja';
+};
+
+const getVulnerabilityLevelLabel = (value: any): string => {
+  const normalized = normalizeVulnerabilityLevel(value);
+  return VULNERABILITY_LEVEL_OPTIONS.find((o) => o.value === normalized)?.label || 'Baja';
+};
+
+const getLegacyVulnerabilityLevelFromItems = (items: any[]): VulnerabilityLevel => {
+  const selected = (Array.isArray(items) ? items : []).find((item: any) => item?.answer === 'si');
+  const selectedLabel = String(selected?.label || '').toLowerCase();
+  if (selectedLabel.includes('alta')) return 'alta';
+  if (selectedLabel.includes('media')) return 'media';
+  if (selectedLabel.includes('baja')) return 'baja';
+  return 'baja';
+};
+
+const normalizeBoletaSections = (value: any): BoletaSection[] => {
+  const defaults = makeDefaultBoleta();
+  const parsedSections = Array.isArray(value) ? value : [];
+
+  const parsedMap = new Map(
+    parsedSections.map((raw: any) => {
+      const key = String(raw?.key || '');
+      const title = String(raw?.title || '');
+      const items: BoletaItem[] = (Array.isArray(raw?.items) ? raw.items : []).map((item: any, idx: number) => ({
+        id: String(item?.id || `${key}-${idx}`),
+        label: String(item?.label || ''),
+        answer: item?.answer === 'si' || item?.answer === 'no' ? item.answer : null,
+        isOriginal: item?.isOriginal !== false,
+      }));
+      const section: BoletaSection = { key, title, items };
+      if (key === PORCENTAJE_SECTION_KEY) {
+        section.vulnerabilityLevel = normalizeVulnerabilityLevel(
+          raw?.vulnerabilityLevel ?? getLegacyVulnerabilityLevelFromItems(raw?.items || [])
+        );
+      }
+      return [key, section] as const;
+    })
+  );
+
+  const merged = defaults.map((defaultSection) => {
+    const existing = parsedMap.get(defaultSection.key);
+    if (!existing) return defaultSection;
+
+    if (defaultSection.key === PORCENTAJE_SECTION_KEY) {
+      return {
+        ...defaultSection,
+        ...existing,
+        items: [],
+        vulnerabilityLevel: normalizeVulnerabilityLevel(
+          existing.vulnerabilityLevel ?? getLegacyVulnerabilityLevelFromItems(existing.items || [])
+        ),
+      };
+    }
+
+    return {
+      ...defaultSection,
+      ...existing,
+      items: Array.isArray(existing.items) ? existing.items : defaultSection.items,
+    };
+  });
+
+  const defaultKeys = new Set(defaults.map((s) => s.key));
+  const extraSections = parsedSections
+    .map((raw: any) => parsedMap.get(String(raw?.key || '')))
+    .filter((s): s is BoletaSection => !!s && !defaultKeys.has(s.key));
+
+  return [...merged, ...extraSections];
+};
 
 export default function ApreciacionVulnerabilidadScreen() {
   const navigation = useNavigation<any>();
@@ -202,6 +288,8 @@ export default function ApreciacionVulnerabilidadScreen() {
   // create/edit
   const [isCreating, setIsCreating] = useState(false);
   const [editing, setEditing] = useState<VulnUI | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitResponse, setSubmitResponse] = useState<{ type: 'success' | 'error', message: string } | null>(null);
 
   const [fecha, setFecha] = useState<Date>(new Date());
   const [showFechaPicker, setShowFechaPicker] = useState(false);
@@ -585,7 +673,7 @@ export default function ApreciacionVulnerabilidadScreen() {
 
     try {
       const parsed = JSON.parse(it.boleta || '[]');
-      if (Array.isArray(parsed)) setBoleta(parsed);
+      if (Array.isArray(parsed)) setBoleta(normalizeBoletaSections(parsed));
       else setBoleta(makeDefaultBoleta());
     } catch {
       setBoleta(makeDefaultBoleta());
@@ -649,6 +737,8 @@ export default function ApreciacionVulnerabilidadScreen() {
     if (!puestoId) return Alert.alert('Error', 'Debes seleccionar Puesto') as any;
     if (!enlace.trim()) return Alert.alert('Error', 'Campo requerido: Enlace') as any;
     if (!nombreSolicitante.trim()) return Alert.alert('Error', 'Campo requerido: Nombre solicitante') as any;
+    const vulnerabilidad = boleta.find((s) => s.key === PORCENTAJE_SECTION_KEY)?.vulnerabilityLevel;
+    if (!vulnerabilidad) return Alert.alert('Error', 'Debes seleccionar el porcentaje de vulnerabilidad') as any;
     if (!firmaSolicitante) return Alert.alert('Error', 'Debes registrar la firma del solicitante') as any;
     if (!firmaResponsable) return Alert.alert('Error', 'Debes registrar la firma del responsable') as any;
     return true;
@@ -673,76 +763,96 @@ export default function ApreciacionVulnerabilidadScreen() {
     if (!employee) return;
     if (!validateForm()) return;
 
-    const payload = buildPayload();
-    const isConnected = await getConnectionStatus();
+    setIsSubmitting(true);
+    setSubmitResponse(null);
 
-    if (!editing) {
-      if (isConnected) {
-        const res = await createApreciacionVulnerabilidad({ requestData: payload, refreshAccessToken, logout });
+    try {
+      const payload = buildPayload();
+      const isConnected = await getConnectionStatus();
+
+      if (!editing) {
+        if (isConnected) {
+          const res = await createApreciacionVulnerabilidad({ requestData: payload, refreshAccessToken, logout });
+          if (res.status) {
+            setSubmitResponse({ type: 'success', message: res.message || 'Registro creado correctamente' });
+            setTimeout(async () => {
+              setIsCreating(false);
+              await fetchItems();
+            }, 2000);
+          } else {
+            setSubmitResponse({ type: 'error', message: res.message || 'No se pudo crear' });
+          }
+        } else {
+          const localId = `local-vuln-${Date.now()}`;
+          const localItem: VulnUI = {
+            id: 0,
+            id_local: localId,
+            cliente_id: clienteId || 0,
+            corpo_id: corpoId || 0,
+            puesto_id: puestoId || 0,
+            fecha: payload.fecha,
+            enlace: payload.enlace,
+            nombre_solicitante: payload.nombre_solicitante,
+            boleta: payload.boleta,
+            metricas_vulnerablidad: payload.metricas_vulnerablidad,
+            observaciones: payload.observaciones,
+            firma_solicitante: payload.firma_solicitante,
+            firma_responsable: payload.firma_responsable,
+          };
+          const next = [localItem, ...items];
+          setItems(next);
+          await AsyncStorage.setItem('apreciacion_vulnerabilidad_cache', JSON.stringify(next));
+          await upsertAction({ type: 'create', id: localId, requestData: payload });
+          setSubmitResponse({ type: 'success', message: 'Se sincronizará cuando vuelva la conexión.' });
+          setTimeout(async () => {
+            setIsCreating(false);
+            await fetchItems();
+          }, 2000);
+        }
+        return;
+      }
+
+      const isLocal = !!editing.id_local || editing.id === 0;
+      if (isConnected && !isLocal) {
+        const res = await updateApreciacionVulnerabilidad({ id: editing.id, requestData: payload, refreshAccessToken, logout });
         if (res.status) {
-          Alert.alert('Éxito', 'Registro creado correctamente');
-          setIsCreating(false);
-          await fetchItems();
-        } else Alert.alert('Error', res.message || 'No se pudo crear');
+          setSubmitResponse({ type: 'success', message: res.message || 'Registro actualizado correctamente' });
+          setTimeout(async () => {
+            setIsCreating(false);
+            setEditing(null);
+            await fetchItems();
+          }, 2000);
+        } else {
+          setSubmitResponse({ type: 'error', message: res.message || 'No se pudo actualizar' });
+        }
       } else {
-        const localId = `local-vuln-${Date.now()}`;
-        const localItem: VulnUI = {
-          id: 0,
-          id_local: localId,
-          cliente_id: clienteId || 0,
-          corpo_id: corpoId || 0,
-          puesto_id: puestoId || 0,
-          fecha: payload.fecha,
-          enlace: payload.enlace,
-          nombre_solicitante: payload.nombre_solicitante,
-          boleta: payload.boleta,
-          metricas_vulnerablidad: payload.metricas_vulnerablidad,
-          observaciones: payload.observaciones,
-          firma_solicitante: payload.firma_solicitante,
-          firma_responsable: payload.firma_responsable,
-        };
-        const next = [localItem, ...items];
+        const next = items.map((it) => {
+          const match = (editing.id_local && it.id_local === editing.id_local) || (!editing.id_local && it.id === editing.id);
+          if (!match) return it;
+          return { ...it, ...payload };
+        });
         setItems(next);
         await AsyncStorage.setItem('apreciacion_vulnerabilidad_cache', JSON.stringify(next));
-        await upsertAction({ type: 'create', id: localId, requestData: payload });
-        Alert.alert('Guardado (offline)', 'Se sincronizará cuando vuelva la conexión.');
-        setIsCreating(false);
-        // refrescar vista principal
-        await fetchItems();
+
+        if (editing.id_local) {
+          const updated = await updateCreateActionForLocalId(editing.id_local, payload);
+          if (!updated) await upsertAction({ type: 'create', id: editing.id_local, requestData: payload });
+        } else {
+          await upsertAction({ type: 'update', id: editing.id, requestData: payload });
+        }
+
+        setSubmitResponse({ type: 'success', message: 'Los cambios se sincronizarán cuando vuelva la conexión.' });
+        setTimeout(async () => {
+          setIsCreating(false);
+          setEditing(null);
+          await fetchItems();
+        }, 2000);
       }
-      return;
-    }
-
-    const isLocal = !!editing.id_local || editing.id === 0;
-    if (isConnected && !isLocal) {
-      const res = await updateApreciacionVulnerabilidad({ id: editing.id, requestData: payload, refreshAccessToken, logout });
-      if (res.status) {
-        Alert.alert('Éxito', 'Registro actualizado correctamente');
-        setIsCreating(false);
-        setEditing(null);
-        await fetchItems();
-      } else Alert.alert('Error', res.message || 'No se pudo actualizar');
-    } else {
-      const next = items.map((it) => {
-        const match = (editing.id_local && it.id_local === editing.id_local) || (!editing.id_local && it.id === editing.id);
-        if (!match) return it;
-        return { ...it, ...payload };
-      });
-      setItems(next);
-      await AsyncStorage.setItem('apreciacion_vulnerabilidad_cache', JSON.stringify(next));
-
-      if (editing.id_local) {
-        const updated = await updateCreateActionForLocalId(editing.id_local, payload);
-        if (!updated) await upsertAction({ type: 'create', id: editing.id_local, requestData: payload });
-      } else {
-        await upsertAction({ type: 'update', id: editing.id, requestData: payload });
-      }
-
-      Alert.alert('Guardado (offline)', 'Los cambios se sincronizarán cuando vuelva la conexión.');
-      setIsCreating(false);
-      setEditing(null);
-      // refrescar vista principal
-      await fetchItems();
+    } catch (error) {
+      console.error('Error saving apreciacion vulnerabilidad:', error);
+      setSubmitResponse({ type: 'error', message: 'Error al guardar el registro' });
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -794,7 +904,22 @@ export default function ApreciacionVulnerabilidadScreen() {
     );
   };
 
+  const setVulnerabilityLevel = (level: VulnerabilityLevel) => {
+    setBoleta((prev) =>
+      prev.map((s) =>
+        s.key === PORCENTAJE_SECTION_KEY
+          ? {
+            ...s,
+            vulnerabilityLevel: normalizeVulnerabilityLevel(level),
+            items: [],
+          }
+          : s
+      )
+    );
+  };
+
   const addCustomOption = (sectionKey: string) => {
+    if (sectionKey === PORCENTAJE_SECTION_KEY) return;
     const text = (newOptionTextBySection[sectionKey] || '').trim();
     if (!text) return;
     setBoleta((prev) =>
@@ -808,6 +933,7 @@ export default function ApreciacionVulnerabilidadScreen() {
   };
 
   const removeCustomOption = (sectionKey: string, itemId: string) => {
+    if (sectionKey === PORCENTAJE_SECTION_KEY) return;
     setBoleta((prev) =>
       prev.map((s) => {
         if (s.key !== sectionKey) return s;
@@ -871,7 +997,7 @@ export default function ApreciacionVulnerabilidadScreen() {
     try {
       const parsed = JSON.parse(String(value || ''));
       if (!Array.isArray(parsed)) return null;
-      return parsed;
+      return normalizeBoletaSections(parsed);
     } catch {
       return null;
     }
@@ -884,6 +1010,7 @@ export default function ApreciacionVulnerabilidadScreen() {
     let none = 0;
     let total = 0;
     for (const s of sections) {
+      if (s.key === PORCENTAJE_SECTION_KEY) continue;
       const items = Array.isArray((s as any).items) ? (s as any).items : [];
       for (const it of items) {
         total += 1;
@@ -929,12 +1056,16 @@ export default function ApreciacionVulnerabilidadScreen() {
 
   const formatBoletaForDisplay = (boletaJson: string): string => {
     try {
-      const sections: BoletaSection[] = JSON.parse(boletaJson || '[]');
+      const sections: BoletaSection[] = normalizeBoletaSections(JSON.parse(boletaJson || '[]'));
       if (!Array.isArray(sections) || sections.length === 0) return 'No hay datos de boleta.';
 
       let formatted = '';
       sections.forEach((section) => {
         formatted += `\n--- ${section.title} ---\n`;
+        if (section.key === PORCENTAJE_SECTION_KEY) {
+          formatted += `  - Nivel seleccionado: ${getVulnerabilityLevelLabel(section.vulnerabilityLevel)}\n`;
+          return;
+        }
         (section.items || []).forEach((item) => {
           const answer = item.answer === 'si' ? 'Sí' : item.answer === 'no' ? 'No' : 'Sin responder';
           formatted += `  - ${item.label}: ${answer}\n`;
@@ -1032,6 +1163,11 @@ export default function ApreciacionVulnerabilidadScreen() {
     const isBoletaExp = boletaExpanded.has(boletaKey);
     const parsedBoleta = parseBoletaString(it.boleta);
     const boletaStats = getBoletaStats(parsedBoleta);
+    const vulnerabilidadSection = parsedBoleta?.find((s) => s.key === PORCENTAJE_SECTION_KEY) || null;
+    const vulnerabilidadLabel = getVulnerabilityLevelLabel(
+      vulnerabilidadSection?.vulnerabilityLevel ??
+      getLegacyVulnerabilityLevelFromItems(vulnerabilidadSection?.items || [])
+    );
     return (
       <ThemedView key={key} style={styles.card}>
         <ThemedText style={styles.cardTitle}>
@@ -1057,6 +1193,10 @@ export default function ApreciacionVulnerabilidadScreen() {
         <ThemedText style={styles.line}>
           <ThemedText style={styles.labelInline}>Puesto: </ThemedText>
           <ThemedText style={styles.valueInline}>{it.puesto_nombre || names?.puesto || '-'}</ThemedText>
+        </ThemedText>
+        <ThemedText style={styles.line}>
+          <ThemedText style={styles.labelInline}>Porcentaje de vulnerabilidad: </ThemedText>
+          <ThemedText style={styles.valueInline}>{vulnerabilidadLabel}</ThemedText>
         </ThemedText>
 
         <TouchableOpacity style={styles.collapseButton} onPress={() => toggleExpanded(key)}>
@@ -1130,6 +1270,12 @@ export default function ApreciacionVulnerabilidadScreen() {
               parsedBoleta.map((section) => (
                 <ThemedView key={section.key || section.title} style={styles.boletaResultsSection}>
                   <ThemedText style={styles.boletaResultsTitle}>{section.title || 'Sección'}</ThemedText>
+                  {section.key === PORCENTAJE_SECTION_KEY ? (
+                    <ThemedView style={styles.boletaResultRow}>
+                      <ThemedText style={styles.boletaResultLabel}>Nivel seleccionado</ThemedText>
+                      <ThemedText style={styles.boletaResultValue}>{getVulnerabilityLevelLabel(section.vulnerabilityLevel)}</ThemedText>
+                    </ThemedView>
+                  ) : null}
                   {(section.items || []).map((q) => (
                     <ThemedView key={q.id} style={styles.boletaResultRow}>
                       <ThemedText style={styles.boletaResultLabel}>{q.label}</ThemedText>
@@ -1546,50 +1692,68 @@ export default function ApreciacionVulnerabilidadScreen() {
               {boleta.map((section) => (
                 <ThemedView key={section.key} style={styles.boletaSection}>
                   <ThemedText style={styles.boletaSectionTitle}>{section.title}</ThemedText>
-                  {section.items.map((bi) => (
-                    <ThemedView key={bi.id} style={styles.boletaRow}>
-                      <ThemedText style={styles.boletaLabel}>{bi.label}</ThemedText>
-                      <ThemedView style={styles.boletaRowRight}>
-                        <TouchableOpacity style={styles.radioOption} onPress={() => setAnswer(section.key, bi.id, 'si')}>
-                          <Ionicons
-                            name={bi.answer === 'si' ? 'radio-button-on' : 'radio-button-off'}
-                            size={18}
-                            color={bi.answer === 'si' ? '#007AFF' : '#777'}
-                          />
-                          <ThemedText style={[styles.radioOptionText, bi.answer === 'si' && styles.radioOptionTextSelected]}>Sí</ThemedText>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity style={styles.radioOption} onPress={() => setAnswer(section.key, bi.id, 'no')}>
-                          <Ionicons
-                            name={bi.answer === 'no' ? 'radio-button-on' : 'radio-button-off'}
-                            size={18}
-                            color={bi.answer === 'no' ? '#007AFF' : '#777'}
-                          />
-                          <ThemedText style={[styles.radioOptionText, bi.answer === 'no' && styles.radioOptionTextSelected]}>No</ThemedText>
-                        </TouchableOpacity>
-                        {!bi.isOriginal ? (
-                          <TouchableOpacity style={styles.trashTiny} onPress={() => removeCustomOption(section.key, bi.id)}>
-                            <Ionicons name="trash" size={18} color="#FFFFFF" />
-                          </TouchableOpacity>
-                        ) : (
-                          <View style={styles.trashTinyPlaceholder} />
-                        )}
+                  {section.key === PORCENTAJE_SECTION_KEY ? (
+                    <>
+                      <ThemedText style={styles.label}>Nivel</ThemedText>
+                      <ThemedView style={styles.pickerWrapper}>
+                        <Picker
+                          selectedValue={section.vulnerabilityLevel || 'baja'}
+                          onValueChange={(val) => setVulnerabilityLevel(normalizeVulnerabilityLevel(val))}
+                        >
+                          {VULNERABILITY_LEVEL_OPTIONS.map((option) => (
+                            <Picker.Item key={option.value} label={option.label} value={option.value} />
+                          ))}
+                        </Picker>
                       </ThemedView>
-                    </ThemedView>
-                  ))}
+                    </>
+                  ) : (
+                    <>
+                      {section.items.map((bi) => (
+                        <ThemedView key={bi.id} style={styles.boletaRow}>
+                          <ThemedText style={styles.boletaLabel}>{bi.label}</ThemedText>
+                          <ThemedView style={styles.boletaRowRight}>
+                            <TouchableOpacity style={styles.radioOption} onPress={() => setAnswer(section.key, bi.id, 'si')}>
+                              <Ionicons
+                                name={bi.answer === 'si' ? 'radio-button-on' : 'radio-button-off'}
+                                size={18}
+                                color={bi.answer === 'si' ? '#007AFF' : '#777'}
+                              />
+                              <ThemedText style={[styles.radioOptionText, bi.answer === 'si' && styles.radioOptionTextSelected]}>Sí</ThemedText>
+                            </TouchableOpacity>
 
-                  <ThemedView style={styles.addOptionRow}>
-                    <TextInput
-                      style={[styles.input, { flex: 1, marginBottom: 0 }]}
-                      placeholder="Agregar opción..."
-                      placeholderTextColor="#999"
-                      value={newOptionTextBySection[section.key] || ''}
-                      onChangeText={(t) => setNewOptionTextBySection((p) => ({ ...p, [section.key]: t }))}
-                    />
-                    <TouchableOpacity style={styles.addTiny} onPress={() => addCustomOption(section.key)}>
-                      <Ionicons name="add" size={18} color="#FFFFFF" />
-                    </TouchableOpacity>
-                  </ThemedView>
+                            <TouchableOpacity style={styles.radioOption} onPress={() => setAnswer(section.key, bi.id, 'no')}>
+                              <Ionicons
+                                name={bi.answer === 'no' ? 'radio-button-on' : 'radio-button-off'}
+                                size={18}
+                                color={bi.answer === 'no' ? '#007AFF' : '#777'}
+                              />
+                              <ThemedText style={[styles.radioOptionText, bi.answer === 'no' && styles.radioOptionTextSelected]}>No</ThemedText>
+                            </TouchableOpacity>
+                            {!bi.isOriginal ? (
+                              <TouchableOpacity style={styles.trashTiny} onPress={() => removeCustomOption(section.key, bi.id)}>
+                                <Ionicons name="trash" size={18} color="#FFFFFF" />
+                              </TouchableOpacity>
+                            ) : (
+                              <View style={styles.trashTinyPlaceholder} />
+                            )}
+                          </ThemedView>
+                        </ThemedView>
+                      ))}
+
+                      <ThemedView style={styles.addOptionRow}>
+                        <TextInput
+                          style={[styles.input, { flex: 1, marginBottom: 0 }]}
+                          placeholder="Agregar opción..."
+                          placeholderTextColor="#999"
+                          value={newOptionTextBySection[section.key] || ''}
+                          onChangeText={(t) => setNewOptionTextBySection((p) => ({ ...p, [section.key]: t }))}
+                        />
+                        <TouchableOpacity style={styles.addTiny} onPress={() => addCustomOption(section.key)}>
+                          <Ionicons name="add" size={18} color="#FFFFFF" />
+                        </TouchableOpacity>
+                      </ThemedView>
+                    </>
+                  )}
                 </ThemedView>
               ))}
 
@@ -1699,14 +1863,36 @@ export default function ApreciacionVulnerabilidadScreen() {
                 </ThemedView>
               )}
 
+              {submitResponse && (
+                <ThemedView style={[styles.responseContainer, submitResponse.type === 'success' ? styles.responseSuccess : styles.responseError]}>
+                  <ThemedText style={styles.responseText}>
+                    {submitResponse.type === 'success' ? '✓ ' : '✗ '}
+                    {submitResponse.message}
+                  </ThemedText>
+                </ThemedView>
+              )}
               <ThemedView style={styles.formActions}>
-                <TouchableOpacity style={[styles.formActionButton, styles.formActionCancel]} onPress={cancelCreating}>
+                <TouchableOpacity
+                  style={[styles.formActionButton, styles.formActionCancel]}
+                  onPress={cancelCreating}
+                  disabled={isSubmitting}
+                >
                   <Ionicons name="close" size={18} color="#000" />
                   <ThemedText style={styles.formActionCancelText}>Cancelar</ThemedText>
                 </TouchableOpacity>
-                <TouchableOpacity style={[styles.formActionButton, styles.formActionSave]} onPress={handleSave}>
-                  <Ionicons name="save" size={18} color="#fff" />
-                  <ThemedText style={styles.formActionSaveText}>Guardar</ThemedText>
+                <TouchableOpacity
+                  style={[styles.formActionButton, styles.formActionSave, isSubmitting && styles.buttonDisabled]}
+                  onPress={handleSave}
+                  disabled={isSubmitting}
+                >
+                  {isSubmitting ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <>
+                      <Ionicons name="save" size={18} color="#fff" />
+                      <ThemedText style={styles.formActionSaveText}>Guardar</ThemedText>
+                    </>
+                  )}
                 </TouchableOpacity>
               </ThemedView>
             </ThemedView>
@@ -2154,6 +2340,28 @@ const styles = StyleSheet.create({
   formActionCancelText: { color: '#000', fontWeight: '800' },
   formActionSave: { backgroundColor: '#007AFF' },
   formActionSaveText: { color: '#fff', fontWeight: '800' },
+  buttonDisabled: {
+    opacity: 0.6,
+  },
+  responseContainer: {
+    padding: 12,
+    borderRadius: 6,
+    marginBottom: 12,
+  },
+  responseSuccess: {
+    backgroundColor: '#D4EDDA',
+    borderWidth: 1,
+    borderColor: '#C3E6CB',
+  },
+  responseError: {
+    backgroundColor: '#F8D7DA',
+    borderWidth: 1,
+    borderColor: '#F5C6CB',
+  },
+  responseText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
 
   // overlays / modals
   overlay: {

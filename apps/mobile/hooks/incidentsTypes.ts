@@ -47,8 +47,10 @@ export type IncidentContribution = {
   incidente_id: number;
   empleado_id: number;
   empleado_nombre: string;
+  nombre_aporte?: string | null;
   aporte: string;
   rol_aporte: string; // OPERATIVO | SUPERVISOR | ADMINISTRATIVO
+  firma_aporte_tercero?: string | null;
   created_at: string; // ISO
   files: IncidentContributionFile[];
   id_local: string; // "" si viene de server
@@ -162,12 +164,16 @@ export type BasicResponse = { status: boolean; message: string };
 
 export type CreateIncidentContributionRequest = {
   aporte: string;
+  nombre_aporte?: string | null;
   rol_aporte: string;
+  firma_aporte_tercero?: string | null;
   archivos?: string | IncidentContributionFileInput[];
 };
 
 export type UpdateIncidentContributionRequest = {
   aporte?: string;
+  nombre_aporte?: string | null;
+  firma_aporte_tercero?: string | null;
   archivos?: string | IncidentContributionFileInput[];
 };
 

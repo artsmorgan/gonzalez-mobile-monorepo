@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../../utils/verifyToken";
-import { prisma } from "../../../../utils/prismaClient";
+import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
 
 function normalizeToStringifiedJson(value: any): string {
@@ -11,7 +11,7 @@ function normalizeToStringifiedJson(value: any): string {
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
     if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
     const resolvedParams = await context.params;
@@ -20,7 +20,10 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
     }
 
-    const existing = await prisma.c_bitacora_vehiculo_detenido.findUnique({ where: { id } });
+    const existing = await callDynamicPrisma({
+      req,
+      data: { action: "GET", table: "c_bitacora_vehiculo_detenido", operation: "findUnique", where: { id } }
+    });
     if (!existing) {
       return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 200 });
     }
@@ -75,30 +78,55 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       }
     }
 
-    const updated = await prisma.c_bitacora_vehiculo_detenido.update({
-      where: { id },
-      data: updateData,
+    // Convertir fechas a ISO strings para la API dinámica
+    const updateDataForApi: any = {};
+    for (const [k, v] of Object.entries(updateData)) {
+      if (v instanceof Date) {
+        updateDataForApi[k] = v.toISOString();
+      } else {
+        updateDataForApi[k] = v;
+      }
+    }
+
+    const updated = await callDynamicPrisma({
+      req,
+      data: {
+        action: "UPDATE",
+        table: "c_bitacora_vehiculo_detenido",
+        where: { id },
+        data: updateDataForApi
+      }
     });
 
     if (cambiosArr.length > 0) {
       const createdBy = parseInt(String((payload as any)?.id ?? 0)) || 0;
-      await prisma.c_cambios_apps_modules.create({
+      await callDynamicPrisma({
+        req,
         data: {
-          nombre_tabla: "c_bitacora_vehiculo_detenido",
-          registro_id: id,
-          cambios: JSON.stringify(cambiosArr),
-          created_at: toZonedTime(new Date(), "America/Costa_Rica"),
-          created_by: createdBy,
-        },
+          action: "POST",
+          table: "c_cambios_apps_modules",
+          data: {
+            nombre_tabla: "c_bitacora_vehiculo_detenido",
+            registro_id: id,
+            cambios: JSON.stringify(cambiosArr),
+            created_at: toZonedTime(new Date(), "America/Costa_Rica").toISOString(),
+            created_by: createdBy,
+          }
+        }
       });
     }
 
     // Si se setea `uso_id`, actualizamos el uso con `bitacora_id`
     if (uso_id) {
       try {
-        await prisma.c_usos_vehiculos_corporativos.update({
-          where: { id: Number(uso_id) },
-          data: { bitacora_id: id },
+        await callDynamicPrisma({
+          req,
+          data: {
+            action: "UPDATE",
+            table: "c_usos_vehiculos_corporativos",
+            where: { id: Number(uso_id) },
+            data: { bitacora_id: id }
+          }
         });
       } catch {
         // ignore
@@ -115,7 +143,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
 export async function DELETE(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
     if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
     const resolvedParams = await context.params;
@@ -124,31 +152,42 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
       return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
     }
 
-    const existing = await prisma.c_bitacora_vehiculo_detenido.findUnique({ where: { id } });
+    const existing = await callDynamicPrisma({
+      req,
+      data: { action: "GET", table: "c_bitacora_vehiculo_detenido", operation: "findUnique", where: { id } }
+    });
     if (!existing) {
       return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 200 });
     }
 
-    await prisma.c_bitacora_vehiculo_detenido.delete({ where: { id } });
+    await callDynamicPrisma({
+      req,
+      data: { action: "DELETE", table: "c_bitacora_vehiculo_detenido", where: { id } }
+    });
 
     // Registrar cambio de eliminación
     const createdBy = parseInt(String((payload as any)?.id ?? 0)) || 0;
-    await prisma.c_cambios_apps_modules.create({
+    await callDynamicPrisma({
+      req,
       data: {
-        nombre_tabla: "c_bitacora_vehiculo_detenido",
-        registro_id: id,
-        cambios: JSON.stringify([{
-          prop: "__deleted__",
-          before: {
-            id: existing.id,
-            tipo: existing.tipo,
-            observaciones: existing.observaciones,
-          },
-          after: null,
-        }]),
-        created_at: toZonedTime(new Date(), "America/Costa_Rica"),
-        created_by: createdBy,
-      },
+        action: "POST",
+        table: "c_cambios_apps_modules",
+        data: {
+          nombre_tabla: "c_bitacora_vehiculo_detenido",
+          registro_id: id,
+          cambios: JSON.stringify([{
+            prop: "__deleted__",
+            before: {
+              id: existing.id,
+              tipo: existing.tipo,
+              observaciones: existing.observaciones,
+            },
+            after: null,
+          }]),
+          created_at: toZonedTime(new Date(), "America/Costa_Rica").toISOString(),
+          created_by: createdBy,
+        }
+      }
     });
 
     return NextResponse.json({ status: true, message: "Bitácora eliminada correctamente" }, { status: 200 });
