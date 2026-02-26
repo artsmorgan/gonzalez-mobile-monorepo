@@ -44,11 +44,18 @@ export async function callDynamicPrisma({
     const baseUrl = serverUrl && serverUrl.length > 0 ? serverUrl.replace(/\/+$/, "") : fallbackBaseUrl;
     const url = `${baseUrl}/api/dynamic-prisma`;
 
-    console.log("url", url);
+    let protocol = "https";
+    if (process.env.APP_MODE === "testing") {
+        protocol = "http";
+    }
+
+    const ultimateUrl = `${protocol}://${baseUrl}/api/dynamic-prisma`;
+
+    console.log("ultimateUrl", ultimateUrl);
 
     try {
         const response = await axios.post(
-            url,
+            ultimateUrl,
             {
                 token: accessToken || undefined,
                 mobileAccessToken: mobileToken,
