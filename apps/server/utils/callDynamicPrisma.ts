@@ -45,11 +45,22 @@ export async function callDynamicPrisma({
     const url = `${baseUrl}/api/dynamic-prisma`;
 
     let protocol = "https";
-    if (process.env.APP_MODE === "testing") {
-        protocol = "http";
-    }
 
-    const ultimateUrl = `${protocol}://${baseUrl}/api/dynamic-prisma`;
+    let ultimateUrl = serverUrl;
+    switch (process.env.APP_MODE) {
+        case "production":
+            ultimateUrl = `${serverUrl}/api/dynamic-prisma`;
+            break;
+        default:
+            // Verificar si tiene protocolo
+            if (serverUrl && serverUrl.includes("://")) {
+                ultimateUrl = `${serverUrl}/api/dynamic-prisma`;
+            }
+            else {
+                ultimateUrl = `${proto}://${serverUrl}/api/dynamic-prisma`;
+            }
+            break;
+    }
 
     console.log("ultimateUrl", ultimateUrl);
 
