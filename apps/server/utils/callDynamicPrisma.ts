@@ -44,6 +44,8 @@ export async function callDynamicPrisma({
     const baseUrl = serverUrl && serverUrl.length > 0 ? serverUrl.replace(/\/+$/, "") : fallbackBaseUrl;
     const url = `${baseUrl}/api/dynamic-prisma`;
 
+    console.log("url", url);
+
     try {
         const response = await axios.post(
             url,
