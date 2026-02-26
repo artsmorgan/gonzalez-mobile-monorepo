@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import fs from "fs";
-import path from "path";
+import { fetchDynamicFile } from "../../../../../../utils/callDynamicFilesApi";
 
-import { prisma } from "../../../../../../utils/prismaClient";
+import { callDynamicPrisma } from "../../../../../../utils/callDynamicPrisma";
 
 export const runtime = "nodejs";
 
@@ -22,16 +21,31 @@ export async function GET(
       );
     }
 
-    const record = await prisma.c_apertura_cierre_puesto.findUnique({ where: { id } });
+    const record = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "c_apertura_cierre_puesto",
+        operation: "findUnique",
+        where: { id },
+      },
+    });
     if (!record) {
       return NextResponse.json(
         { status: false, message: "Registro no encontrado" },
         { status: 404 }
       );
     }
+    const recordObj = record as any;
 
-    const fileRecord = await prisma.c_imagenes_apertura_cierre_puesto.findFirst({
-      where: { apetura_cierre_id: record.id, name: image },
+    const fileRecord = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "c_imagenes_apertura_cierre_puesto",
+        operation: "findFirst",
+        where: { apetura_cierre_id: recordObj.id, name: image },
+      },
     });
     if (!fileRecord) {
       return NextResponse.json(
@@ -40,35 +54,17 @@ export async function GET(
       );
     }
 
-    const filePath = path.join(
-      process.cwd(),
-      "public",
-      "uploads",
-      "opening-closing-position",
-      `${record.id}`,
-      image
-    );
+    const fetched = await fetchDynamicFile({
+      req,
+      type: "image",
+      url: `opening-closing-position/${record.id}/${image}`,
+      download: false,
+    });
 
-    if (!fs.existsSync(filePath)) {
-      return NextResponse.json(
-        { status: false, message: "Imagen no encontrada" },
-        { status: 404 }
-      );
-    }
-
-    const file = await fs.promises.readFile(filePath);
-    const ext = path.extname(filePath).toLowerCase();
-
-    let contentType = "application/octet-stream";
-    if (ext === ".jpg" || ext === ".jpeg") contentType = "image/jpeg";
-    if (ext === ".png") contentType = "image/png";
-    if (ext === ".webp") contentType = "image/webp";
-    if (ext === ".gif") contentType = "image/gif";
-
-    return new NextResponse(Buffer.from(file), {
+    return new NextResponse(fetched.buffer, {
       headers: {
-        "Content-Type": contentType,
-        "Cache-Control": "public, max-age=31536000",
+        "Content-Type": fetched.headers.contentType,
+        "Cache-Control": fetched.headers.cacheControl,
       },
     });
   } catch (error: unknown) {

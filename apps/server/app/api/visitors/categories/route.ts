@@ -1,10 +1,13 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "../../../../utils/prismaClient";
+import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 
 export async function GET(req: NextRequest) {
     try {
-        const categories = await prisma.n_tipo_activo_visitas.findMany();
+        const categories = await callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "n_tipo_activo_visitas", operation: "findMany" }
+        });
         return NextResponse.json({ status: true, categories }, { status: 200 });
     }
     catch (error: unknown) {

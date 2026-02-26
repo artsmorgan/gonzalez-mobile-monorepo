@@ -23,6 +23,8 @@ import { createVoiceNote, deleteVoiceNote } from './hooks/voiceNotesFunctions';
 import { createBitacoraVehiculoDetenido, deleteBitacoraVehiculoDetenido, updateBitacoraVehiculoDetenido } from './hooks/bitacoraVehiculoDetenidoFunctions';
 import { createLlave, deleteLlave, updateLlave } from './hooks/llavesFunctions';
 import { createMovimientoLlave, deleteMovimientoLlave, updateMovimientoLlave } from './hooks/movimientosLlavesFunctions';
+import { createLlavero, deleteLlavero, updateLlavero } from './hooks/llaverosFunctions';
+import { createMovimientoLlavero, deleteMovimientoLlavero, updateMovimientoLlavero } from './hooks/movimientosLlaverosFunctions';
 import { createMovimientoActivoMantenimiento, deleteMovimientoActivoMantenimiento, updateMovimientoActivoMantenimiento } from './hooks/movimientosActivosMantenimientoFunctions';
 import {
   createMovimientoArticuloMantenimiento,
@@ -106,6 +108,7 @@ import saveAbsentReason from './hooks/saveAbsentReason';
 import getHoraAccion from './hooks/getHoraAccion';
 import authedFetch from './hooks/authedFetch';
 import updateServerTime, { setDisconnectedTime } from './hooks/updateServerTime';
+import getValidAccessTokenOrLogout from './hooks/getValidAccessTokenOrLogout';
 import JobManualsScreen from './screens/JobManualsScreen';
 import { createJobManual, deleteJobManual, signJobManual, putJobManualQuizResult } from './hooks/jobManualsFunctions';
 import StaffEvaluationsScreen from './screens/StaffEvaluationsScreen';
@@ -117,6 +120,7 @@ import ApreciacionVulnerabilidadScreen from './screens/ApreciacionVulnerabilidad
 import MutuosAcuerdosScreen from './screens/MutuosAcuerdosScreen';
 import EntregaPuestosScreen from './screens/EntregaPuestosScreen';
 import ChecklistSupervisionScreen from './screens/ChecklistSupervisionScreen';
+import PuestoUbicacionScreen from './screens/PuestoUbicacionScreen';
 import { createStaffEvaluation, deleteStaffEvaluation } from './hooks/staffEvaluationsFunctions';
 
 export type RootStackParamList = {
@@ -220,6 +224,7 @@ export type RootStackParamList = {
   ApreciacionVulnerabilidad: undefined;
   EntregaPuestos: undefined;
   ChecklistSupervision: undefined;
+  PuestoUbicacion: undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -307,6 +312,7 @@ function RootNavigator() {
       <Stack.Screen name="ApreciacionVulnerabilidad" component={ApreciacionVulnerabilidadScreen} />
       <Stack.Screen name="EntregaPuestos" component={EntregaPuestosScreen} />
       <Stack.Screen name="ChecklistSupervision" component={ChecklistSupervisionScreen} />
+      <Stack.Screen name="PuestoUbicacion" component={PuestoUbicacionScreen} />
     </Stack.Navigator>
   );
 }
@@ -322,6 +328,34 @@ function AppContent() {
   const routeNameRef = useRef<string | undefined>(undefined);
   // 🆕 Variable de estado para conexión a internet
   const [isConnected, setIsConnected] = React.useState<boolean | null>(null);
+  const isSyncingActionsRef = useRef(false);
+
+  const ACTION_STORAGE_KEYS = [
+    'lunch_time_actions',
+    'vehicles_actions',
+    'bitacora_vehiculo_detenido_actions',
+    'llaves_actions',
+    'movimientos_llaves_actions',
+    'llaveros_actions',
+    'movimientos_llaveros_actions',
+    'articulo_mantenimiento_actions',
+    'movimientos_articulos_mantenimiento_actions',
+    'documentos_entregados_actions',
+    'apreciacion_vulnerabilidad_actions',
+    'notifications_actions',
+    'visitors_actions',
+    'notes_actions',
+    'activities_actions',
+    'evaluations_actions',
+    'surveys_actions',
+    'trainings_actions',
+    'incidents_actions',
+    'mutuos_acuerdos_actions',
+    'incident_contributions_actions',
+    'voice_notes_actions',
+    'staff_evaluations_actions',
+    'job_manuals_actions',
+  ];
 
   const FORCE_OFFLINE = false;
 
@@ -355,48 +389,91 @@ function AppContent() {
     return () => subscription.remove();
   }, []);
 
-  // 🆕 Mostrar alerta si se pierde la conexión
-  useEffect(() => {
-    const checkCaches = async () => {
-      if (isConnected === false) {
-        console.log('Sin conexión');
+  const hasPendingActionsInStorage = useCallback(async (): Promise<boolean> => {
+    const values = await Promise.all(ACTION_STORAGE_KEYS.map((key) => AsyncStorage.getItem(key)));
+    return values.some((raw) => {
+      if (!raw) return false;
+      try {
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) && parsed.length > 0;
+      } catch {
+        return false;
       }
-      else {
-        console.log('Conectado');
-        console.log('Funciones que se ejecutarán cuando se recupera la conexión');
-        updateServerTime();
-        await Promise.all([
-          checkManualSignatureCache(),
-          checkMarcaCache(),
-          checkAbsentReasonCache(),
-          checkLunchTimeActionsCache(),
-          checkVehiclesActionsCache(),
-          checkBitacoraVehiculoDetenidoActionsCache(),
-          checkLlavesActionsCache(),
-          checkMovimientosLlavesActionsCache(),
-          checkArticuloMantenimientoActionsCache(),
-          checkMovimientosArticulosMantenimientoActionsCache(),
-          checkDocumentosEntregadosActionsCache(),
-          checkApreciacionVulnerabilidadActionsCache(),
-          checkNotificationsActionsCache(),
-          checkVisitorsActionsCache(),
-          checkNotesActionsCache(),
-          checkActivitiesActionsCache(),
-          checkEvaluationsActionsCache(),
-          checkSurveysActionsCache(),
-          checkTrainingsActionsCache(),
-          checkIncidentsActionsCache(),
-          checkMutuosAcuerdosActionsCache(),
-          checkIncidentContributionsActionsCache(),
-          checkVoiceNotesActionsCache(),
-          checkStaffEvaluationsActionsCache(),
-          checkJobManualsActionsCache(),
-        ]);
-        eventBus.emit('connectionRestored');
-      }
+    });
+  }, []);
+
+  const syncPendingActionsIfOnline = useCallback(async () => {
+    if (isConnected !== true) {
+      console.log('Sin conexión');
+      return;
     }
-    checkCaches();
-  }, [isConnected]);
+    if (isSyncingActionsRef.current) return;
+
+    try {
+      isSyncingActionsRef.current = true;
+      console.log('Conectado');
+      console.log('Funciones que se ejecutarán cuando se recupera la conexión');
+
+      updateServerTime();
+      await Promise.all([
+        checkManualSignatureCache(),
+        checkMarcaCache(),
+        checkAbsentReasonCache(),
+      ]);
+
+      const hasPendingActions = await hasPendingActionsInStorage();
+      if (!hasPendingActions) return;
+
+      const validAccessToken = await getValidAccessTokenOrLogout({ refreshAccessToken, logout });
+      if (!validAccessToken) {
+        console.log('Sincronización cancelada: token inválido o expirado');
+        return;
+      }
+
+      await Promise.all([
+        checkLunchTimeActionsCache(),
+        checkVehiclesActionsCache(),
+        checkBitacoraVehiculoDetenidoActionsCache(),
+        checkLlavesActionsCache(),
+        checkMovimientosLlavesActionsCache(),
+        checkLlaverosActionsCache(),
+        checkMovimientosLlaverosActionsCache(),
+        checkArticuloMantenimientoActionsCache(),
+        checkMovimientosArticulosMantenimientoActionsCache(),
+        checkDocumentosEntregadosActionsCache(),
+        checkApreciacionVulnerabilidadActionsCache(),
+        checkNotificationsActionsCache(),
+        checkVisitorsActionsCache(),
+        checkNotesActionsCache(),
+        checkActivitiesActionsCache(),
+        checkEvaluationsActionsCache(),
+        checkSurveysActionsCache(),
+        checkTrainingsActionsCache(),
+        checkIncidentsActionsCache(),
+        checkMutuosAcuerdosActionsCache(),
+        checkIncidentContributionsActionsCache(),
+        checkVoiceNotesActionsCache(),
+        checkStaffEvaluationsActionsCache(),
+        checkJobManualsActionsCache(),
+      ]);
+
+      eventBus.emit('connectionRestored');
+    } finally {
+      isSyncingActionsRef.current = false;
+    }
+  }, [hasPendingActionsInStorage, isConnected, logout, refreshAccessToken]);
+
+  // Ejecutar al cambiar estado de red y luego cada minuto si hay internet
+  useEffect(() => {
+    syncPendingActionsIfOnline();
+    if (isConnected !== true) return;
+
+    const intervalId = setInterval(() => {
+      syncPendingActionsIfOnline();
+    }, 60 * 1000);
+
+    return () => clearInterval(intervalId);
+  }, [isConnected, syncPendingActionsIfOnline]);
 
   const checkManualSignatureCache = async () => {
     if (!employee) return;
@@ -995,6 +1072,187 @@ function AppContent() {
         }
       } catch (error) {
         console.error('Error procesando acción de movimientos de llaves:', error);
+      }
+    }
+  }
+
+  const checkLlaverosActionsCache = async () => {
+    if (!employee) return;
+
+    const actionsStr = await AsyncStorage.getItem('llaveros_actions');
+    if (!actionsStr) return;
+
+    const actions = JSON.parse(actionsStr);
+    if (!actions || actions.length === 0) return;
+
+    console.log('Sincronizando acciones de llaveros:', actions.length);
+
+    for (const action of actions) {
+      try {
+        if (action.type === 'create') {
+          const result = await createLlavero({
+            requestData: action.requestData,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result.status) {
+            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'create'));
+            await AsyncStorage.setItem('llaveros_actions', JSON.stringify(updatedActions));
+
+            // Reemplazar id_local por id real en cache
+            if (result.id) {
+              const cacheStr = await AsyncStorage.getItem('llaveros_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((it: any) => {
+                  if (it.id_local && it.id_local === action.id) {
+                    return { ...it, id: result.id, id_local: '' };
+                  }
+                  return it;
+                });
+                await AsyncStorage.setItem('llaveros_cache', JSON.stringify(updatedCache));
+              }
+            }
+          }
+        } else if (action.type === 'update') {
+          const result = await updateLlavero({
+            id: action.id,
+            requestData: action.requestData,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result.status) {
+            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'update'));
+            await AsyncStorage.setItem('llaveros_actions', JSON.stringify(updatedActions));
+          }
+        } else if (action.type === 'delete') {
+          const result = await deleteLlavero({
+            id: action.id,
+            marcaId: action.marcaId,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result.status) {
+            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'delete'));
+            await AsyncStorage.setItem('llaveros_actions', JSON.stringify(updatedActions));
+
+            const cacheStr = await AsyncStorage.getItem('llaveros_cache');
+            if (cacheStr) {
+              const cache = JSON.parse(cacheStr);
+              const updatedCache = cache.filter((it: any) => it.id !== action.id);
+              await AsyncStorage.setItem('llaveros_cache', JSON.stringify(updatedCache));
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error procesando acción de llaveros:', error);
+      }
+    }
+  }
+
+  const checkMovimientosLlaverosActionsCache = async () => {
+    if (!employee) return;
+
+    const actionsStr = await AsyncStorage.getItem('movimientos_llaveros_actions');
+    if (!actionsStr) return;
+
+    const actions = JSON.parse(actionsStr);
+    if (!actions || actions.length === 0) return;
+
+    console.log('Sincronizando acciones de movimientos de llaveros:', actions.length);
+
+    for (const action of actions) {
+      try {
+        // Resolver llaveroId real si viene de un llavero creado offline (llaveroLocalId)
+        let llaveroId: number = Number(action.llaveroId) || 0;
+        if ((!llaveroId || llaveroId === 0) && action.llaveroLocalId) {
+          const cacheStr = await AsyncStorage.getItem('llaveros_cache');
+          if (cacheStr) {
+            const cache = JSON.parse(cacheStr);
+            const found = cache.find((it: any) => it.id_local && it.id_local === action.llaveroLocalId);
+            if (found?.id && found.id !== 0) llaveroId = found.id;
+          }
+        }
+
+        // Si aún no hay llaveroId real, posponer
+        if (!llaveroId || llaveroId === 0) continue;
+
+        if (action.type === 'create') {
+          const result = await createMovimientoLlavero({
+            llaveroId,
+            requestData: action.requestData,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result.status) {
+            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'create'));
+            await AsyncStorage.setItem('movimientos_llaveros_actions', JSON.stringify(updatedActions));
+
+            // Reemplazar id_local por id real en cache (dentro de movimientos del llavero)
+            if (result.id) {
+              const cacheStr = await AsyncStorage.getItem('llaveros_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((it: any) => {
+                  if (it.id !== llaveroId) return it;
+                  const movs = Array.isArray(it.movimientos) ? it.movimientos : [];
+                  const nextMovs = movs.map((m: any) => {
+                    if (m.id_local && m.id_local === action.id) {
+                      return { ...m, id: result.id, id_local: '' };
+                    }
+                    return m;
+                  });
+                  return { ...it, movimientos: nextMovs };
+                });
+                await AsyncStorage.setItem('llaveros_cache', JSON.stringify(updatedCache));
+              }
+            }
+          }
+        } else if (action.type === 'update') {
+          const result = await updateMovimientoLlavero({
+            llaveroId,
+            id: action.id,
+            requestData: action.requestData,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result.status) {
+            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'update'));
+            await AsyncStorage.setItem('movimientos_llaveros_actions', JSON.stringify(updatedActions));
+          }
+        } else if (action.type === 'delete') {
+          const result = await deleteMovimientoLlavero({
+            llaveroId,
+            id: action.id,
+            marcaId: action.marcaId,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result.status) {
+            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'delete'));
+            await AsyncStorage.setItem('movimientos_llaveros_actions', JSON.stringify(updatedActions));
+
+            const cacheStr = await AsyncStorage.getItem('llaveros_cache');
+            if (cacheStr) {
+              const cache = JSON.parse(cacheStr);
+              const updatedCache = cache.map((it: any) => {
+                if (it.id !== llaveroId) return it;
+                const movs = Array.isArray(it.movimientos) ? it.movimientos : [];
+                const nextMovs = movs.filter((m: any) => m.id !== action.id);
+                return { ...it, movimientos: nextMovs };
+              });
+              await AsyncStorage.setItem('llaveros_cache', JSON.stringify(updatedCache));
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error procesando acción de movimientos de llaveros:', error);
       }
     }
   }
@@ -1607,7 +1865,12 @@ function AppContent() {
           if (result.status) {
             console.log('Revisión de equipo actualizada correctamente');
             const updatedActions = actions.filter(
-              (a: any) => !(a.revisionEquipo_id === action.revisionEquipo_id && a.type === 'update-equipo')
+              (a: any) =>
+                !(
+                  a.revisionEquipo_id === action.revisionEquipo_id &&
+                  a.inventory_id === action.inventory_id &&
+                  a.type === 'update-equipo'
+                )
             );
             await AsyncStorage.setItem('activities_actions', JSON.stringify(updatedActions));
           }
@@ -2982,6 +3245,56 @@ function AppContent() {
               console.log('Control de aseadores actualizado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'cleaners_control'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            }
+          } else if (action.type === 'puesto_ubicacion') {
+            console.log('Actualizando ubicación del puesto:', action.puesto_id);
+            const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+            if (!apiUrl) {
+              console.error('Server URL not configured');
+              continue;
+            }
+
+            try {
+              const response = await authedFetch({
+                url: `${apiUrl}/api/puestos/${action.puesto_id}/ubicacion`,
+                init: {
+                  method: 'PUT',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'ngrok-skip-browser-warning': '69420',
+                  },
+                  body: JSON.stringify({
+                    latitud: action.payload.latitud,
+                    longitud: action.payload.longitud,
+                  }),
+                },
+                refreshAccessToken,
+                logout,
+              });
+
+              if (response) {
+                const data = await response.json();
+                if (data.status) {
+                  console.log('Ubicación del puesto actualizada correctamente');
+                  const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'puesto_ubicacion'));
+                  await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+
+                  // Actualizar cache
+                  const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                  if (cacheStr) {
+                    const cache = JSON.parse(cacheStr);
+                    const updatedCache = cache.map((item: any) => {
+                      if (item.id_local === action.id && item.type === 'puesto_ubicacion') {
+                        return { ...item, synced: true };
+                      }
+                      return item;
+                    });
+                    await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                  }
+                }
+              }
+            } catch (error) {
+              console.error('Error syncing puesto ubicacion:', error);
             }
           } else if (action.type === 'agenda_minuta' || action.type === 'physical_minute_agenda') {
             console.log('Actualizando agenda minuta:', action.id);
@@ -4627,108 +4940,17 @@ function AppContent() {
   const checkMutuosAcuerdosActionsCache = async () => {
     if (!employee) return;
 
+    // Mutuos acuerdos ahora es exclusivamente online: limpiar cola/cache legacy.
     const actionsStr = await AsyncStorage.getItem('mutuos_acuerdos_actions');
-    if (!actionsStr) return;
-
-    const actions = JSON.parse(actionsStr);
-    if (!actions || actions.length === 0) return;
-
-    console.log('Sincronizando acciones de mutuos acuerdos:', actions.length);
-
-    for (const action of actions) {
-      try {
-        if (action.type === 'create') {
-          const { createMutuoAcuerdo } = await import('@/hooks/mutuosAcuerdosFunctions');
-          const result = await createMutuoAcuerdo({
-            requestData: action.requestData,
-            refreshAccessToken,
-            logout,
-          });
-
-          if (result?.status) {
-            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'create'));
-            await AsyncStorage.setItem('mutuos_acuerdos_actions', JSON.stringify(updatedActions));
-
-            const newId = (result as any)?.data?.id;
-            if (newId) {
-              const cacheStr = await AsyncStorage.getItem('mutuos_acuerdos_cache');
-              if (cacheStr) {
-                const cache = JSON.parse(cacheStr);
-                const updatedCache = Array.isArray(cache)
-                  ? cache.map((r: any) => {
-                    if (r?.id_local && r.id_local === action.id) {
-                      return {
-                        ...(result as any).data,
-                        id: newId,
-                        id_local: '',
-                        synced: true,
-                      };
-                    }
-                    return r;
-                  })
-                  : cache;
-                await AsyncStorage.setItem('mutuos_acuerdos_cache', JSON.stringify(updatedCache));
-              }
-            }
-          }
-        } else if (action.type === 'update') {
-          const { updateMutuoAcuerdo } = await import('@/hooks/mutuosAcuerdosFunctions');
-          const result = await updateMutuoAcuerdo({
-            id: action.id,
-            requestData: action.requestData,
-            refreshAccessToken,
-            logout,
-          });
-
-          if (result?.status) {
-            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'update'));
-            await AsyncStorage.setItem('mutuos_acuerdos_actions', JSON.stringify(updatedActions));
-          }
-        } else if (action.type === 'delete') {
-          const { deleteMutuoAcuerdo } = await import('@/hooks/mutuosAcuerdosFunctions');
-          const result = await deleteMutuoAcuerdo({
-            id: action.id,
-            refreshAccessToken,
-            logout,
-          });
-
-          if (result?.status) {
-            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'delete'));
-            await AsyncStorage.setItem('mutuos_acuerdos_actions', JSON.stringify(updatedActions));
-
-            const cacheStr = await AsyncStorage.getItem('mutuos_acuerdos_cache');
-            if (cacheStr) {
-              const cache = JSON.parse(cacheStr);
-              const updatedCache = Array.isArray(cache) ? cache.filter((r: any) => r?.id !== action.id) : cache;
-              await AsyncStorage.setItem('mutuos_acuerdos_cache', JSON.stringify(updatedCache));
-            }
-          }
-        } else if (action.type === 'sign') {
-          const { signMutuoAcuerdoEjecutivo } = await import('@/hooks/mutuosAcuerdosFunctions');
-          const result = await signMutuoAcuerdoEjecutivo({
-            id: action.id,
-            firma_ejecutivo_cuenta: action.firma_ejecutivo_cuenta,
-            refreshAccessToken,
-            logout,
-          });
-
-          if (result?.status) {
-            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'sign'));
-            await AsyncStorage.setItem('mutuos_acuerdos_actions', JSON.stringify(updatedActions));
-
-            const cacheStr = await AsyncStorage.getItem('mutuos_acuerdos_cache');
-            if (cacheStr) {
-              const cache = JSON.parse(cacheStr);
-              const updatedCache = Array.isArray(cache)
-                ? cache.map((r: any) => (r?.id === action.id ? { ...r, firma_ejecutivo_cuenta: action.firma_ejecutivo_cuenta, synced: true } : r))
-                : cache;
-              await AsyncStorage.setItem('mutuos_acuerdos_cache', JSON.stringify(updatedCache));
-            }
-          }
-        }
-      } catch (error) {
-        console.error('Error procesando acción de mutuos acuerdos:', error);
-      }
+    const actions = actionsStr ? JSON.parse(actionsStr) : [];
+    if (Array.isArray(actions) && actions.length > 0) {
+      console.log('Limpiando acciones legacy de mutuos acuerdos (modo online):', actions.length);
+      await AsyncStorage.removeItem('mutuos_acuerdos_actions');
+    }
+    const cacheStr = await AsyncStorage.getItem('mutuos_acuerdos_cache');
+    const cache = cacheStr ? JSON.parse(cacheStr) : [];
+    if (Array.isArray(cache) && cache.length > 0) {
+      await AsyncStorage.removeItem('mutuos_acuerdos_cache');
     }
   }
 
@@ -5030,6 +5252,66 @@ function AppContent() {
     }
   }
 
+  const alert_lunch_time = async () => {
+    try {
+      const current_marca = await AsyncStorage.getItem('current_marca');
+      if (!current_marca) return;
+
+      const current_marca_obj = JSON.parse(current_marca);
+      if (!current_marca_obj || !current_marca_obj.id) return;
+
+      // Bandera: solo si está en true mostramos el recordatorio
+      const alertFlag = await AsyncStorage.getItem('alert_lunch_time');
+      if (!alertFlag || alertFlag !== 'true') return;
+
+      const fechaRaw = String(current_marca_obj.fecha || '').trim();
+      const horaInicioRaw = String(current_marca_obj.hora_inicio || '').trim();
+      const horasDuracionRaw = current_marca_obj.horas_duracion;
+
+      if (!fechaRaw || !horaInicioRaw || horasDuracionRaw === undefined || horasDuracionRaw === null) {
+        return;
+      }
+
+      const horasDuracionNum = Number(horasDuracionRaw);
+      if (!Number.isFinite(horasDuracionNum) || horasDuracionNum <= 0) {
+        return;
+      }
+
+      const fechaPart = fechaRaw.split('T')[0];
+      let horaPart = horaInicioRaw;
+      if (horaInicioRaw.includes('T')) {
+        horaPart = horaInicioRaw.split('T')[1];
+      } else if (horaInicioRaw.includes(' ')) {
+        horaPart = horaInicioRaw.split(' ')[1];
+      }
+
+      const inicioDate = new Date(`${fechaPart}T${horaPart}`);
+      if (Number.isNaN(inicioDate.getTime())) return;
+
+      const finDate = new Date(inicioDate.getTime() + horasDuracionNum * 60 * 60 * 1000);
+      if (Number.isNaN(finDate.getTime())) return;
+
+      const totalMs = finDate.getTime() - inicioDate.getTime();
+      if (!(totalMs > 0)) return;
+      const thresholdMs = inicioDate.getTime() + totalMs * 0.75;
+
+      // Hora actual de referencia (servidor/offline) usando getHoraAccion
+      const horaAccion = await getUpdatedHoraAccion();
+      if (!horaAccion || typeof horaAccion !== 'number') return;
+
+      if (horaAccion >= thresholdMs) {
+        Alert.alert(
+          'Recordatorio de almuerzo',
+          'Ya cumpliste el 75% de tu jornada. Recuerda tomar tu tiempo de almuerzo.'
+        );
+        // Desactivar el alert para no volver a mostrarlo
+        await AsyncStorage.setItem('alert_lunch_time', 'false');
+      }
+    } catch (error) {
+      console.error('Error alerting lunch time:', error);
+    }
+  }
+
   const get_notifications = async () => {
     const current_marca = await AsyncStorage.getItem('current_marca');
     if (!current_marca) {
@@ -5091,7 +5373,7 @@ function AppContent() {
       eventBus.emit('notificationsUpdatedCounter');
     }
     else {
-      Alert.alert('Error', data.message);
+      
     }
   }
 
@@ -5100,6 +5382,7 @@ function AppContent() {
 
     const poll = async () => {
       await check_conection_time();
+      await alert_lunch_time();
       timeoutId = setTimeout(poll, 30000) as unknown as NodeJS.Timeout;
     };
 

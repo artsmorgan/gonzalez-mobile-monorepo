@@ -73,6 +73,8 @@ export default function DocumentosEntregadosScreen() {
   // create/edit (oculta lista al estar activo)
   const [isCreating, setIsCreating] = useState(false);
   const [editing, setEditing] = useState<DocUI | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitResponse, setSubmitResponse] = useState<{ type: 'success' | 'error', message: string } | null>(null);
 
   const [fecha, setFecha] = useState('');
   const [showFechaPicker, setShowFechaPicker] = useState(false);
@@ -450,86 +452,96 @@ export default function DocumentosEntregadosScreen() {
     if (!employee) return;
     if (!validateForm()) return;
 
-    const payload = await buildPayload();
-    const isConnected = await getConnectionStatus();
+    setIsSubmitting(true);
+    setSubmitResponse(null);
 
-    // create
-    if (!editing) {
-      if (isConnected) {
-        const res = await createDocumentoEntregado({ requestData: payload, refreshAccessToken, logout });
-        if (res.status) {
-          Alert.alert('Éxito', 'Documento entregado creado correctamente');
+    try {
+      const payload = await buildPayload();
+      const isConnected = await getConnectionStatus();
+
+      // create
+      if (!editing) {
+        if (isConnected) {
+          const res = await createDocumentoEntregado({ requestData: payload, refreshAccessToken, logout });
+          if (res.status) {
+            setSubmitResponse({ type: 'success', message: res.message || 'Documento entregado creado correctamente' });
+            setIsCreating(false);
+            await fetchDocs();
+          } else {
+            setSubmitResponse({ type: 'error', message: res.message || 'No se pudo crear el documento' });
+          }
+        } else {
+          const localId = `local-doc-${Date.now()}`;
+          const localItem: DocUI = {
+            id: 0,
+            id_local: localId,
+            cliente_id: 0,
+            corpo_id: 0,
+            fecha: payload.fecha,
+            nombre_oficial_entrega: payload.nombre_oficial_entrega,
+            nombre_oficial_recibe: payload.nombre_oficial_recibe,
+            tipo_documento: payload.tipo_documento,
+            descripcion: payload.descripcion,
+            firma_representante_cliente: payload.firma_representante_cliente,
+            firma_responsable: payload.firma_responsable,
+          };
+          const next = [localItem, ...docs];
+          setDocs(next);
+          await AsyncStorage.setItem('documentos_entregados_cache', JSON.stringify(next));
+          await upsertAction({ type: 'create', id: localId, requestData: payload });
+          setSubmitResponse({ type: 'success', message: 'Se sincronizará cuando vuelva la conexión.' });
           setIsCreating(false);
+        }
+        return;
+      }
+
+      // update
+      const isLocal = !!editing.id_local || editing.id === 0;
+      if (isConnected && !isLocal) {
+        const res = await updateDocumentoEntregado({ id: editing.id, requestData: payload, refreshAccessToken, logout });
+        if (res.status) {
+          setSubmitResponse({ type: 'success', message: res.message || 'Documento entregado actualizado correctamente' });
+          setIsCreating(false);
+          setEditing(null);
           await fetchDocs();
         } else {
-          Alert.alert('Error', res.message || 'No se pudo crear el documento');
+          setSubmitResponse({ type: 'error', message: res.message || 'No se pudo actualizar el documento' });
         }
       } else {
-        const localId = `local-doc-${Date.now()}`;
-        const localItem: DocUI = {
-          id: 0,
-          id_local: localId,
-          cliente_id: 0,
-          corpo_id: 0,
-          fecha: payload.fecha,
-          nombre_oficial_entrega: payload.nombre_oficial_entrega,
-          nombre_oficial_recibe: payload.nombre_oficial_recibe,
-          tipo_documento: payload.tipo_documento,
-          descripcion: payload.descripcion,
-          firma_representante_cliente: payload.firma_representante_cliente,
-          firma_responsable: payload.firma_responsable,
-        };
-        const next = [localItem, ...docs];
+        const next = docs.map((it) => {
+          const match =
+            (editing.id_local && it.id_local === editing.id_local) || (!editing.id_local && it.id === editing.id);
+          if (!match) return it;
+          return {
+            ...it,
+            fecha: payload.fecha,
+            nombre_oficial_entrega: payload.nombre_oficial_entrega,
+            nombre_oficial_recibe: payload.nombre_oficial_recibe,
+            tipo_documento: payload.tipo_documento,
+            descripcion: payload.descripcion,
+            firma_representante_cliente: payload.firma_representante_cliente,
+            firma_responsable: payload.firma_responsable,
+          };
+        });
         setDocs(next);
         await AsyncStorage.setItem('documentos_entregados_cache', JSON.stringify(next));
-        await upsertAction({ type: 'create', id: localId, requestData: payload });
-        Alert.alert('Guardado (offline)', 'Se sincronizará cuando vuelva la conexión.');
-        setIsCreating(false);
-      }
-      return;
-    }
 
-    // update
-    const isLocal = !!editing.id_local || editing.id === 0;
-    if (isConnected && !isLocal) {
-      const res = await updateDocumentoEntregado({ id: editing.id, requestData: payload, refreshAccessToken, logout });
-      if (res.status) {
-        Alert.alert('Éxito', 'Documento entregado actualizado correctamente');
+        if (editing.id_local) {
+          const updated = await updateCreateActionForLocalId(editing.id_local, payload);
+          if (!updated) await upsertAction({ type: 'create', id: editing.id_local, requestData: payload });
+        } else {
+          await upsertAction({ type: 'update', id: editing.id, requestData: payload });
+        }
+
+        setSubmitResponse({ type: 'success', message: 'Los cambios se sincronizarán cuando vuelva la conexión.' });
         setIsCreating(false);
         setEditing(null);
-        await fetchDocs();
-      } else {
-        Alert.alert('Error', res.message || 'No se pudo actualizar el documento');
       }
-    } else {
-      const next = docs.map((it) => {
-        const match =
-          (editing.id_local && it.id_local === editing.id_local) || (!editing.id_local && it.id === editing.id);
-        if (!match) return it;
-        return {
-          ...it,
-          fecha: payload.fecha,
-          nombre_oficial_entrega: payload.nombre_oficial_entrega,
-          nombre_oficial_recibe: payload.nombre_oficial_recibe,
-          tipo_documento: payload.tipo_documento,
-          descripcion: payload.descripcion,
-          firma_representante_cliente: payload.firma_representante_cliente,
-          firma_responsable: payload.firma_responsable,
-        };
-      });
-      setDocs(next);
-      await AsyncStorage.setItem('documentos_entregados_cache', JSON.stringify(next));
-
-      if (editing.id_local) {
-        const updated = await updateCreateActionForLocalId(editing.id_local, payload);
-        if (!updated) await upsertAction({ type: 'create', id: editing.id_local, requestData: payload });
-      } else {
-        await upsertAction({ type: 'update', id: editing.id, requestData: payload });
-      }
-
-      Alert.alert('Guardado (offline)', 'Los cambios se sincronizarán cuando vuelva la conexión.');
-      setIsCreating(false);
-      setEditing(null);
+    } catch (error) {
+      console.error('Error saving documento:', error);
+      setSubmitResponse({ type: 'error', message: 'Error al guardar el documento' });
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -908,14 +920,32 @@ export default function DocumentosEntregadosScreen() {
                 </ThemedView>
               )}
 
+              {submitResponse && (
+                <ThemedView style={[styles.responseContainer, submitResponse.type === 'success' ? styles.responseSuccess : styles.responseError]}>
+                  <ThemedText style={styles.responseText}>
+                    {submitResponse.type === 'success' ? '✓ ' : '✗ '}
+                    {submitResponse.message}
+                  </ThemedText>
+                </ThemedView>
+              )}
               <ThemedView style={styles.formActions}>
-                <TouchableOpacity style={[styles.formActionButton, styles.formActionCancel]} onPress={cancelCreating}>
+                <TouchableOpacity style={[styles.formActionButton, styles.formActionCancel]} onPress={cancelCreating} disabled={isSubmitting}>
                   <Ionicons name="close" size={18} color="#000" />
                   <ThemedText style={styles.formActionCancelText}>Cancelar</ThemedText>
                 </TouchableOpacity>
-                <TouchableOpacity style={[styles.formActionButton, styles.formActionSave]} onPress={handleSave}>
-                  <Ionicons name="save" size={18} color="#fff" />
-                  <ThemedText style={styles.formActionSaveText}>Guardar</ThemedText>
+                <TouchableOpacity 
+                  style={[styles.formActionButton, styles.formActionSave, isSubmitting && styles.buttonDisabled]} 
+                  onPress={handleSave}
+                  disabled={isSubmitting}
+                >
+                  {isSubmitting ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <>
+                      <Ionicons name="save" size={18} color="#fff" />
+                      <ThemedText style={styles.formActionSaveText}>Guardar</ThemedText>
+                    </>
+                  )}
                 </TouchableOpacity>
               </ThemedView>
             </ThemedView>
@@ -1286,6 +1316,28 @@ const styles = StyleSheet.create({
   formActionCancelText: { color: '#000', fontWeight: '800' },
   formActionSave: { backgroundColor: '#007AFF' },
   formActionSaveText: { color: '#fff', fontWeight: '800' },
+  buttonDisabled: {
+    opacity: 0.6,
+  },
+  responseContainer: {
+    padding: 12,
+    borderRadius: 6,
+    marginBottom: 12,
+  },
+  responseSuccess: {
+    backgroundColor: '#D4EDDA',
+    borderWidth: 1,
+    borderColor: '#C3E6CB',
+  },
+  responseError: {
+    backgroundColor: '#F8D7DA',
+    borderWidth: 1,
+    borderColor: '#F5C6CB',
+  },
+  responseText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
 
   listContainer: {},
   emptyContainer: { padding: 24, alignItems: 'center' },

@@ -1,25 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import fs from "fs";
 import path from "path";
-import { prisma } from "../../../../../../../../utils/prismaClient";
+import { fetchDynamicFile } from "../../../../../../../../utils/callDynamicFilesApi";
+import { callDynamicPrisma } from "../../../../../../../../utils/callDynamicPrisma";
 
 export const runtime = "nodejs";
-
-const CONTENT_TYPES: Record<string, string> = {
-  pdf: "application/pdf",
-  doc: "application/msword",
-  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  txt: "text/plain",
-  csv: "text/csv",
-  xls: "application/vnd.ms-excel",
-  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  png: "image/png",
-  jpg: "image/jpeg",
-  jpeg: "image/jpeg",
-  gif: "image/gif",
-  mp3: "audio/mpeg",
-  mp4: "video/mp4",
-};
 
 export async function GET(
   req: NextRequest,
@@ -29,47 +13,55 @@ export async function GET(
     const { id, contributionId, file } = await context.params;
     const incidentId = parseInt(id, 10);
     const aporteId = parseInt(contributionId, 10);
-    const fileName = file;
+    const fileName = path.basename(decodeURIComponent(file));
 
     if (!incidentId || !aporteId || !fileName) {
       return NextResponse.json({ status: false, message: "IDs o archivo faltante" }, { status: 400 });
     }
 
-    const aporte = await prisma.c_contribucion_incidente.findFirst({
-      where: { id: aporteId, incidente_id: incidentId },
-    });
-    if (!aporte) return NextResponse.json({ status: false, message: "Aporte no encontrado" }, { status: 404 });
+    let fileRecord: any = null;
+    try {
+      const aporte = await callDynamicPrisma({
+        req,
+        data: {
+          action: "GET",
+          table: "c_contribucion_incidente",
+          operation: "findFirst",
+          where: { id: aporteId, incidente_id: incidentId },
+        },
+      });
+      if (!aporte) return NextResponse.json({ status: false, message: "Aporte no encontrado" }, { status: 404 });
 
-    const fileRecord = await prisma.c_archivos_aporte_incidente.findFirst({
-      where: { contribucion_id: aporteId, name: fileName },
-    });
-    if (!fileRecord) return NextResponse.json({ status: false, message: "Archivo no encontrado" }, { status: 404 });
-
-    const filePath = path.join(
-      process.cwd(),
-      "public",
-      "uploads",
-      "incidents",
-      `${incidentId}`,
-      "aportes",
-      `${aporteId}`,
-      fileName
-    );
-
-    if (!fs.existsSync(filePath)) {
-      return NextResponse.json({ status: false, message: "Archivo físico no encontrado" }, { status: 404 });
+      fileRecord = await callDynamicPrisma({
+        req,
+        data: {
+          action: "GET",
+          table: "c_archivos_aporte_incidente",
+          operation: "findFirst",
+          where: { contribucion_id: aporteId, name: fileName },
+        },
+      });
+      if (!fileRecord) return NextResponse.json({ status: false, message: "Archivo no encontrado" }, { status: 404 });
+    } catch (dbError: any) {
+      const msg = String(dbError?.message || "");
+      if (!msg.toLowerCase().includes("token no proporcionado")) {
+        throw dbError;
+      }
     }
 
-    const fileBuffer = await fs.promises.readFile(filePath);
-    const ext = path.extname(filePath).toLowerCase().replace(".", "");
-    const contentType = CONTENT_TYPES[ext] || "application/octet-stream";
-    const downloadName = fileRecord.original_name || path.basename(filePath);
+    const fetched = await fetchDynamicFile({
+      req,
+      type: "file",
+      url: `incidents/${incidentId}/aportes/${aporteId}/${fileName}`,
+      download: true,
+      shouldVerifyAccessToken: false,
+    });
 
-    return new NextResponse(Buffer.from(fileBuffer), {
+    return new NextResponse(fetched.buffer, {
       headers: {
-        "Content-Type": contentType,
-        "Content-Disposition": `attachment; filename="${encodeURIComponent(downloadName)}"`,
-        "Cache-Control": "public, max-age=31536000",
+        "Content-Type": fetched.headers.contentType,
+        ...(fetched.headers.contentDisposition ? { "Content-Disposition": fetched.headers.contentDisposition } : {}),
+        "Cache-Control": fetched.headers.cacheControl,
       },
     });
   } catch (error: unknown) {

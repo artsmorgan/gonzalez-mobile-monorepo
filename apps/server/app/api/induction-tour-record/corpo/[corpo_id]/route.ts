@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../../../utils/verifyToken";
-import { prisma } from "../../../../../utils/prismaClient";
+import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 
 export async function GET(
     req: NextRequest,
     context: { params: Promise<{ corpo_id: string }> }
 ) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
 
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
@@ -18,16 +18,23 @@ export async function GET(
             return NextResponse.json({ status: false, message: "Corpo inválido", data: [] }, { status: 400 });
         }
 
-        const records = await prisma.c_registro_induccion_recorrido.findMany({
-            where: {
-                corpo_id: corpoIdNum
+        const records = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_registro_induccion_recorrido",
+                operation: "findMany",
+                where: {
+                    corpo_id: corpoIdNum
+                },
+                orderBy: {
+                    created_at: 'desc'
+                }
             },
-            orderBy: {
-                created_at: 'desc'
-            }
         });
 
-        const recordsWithIdLocal = records.map(record => ({
+        const recordsArray = Array.isArray(records) ? records : [];
+        const recordsWithIdLocal = recordsArray.map((record: any) => ({
             ...record,
             id_local: ""
         }));

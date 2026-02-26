@@ -1,15 +1,15 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../../utils/verifyToken";
-import { prisma } from "../../../../utils/prismaClient";
+import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
-import { v4 as uuidv4 } from "uuid";
 import fs from "fs";
 import path from "path";
+import { uploadDynamicFiles } from "../../../../utils/callDynamicFilesApi";
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
-    const { valid, expired, message, payload } = verifyAccessToken(req);
+    const { valid, expired, message, payload } = await verifyAccessTokenByApi(req);
     if (!valid) {
       return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
     }
@@ -52,7 +52,10 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       files,
     } = body ?? {};
 
-    const existing = await prisma.c_articulo_mantenimiento.findUnique({ where: { id } });
+    const existing = await callDynamicPrisma({
+      req,
+      data: { action: "GET", table: "c_articulo_mantenimiento", operation: "findUnique", where: { id } }
+    });
     if (!existing) return NextResponse.json({ status: false, message: "Registro de mantenimiento no encontrado" }, { status: 200 });
 
     const updateData: any = {};
@@ -188,18 +191,43 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       }
     }
 
-    await prisma.c_articulo_mantenimiento.update({ where: { id }, data: updateData });
+    // Convertir fechas a ISO strings para la API dinámica
+    const updateDataForApi: any = {};
+    for (const [k, v] of Object.entries(updateData)) {
+      if (v instanceof Date) {
+        updateDataForApi[k] = v.toISOString();
+      } else {
+        updateDataForApi[k] = v;
+      }
+    }
+
+    await callDynamicPrisma({
+      req,
+      data: {
+        action: "UPDATE",
+        table: "c_articulo_mantenimiento",
+        operation: "update",
+        where: { id },
+        data: updateDataForApi
+      }
+    });
 
     if (cambiosArr.length > 0) {
       const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
-      await prisma.c_cambios_apps_modules.create({
+      await callDynamicPrisma({
+        req,
         data: {
-          nombre_tabla: "c_articulo_mantenimiento",
-          registro_id: id,
-          cambios: JSON.stringify(cambiosArr),
-          created_at: toZonedTime(new Date(), "America/Costa_Rica"),
-          created_by: createdBy,
-        },
+          action: "POST",
+          table: "c_cambios_apps_modules",
+          operation: "create",
+          data: {
+            nombre_tabla: "c_articulo_mantenimiento",
+            registro_id: id,
+            cambios: JSON.stringify(cambiosArr),
+            created_at: toZonedTime(new Date(), "America/Costa_Rica").toISOString(),
+            created_by: createdBy,
+          }
+        }
       });
     }
 
@@ -213,34 +241,26 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         return NextResponse.json({ status: false, message: "Formato de archivos inválido" }, { status: 200 });
       }
 
-      if (Array.isArray(filesParsed) && filesParsed.length > 0) {
+      const validFiles = filesParsed.filter((f) => f?.file_base64 && f?.extension && f?.type);
+      if (validFiles.length > 0) {
         const dir = path.join(process.cwd(), "public", "uploads", "articulo-mantenimiento", `${id}`);
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
-        for (const file of filesParsed) {
-          if (!file.file_base64 || !file.extension || !file.type) continue;
-          let buffer: Buffer;
-          try {
-            buffer = Buffer.from(file.file_base64, "base64");
-          } catch {
-            console.warn("Formato de archivo inválido, se omite uno de los archivos");
-            continue;
-          }
-          const fileName = `${uuidv4()}.${file.extension}`;
-          const filePath = path.join(dir, fileName);
-          fs.writeFileSync(filePath, buffer);
-
+        // Si es imagen arma_foto_antes/despues, eliminar existentes antes de subir
+        for (const file of validFiles) {
           const originalName =
-            typeof file.original_name === "string" && file.original_name.trim().length > 0 ? file.original_name.trim() : fileName;
-
-          // Si es una imagen "especial" (ej: arma_foto_antes / arma_foto_despues), reemplazar la existente
-          // para no acumular múltiples archivos con el mismo original_name.
+            typeof file.original_name === "string" && file.original_name.trim().length > 0 ? file.original_name.trim() : "";
           if (file.type === "image" && (originalName.startsWith("arma_foto_antes") || originalName.startsWith("arma_foto_despues"))) {
             try {
-              const existingFiles = await prisma.c_archivos_adjuntos_articulo_mantenimiento.findMany({
-                where: { activo_mantenimiento_id: id, original_name: originalName, type: "image" },
+              const existingFiles = await callDynamicPrisma({
+                req,
+                data: {
+                  action: "GET",
+                  table: "c_archivos_adjuntos_articulo_mantenimiento",
+                  operation: "findMany",
+                  where: { activo_mantenimiento_id: id, original_name: originalName, type: "image" }
+                }
               });
-              for (const ef of existingFiles) {
+              for (const ef of (existingFiles as any[])) {
                 try {
                   const oldPath = path.join(dir, ef.name);
                   if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
@@ -248,24 +268,56 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                   console.warn("No se pudo eliminar archivo anterior:", e);
                 }
               }
-              if (existingFiles.length > 0) {
-                await prisma.c_archivos_adjuntos_articulo_mantenimiento.deleteMany({
-                  where: { activo_mantenimiento_id: id, original_name: originalName, type: "image" },
+              if (Array.isArray(existingFiles) && existingFiles.length > 0) {
+                await callDynamicPrisma({
+                  req,
+                  data: {
+                    action: "DELETE",
+                    table: "c_archivos_adjuntos_articulo_mantenimiento",
+                    operation: "deleteMany",
+                    where: { activo_mantenimiento_id: id, original_name: originalName, type: "image" }
+                  }
                 });
               }
             } catch (e) {
               console.warn("No se pudo limpiar imagen previa:", e);
             }
           }
+        }
 
-          await prisma.c_archivos_adjuntos_articulo_mantenimiento.create({
+        const uploadResp = await uploadDynamicFiles({
+          req,
+          folderPath: `articulo-mantenimiento/${id}`,
+          files: validFiles.map((f) => ({
+            type: (f.type || "file") as "image" | "video" | "audio" | "file",
+            extension: String(f.extension).replace(".", "").trim() || "bin",
+            original_name: f.original_name,
+            file_base64: f.file_base64,
+          })),
+        });
+
+        const uploadedFiles = Array.isArray(uploadResp?.files) ? uploadResp.files : [];
+        for (let i = 0; i < uploadedFiles.length; i++) {
+          const uploaded = uploadedFiles[i];
+          const file = validFiles[i];
+          const originalName =
+            typeof file?.original_name === "string" && file.original_name.trim().length > 0
+              ? file.original_name.trim()
+              : uploaded?.original_name || uploaded?.name || "";
+          await callDynamicPrisma({
+            req,
             data: {
-              name: fileName,
-              original_name: originalName,
-              type: file.type,
-              extension: file.extension,
-              activo_mantenimiento_id: id,
-            },
+              action: "POST",
+              table: "c_archivos_adjuntos_articulo_mantenimiento",
+              operation: "create",
+              data: {
+                name: uploaded.name,
+                original_name: originalName,
+                type: file?.type || "file",
+                extension: file?.extension || "bin",
+                activo_mantenimiento_id: id,
+              }
+            }
           });
         }
       }

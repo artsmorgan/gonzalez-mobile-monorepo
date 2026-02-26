@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import fs from "fs";
 import path from "path";
-import { prisma } from "../../../../../../../../utils/prismaClient";
+import { fetchDynamicFile } from "../../../../../../../../utils/callDynamicFilesApi";
+import { callDynamicPrisma } from "../../../../../../../../utils/callDynamicPrisma";
 
 export const runtime = "nodejs";
 
@@ -13,49 +13,53 @@ export async function GET(
     const { id, contributionId, audio } = await context.params;
     const incidentId = parseInt(id, 10);
     const aporteId = parseInt(contributionId, 10);
+    const safeAudioName = path.basename(decodeURIComponent(audio));
 
-    if (!incidentId || !aporteId || !audio) {
+    if (!incidentId || !aporteId || !safeAudioName) {
       return NextResponse.json({ status: false, message: "IDs o audio faltante" }, { status: 400 });
     }
 
-    const aporte = await prisma.c_contribucion_incidente.findFirst({
-      where: { id: aporteId, incidente_id: incidentId },
-    });
-    if (!aporte) return NextResponse.json({ status: false, message: "Aporte no encontrado" }, { status: 404 });
+    try {
+      const aporte = await callDynamicPrisma({
+        req,
+        data: {
+          action: "GET",
+          table: "c_contribucion_incidente",
+          operation: "findFirst",
+          where: { id: aporteId, incidente_id: incidentId },
+        },
+      });
+      if (!aporte) return NextResponse.json({ status: false, message: "Aporte no encontrado" }, { status: 404 });
 
-    const fileRecord = await prisma.c_archivos_aporte_incidente.findFirst({
-      where: { contribucion_id: aporteId, name: audio },
-    });
-    if (!fileRecord) return NextResponse.json({ status: false, message: "Archivo no encontrado" }, { status: 404 });
-
-    const filePath = path.join(
-      process.cwd(),
-      "public",
-      "uploads",
-      "incidents",
-      `${incidentId}`,
-      "aportes",
-      `${aporteId}`,
-      audio
-    );
-
-    if (!fs.existsSync(filePath)) {
-      return NextResponse.json({ status: false, message: "Audio no encontrado" }, { status: 404 });
+      const fileRecord = await callDynamicPrisma({
+        req,
+        data: {
+          action: "GET",
+          table: "c_archivos_aporte_incidente",
+          operation: "findFirst",
+          where: { contribucion_id: aporteId, name: safeAudioName },
+        },
+      });
+      if (!fileRecord) return NextResponse.json({ status: false, message: "Archivo no encontrado" }, { status: 404 });
+    } catch (dbError: any) {
+      const msg = String(dbError?.message || "");
+      if (!msg.toLowerCase().includes("token no proporcionado")) {
+        throw dbError;
+      }
     }
 
-    const file = await fs.promises.readFile(filePath);
-    const ext = path.extname(filePath).toLowerCase();
+    const fetched = await fetchDynamicFile({
+      req,
+      type: "audio",
+      url: `incidents/${incidentId}/aportes/${aporteId}/${safeAudioName}`,
+      download: false,
+      shouldVerifyAccessToken: false,
+    });
 
-    let contentType = "audio/mpeg";
-    if (ext === ".wav") contentType = "audio/wav";
-    if (ext === ".m4a") contentType = "audio/mp4";
-    if (ext === ".ogg" || ext === ".opus") contentType = "audio/ogg";
-    if (ext === ".mp3") contentType = "audio/mpeg";
-
-    return new NextResponse(Buffer.from(file), {
+    return new NextResponse(fetched.buffer, {
       headers: {
-        "Content-Type": contentType,
-        "Cache-Control": "public, max-age=31536000",
+        "Content-Type": fetched.headers.contentType,
+        "Cache-Control": fetched.headers.cacheControl,
       },
     });
   } catch (error: unknown) {

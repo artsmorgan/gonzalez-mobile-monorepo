@@ -34,6 +34,8 @@ interface Vehicle {
   placa: string;
   nombre_propietario: string;
   cedula_propietario: string;
+  departamento_visita?: string;
+  persona_visita?: string;
   hora_entrada: string;
   hora_salida: string | null;
   razon_visita: string;
@@ -49,6 +51,27 @@ interface VehiclesResponse {
   message?: string;
 }
 
+/** Extrae solo la parte base64 de una imagen (con o sin prefijo data:...;base64,) para enviar al servidor. Referencia: NonConformingProductScreen. */
+const getBase64Only = (imageValue: string | null | undefined): string => {
+  if (!imageValue || typeof imageValue !== 'string') return '';
+  const trimmed = imageValue.trim();
+  if (trimmed.length === 0) return '';
+  if (trimmed.includes(',')) {
+    const parts = trimmed.split(',');
+    return parts.length > 1 ? parts[1].trim() : parts[0].trim();
+  }
+  return trimmed;
+};
+
+/** URI para mostrar imagen en <Image />: acepta base64 crudo o data URL. */
+const getVehicleImageDisplayUri = (base64OrDataUrl: string | null | undefined): string | null => {
+  if (!base64OrDataUrl || typeof base64OrDataUrl !== 'string') return null;
+  const s = base64OrDataUrl.trim();
+  if (s.length === 0) return null;
+  if (s.startsWith('data:')) return s;
+  return `data:image/jpeg;base64,${s}`;
+};
+
 interface EditingVehicle {
   id: number | null;
   id_local: string;
@@ -56,6 +79,10 @@ interface EditingVehicle {
   placa: string;
   nombre_propietario: string;
   cedula_propietario: string;
+  departamento_visita: string;
+  persona_visita: string;
+  fecha_entrada: string;
+  fecha_salida: string;
   hora_entrada_h: string;
   hora_entrada_m: string;
   hora_salida_h: string;
@@ -65,9 +92,16 @@ interface EditingVehicle {
 }
 
 export default function VehiclesScreen() {
-  const { employee, refreshAccessToken, logout } = useAuth();
+  const { employee, refreshAccessToken, logout, accessToken } = useAuth();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const navigation = useNavigation<VehiclesScreenNavigationProp>();
+  const appendTokenToUrl = (url: string) => {
+    if (!url) return '';
+    if (!accessToken || accessToken.trim().length === 0) return url;
+    if (/[?&]token=/.test(url)) return url;
+    const sep = url.includes('?') ? '&' : '?';
+    return `${url}${sep}token=${encodeURIComponent(accessToken)}`;
+  };
 
   // Vehicles state
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
@@ -89,6 +123,10 @@ export default function VehiclesScreen() {
     placa: '',
     nombre_propietario: '',
     cedula_propietario: '',
+    departamento_visita: '',
+    persona_visita: '',
+    fecha_entrada: '',
+    fecha_salida: '',
     hora_entrada_h: '',
     hora_entrada_m: '',
     hora_salida_h: '',
@@ -116,6 +154,10 @@ export default function VehiclesScreen() {
   const placaRef = useRef('');
   const nombrePropietarioRef = useRef('');
   const cedulaPropietarioRef = useRef('');
+  const departamentoVisitaRef = useRef('');
+  const personaVisitaRef = useRef('');
+  const fechaEntradaRef = useRef('');
+  const fechaSalidaRef = useRef('');
   const horaEntradaHRef = useRef('');
   const horaEntradaMRef = useRef('');
   const horaSalidaHRef = useRef('');
@@ -146,6 +188,46 @@ export default function VehiclesScreen() {
     const m = parseInt(minutes || '0', 10);
     baseDate.setHours(isNaN(h) ? 0 : h, isNaN(m) ? 0 : m, 0, 0);
     return baseDate;
+  };
+
+  const formatDateDisplay = (date: Date) => date.toISOString().split('T')[0];
+
+  const buildIsoFromDateAndTime = (date: string, hours: string, minutes: string) => {
+    return `${date}T${hours.padStart(2, '0')}:${minutes.padStart(2, '0')}:00.000Z`;
+  };
+
+  const openFechaEntradaPicker = () => {
+    const baseDate = fechaEntradaRef.current ? new Date(`${fechaEntradaRef.current}T00:00:00`) : new Date();
+    setFechaEntradaPickerValue(baseDate);
+    setShowFechaEntradaPicker(true);
+  };
+
+  const handleFechaEntradaPickerChange = (event: any, selectedDate?: Date) => {
+    if (Platform.OS === 'android') {
+      setShowFechaEntradaPicker(false);
+    }
+    if (!selectedDate) return;
+    const formattedDate = formatDateDisplay(selectedDate);
+    fechaEntradaRef.current = formattedDate;
+    setFechaEntradaDisplay(formattedDate);
+    setFechaEntradaPickerValue(selectedDate);
+  };
+
+  const openFechaSalidaPicker = () => {
+    const baseDate = fechaSalidaRef.current ? new Date(`${fechaSalidaRef.current}T00:00:00`) : new Date();
+    setFechaSalidaPickerValue(baseDate);
+    setShowFechaSalidaPicker(true);
+  };
+
+  const handleFechaSalidaPickerChange = (event: any, selectedDate?: Date) => {
+    if (Platform.OS === 'android') {
+      setShowFechaSalidaPicker(false);
+    }
+    if (!selectedDate) return;
+    const formattedDate = formatDateDisplay(selectedDate);
+    fechaSalidaRef.current = formattedDate;
+    setFechaSalidaDisplay(formattedDate);
+    setFechaSalidaPickerValue(selectedDate);
   };
 
   const openHoraEntradaPicker = () => {
@@ -186,12 +268,22 @@ export default function VehiclesScreen() {
     syncTimeFields(horaEntradaHRef.current, horaEntradaMRef.current, '', '');
     setHoraSalidaPickerValue(buildDateFromParts('', ''));
     setShowHoraSalidaPicker(false);
+    fechaSalidaRef.current = '';
+    setFechaSalidaDisplay('');
+    setFechaSalidaPickerValue(new Date());
+    setShowFechaSalidaPicker(false);
   };
 
   // Minimal state for Picker (needs controlled value)
   const [vehicleTipo, setVehicleTipo] = useState<'Particular' | 'Institucional'>('Particular');
 
   // Time picker state
+  const [showFechaEntradaPicker, setShowFechaEntradaPicker] = useState(false);
+  const [fechaEntradaPickerValue, setFechaEntradaPickerValue] = useState(new Date());
+  const [fechaEntradaDisplay, setFechaEntradaDisplay] = useState('');
+  const [showFechaSalidaPicker, setShowFechaSalidaPicker] = useState(false);
+  const [fechaSalidaPickerValue, setFechaSalidaPickerValue] = useState(new Date());
+  const [fechaSalidaDisplay, setFechaSalidaDisplay] = useState('');
   const [showHoraEntradaPicker, setShowHoraEntradaPicker] = useState(false);
   const [horaEntradaPickerValue, setHoraEntradaPickerValue] = useState(new Date());
   const [horaEntradaDisplay, setHoraEntradaDisplay] = useState('');
@@ -480,12 +572,14 @@ export default function VehiclesScreen() {
 
       setIsCameraVisible(false);
 
-      // Format base64 with data URI prefix
-      const formattedBase64 = `data:image/jpeg;base64,${photo.base64!}`;
+      // Almacenar solo base64 crudo (como NonConformingProductScreen: file_base64). El prefijo data: se añade solo para mostrar.
+      const rawBase64 = (photo.base64 || '').trim();
+      if (!rawBase64) {
+        Alert.alert('Error', 'No se pudo procesar la imagen. Por favor intente nuevamente.');
+        return;
+      }
 
-      setTimeout(() => {
-        setVehicleImageBase64(formattedBase64);
-      }, 100);
+      setVehicleImageBase64(rawBase64);
     } catch (error) {
       console.error('Error capturing image:', error);
       Alert.alert('Error', 'No se pudo capturar la imagen');
@@ -501,12 +595,17 @@ export default function VehiclesScreen() {
     }
 
     if (!nombrePropietarioRef.current.trim()) {
-      Alert.alert('Error', 'El nombre del propietario es obligatorio');
+      Alert.alert('Error', 'El nombre del conductor es obligatorio');
       return;
     }
 
     if (!cedulaPropietarioRef.current.trim()) {
-      Alert.alert('Error', 'La cédula del propietario es obligatoria');
+      Alert.alert('Error', 'La cédula del conductor es obligatoria');
+      return;
+    }
+
+    if (!fechaEntradaRef.current.trim()) {
+      Alert.alert('Error', 'La fecha de entrada es obligatoria');
       return;
     }
 
@@ -537,16 +636,19 @@ export default function VehiclesScreen() {
 
               const currentMarcaData = JSON.parse(currentMarca);
 
-              // Construir hora_entrada y hora_salida
-              const hora_entrada = `${horaEntradaHRef.current.padStart(2, '0')}:${horaEntradaMRef.current.padStart(2, '0')}`;
-              const hora_salida = (horaSalidaHRef.current && horaSalidaMRef.current)
-                ? `${horaSalidaHRef.current.padStart(2, '0')}:${horaSalidaMRef.current.padStart(2, '0')}`
+              const entradaIso = buildIsoFromDateAndTime(
+                fechaEntradaRef.current,
+                horaEntradaHRef.current,
+                horaEntradaMRef.current
+              );
+              const salidaCompleta = !!(fechaSalidaRef.current && horaSalidaHRef.current && horaSalidaMRef.current);
+              const salidaIso = salidaCompleta
+                ? buildIsoFromDateAndTime(
+                  fechaSalidaRef.current,
+                  horaSalidaHRef.current,
+                  horaSalidaMRef.current
+                )
                 : null;
-
-              const { converted_hora_entrada, converted_hora_salida } = convert_date(currentMarcaData, hora_entrada, hora_salida);
-
-              console.log("converted_hora_entrada", converted_hora_entrada);
-              console.log("converted_hora_salida", converted_hora_salida);
 
               const requestBody: any = {
                 marca_id: currentMarcaData.id,
@@ -554,14 +656,17 @@ export default function VehiclesScreen() {
                 placa: placaRef.current,
                 nombre: nombrePropietarioRef.current,
                 cedula: cedulaPropietarioRef.current,
-                hora_entrada: converted_hora_entrada,
-                hora_salida: converted_hora_salida,
+                departamento_visita: departamentoVisitaRef.current || null,
+                persona_visita: personaVisitaRef.current || null,
+                hora_entrada: entradaIso,
+                hora_salida: salidaIso,
                 razon_visita: razonVisitaRef.current,
               };
 
-              // Add image if captured (already formatted as data:image/jpeg;base64,...)
-              if (vehicleImageBase64 && vehicleImageBase64.trim() !== '') {
-                requestBody.file = vehicleImageBase64;
+              // Imagen: enviar solo base64 crudo (referencia NonConformingProductScreen file_base64). El servidor acepta ambos formatos.
+              const fileBase64 = getBase64Only(vehicleImageBase64);
+              if (fileBase64) {
+                requestBody.file = fileBase64;
               } else {
                 requestBody.file = null;
               }
@@ -588,6 +693,10 @@ export default function VehiclesScreen() {
                     placa: '',
                     nombre_propietario: '',
                     cedula_propietario: '',
+                    departamento_visita: '',
+                    persona_visita: '',
+                    fecha_entrada: '',
+                    fecha_salida: '',
                     hora_entrada_h: '',
                     hora_entrada_m: '',
                     hora_salida_h: '',
@@ -596,6 +705,14 @@ export default function VehiclesScreen() {
                     base64_image: '',
                   });
                   syncTimeFields('', '', '', '');
+                  fechaEntradaRef.current = '';
+                  fechaSalidaRef.current = '';
+                  setFechaEntradaDisplay('');
+                  setFechaSalidaDisplay('');
+                  setFechaEntradaPickerValue(new Date());
+                  setFechaSalidaPickerValue(new Date());
+                  setShowFechaEntradaPicker(false);
+                  setShowFechaSalidaPicker(false);
                   setHoraEntradaPickerValue(buildDateFromParts('', ''));
                   setHoraSalidaPickerValue(buildDateFromParts('', ''));
                   setShowHoraEntradaPicker(false);
@@ -631,8 +748,10 @@ export default function VehiclesScreen() {
                   placa: placaRef.current,
                   nombre_propietario: nombrePropietarioRef.current,
                   cedula_propietario: cedulaPropietarioRef.current,
-                  hora_entrada: converted_hora_entrada.toString(),
-                  hora_salida: converted_hora_salida ? converted_hora_salida.toString() : null,
+                  departamento_visita: departamentoVisitaRef.current || '',
+                  persona_visita: personaVisitaRef.current || '',
+                  hora_entrada: entradaIso,
+                  hora_salida: salidaIso,
                   razon_visita: razonVisitaRef.current,
                   responsable: {
                     id: parseInt(employee?.id || '0'),
@@ -655,6 +774,10 @@ export default function VehiclesScreen() {
                   placa: '',
                   nombre_propietario: '',
                   cedula_propietario: '',
+                  departamento_visita: '',
+                  persona_visita: '',
+                  fecha_entrada: '',
+                  fecha_salida: '',
                   hora_entrada_h: '',
                   hora_entrada_m: '',
                   hora_salida_h: '',
@@ -663,6 +786,14 @@ export default function VehiclesScreen() {
                   base64_image: '',
                 });
                 syncTimeFields('', '', '', '');
+                fechaEntradaRef.current = '';
+                fechaSalidaRef.current = '';
+                setFechaEntradaDisplay('');
+                setFechaSalidaDisplay('');
+                setFechaEntradaPickerValue(new Date());
+                setFechaSalidaPickerValue(new Date());
+                setShowFechaEntradaPicker(false);
+                setShowFechaSalidaPicker(false);
                 setHoraEntradaPickerValue(buildDateFromParts('', ''));
                 setHoraSalidaPickerValue(buildDateFromParts('', ''));
                 setShowHoraEntradaPicker(false);
@@ -680,35 +811,6 @@ export default function VehiclesScreen() {
     );
   };
 
-  const convert_date = (currentMarca: any, hora_entrada: string, hora_salida: string | null) => {
-    const fechaSplit = currentMarca.fecha.split("T")[0];
-    const year = fechaSplit.split("-")[0];
-    const month = fechaSplit.split("-")[1];
-    const day = fechaSplit.split("-")[2];
-
-    const horaInicioSplit = currentMarca.hora_inicio ? currentMarca.hora_inicio.split("T")[1].split(":") : null;
-
-    const hora_entrada_raw = hora_entrada.split(":");
-
-    let final_day_initial = day;
-    if (horaInicioSplit && parseInt(horaInicioSplit[0]) > parseInt(hora_entrada_raw[0])) {
-      final_day_initial = (parseInt(day) + 1).toString().padStart(2, "0");
-    }
-
-    let final_day_final = day;
-    if (hora_salida) {
-      const hora_salida_raw = hora_salida.split(":");
-      if (horaInicioSplit && parseInt(horaInicioSplit[0]) > parseInt(hora_salida_raw[0])) {
-        final_day_final = (parseInt(day) + 1).toString().padStart(2, "0");
-      }
-    }
-
-    const hora_entrada_converted = year + "-" + month + "-" + final_day_initial + "T" + hora_entrada_raw[0] + ":" + hora_entrada_raw[1] + ":00.000Z";
-    const hora_salida_converted = hora_salida ? year + "-" + month + "-" + final_day_final + "T" + hora_salida.split(":")[0] + ":" + hora_salida.split(":")[1] + ":00.000Z" : null;
-
-    return { converted_hora_entrada: hora_entrada_converted, converted_hora_salida: hora_salida_converted };
-  };
-
   const updateVehicle = async (vehicleId: number) => {
     if (!editingVehicle) return;
 
@@ -719,12 +821,17 @@ export default function VehiclesScreen() {
     }
 
     if (!nombrePropietarioRef.current.trim()) {
-      Alert.alert('Error', 'El nombre del propietario es obligatorio');
+      Alert.alert('Error', 'El nombre del conductor es obligatorio');
       return;
     }
 
     if (!cedulaPropietarioRef.current.trim()) {
-      Alert.alert('Error', 'La cédula del propietario es obligatoria');
+      Alert.alert('Error', 'La cédula del conductor es obligatoria');
+      return;
+    }
+
+    if (!fechaEntradaRef.current.trim()) {
+      Alert.alert('Error', 'La fecha de entrada es obligatoria');
       return;
     }
 
@@ -754,13 +861,19 @@ export default function VehiclesScreen() {
               }
               const currentMarcaData = JSON.parse(currentMarca);
 
-              // Construir hora_entrada y hora_salida
-              const hora_entrada = `${horaEntradaHRef.current.padStart(2, '0')}:${horaEntradaMRef.current.padStart(2, '0')}`;
-              const hora_salida = (horaSalidaHRef.current && horaSalidaMRef.current)
-                ? `${horaSalidaHRef.current.padStart(2, '0')}:${horaSalidaMRef.current.padStart(2, '0')}`
+              const entradaIso = buildIsoFromDateAndTime(
+                fechaEntradaRef.current,
+                horaEntradaHRef.current,
+                horaEntradaMRef.current
+              );
+              const salidaCompleta = !!(fechaSalidaRef.current && horaSalidaHRef.current && horaSalidaMRef.current);
+              const salidaIso = salidaCompleta
+                ? buildIsoFromDateAndTime(
+                  fechaSalidaRef.current,
+                  horaSalidaHRef.current,
+                  horaSalidaMRef.current
+                )
                 : null;
-
-              const { converted_hora_entrada, converted_hora_salida } = convert_date(currentMarcaData, hora_entrada, hora_salida);
 
               const requestBody: any = {
                 marca_id: currentMarcaData.id,
@@ -768,14 +881,17 @@ export default function VehiclesScreen() {
                 placa: placaRef.current,
                 nombre: nombrePropietarioRef.current,
                 cedula: cedulaPropietarioRef.current,
-                hora_entrada: converted_hora_entrada,
-                hora_salida: converted_hora_salida,
+                departamento_visita: departamentoVisitaRef.current || null,
+                persona_visita: personaVisitaRef.current || null,
+                hora_entrada: entradaIso,
+                hora_salida: salidaIso,
                 razon_visita: razonVisitaRef.current,
               };
 
-              // Add image if captured (already formatted as data:image/jpeg;base64,...)
-              if (vehicleImageBase64 && vehicleImageBase64.trim() !== '') {
-                requestBody.file = vehicleImageBase64;
+              // Imagen: enviar solo base64 crudo (referencia NonConformingProductScreen file_base64). El servidor acepta ambos formatos.
+              const fileBase64 = getBase64Only(vehicleImageBase64);
+              if (fileBase64) {
+                requestBody.file = fileBase64;
               } else {
                 requestBody.file = null;
               }
@@ -855,8 +971,10 @@ export default function VehiclesScreen() {
                     placa: placaRef.current,
                     nombre_propietario: nombrePropietarioRef.current,
                     cedula_propietario: cedulaPropietarioRef.current,
-                    hora_entrada: converted_hora_entrada.toString(),
-                    hora_salida: converted_hora_salida ? converted_hora_salida.toString() : null,
+                    departamento_visita: departamentoVisitaRef.current || '',
+                    persona_visita: personaVisitaRef.current || '',
+                    hora_entrada: entradaIso,
+                    hora_salida: salidaIso,
                     razon_visita: razonVisitaRef.current,
                     base64_image: updatedBase64Image,
                   };
@@ -1002,9 +1120,9 @@ export default function VehiclesScreen() {
           />
         </ThemedView>
 
-        {/* Nombre Propietario */}
+        {/* Nombre Conductor */}
         <ThemedView style={styles.formGroup}>
-          <ThemedText style={styles.formLabel}>Nombre del Propietario:</ThemedText>
+          <ThemedText style={styles.formLabel}>Nombre del Conductor:</ThemedText>
           <TextInput
             style={styles.formInput}
             defaultValue={vehicle.nombre_propietario}
@@ -1015,9 +1133,9 @@ export default function VehiclesScreen() {
           />
         </ThemedView>
 
-        {/* Cédula Propietario */}
+        {/* Cédula Conductor */}
         <ThemedView style={styles.formGroup}>
-          <ThemedText style={styles.formLabel}>Cédula del Propietario:</ThemedText>
+          <ThemedText style={styles.formLabel}>Cédula del Conductor:</ThemedText>
           <TextInput
             style={styles.formInput}
             defaultValue={vehicle.cedula_propietario}
@@ -1029,9 +1147,51 @@ export default function VehiclesScreen() {
           />
         </ThemedView>
 
-        {/* Hora Entrada */}
+        {/* Departamento visita */}
         <ThemedView style={styles.formGroup}>
-          <ThemedText style={styles.formLabel}>Hora de Entrada:</ThemedText>
+          <ThemedText style={styles.formLabel}>Departamento (opcional):</ThemedText>
+          <TextInput
+            style={styles.formInput}
+            defaultValue={vehicle.departamento_visita}
+            onChangeText={(text) => { departamentoVisitaRef.current = text; }}
+            placeholder="Departamento de visita"
+            placeholderTextColor="#999"
+            key={`departamento-${isCreating ? 'create' : vehicle.id}`}
+          />
+        </ThemedView>
+
+        {/* Persona visita */}
+        <ThemedView style={styles.formGroup}>
+          <ThemedText style={styles.formLabel}>Persona a visitar (opcional):</ThemedText>
+          <TextInput
+            style={styles.formInput}
+            defaultValue={vehicle.persona_visita}
+            onChangeText={(text) => { personaVisitaRef.current = text; }}
+            placeholder="Persona de contacto"
+            placeholderTextColor="#999"
+            key={`persona-visita-${isCreating ? 'create' : vehicle.id}`}
+          />
+        </ThemedView>
+
+        {/* Fecha y hora Entrada */}
+        <ThemedView style={styles.formGroup}>
+          <ThemedText style={styles.formLabel}>Entrada (fecha y hora):</ThemedText>
+          <TouchableOpacity style={styles.timePickerButton} onPress={openFechaEntradaPicker}>
+            <ThemedText style={styles.timePickerButtonText}>
+              {fechaEntradaDisplay || 'Seleccionar fecha'}
+            </ThemedText>
+            <Ionicons name="calendar-outline" size={20} color="#007AFF" />
+          </TouchableOpacity>
+          {showFechaEntradaPicker && (
+            <View style={styles.inlinePickerContainer}>
+              <DateTimePicker
+                value={fechaEntradaPickerValue}
+                mode="date"
+                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                onChange={handleFechaEntradaPickerChange}
+              />
+            </View>
+          )}
           <TouchableOpacity style={styles.timePickerButton} onPress={openHoraEntradaPicker}>
             <ThemedText style={styles.timePickerButtonText}>
               {horaEntradaDisplay || 'Seleccionar hora'}
@@ -1050,9 +1210,25 @@ export default function VehiclesScreen() {
           )}
         </ThemedView>
 
-        {/* Hora Salida */}
+        {/* Fecha y hora Salida */}
         <ThemedView style={styles.formGroup}>
-          <ThemedText style={styles.formLabel}>Hora de Salida (opcional):</ThemedText>
+          <ThemedText style={styles.formLabel}>Salida (fecha y hora, opcional):</ThemedText>
+          <TouchableOpacity style={styles.timePickerButton} onPress={openFechaSalidaPicker}>
+            <ThemedText style={styles.timePickerButtonText}>
+              {fechaSalidaDisplay || 'Seleccionar fecha'}
+            </ThemedText>
+            <Ionicons name="calendar-outline" size={20} color="#007AFF" />
+          </TouchableOpacity>
+          {showFechaSalidaPicker && (
+            <View style={styles.inlinePickerContainer}>
+              <DateTimePicker
+                value={fechaSalidaPickerValue}
+                mode="date"
+                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                onChange={handleFechaSalidaPickerChange}
+              />
+            </View>
+          )}
           <View style={styles.timePickerRow}>
             <TouchableOpacity style={styles.timePickerButton} onPress={openHoraSalidaPicker}>
               <ThemedText style={styles.timePickerButtonText}>
@@ -1108,16 +1284,20 @@ export default function VehiclesScreen() {
           </TouchableOpacity>
 
           {/* Show captured image preview */}
-          {vehicleImageBase64 && (
-            <ThemedView style={styles.imagePreviewContainer}>
-              <ThemedText style={styles.imagePreviewTitle}>Imagen capturada:</ThemedText>
-              <Image
-                source={{ uri: vehicleImageBase64.startsWith('data:') ? vehicleImageBase64 : `data:image/jpeg;base64,${vehicleImageBase64}` }}
-                style={styles.imagePreview}
-                resizeMode="contain"
-              />
-            </ThemedView>
-          )}
+          {vehicleImageBase64 && (() => {
+            const displayUri = getVehicleImageDisplayUri(vehicleImageBase64);
+            if (!displayUri) return null;
+            return (
+              <ThemedView style={styles.imagePreviewContainer}>
+                <ThemedText style={styles.imagePreviewTitle}>Imagen capturada:</ThemedText>
+                <Image
+                  source={{ uri: displayUri }}
+                  style={styles.imagePreview}
+                  resizeMode="contain"
+                />
+              </ThemedView>
+            );
+          })()}
 
           {/* Show existing image in edit mode */}
           {!isCreating && !vehicleImageBase64 && isEditingImage && (() => {
@@ -1127,11 +1307,7 @@ export default function VehiclesScreen() {
             // This ensures offline mode always shows base64_image
             const imageToShow = editingVehicleServerImage
               ? editingVehicleServerImage
-              : (editingVehicle?.base64_image && editingVehicle.base64_image.trim() !== '')
-                ? (editingVehicle.base64_image.startsWith('data:')
-                  ? editingVehicle.base64_image
-                  : `data:image/jpeg;base64,${editingVehicle.base64_image}`)
-                : null;
+              : getVehicleImageDisplayUri(editingVehicle?.base64_image) || null;
 
             if (!imageToShow) return null;
 
@@ -1197,18 +1373,19 @@ export default function VehiclesScreen() {
   };
 
   const startEditing = async (vehicle: Vehicle) => {
-    // Parse time from hora_entrada
-
-    const entrada_split = vehicle.hora_entrada.split(':');
-    const hours = entrada_split[0].split('T')[1];
-    const minutes = entrada_split[1];
+    const entradaDate = new Date(vehicle.hora_entrada);
+    const hours = entradaDate.getUTCHours().toString().padStart(2, '0');
+    const minutes = entradaDate.getUTCMinutes().toString().padStart(2, '0');
+    const fechaEntrada = entradaDate.toISOString().split('T')[0];
 
     let exitHours = '';
     let exitMinutes = '';
+    let fechaSalida = '';
     if (vehicle.hora_salida) {
-      const salida_split = vehicle.hora_salida.split(':');
-      exitHours = salida_split[0].split('T')[1];
-      exitMinutes = salida_split[1];
+      const salidaDate = new Date(vehicle.hora_salida);
+      exitHours = salidaDate.getUTCHours().toString().padStart(2, '0');
+      exitMinutes = salidaDate.getUTCMinutes().toString().padStart(2, '0');
+      fechaSalida = salidaDate.toISOString().split('T')[0];
     }
 
     setEditingVehicle({
@@ -1218,6 +1395,10 @@ export default function VehiclesScreen() {
       placa: vehicle.placa,
       nombre_propietario: vehicle.nombre_propietario,
       cedula_propietario: vehicle.cedula_propietario,
+      departamento_visita: vehicle.departamento_visita || '',
+      persona_visita: vehicle.persona_visita || '',
+      fecha_entrada: fechaEntrada,
+      fecha_salida: fechaSalida,
       hora_entrada_h: hours,
       hora_entrada_m: minutes,
       hora_salida_h: exitHours,
@@ -1226,6 +1407,14 @@ export default function VehiclesScreen() {
       base64_image: vehicle.base64_image || '',
     });
     syncTimeFields(hours, minutes, exitHours, exitMinutes);
+    fechaEntradaRef.current = fechaEntrada;
+    fechaSalidaRef.current = fechaSalida;
+    setFechaEntradaDisplay(fechaEntrada);
+    setFechaSalidaDisplay(fechaSalida);
+    setFechaEntradaPickerValue(new Date(`${fechaEntrada}T00:00:00`));
+    setFechaSalidaPickerValue(fechaSalida ? new Date(`${fechaSalida}T00:00:00`) : new Date());
+    setShowFechaEntradaPicker(false);
+    setShowFechaSalidaPicker(false);
     setHoraEntradaPickerValue(buildDateFromParts(hours, minutes));
     setHoraSalidaPickerValue(buildDateFromParts(exitHours, exitMinutes));
     setShowHoraEntradaPicker(false);
@@ -1237,6 +1426,8 @@ export default function VehiclesScreen() {
     placaRef.current = vehicle.placa;
     nombrePropietarioRef.current = vehicle.nombre_propietario;
     cedulaPropietarioRef.current = vehicle.cedula_propietario;
+    departamentoVisitaRef.current = vehicle.departamento_visita || '';
+    personaVisitaRef.current = vehicle.persona_visita || '';
     horaEntradaHRef.current = hours;
     horaEntradaMRef.current = minutes;
     horaSalidaHRef.current = exitHours;
@@ -1255,7 +1446,7 @@ export default function VehiclesScreen() {
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (apiUrl) {
         try {
-          const imageUrl = `${apiUrl}/api/vehicles/${vehicle.id}/get-image?t=${Date.now()}`;
+          const imageUrl = appendTokenToUrl(`${apiUrl}/api/vehicles/${vehicle.id}/get-image?t=${Date.now()}`);
           const response = await authedFetch({
             url: imageUrl,
             init: {
@@ -1325,12 +1516,26 @@ export default function VehiclesScreen() {
     setVehicleImageBase64(null);
     setIsEditingImage(false);
     setEditingVehicleServerImage(null);
+    fechaEntradaRef.current = '';
+    fechaSalidaRef.current = '';
+    setFechaEntradaDisplay('');
+    setFechaSalidaDisplay('');
+    setShowFechaEntradaPicker(false);
+    setShowFechaSalidaPicker(false);
     setVehicleTipo('Particular');
     tipoRef.current = 'Particular';
   };
 
   const startCreating = () => {
     syncTimeFields('', '', '', '');
+    fechaEntradaRef.current = '';
+    fechaSalidaRef.current = '';
+    setFechaEntradaDisplay('');
+    setFechaSalidaDisplay('');
+    setFechaEntradaPickerValue(new Date());
+    setFechaSalidaPickerValue(new Date());
+    setShowFechaEntradaPicker(false);
+    setShowFechaSalidaPicker(false);
     setHoraEntradaPickerValue(buildDateFromParts('', ''));
     setHoraSalidaPickerValue(buildDateFromParts('', ''));
     setShowHoraEntradaPicker(false);
@@ -1343,6 +1548,10 @@ export default function VehiclesScreen() {
       placa: '',
       nombre_propietario: '',
       cedula_propietario: '',
+      departamento_visita: '',
+      persona_visita: '',
+      fecha_entrada: '',
+      fecha_salida: '',
       hora_entrada_h: '',
       hora_entrada_m: '',
       hora_salida_h: '',
@@ -1356,6 +1565,8 @@ export default function VehiclesScreen() {
     placaRef.current = '';
     nombrePropietarioRef.current = '';
     cedulaPropietarioRef.current = '';
+    departamentoVisitaRef.current = '';
+    personaVisitaRef.current = '';
     horaEntradaHRef.current = '';
     horaEntradaMRef.current = '';
     horaSalidaHRef.current = '';
@@ -1373,6 +1584,10 @@ export default function VehiclesScreen() {
       placa: '',
       nombre_propietario: '',
       cedula_propietario: '',
+      departamento_visita: '',
+      persona_visita: '',
+      fecha_entrada: '',
+      fecha_salida: '',
       hora_entrada_h: '',
       hora_entrada_m: '',
       hora_salida_h: '',
@@ -1381,6 +1596,12 @@ export default function VehiclesScreen() {
       base64_image: '',
     });
     setVehicleImageBase64(null);
+    fechaEntradaRef.current = '';
+    fechaSalidaRef.current = '';
+    setFechaEntradaDisplay('');
+    setFechaSalidaDisplay('');
+    setShowFechaEntradaPicker(false);
+    setShowFechaSalidaPicker(false);
     setVehicleTipo('Particular');
     tipoRef.current = 'Particular';
   };
@@ -1395,6 +1616,8 @@ export default function VehiclesScreen() {
       vehicle.placa.toLowerCase().includes(searchText.toLowerCase()) ||
       vehicle.nombre_propietario.toLowerCase().includes(searchText.toLowerCase()) ||
       vehicle.cedula_propietario.toLowerCase().includes(searchText.toLowerCase()) ||
+      (vehicle.departamento_visita || '').toLowerCase().includes(searchText.toLowerCase()) ||
+      (vehicle.persona_visita || '').toLowerCase().includes(searchText.toLowerCase()) ||
       vehicle.razon_visita.toLowerCase().includes(searchText.toLowerCase()) ||
       vehicle.responsable.nombre.toLowerCase().includes(searchText.toLowerCase());
 
@@ -1516,7 +1739,7 @@ export default function VehiclesScreen() {
             {isFiltersExpanded && (
               <ThemedView style={styles.filterContent}>
                 <ThemedView style={styles.filterGroupSearch}>
-                  <ThemedText style={styles.filterLabel}>Buscar por placa, propietario, cédula, razón o responsable:</ThemedText>
+                  <ThemedText style={styles.filterLabel}>Buscar por placa, conductor, cédula, departamento, persona, razón o responsable:</ThemedText>
                   <TextInput
                     style={styles.searchInput}
                     value={searchText}
@@ -1586,6 +1809,7 @@ export default function VehiclesScreen() {
                     getActionIcon={getActionIcon}
                     convertDate={convertDate}
                     getConnectionStatus={getConnectionStatus}
+                    appendTokenToUrl={appendTokenToUrl}
                   />
                 ))
               )}
@@ -1730,6 +1954,7 @@ interface VehicleItemComponentProps {
   getActionIcon: (action: string) => React.ReactElement;
   convertDate: (dateString: string) => string;
   getConnectionStatus: () => Promise<boolean>;
+  appendTokenToUrl: (url: string) => string;
 }
 
 const VehicleItemComponent: React.FC<VehicleItemComponentProps> = ({
@@ -1740,6 +1965,7 @@ const VehicleItemComponent: React.FC<VehicleItemComponentProps> = ({
   getActionIcon,
   convertDate,
   getConnectionStatus,
+  appendTokenToUrl,
 }) => {
   const { employee, refreshAccessToken, logout } = useAuth();
   const [imageBase64, setImageBase64] = React.useState<string | null>(null);
@@ -1760,7 +1986,7 @@ const VehicleItemComponent: React.FC<VehicleItemComponentProps> = ({
 
     try {
       const response = await authedFetch({
-        url: `${apiUrl}/api/vehicles/${vehicle.id}/get-image?t=${Date.now()}`,
+        url: appendTokenToUrl(`${apiUrl}/api/vehicles/${vehicle.id}/get-image?t=${Date.now()}`),
         init: {
           method: 'GET',
         },
@@ -1827,10 +2053,8 @@ const VehicleItemComponent: React.FC<VehicleItemComponentProps> = ({
 
       // Always load cached image first (base64_image from vehicle)
       if (vehicle.base64_image && vehicle.base64_image.trim() !== '') {
-        const formattedImage = vehicle.base64_image.startsWith('data:')
-          ? vehicle.base64_image
-          : `data:image/jpeg;base64,${vehicle.base64_image}`;
-        setImageBase64(formattedImage);
+        const formattedImage = getVehicleImageDisplayUri(vehicle.base64_image);
+        if (formattedImage) setImageBase64(formattedImage);
       } else {
         setImageBase64(null);
       }
@@ -1854,8 +2078,14 @@ const VehicleItemComponent: React.FC<VehicleItemComponentProps> = ({
         <ThemedText style={styles.vehiclePlaca}>{vehicle.placa}</ThemedText>
         <ThemedText style={styles.vehicleTipo}>{vehicle.tipo}</ThemedText>
       </ThemedView>
-      <ThemedText style={styles.vehicleInfo}>Propietario: {vehicle.nombre_propietario}</ThemedText>
+      <ThemedText style={styles.vehicleInfo}>Conductor: {vehicle.nombre_propietario}</ThemedText>
       <ThemedText style={styles.vehicleInfo}>Cédula: {vehicle.cedula_propietario}</ThemedText>
+      {!!vehicle.departamento_visita && (
+        <ThemedText style={styles.vehicleInfo}>Departamento: {vehicle.departamento_visita}</ThemedText>
+      )}
+      {!!vehicle.persona_visita && (
+        <ThemedText style={styles.vehicleInfo}>Persona a visitar: {vehicle.persona_visita}</ThemedText>
+      )}
       <ThemedText style={styles.vehicleInfo}>Entrada: {convertDate(vehicle.hora_entrada)}</ThemedText>
       {vehicle.hora_salida && (
         <ThemedText style={styles.vehicleInfo}>Salida: {convertDate(vehicle.hora_salida)}</ThemedText>

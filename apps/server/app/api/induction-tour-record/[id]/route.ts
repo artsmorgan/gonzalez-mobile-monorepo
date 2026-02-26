@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../../utils/verifyToken";
-import { prisma } from "../../../../utils/prismaClient";
+import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
 
 function parseFechaInput(fecha: any): Date | undefined {
@@ -26,7 +26,7 @@ export async function PUT(
     context: { params: Promise<{ id: string }> }
 ) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
 
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
@@ -38,6 +38,13 @@ export async function PUT(
         }
 
         const {
+            empresa_id,
+            cliente_id,
+            contrato_id,
+            corpo_id,
+            puesto_id,
+            plaza_id,
+            empleado_id,
             fecha,
             division,
             renglon_edificio,
@@ -47,33 +54,58 @@ export async function PUT(
             aspectos_especificos,
             participantes,
             firma_supervisor,
+            firma_empleado,
             firma_responsable
         } = await req.json();
 
-        const existing = await prisma.c_registro_induccion_recorrido.findUnique({
-            where: { id: idNum }
+        const existing = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_registro_induccion_recorrido",
+                operation: "findUnique",
+                where: { id: idNum },
+            },
         });
         if (!existing) {
             return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
         }
+        const existingObj = existing as any;
 
         const fechaParsed = parseFechaInput(fecha);
         if (fecha !== undefined && fecha !== null && !fechaParsed) {
             return NextResponse.json({ status: false, message: "Fecha inválida" }, { status: 400 });
         }
 
-        const updateData: any = {
-            ...(fecha !== undefined ? (fechaParsed ? { fecha: fechaParsed } : {}) : {}),
-            division: division !== undefined ? (division ? String(division).trim() : "Otros") : undefined,
-            renglon_edificio: renglon_edificio !== undefined ? (renglon_edificio ? String(renglon_edificio) : "") : undefined,
-            supervisor_cliente: supervisor_cliente !== undefined ? (supervisor_cliente !== null && supervisor_cliente !== undefined ? String(supervisor_cliente) : null) : undefined,
-            supervisor_corporacion: supervisor_corporacion !== undefined ? (supervisor_corporacion ? String(supervisor_corporacion) : "") : undefined,
-            temas_desarrollados: temas_desarrollados !== undefined ? (temas_desarrollados ? String(temas_desarrollados) : "[]") : undefined,
-            aspectos_especificos: aspectos_especificos !== undefined ? (aspectos_especificos ? String(aspectos_especificos) : "[]") : undefined,
-            participantes: participantes !== undefined ? (participantes ? String(participantes) : "[]") : undefined,
-            firma_supervisor: firma_supervisor !== undefined ? (firma_supervisor ? String(firma_supervisor) : "") : undefined,
-            firma_responsable: firma_responsable !== undefined ? (firma_responsable ? String(firma_responsable) : "") : undefined,
-        };
+        const updateData: any = {};
+        if (empresa_id !== undefined) updateData.empresa_id = Number(empresa_id);
+        if (cliente_id !== undefined) updateData.cliente_id = Number(cliente_id);
+        if (contrato_id !== undefined) updateData.contrato_id = Number(contrato_id);
+        if (corpo_id !== undefined) updateData.corpo_id = Number(corpo_id);
+        if (puesto_id !== undefined) updateData.puesto_id = puesto_id !== null ? Number(puesto_id) : null;
+        if (plaza_id !== undefined) updateData.plaza_id = Number(plaza_id);
+        if (empleado_id !== undefined) {
+            const empleadoIdNum = Number(empleado_id);
+            if (Number.isNaN(empleadoIdNum) || empleadoIdNum === 0) {
+                return NextResponse.json({ status: false, message: "empleado_id inválido" }, { status: 400 });
+            }
+            updateData.empleado_id = empleadoIdNum;
+        }
+        if (fecha !== undefined) {
+            if (fechaParsed) {
+                updateData.fecha = fechaParsed.toISOString();
+            }
+        }
+        if (division !== undefined) updateData.division = division ? String(division).trim() : "Otros";
+        if (renglon_edificio !== undefined) updateData.renglon_edificio = renglon_edificio ? String(renglon_edificio) : "";
+        if (supervisor_cliente !== undefined) updateData.supervisor_cliente = supervisor_cliente !== null && supervisor_cliente !== undefined ? String(supervisor_cliente) : null;
+        if (supervisor_corporacion !== undefined) updateData.supervisor_corporacion = supervisor_corporacion ? String(supervisor_corporacion) : "";
+        if (temas_desarrollados !== undefined) updateData.temas_desarrollados = temas_desarrollados ? String(temas_desarrollados) : "[]";
+        if (aspectos_especificos !== undefined) updateData.aspectos_especificos = aspectos_especificos ? String(aspectos_especificos) : "[]";
+        if (participantes !== undefined) updateData.participantes = participantes ? String(participantes) : "[]";
+        if (firma_supervisor !== undefined) updateData.firma_supervisor = firma_supervisor ? String(firma_supervisor) : "";
+        if (firma_empleado !== undefined) updateData.firma_empleado = firma_empleado ? String(firma_empleado).trim() : "";
+        if (firma_responsable !== undefined) updateData.firma_responsable = firma_responsable ? String(firma_responsable) : "";
 
         // Registrar cambios (solo campos actualizados, excluyendo firmas)
         const eq = (a: any, b: any) => {
@@ -87,34 +119,47 @@ export async function PUT(
 
         const cambiosArr: Array<{ prop: string; before: any; after: any }> = [];
         for (const [k, v] of Object.entries(updateData)) {
-            if (v === undefined) continue; // Solo procesar campos que se están actualizando
             if (k.startsWith("firma_")) continue; // Excluir firmas
 
-            const before = (existing as any)[k];
+            const before = existingObj[k];
             const after = v;
             if (!eq(before, after)) {
+                const beforeValue = before instanceof Date ? before.toISOString() : (typeof before === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(before) ? before : before);
+                const afterValue = after instanceof Date ? after.toISOString() : (typeof after === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(after) ? after : after);
                 cambiosArr.push({
                     prop: k,
-                    before: before instanceof Date ? before.toISOString() : before,
-                    after: after instanceof Date ? after.toISOString() : after,
+                    before: beforeValue,
+                    after: afterValue,
                 });
             }
         }
 
-        const updated_record = await prisma.c_registro_induccion_recorrido.update({
-            where: { id: idNum },
-            data: updateData,
+        const updated_record = await callDynamicPrisma({
+            req,
+            data: {
+                action: "UPDATE",
+                table: "c_registro_induccion_recorrido",
+                operation: "update",
+                where: { id: idNum },
+                data: updateData,
+            },
         });
 
         if (cambiosArr.length > 0) {
             const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
-            await prisma.c_cambios_apps_modules.create({
+            await callDynamicPrisma({
+                req,
                 data: {
-                    nombre_tabla: "c_registro_induccion_recorrido",
-                    registro_id: idNum,
-                    cambios: JSON.stringify(cambiosArr),
-                    created_at: toZonedTime(new Date(), "America/Costa_Rica"),
-                    created_by: createdBy,
+                    action: "POST",
+                    table: "c_cambios_apps_modules",
+                    operation: "create",
+                    data: {
+                        nombre_tabla: "c_registro_induccion_recorrido",
+                        registro_id: idNum,
+                        cambios: JSON.stringify(cambiosArr),
+                        created_at: toZonedTime(new Date(), "America/Costa_Rica").toISOString(),
+                        created_by: createdBy,
+                    },
                 },
             });
         }
@@ -137,7 +182,7 @@ export async function DELETE(
     context: { params: Promise<{ id: string }> }
 ) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
 
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
@@ -148,48 +193,69 @@ export async function DELETE(
             return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
         }
 
-        const existing = await prisma.c_registro_induccion_recorrido.findUnique({
-            where: { id: idNum }
+        const existing = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_registro_induccion_recorrido",
+                operation: "findUnique",
+                where: { id: idNum },
+            },
         });
         if (!existing) {
             return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
         }
 
+        const existingObj = existing as any;
         // Registrar cambio de eliminación antes de eliminar
         const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
         const createdAt = toZonedTime(new Date(), "America/Costa_Rica");
-        await prisma.c_cambios_apps_modules.create({
+        const fechaValue = existingObj.fecha instanceof Date ? existingObj.fecha.toISOString() : (typeof existingObj.fecha === 'string' ? existingObj.fecha : null);
+        await callDynamicPrisma({
+            req,
             data: {
-                nombre_tabla: "c_registro_induccion_recorrido",
-                registro_id: idNum,
-                cambios: JSON.stringify([{
-                    prop: "__deleted__",
-                    before: {
-                        id: existing.id,
-                        empresa_id: existing.empresa_id,
-                        cliente_id: existing.cliente_id,
-                        contrato_id: existing.contrato_id,
-                        corpo_id: existing.corpo_id,
-                        puesto_id: existing.puesto_id,
-                        plaza_id: existing.plaza_id,
-                        fecha: existing.fecha ? existing.fecha.toISOString() : null,
-                        division: existing.division,
-                        renglon_edificio: existing.renglon_edificio,
-                        supervisor_cliente: existing.supervisor_cliente,
-                        supervisor_corporacion: existing.supervisor_corporacion,
-                        temas_desarrollados: existing.temas_desarrollados,
-                        aspectos_especificos: existing.aspectos_especificos,
-                        participantes: existing.participantes,
-                    },
-                    after: null,
-                }]),
-                created_at: createdAt,
-                created_by: createdBy,
+                action: "POST",
+                table: "c_cambios_apps_modules",
+                operation: "create",
+                data: {
+                    nombre_tabla: "c_registro_induccion_recorrido",
+                    registro_id: idNum,
+                    cambios: JSON.stringify([{
+                        prop: "__deleted__",
+                        before: {
+                            id: existingObj.id,
+                            empresa_id: existingObj.empresa_id,
+                            cliente_id: existingObj.cliente_id,
+                            contrato_id: existingObj.contrato_id,
+                            corpo_id: existingObj.corpo_id,
+                            puesto_id: existingObj.puesto_id,
+                            plaza_id: existingObj.plaza_id,
+                            empleado_id: existingObj.empleado_id,
+                            fecha: fechaValue,
+                            division: existingObj.division,
+                            renglon_edificio: existingObj.renglon_edificio,
+                            supervisor_cliente: existingObj.supervisor_cliente,
+                            supervisor_corporacion: existingObj.supervisor_corporacion,
+                            temas_desarrollados: existingObj.temas_desarrollados,
+                            aspectos_especificos: existingObj.aspectos_especificos,
+                            participantes: existingObj.participantes,
+                        },
+                        after: null,
+                    }]),
+                    created_at: createdAt.toISOString(),
+                    created_by: createdBy,
+                },
             },
         });
 
-        await prisma.c_registro_induccion_recorrido.delete({
-            where: { id: idNum }
+        await callDynamicPrisma({
+            req,
+            data: {
+                action: "DELETE",
+                table: "c_registro_induccion_recorrido",
+                operation: "delete",
+                where: { id: idNum },
+            },
         });
 
         return NextResponse.json({

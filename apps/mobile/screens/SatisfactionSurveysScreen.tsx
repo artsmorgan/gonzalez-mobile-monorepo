@@ -82,7 +82,7 @@ interface Survey {
 interface Question {
   title: string;
   inputs: {
-    type: 'punctuation' | 'radio' | 'text';
+    type: 'punctuation' | 'radio' | 'text' | 'select';
     length?: string;
     options?: string[];
     required: boolean;
@@ -114,11 +114,11 @@ const QUESTIONS_SEGURIDAD: Question[] = [
   },
   {
     title: "¿Domina el personal los lineamientos del puesto de trabajo?",
-    inputs: { type: "radio", options: ["Sí", "No"], required: true }
+    inputs: { type: "punctuation", length: "5", required: true }
   },
   {
     title: "¿El equipo de trabajo diario se encuentra en optimas condiciones?",
-    inputs: { type: "radio", options: ["Sí", "No"], required: true }
+    inputs: { type: "punctuation", length: "5", required: true }
   },
   {
     title: "¿Cómo califica el servicio  recibido por el personal?",
@@ -134,11 +134,11 @@ const QUESTIONS_SEGURIDAD: Question[] = [
   },
   {
     title: "¿La empresa Cumple el servicio con lo estipulado en el contrato? ",
-    inputs: { type: "radio", options: ["Sí", "No"], required: true }
+    inputs: { type: "punctuation", length: "5", required: true }
   },
   {
     title: "¿Son atendidas sus quejas en el plazo acordado con el personal que lo atiende?",
-    inputs: { type: "radio", options: ["Sí", "No"], required: true }
+    inputs: { type: "punctuation", length: "5", required: true }
   },
   {
     title: "¿Cómo califica la comunicación  entre la compañia y usted como cliente?",
@@ -150,7 +150,7 @@ const QUESTIONS_SEGURIDAD: Question[] = [
   },
   {
     title: "¿Conoce el procedimiento de atención de quejas de la compañía? Para el caso de seguridad el correo es gerenteseg@corporaciongonzalez.com",
-    inputs: { type: "radio", options: ["Sí", "No"], required: true }
+    inputs: { type: "punctuation", length: "5", required: true }
   },
 ];
 
@@ -161,11 +161,11 @@ const QUESTIONS_ASEO: Question[] = [
   },
   {
     title: "¿Domina el personal los lineamientos del puesto de trabajo?",
-    inputs: { type: "radio", options: ["Sí", "No"], required: true }
+    inputs: { type: "punctuation", length: "5", required: true }
   },
   {
     title: "¿El equipo de trabajo diario se encuentra en optimas condiciones?",
-    inputs: { type: "radio", options: ["Sí", "No"], required: true }
+    inputs: { type: "punctuation", length: "5", required: true }
   },
   {
     title: "¿Cómo califica el servicio  recibido por el personal?",
@@ -181,11 +181,11 @@ const QUESTIONS_ASEO: Question[] = [
   },
   {
     title: "¿La empresa Cumple el servicio con lo estipulado en el contrato? ",
-    inputs: { type: "radio", options: ["Sí", "No"], required: true }
+    inputs: { type: "punctuation", length: "5", required: true }
   },
   {
     title: "¿Son atendidas sus quejas en el plazo acordado con el personal que lo atiende?",
-    inputs: { type: "radio", options: ["Sí", "No"], required: true }
+    inputs: { type: "punctuation", length: "5", required: true }
   },
   {
     title: "¿Cómo califica la comunicación  entre la compañia y usted como cliente?",
@@ -197,7 +197,7 @@ const QUESTIONS_ASEO: Question[] = [
   },
   {
     title: "¿Conoce el procedimiento de atención de quejas de la compañía? Para el caso de Aseo el correo es gerenteaseo@corporaciongonzalez",
-    inputs: { type: "radio", options: ["Sí", "No"], required: true }
+    inputs: { type: "punctuation", length: "5", required: true }
   },
 ];
 
@@ -380,7 +380,15 @@ export default function SatisfactionSurveysScreen() {
     }
   };
 
+  // Refs para evitar recrear funciones y controlar carga
+  const hasLoadedMainStructureRef = useRef(false);
+  const hasLoadedInitialDataRef = useRef(false);
+  const isInitialLoadRef = useRef(true);
+
   const fetchMainStructure = useCallback(async () => {
+    // Solo cargar una vez
+    if (hasLoadedMainStructureRef.current) return;
+
     setIsStructureLoading(true);
     try {
       const cacheStr = await AsyncStorage.getItem('main_structure_cache');
@@ -394,7 +402,10 @@ export default function SatisfactionSurveysScreen() {
       }
 
       const isConnected = await getConnectionStatus();
-      if (!isConnected) return;
+      if (!isConnected) {
+        hasLoadedMainStructureRef.current = true;
+        return;
+      }
 
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) throw new Error('Server URL not configured');
@@ -409,7 +420,10 @@ export default function SatisfactionSurveysScreen() {
         refreshAccessToken,
         logout,
       });
-      if (!response) return;
+      if (!response) {
+        hasLoadedMainStructureRef.current = true;
+        return;
+      }
 
       if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
       const data = await response.json();
@@ -418,8 +432,10 @@ export default function SatisfactionSurveysScreen() {
         setStructure(incoming);
         await AsyncStorage.setItem('main_structure_cache', JSON.stringify(incoming));
       }
+      hasLoadedMainStructureRef.current = true;
     } catch (e) {
       console.error('Error fetching main structure for satisfaction surveys:', e);
+      hasLoadedMainStructureRef.current = true;
     } finally {
       setIsStructureLoading(false);
     }
@@ -485,7 +501,59 @@ export default function SatisfactionSurveysScreen() {
     return `local_${Date.now()}_${Math.random().toString(36).substring(7)}`;
   };
 
-  const fetchSurveys = useCallback(async () => {
+  // Ref para evitar cargar puestos múltiples veces para el mismo corpo
+  const lastLoadedCorpoIdRef = useRef<number | null>(null);
+
+  // Función separada para cargar puestos
+  const fetchPuestosForCorpo = useCallback(async (corpoId: number, forceReload: boolean = false) => {
+    // Solo cargar si es un corpo diferente o si se fuerza la recarga
+    if (!forceReload && lastLoadedCorpoIdRef.current === corpoId) {
+      return;
+    }
+
+    try {
+      const isConnected = await getConnectionStatus();
+      if (!isConnected) {
+        // Cargar desde cache
+        const puestosCache = await AsyncStorage.getItem('surveys_puestos_cache');
+        if (puestosCache) {
+          const cachedPuestos = JSON.parse(puestosCache);
+          setPuestos(cachedPuestos);
+        }
+        lastLoadedCorpoIdRef.current = corpoId;
+        return;
+      }
+
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) return;
+      const puestosResponse = await authedFetch({
+        url: `${apiUrl}/api/puestos/corpo/${corpoId}`,
+        init: {
+          method: 'GET',
+        },
+        refreshAccessToken,
+        logout,
+      });
+      if (!puestosResponse) return;
+
+      if (puestosResponse.ok) {
+        const puestosData = await puestosResponse.json();
+        if (puestosData.status && puestosData.puestos) {
+          setPuestos(puestosData.puestos);
+          await AsyncStorage.setItem('surveys_puestos_cache', JSON.stringify(puestosData.puestos));
+          lastLoadedCorpoIdRef.current = corpoId;
+        }
+      }
+    } catch (err) {
+      console.error('Error fetching puestos for corpo:', err);
+    }
+  }, [refreshAccessToken, logout]);
+
+  // Ref para controlar si ya se mostró el alert de modo offline
+  const hasShownOfflineAlertRef = useRef(false);
+
+  // Función separada para cargar encuestas (sin cargar puestos)
+  const fetchSurveys = useCallback(async (showOfflineAlert: boolean = true) => {
     try {
       setIsLoading(true);
 
@@ -532,28 +600,8 @@ export default function SatisfactionSurveysScreen() {
         } else {
           setSurveys([]);
         }
-
-        // Fetch puestos if filterCorpoId exists
-        if (filterCorpoId) {
-          const puestosResponse = await authedFetch({
-            url: `${apiUrl}/api/puestos/corpo/${filterCorpoId}`,
-            init: {
-              method: 'GET',
-            },
-            refreshAccessToken,
-            logout,
-          });
-          if (!puestosResponse) return;
-
-          if (puestosResponse.ok) {
-            const puestosData = await puestosResponse.json();
-            if (puestosData.status && puestosData.puestos) {
-              setPuestos(puestosData.puestos);
-              // Actualizar surveys_puestos_cache
-              await AsyncStorage.setItem('surveys_puestos_cache', JSON.stringify(puestosData.puestos));
-            }
-          }
-        }
+        // Resetear el flag cuando hay conexión
+        hasShownOfflineAlertRef.current = false;
       } else {
         // Sin internet: cargar desde cache
         const surveysCache = await AsyncStorage.getItem('surveys_cache');
@@ -569,14 +617,11 @@ export default function SatisfactionSurveysScreen() {
           setSurveys([]);
         }
 
-        // Cargar puestos desde cache
-        const puestosCache = await AsyncStorage.getItem('surveys_puestos_cache');
-        if (puestosCache) {
-          const cachedPuestos = JSON.parse(puestosCache);
-          setPuestos(cachedPuestos);
+        // Solo mostrar alert en la carga inicial o cuando se restaura la conexión
+        if (showOfflineAlert && !hasShownOfflineAlertRef.current) {
+          Alert.alert('Modo Offline', 'No hay conexión a internet. Mostrando datos guardados.');
+          hasShownOfflineAlertRef.current = true;
         }
-
-        Alert.alert('Modo Offline', 'No hay conexión a internet. Mostrando datos guardados.');
       }
 
     } catch (err) {
@@ -591,49 +636,93 @@ export default function SatisfactionSurveysScreen() {
             id_local: s.id_local || '',
           }));
           setSurveys(surveysWithLocalId);
-          Alert.alert('Modo Offline', 'Error de conexión. Mostrando datos guardados.');
+          if (showOfflineAlert && !hasShownOfflineAlertRef.current) {
+            Alert.alert('Modo Offline', 'Error de conexión. Mostrando datos guardados.');
+            hasShownOfflineAlertRef.current = true;
+          }
         } else {
-          Alert.alert('Error', 'No se pudieron cargar las encuestas');
+          if (showOfflineAlert) {
+            Alert.alert('Error', 'No se pudieron cargar las encuestas');
+          }
         }
       } catch (cacheErr) {
-        Alert.alert('Error', 'No se pudieron cargar las encuestas');
+        if (showOfflineAlert) {
+          Alert.alert('Error', 'No se pudieron cargar las encuestas');
+        }
       }
     } finally {
       setIsLoading(false);
     }
   }, [filterEmpresaId, filterClienteId, filterDivisionId, filterContratoId, filterCorpoId, filterPuestoId, refreshAccessToken, logout]);
 
-  // Inicializar filtros desde current_marca al cargar
-  useFocusEffect(
-    useCallback(() => {
-      (async () => {
-        const current = await loadMarcaContext();
-        await fetchMainStructure();
-        // Inicializar filtros con valores de current_marca después de cargar
-        if (current) {
-          const clienteIdRaw = current?.cliente?.id ?? current?.cliente_id;
-          const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
-          const puestoIdRaw = current?.puesto?.id ?? current?.puesto_id;
+  // Función para cargar datos iniciales (main_structure y surveys_puestos)
+  // Solo se ejecuta una vez al abrir la ventana
+  const loadInitialData = useCallback(async () => {
+    if (hasLoadedInitialDataRef.current) return;
+    hasLoadedInitialDataRef.current = true;
 
-          if (clienteIdRaw !== undefined && clienteIdRaw !== null) {
-            setFilterClienteId(Number(clienteIdRaw));
-          }
-          if (corpoIdRaw !== undefined && corpoIdRaw !== null) {
-            setFilterCorpoId(Number(corpoIdRaw));
-          }
-          if (puestoIdRaw !== undefined && puestoIdRaw !== null) {
-            setFilterPuestoId(Number(puestoIdRaw));
-          }
-        }
-        // Cargar encuestas después de inicializar
-        fetchSurveys();
-      })();
-    }, [fetchSurveys, fetchMainStructure])
-  );
+    const current = await loadMarcaContext();
+    await fetchMainStructure();
+
+    // Inicializar filtros con valores de current_marca después de cargar
+    if (current) {
+      const clienteIdRaw = current?.cliente?.id ?? current?.cliente_id;
+      const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
+      const puestoIdRaw = current?.puesto?.id ?? current?.puesto_id;
+
+      if (clienteIdRaw !== undefined && clienteIdRaw !== null) {
+        setFilterClienteId(Number(clienteIdRaw));
+      }
+      if (corpoIdRaw !== undefined && corpoIdRaw !== null) {
+        setFilterCorpoId(Number(corpoIdRaw));
+        // Cargar puestos para el corpo seleccionado
+        await fetchPuestosForCorpo(Number(corpoIdRaw), true);
+      }
+      if (puestoIdRaw !== undefined && puestoIdRaw !== null) {
+        setFilterPuestoId(Number(puestoIdRaw));
+      }
+    }
+  }, [fetchMainStructure, fetchPuestosForCorpo]);
+
+  // Cargar datos iniciales solo una vez al montar el componente
+  useEffect(() => {
+    let isMounted = true;
+    isInitialLoadRef.current = true;
+    (async () => {
+      await loadInitialData();
+      // Cargar encuestas después de cargar datos iniciales
+      if (isMounted) {
+        await fetchSurveys();
+        isInitialLoadRef.current = false;
+      }
+    })();
+    return () => {
+      isMounted = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Solo se ejecuta una vez al montar
+
+  // IMPORTANTE: Al actualizar los filtros solo se actualizan las encuestas
+  // main_structure y puestos NO se recargan cuando cambian los filtros
+  useEffect(() => {
+    // Solo cargar si ya se cargó la estructura inicial y no es la carga inicial
+    if (isInitialLoadRef.current) {
+      return;
+    }
+    if (hasLoadedInitialDataRef.current && (structure.length > 0 || isStructureLoading === false)) {
+      // Solo recargar encuestas cuando cambian los filtros
+      // NO recargar main_structure ni puestos
+      fetchSurveys(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterEmpresaId, filterClienteId, filterDivisionId, filterContratoId, filterCorpoId, filterPuestoId]);
 
   useEffect(() => {
     const handler = () => {
-      fetchSurveys();
+      // Resetear flag de alert cuando se restaura la conexión
+      hasShownOfflineAlertRef.current = false;
+      // Mostrar alert si es necesario
+      fetchSurveys(true);
     };
 
     eventBus.on('connectionRestored', handler);
@@ -641,43 +730,6 @@ export default function SatisfactionSurveysScreen() {
       eventBus.off('connectionRestored', handler);
     };
   }, [fetchSurveys]);
-
-  const fetchPuestosForCorpo = useCallback(async (corpoId: number) => {
-    try {
-      const isConnected = await getConnectionStatus();
-      if (!isConnected) {
-        // Cargar desde cache
-        const puestosCache = await AsyncStorage.getItem('surveys_puestos_cache');
-        if (puestosCache) {
-          const cachedPuestos = JSON.parse(puestosCache);
-          setPuestos(cachedPuestos);
-        }
-        return;
-      }
-
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-      if (!apiUrl) return;
-      const puestosResponse = await authedFetch({
-        url: `${apiUrl}/api/puestos/corpo/${corpoId}`,
-        init: {
-          method: 'GET',
-        },
-        refreshAccessToken,
-        logout,
-      });
-      if (!puestosResponse) return;
-
-      if (puestosResponse.ok) {
-        const puestosData = await puestosResponse.json();
-        if (puestosData.status && puestosData.puestos) {
-          setPuestos(puestosData.puestos);
-          await AsyncStorage.setItem('surveys_puestos_cache', JSON.stringify(puestosData.puestos));
-        }
-      }
-    } catch (err) {
-      console.error('Error fetching puestos for corpo:', err);
-    }
-  }, [refreshAccessToken, logout]);
 
   // Función para rastrear el contrato de una sucursal
   const findContratoForSucursal = useCallback((sucursalId: number): number | null => {
@@ -997,7 +1049,7 @@ export default function SatisfactionSurveysScreen() {
 
     // Si hay corpo seleccionado, cargar puestos
     if (marcaCorpoId) {
-      fetchPuestosForCorpo(marcaCorpoId);
+      fetchPuestosForCorpo(marcaCorpoId, true);
     }
   };
 
@@ -1235,7 +1287,7 @@ export default function SatisfactionSurveysScreen() {
                   Alert.alert('Éxito', data.message || 'Encuesta creada correctamente');
                   setIsCreating(false);
                   resetForm();
-                  await fetchSurveys();
+                  await fetchSurveys(true);
                 } else {
                   Alert.alert('Error', data.message || 'Error al crear la encuesta');
                 }
@@ -1437,8 +1489,32 @@ export default function SatisfactionSurveysScreen() {
     }
   `;
 
+  // Inicializar respuestas con valor por defecto (5 estrellas) cuando se carga el formulario o cambia la división
+  useEffect(() => {
+    if (formDivisionId && (selectedDivision === 'Seguridad' || selectedDivision === 'Aseo & Limpieza') && isCreating) {
+      const currentQuestions = getQuestionsForDivision(selectedDivision);
+      setAnswers(prevAnswers => {
+        const newAnswers = { ...prevAnswers };
+        let hasChanges = false;
+
+        currentQuestions.forEach((question, index) => {
+          if (question.inputs.type === 'punctuation' && !prevAnswers[index]) {
+            const maxStars = parseInt(question.inputs.length || '5');
+            newAnswers[index] = maxStars;
+            answersRef.current[index] = maxStars;
+            hasChanges = true;
+          }
+        });
+
+        return hasChanges ? newAnswers : prevAnswers;
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [formDivisionId, selectedDivision, isCreating]);
+
   const renderStarRating = (questionIndex: number, maxStars: number) => {
-    const currentRating = answers[questionIndex] as number || 0;
+    // Si no hay valor, usar el máximo (todas las estrellas marcadas por defecto)
+    const currentRating = answers[questionIndex] as number || maxStars;
 
     return (
       <ThemedView style={styles.starsContainer}>
@@ -1497,6 +1573,7 @@ export default function SatisfactionSurveysScreen() {
             ))}
           </ThemedView>
         )}
+
       </ThemedView>
     );
   };
@@ -2298,7 +2375,7 @@ export default function SatisfactionSurveysScreen() {
                               setFormPuestoId(null);
                               // Cargar puestos cuando se selecciona una sucursal
                               if (value && value !== '') {
-                                fetchPuestosForCorpo(Number(value));
+                                fetchPuestosForCorpo(Number(value), true);
                               }
                             }}
                             style={styles.picker}

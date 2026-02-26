@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../../../utils/verifyToken";
-import { prisma } from "../../../../../utils/prismaClient";
+import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 
 export async function GET(req: NextRequest, context: { params: Promise<{ corpo_id: string }> }) {
   try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
     if (!valid) return NextResponse.json({ status: false, expired: expired, message: message, data: [] }, { status: expired ? 401 : 403 });
 
     const resolvedParams = await context.params;
@@ -15,18 +15,27 @@ export async function GET(req: NextRequest, context: { params: Promise<{ corpo_i
 
     const currentEmployeeId = parseInt(String((payload as any)?.id ?? 0), 10) || 0;
     const empleado = currentEmployeeId
-      ? await prisma.c_empleado.findUnique({ where: { id: currentEmployeeId } })
+      ? await callDynamicPrisma({
+        req,
+        data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: currentEmployeeId } }
+      })
       : null;
     const myEjecutivoCuentaId = empleado?.supervisor_id ?? null;
 
-    const records = await prisma.e_mutuos_acuerdos.findMany({
-      where: { corpo_id: corpoIdNum },
-      orderBy: { created_at: "desc" },
-      include: {
-        e_estructura_cliente: { select: { nombre: true } },
-        e_estructura_sucursal: { select: { nombre: true, nro_sucursal: true } },
-        n_ejecutivo_cuenta: { select: { id: true, nombre: true } },
-      },
+    const records = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "e_mutuos_acuerdos",
+        operation: "findMany",
+        where: { corpo_id: corpoIdNum },
+        orderBy: { created_at: "desc" },
+        include: {
+          e_estructura_cliente: { select: { nombre: true } },
+          e_estructura_sucursal: { select: { nombre: true, nro_sucursal: true } },
+          n_ejecutivo_cuenta: { select: { id: true, nombre: true } },
+        }
+      }
     });
 
     const mapped = records.map((r: any) => ({

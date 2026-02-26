@@ -1,206 +1,96 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../../utils/verifyToken";
-import { prisma } from "../../../../utils/prismaClient";
+import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
 
-function parseFechaInput(fecha: any): Date | undefined {
-  if (!fecha) return undefined;
-  if (fecha instanceof Date) return fecha;
-  if (typeof fecha === "string") {
-    if (fecha.includes("/")) {
-      const parts = fecha.split("/");
-      if (parts.length === 3) {
-        const [dd, mm, yyyy] = parts;
-        const d = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
-        if (!Number.isNaN(d.getTime())) return d;
-      }
-    }
-    const d = new Date(fecha);
-    if (!Number.isNaN(d.getTime())) return d;
-  }
-  return undefined;
-}
+const parseIntStrict = (value: any) => {
+  const n = parseInt(String(value), 10);
+  return Number.isNaN(n) ? null : n;
+};
 
-function ensureStringJson(value: any, fallback: string) {
-  if (value === null || value === undefined) return fallback;
-  if (typeof value === "string") return value;
+export async function PATCH(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
-    return JSON.stringify(value);
-  } catch {
-    return fallback;
-  }
-}
+    const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
+    if (!valid) return NextResponse.json({ status: false, expired, message }, { status: expired ? 401 : 403 });
 
-export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
-  try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
-    if (!valid) return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
-
-    const resolvedParams = await context.params;
-    const idNum = parseInt(String(resolvedParams.id), 10);
-    if (Number.isNaN(idNum) || idNum <= 0) {
-      return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
-    }
-
-    const existing = await prisma.e_mutuos_acuerdos.findUnique({ where: { id: idNum } });
-    if (!existing) {
-      return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
-    }
+    const { id } = await context.params;
+    const idNum = parseIntStrict(id);
+    if (!idNum) return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
 
     const body = await req.json();
-    const data: any = {};
-
-    if (body.cliente_id !== undefined) {
-      const n = parseInt(String(body.cliente_id), 10);
-      if (Number.isNaN(n) || n <= 0) return NextResponse.json({ status: false, message: "cliente_id inválido" }, { status: 400 });
-      data.cliente_id = n;
-    }
-    if (body.corpo_id !== undefined) {
-      const n = parseInt(String(body.corpo_id), 10);
-      if (Number.isNaN(n) || n <= 0) return NextResponse.json({ status: false, message: "corpo_id inválido" }, { status: 400 });
-      data.corpo_id = n;
-    }
-    if (body.ejecutivo_cuenta !== undefined) {
-      const n = parseInt(String(body.ejecutivo_cuenta), 10);
-      if (Number.isNaN(n) || n <= 0) return NextResponse.json({ status: false, message: "ejecutivo_cuenta inválido" }, { status: 400 });
-      data.ejecutivo_cuenta = n;
-    }
-    if (body.fecha !== undefined) {
-      const d = parseFechaInput(body.fecha);
-      if (!d) return NextResponse.json({ status: false, message: "Fecha inválida" }, { status: 400 });
-      data.fecha = d;
-    }
-    if (body.turno !== undefined) data.turno = String(body.turno).trim();
-    if (body.informacion_oficial_interesado !== undefined) data.informacion_oficial_interesado = ensureStringJson(body.informacion_oficial_interesado, "[]");
-    if (body.informacion_oficial_colaborador !== undefined) data.informacion_oficial_colaborador = ensureStringJson(body.informacion_oficial_colaborador, "[]");
-    if (body.motivo !== undefined) data.motivo = String(body.motivo);
-    if (body.firma_responsable !== undefined) data.firma_responsable = String(body.firma_responsable);
-
-    // Nota: firma_ejecutivo_cuenta se actualiza en endpoint dedicado con validación owned
-    if (body.firma_ejecutivo_cuenta !== undefined) {
-      return NextResponse.json(
-        { status: false, message: "Use el endpoint de firma de ejecutivo para modificar firma_ejecutivo_cuenta" },
-        { status: 400 }
-      );
+    const role = String(body?.role || "").trim().toLowerCase();
+    if (role !== "ausente" && role !== "reemplaza") {
+      return NextResponse.json({ status: false, message: "Role inválido" }, { status: 400 });
     }
 
-    // Registrar cambios (solo campos actualizados)
-    const eq = (a: any, b: any) => {
-      if (a === b) return true;
-      if (a == null && b == null) return true;
-      const da = a instanceof Date ? a : (typeof a === "string" && /^\d{4}-\d{2}-\d{2}T/.test(a) ? new Date(a) : null);
-      const db = b instanceof Date ? b : (typeof b === "string" && /^\d{4}-\d{2}-\d{2}T/.test(b) ? new Date(b) : null);
-      if (da && db) return da.getTime() === db.getTime();
-      return false;
-    };
+    const currentEmployeeId = parseIntStrict((payload as any)?.id);
+    if (!currentEmployeeId) return NextResponse.json({ status: false, message: "Empleado inválido" }, { status: 400 });
 
-    const cambiosArr: Array<{ prop: string; before: any; after: any }> = [];
-    for (const [k, v] of Object.entries(data)) {
-      // No registramos firmas: esas se guardan aparte y no son "datos escritos"
-      if (k === "firma_responsable" || k === "firma_ejecutivo_cuenta") continue;
+    const existing = await callDynamicPrisma({
+      req,
+      data: { action: "GET", table: "e_mutuos_acuerdos", operation: "findUnique", where: { id: idNum } },
+    });
+    if (!existing) return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
 
-      const before = (existing as any)[k];
-      const after = v;
-      if (!eq(before, after)) {
-        cambiosArr.push({
-          prop: k,
-          before: before instanceof Date ? before.toISOString() : before,
-          after: after instanceof Date ? after.toISOString() : after,
-        });
+    const now = toZonedTime(new Date(), "America/Costa_Rica").toISOString();
+    let updateData: any = {};
+    let cambios: any[] = [];
+
+    if (role === "ausente") {
+      if (Number(existing.empleadoAusente_id) !== currentEmployeeId) {
+        return NextResponse.json({ status: false, message: "No autorizado para aceptar como ausente" }, { status: 403 });
       }
+      if (existing.ausente_acepta) {
+        return NextResponse.json({ status: true, message: "El ausente ya había aceptado", data: existing }, { status: 200 });
+      }
+      updateData = { ausente_acepta: true, ausente_acepta_at: now };
+      cambios = [
+        { prop: "ausente_acepta", before: existing.ausente_acepta, after: true },
+        { prop: "ausente_acepta_at", before: existing.ausente_acepta_at || null, after: now },
+      ];
+    } else {
+      if (Number(existing.empleadoReemplaza_id) !== currentEmployeeId) {
+        return NextResponse.json({ status: false, message: "No autorizado para aceptar como reemplaza" }, { status: 403 });
+      }
+      if (existing.reemplaza_acepta) {
+        return NextResponse.json({ status: true, message: "El reemplaza ya había aceptado", data: existing }, { status: 200 });
+      }
+      updateData = { reemplaza_acepta: true, reemplaza_acepta_at: now };
+      cambios = [
+        { prop: "reemplaza_acepta", before: existing.reemplaza_acepta, after: true },
+        { prop: "reemplaza_acepta_at", before: existing.reemplaza_acepta_at || null, after: now },
+      ];
     }
 
-    const updated = await prisma.e_mutuos_acuerdos.update({
-      where: { id: idNum },
-      data,
-      include: {
-        e_estructura_cliente: { select: { nombre: true } },
-        e_estructura_sucursal: { select: { nombre: true, nro_sucursal: true } },
-        n_ejecutivo_cuenta: { select: { id: true, nombre: true } },
+    const updated = await callDynamicPrisma({
+      req,
+      data: {
+        action: "UPDATE",
+        table: "e_mutuos_acuerdos",
+        where: { id: idNum },
+        data: updateData,
       },
     });
 
-    if (cambiosArr.length > 0) {
-      const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
-      await prisma.c_cambios_apps_modules.create({
+    await callDynamicPrisma({
+      req,
+      data: {
+        action: "POST",
+        table: "c_cambios_apps_modules",
         data: {
           nombre_tabla: "e_mutuos_acuerdos",
           registro_id: idNum,
-          cambios: JSON.stringify(cambiosArr),
-          created_at: toZonedTime(new Date(), "America/Costa_Rica"),
-          created_by: createdBy,
+          cambios: JSON.stringify(cambios),
+          created_at: now,
+          created_by: currentEmployeeId,
         },
-      });
-    }
-
-    return NextResponse.json(
-      {
-        status: true,
-        message: "Mutuo acuerdo actualizado correctamente",
-        data: {
-          ...updated,
-          id_local: "",
-          cliente_nombre: (updated as any).e_estructura_cliente?.nombre || null,
-          corpo_nombre: (updated as any).e_estructura_sucursal
-            ? `${(updated as any).e_estructura_sucursal.nro_sucursal ? `${(updated as any).e_estructura_sucursal.nro_sucursal} - ` : ""}${(updated as any).e_estructura_sucursal.nombre}`
-            : null,
-          ejecutivo_nombre: (updated as any).n_ejecutivo_cuenta?.nombre || null,
-        },
-      },
-      { status: 200 }
-    );
-  } catch (error: unknown) {
-    const errorMessage = error instanceof Error ? error.message : "Error desconocido";
-    console.error(errorMessage);
-    return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
-  }
-}
-
-export async function DELETE(req: NextRequest, context: { params: Promise<{ id: string }> }) {
-  try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
-    if (!valid) return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
-
-    const resolvedParams = await context.params;
-    const idNum = parseInt(String(resolvedParams.id), 10);
-    if (Number.isNaN(idNum) || idNum <= 0) {
-      return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
-    }
-
-    const existing = await prisma.e_mutuos_acuerdos.findUnique({ where: { id: idNum } });
-    if (!existing) {
-      return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
-    }
-
-    await prisma.e_mutuos_acuerdos.delete({ where: { id: idNum } });
-
-    // Registrar cambio de eliminación
-    const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
-    await prisma.c_cambios_apps_modules.create({
-      data: {
-        nombre_tabla: "e_mutuos_acuerdos",
-        registro_id: idNum,
-        cambios: JSON.stringify([{
-          prop: "__deleted__",
-          before: {
-            id: existing.id,
-            fecha: existing.fecha.toISOString(),
-            turno: existing.turno,
-            motivo: existing.motivo,
-          },
-          after: null,
-        }]),
-        created_at: toZonedTime(new Date(), "America/Costa_Rica"),
-        created_by: createdBy,
       },
     });
 
-    return NextResponse.json({ status: true, message: "Mutuo acuerdo eliminado correctamente" }, { status: 200 });
+    return NextResponse.json({ status: true, message: "Aceptación registrada correctamente", data: updated }, { status: 200 });
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
-    console.error(errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
   }
 }
-
 

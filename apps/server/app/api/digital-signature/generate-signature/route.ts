@@ -1,14 +1,14 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
-import { verifyAccessToken } from "../../../../utils/verifyToken";
+import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
 const dotenv = require('dotenv');
 dotenv.config();
 
 export async function POST(req: NextRequest) {
     try {
         // 🟢 Verificar token de acceso
-        const { valid, expired, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
 
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 

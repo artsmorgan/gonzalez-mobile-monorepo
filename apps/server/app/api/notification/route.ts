@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../utils/verifyToken";
-import { prisma } from "../../../utils/prismaClient";
+import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
+import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 
 export async function GET(req: NextRequest) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(req);
+
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         const searchParams = req.nextUrl.searchParams;
@@ -14,7 +15,15 @@ export async function GET(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
         }
 
-        const marca = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(m) } });
+        const marca = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_marca_dia",
+                operation: "findUnique",
+                where: { id: parseInt(m) }
+            }
+        });
         if (!marca) {
             return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
         }
@@ -23,14 +32,38 @@ export async function GET(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Plaza o empleado no encontrados" }, { status: 200 });
         }
 
-        const plaza_notifications = await prisma.c_plaza_notification.findMany({ where: { plazaId: marca.plaza_id } });
+        const plaza_notifications = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_plaza_notification",
+                operation: "findMany",
+                where: { plazaId: marca.plaza_id }
+            }
+        });
 
-        const empleado_notifications = await prisma.c_empleado_notification.findMany({ where: { empleadoId: marca.empleadoFijo_id } });
+        const empleado_notifications = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_empleado_notification",
+                operation: "findMany",
+                where: { empleadoId: marca.empleadoFijo_id }
+            }
+        });
 
         const notifications_return: { id: number, title: string, description: string, watched: boolean, is_plaza: boolean, created_at: string }[] = [];
 
         for (const not of plaza_notifications) {
-            const notificationData = await prisma.c_notifications.findUnique({ where: { id: not.notificationId } });
+            const notificationData = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "c_notifications",
+                    operation: "findUnique",
+                    where: { id: not.notificationId }
+                }
+            });
             if (!notificationData) continue;
             notifications_return.push({
                 id: not.id,
@@ -38,12 +71,20 @@ export async function GET(req: NextRequest) {
                 description: notificationData.description,
                 watched: not.watched,
                 is_plaza: true,
-                created_at: notificationData.created_at.toISOString()
+                created_at: notificationData.created_at
             });
         }
 
         for (const not of empleado_notifications) {
-            const notificationData = await prisma.c_notifications.findUnique({ where: { id: not.notificationId } });
+            const notificationData = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "c_notifications",
+                    operation: "findUnique",
+                    where: { id: not.notificationId }
+                }
+            });
             if (!notificationData) continue;
             notifications_return.push({
                 id: not.id,
@@ -51,7 +92,7 @@ export async function GET(req: NextRequest) {
                 description: notificationData.description,
                 watched: not.watched,
                 is_plaza: false,
-                created_at: notificationData.created_at.toISOString()
+                created_at: notificationData.created_at
             });
         }
 
@@ -68,19 +109,37 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(req);
-        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
-
         const { notifications } = await req.json();
         if (notifications === undefined || notifications.length === 0) {
             return NextResponse.json({ status: false, message: "Notificaciones no especificadas" }, { status: 200 });
         }
 
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
+
         for (const not of notifications) {
             if (not.is_plaza) {
-                await prisma.c_plaza_notification.update({ where: { id: not.id }, data: { watched: true } });
+                await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "UPDATE",
+                        table: "c_plaza_notification",
+                        operation: "update",
+                        where: { id: not.id },
+                        data: { watched: true }
+                    }
+                });
             } else {
-                await prisma.c_empleado_notification.update({ where: { id: not.id }, data: { watched: true } });
+                await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "UPDATE",
+                        table: "c_empleado_notification",
+                        operation: "update",
+                        where: { id: not.id },
+                        data: { watched: true }
+                    }
+                });
             }
         }
 

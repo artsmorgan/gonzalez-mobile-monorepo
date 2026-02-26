@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../../utils/verifyToken";
-import { prisma } from "../../../../utils/prismaClient";
+import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import { sendNotificationByRole } from "../../../../utils/sendNotification";
 import { getActivities } from "../../../../utils/createActivities";
+import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
 
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
@@ -16,7 +16,15 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         const { type, reason, horaAccion } = await req.json();
 
         // Obtener siempre la última marca agregada
-        const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id } });
+        const marcaDia = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_marca_dia",
+                operation: "findUnique",
+                where: { id }
+            }
+        });
         if (!marcaDia) {
             return NextResponse.json({ status: false, message: "No se encontró la marca" }, { status: 200 });
         }
@@ -28,69 +36,166 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                 }
                 marcaDia.hora_entrada_digitada = new Date(horaAccion);
 
-                const empresa = await prisma.e_estructura_empresa.findUnique({ where: { id: marcaDia.empresa_id } });
+                const empresa = await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "GET",
+                        table: "e_estructura_empresa",
+                        operation: "findUnique",
+                        where: { id: marcaDia.empresa_id }
+                    }
+                });
                 if (!empresa) {
                     return NextResponse.json({ status: false, message: "Empresa no encontrada" }, { status: 200 });
                 }
 
-                const cliente = await prisma.e_estructura_cliente.findUnique({ where: { id: marcaDia.cliente_id } });
+                const cliente = await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "GET",
+                        table: "e_estructura_cliente",
+                        operation: "findUnique",
+                        where: { id: marcaDia.cliente_id }
+                    }
+                });
                 if (!cliente) {
                     return NextResponse.json({ status: false, message: "Cliente no encontrado" }, { status: 200 });
                 }
 
-                const contrato = await prisma.e_estructura_contrato.findUnique({ where: { id: marcaDia.contrato_id } });
+                const contrato = await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "GET",
+                        table: "e_estructura_contrato",
+                        operation: "findUnique",
+                        where: { id: marcaDia.contrato_id }
+                    }
+                });
                 if (!contrato) {
                     return NextResponse.json({ status: false, message: "Contrato no encontrado" }, { status: 200 });
                 }
 
-                const corpo = await prisma.e_estructura_sucursal.findUnique({ where: { id: marcaDia.corpo_id } });
+                const corpo = await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "GET",
+                        table: "e_estructura_sucursal",
+                        operation: "findUnique",
+                        where: { id: marcaDia.corpo_id }
+                    }
+                });
                 if (!corpo) {
                     return NextResponse.json({ status: false, message: "Corpo no encontrado" }, { status: 200 });
                 }
 
-                const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: marcaDia.puesto_id } });
+                const puesto = await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "GET",
+                        table: "e_estructura_puesto",
+                        operation: "findUnique",
+                        where: { id: marcaDia.puesto_id }
+                    }
+                });
                 if (!puesto) {
                     return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
                 }
 
-                const plaza = await prisma.e_estructura_plazas.findUnique({ where: { id: marcaDia.plaza_id } });
+                const plaza = await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "GET",
+                        table: "e_estructura_plazas",
+                        operation: "findUnique",
+                        where: { id: marcaDia.plaza_id }
+                    }
+                });
                 if (!plaza) {
                     return NextResponse.json({ status: false, message: "Plaza no encontrada" }, { status: 200 });
                 }
 
-                const horario = await prisma.c_horario.findUnique({ where: { id: marcaDia.horario_id } });
+                const horario = await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "GET",
+                        table: "c_horario",
+                        operation: "findUnique",
+                        where: { id: marcaDia.horario_id }
+                    }
+                });
                 if (!horario) {
                     return NextResponse.json({ status: false, message: "Horario no encontrado" }, { status: 200 });
                 }
 
-                const previousUserMarca = await prisma.c_marca_dia.findFirst({ where: { empleadoFijo_id: marcaDia.empleadoFijo_id, id: { lt: marcaDia.id } }, orderBy: { id: "desc" } });
+                const previousUserMarca = await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "GET",
+                        table: "c_marca_dia",
+                        operation: "findFirst",
+                        where: { empleadoFijo_id: marcaDia.empleadoFijo_id, id: { lt: marcaDia.id } },
+                        orderBy: { id: "desc" }
+                    }
+                });
 
                 if (previousUserMarca && previousUserMarca.hora_entrada_digitada != null && previousUserMarca.hora_salida_digitada == null) {
-                    const response = await marcar_salida(previousUserMarca.id, horaAccion, reason);
+                    const response = await marcar_salida(req, previousUserMarca.id, horaAccion, reason);
                 }
 
-                const updated = await prisma.c_marca_dia.update({ where: { id: marcaDia.id }, data: marcaDia });
+                const updated = await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "UPDATE",
+                        table: "c_marca_dia",
+                        where: { id: marcaDia.id },
+                        data: marcaDia
+                    }
+                });
 
                 if (!updated) {
                     return NextResponse.json({ status: false, message: "No se pudo actualizar la marca del dia" }, { status: 200 });
                 }
 
-                const empleado = await prisma.c_empleado.findUnique({ where: { id: marcaDia.empleadoFijo_id ?? 0 } });
-                const current_corpo = await prisma.e_estructura_sucursal.findUnique({ where: { id: marcaDia.corpo_id } });
-                const current_puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: marcaDia.puesto_id } });
+                const empleado = await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "GET",
+                        table: "c_empleado",
+                        operation: "findUnique",
+                        where: { id: marcaDia.empleadoFijo_id ?? 0 }
+                    }
+                });
+                const current_corpo = await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "GET",
+                        table: "e_estructura_sucursal",
+                        operation: "findUnique",
+                        where: { id: marcaDia.corpo_id }
+                    }
+                });
+                const current_puesto = await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "GET",
+                        table: "e_estructura_puesto",
+                        operation: "findUnique",
+                        where: { id: marcaDia.puesto_id }
+                    }
+                });
                 if (empleado && current_corpo && current_puesto) {
                     if (marcaDia.hora_inicio && marcaDia.fecha && marcaDia.hora_entrada_digitada) {
-                        const momentoEntrada = marcaDia.fecha.getTime() + marcaDia.hora_inicio.getTime();
+                        const momentoEntrada = new Date(marcaDia.fecha).getTime() + new Date(marcaDia.hora_inicio).getTime();
                         let desc_tardia = "";
-                        if (momentoEntrada < marcaDia.hora_entrada_digitada.getTime()) {
-                            const lateTime = await getLateTime(marcaDia.id, marcaDia.hora_entrada_digitada.getTime());
+                        if (momentoEntrada < new Date(marcaDia.hora_entrada_digitada).getTime()) {
+                            const lateTime = await getLateTime(req, marcaDia.id, new Date(marcaDia.hora_entrada_digitada).getTime());
                             if (lateTime) {
                                 desc_tardia = " con una tardía de " + lateTime;
                             }
                         }
                         const title = "Ingreso de trabajo confirmado";
                         const description = `El empleado ${empleado.nombre} ${empleado.primer_apellido} ha ingresado a su puesto de ${current_puesto.nombre}${desc_tardia}`;
-                        await sendNotificationByRole(marcaDia.corpo_id, [marcaDia.plaza_id], title, description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+                        await sendNotificationByRole(req, marcaDia.corpo_id, [marcaDia.plaza_id], title, description, ["ADMINISTRATIVO", "SUPERVISOR"]);
                     }
                 }
                 break;
@@ -99,7 +204,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                     return NextResponse.json({ status: false, message: "Ya has marcado la salida" }, { status: 200 });
                 }
 
-                const response = await marcar_salida(marcaDia.id, horaAccion, reason);
+                const response = await marcar_salida(req, marcaDia.id, horaAccion, reason);
                 if (!response.status) {
                     return NextResponse.json({ status: false, message: response.message }, { status: 200 });
                 }
@@ -114,11 +219,19 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     }
 }
 
-async function marcar_salida(id: number, horaAccion: string, reason: string) {
+async function marcar_salida(req: NextRequest, id: number, horaAccion: string, reason: string) {
     try {
         const now = new Date(horaAccion);
 
-        const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id } });
+        const marcaDia = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_marca_dia",
+                operation: "findUnique",
+                where: { id }
+            }
+        });
         if (!marcaDia) {
             return { status: false, message: "Marca no encontrada" };
         }
@@ -133,19 +246,33 @@ async function marcar_salida(id: number, horaAccion: string, reason: string) {
             return { status: false, message: "Fecha no establecida" };
         }
 
-        const endDate = new Date(marcaDia.hora_fin);
-        endDate.setFullYear(marcaDia.fecha.getFullYear(), marcaDia.fecha.getMonth(), marcaDia.hora_inicio > marcaDia.hora_fin ? marcaDia.fecha.getDate() + 1 : marcaDia.fecha.getDate());
+        const fechaMarca = new Date(marcaDia.fecha);
+        const horaInicioMarca = new Date(marcaDia.hora_inicio);
+        const horaFinMarca = new Date(marcaDia.hora_fin);
+        const endDate = new Date(horaFinMarca);
+        endDate.setFullYear(
+            fechaMarca.getFullYear(),
+            fechaMarca.getMonth(),
+            horaInicioMarca.getTime() > horaFinMarca.getTime() ? fechaMarca.getDate() + 1 : fechaMarca.getDate()
+        );
 
         let salidaAnticipada = null;
         if (now.getTime() < (endDate.getTime() - 15 * 60 * 1000)) {
-            salidaAnticipada = await prisma.c_salida_anticipada.create({
+            const horaInicio = new Date(marcaDia.hora_inicio);
+            const horaFin = new Date(marcaDia.hora_fin);
+            salidaAnticipada = await callDynamicPrisma({
+                req,
                 data: {
-                    tipo_turno: marcaDia.tipo_turno,
-                    horario_str: `${marcaDia.hora_inicio.getHours().toString().padStart(2, '0')}:${marcaDia.hora_inicio.getMinutes().toString().padStart(2, '0')}-${marcaDia.hora_fin.getHours().toString().padStart(2, '0')}:${marcaDia.hora_fin.getMinutes().toString().padStart(2, '0')}`,
-                    cantidad_horas: marcaDia.horas_duracion || 0,
-                    hora_salida_anticipada: now,
-                    minutos_descuento: (endDate.getTime() - now.getTime()) / 60000,
-                    motivo: reason
+                    action: "POST",
+                    table: "c_salida_anticipada",
+                    data: {
+                        tipo_turno: marcaDia.tipo_turno,
+                        horario_str: `${horaInicio.getHours().toString().padStart(2, '0')}:${horaInicio.getMinutes().toString().padStart(2, '0')}-${horaFin.getHours().toString().padStart(2, '0')}:${horaFin.getMinutes().toString().padStart(2, '0')}`,
+                        cantidad_horas: marcaDia.horas_duracion || 0,
+                        hora_salida_anticipada: now.toISOString(),
+                        minutos_descuento: (endDate.getTime() - now.getTime()) / 60000,
+                        motivo: reason
+                    }
                 }
             });
         }
@@ -153,23 +280,39 @@ async function marcar_salida(id: number, horaAccion: string, reason: string) {
         if (salidaAnticipada) {
             marcaDia.hora_salida_digitada = now;
             marcaDia.salida_anticipada_id = salidaAnticipada.id;
-            const empleado = await prisma.c_empleado.findUnique({ where: { id: marcaDia.empleadoFijo_id ?? 0 } });
+            const empleado = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "c_empleado",
+                    operation: "findUnique",
+                    where: { id: marcaDia.empleadoFijo_id ?? 0 }
+                }
+            });
             if (empleado) {
                 const title = "Salida anticipada";
                 const fecha_salida_string = now.toISOString().split('T')[0];
                 const hora_salida_string = now.toISOString().split('T')[1].split('.')[0];
                 const description = `El empleado ${empleado.nombre} ${empleado.primer_apellido} ha salido anticipadamente el día ${fecha_salida_string} a las ${hora_salida_string}. Motivo: ${reason}`;
-                await sendNotificationByRole(marcaDia.corpo_id, [marcaDia.plaza_id], title, description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+                await sendNotificationByRole(req, marcaDia.corpo_id, [marcaDia.plaza_id], title, description, ["ADMINISTRATIVO", "SUPERVISOR"]);
             }
         }
 
-        const updated = await prisma.c_marca_dia.update({ where: { id: marcaDia.id }, data: marcaDia });
+        const updated = await callDynamicPrisma({
+            req,
+            data: {
+                action: "UPDATE",
+                table: "c_marca_dia",
+                where: { id: marcaDia.id },
+                data: marcaDia
+            }
+        });
 
         if (!updated) {
             return { status: false, message: "No se pudo actualizar la marca del dia" };
         }
 
-        const response = await check_unmarked_activities(marcaDia.id);
+        const response = await check_unmarked_activities(req, marcaDia.id);
         if (!response.status) {
             return { status: false, message: response.message };
         }
@@ -183,11 +326,19 @@ async function marcar_salida(id: number, horaAccion: string, reason: string) {
     }
 }
 
-async function check_unmarked_activities(id: number) {
-    const activities = await getActivities(id);
+async function check_unmarked_activities(req: NextRequest, id: number) {
+    const activities = await getActivities(req, id);
     if (activities.status) {
         if (activities.actividades && activities.actividades.length > 0) {
-            const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id } });
+            const marcaDia = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "c_marca_dia",
+                    operation: "findUnique",
+                    where: { id }
+                }
+            });
             if (!marcaDia) {
                 return { status: false, message: "Marca no encontrada" };
             }
@@ -214,13 +365,21 @@ async function check_unmarked_activities(id: number) {
                     unmarked_activities += ", ";
                 }
             }
-            const empleado = await prisma.c_empleado.findUnique({ where: { id: marcaDia.empleadoFijo_id ?? 0 } });
+            const empleado = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "c_empleado",
+                    operation: "findUnique",
+                    where: { id: marcaDia.empleadoFijo_id ?? 0 }
+                }
+            });
             if (empleado && unmarked) {
                 // Remover la última coma
                 unmarked_activities = unmarked_activities.slice(0, -2);
                 const title = "Actividades sin marcar";
                 const description = `El empleado ${empleado.nombre} ${empleado.primer_apellido} marcó salida sin haber marcado las siguientes actividades: ${unmarked_activities}`;
-                await sendNotificationByRole(marcaDia.corpo_id, [marcaDia.plaza_id], title, description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+                await sendNotificationByRole(req, marcaDia.corpo_id, [marcaDia.plaza_id], title, description, ["ADMINISTRATIVO", "SUPERVISOR"]);
             }
         }
     }
@@ -231,13 +390,21 @@ async function check_unmarked_activities(id: number) {
 }
 
 
-const getLateTime = async (id: number, horaAccion: number | null) => {
-    const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id } });
+const getLateTime = async (req: NextRequest, id: number, horaAccion: number | null) => {
+    const marcaDia = await callDynamicPrisma({
+        req,
+        data: {
+            action: "GET",
+            table: "c_marca_dia",
+            operation: "findUnique",
+            where: { id }
+        }
+    });
     if (!marcaDia) {
         return null;
     }
-    const fecha = marcaDia.fecha.toISOString().split('T')[0];
-    const horaInicio = marcaDia.hora_inicio?.toISOString().split('T')[1].split('.')[0] ?? '00:00:00';
+    const fecha = new Date(marcaDia.fecha).toISOString().split('T')[0];
+    const horaInicio = marcaDia.hora_inicio ? new Date(marcaDia.hora_inicio).toISOString().split('T')[1].split('.')[0] : '00:00:00';
     const inicio = fecha + 'T' + horaInicio;
     if (!horaAccion) {
         return null;

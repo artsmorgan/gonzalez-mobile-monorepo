@@ -1,22 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../utils/verifyToken";
+import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { toZonedTime } from "date-fns-tz";
-import { prisma } from "../../../utils/prismaClient";
+import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import fs from "fs";
 import path from "path";
-import { v4 as uuidv4 } from "uuid";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
+import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
 
 export const runtime = "nodejs";
 
 type VehicleImageInput = {
-  extension: string; // jpg|png|...
+  extension: string;
   file_base64: string;
+  original_name?: string;
 };
 
 export async function GET(req: NextRequest) {
   try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
     if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
     const empresaIdStr = req.nextUrl.searchParams.get("empresa_id");
@@ -34,11 +35,18 @@ export async function GET(req: NextRequest) {
     } else if (empresaIdStr) {
       // Si hay empresa pero no cliente, buscar todos los clientes de la empresa
       const empresaId = parseInt(empresaIdStr);
-      const clientes = await prisma.e_estructura_cliente.findMany({
-        where: { empresa_id: empresaId },
-        select: { id: true },
+      const clientes = await callDynamicPrisma({
+        req,
+        data: {
+          action: "GET",
+          table: "e_estructura_cliente",
+          operation: "findMany",
+          where: { empresa_id: empresaId },
+          select: { id: true },
+        },
       });
-      const clienteIds = clientes.map((c) => c.id);
+      const clientesArray = Array.isArray(clientes) ? clientes : [];
+      const clienteIds = clientesArray.map((c: any) => c.id);
       if (clienteIds.length > 0) {
         where.cliente_id = { in: clienteIds };
       } else {
@@ -48,44 +56,62 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ status: false, message: "Debe especificar filtros jerárquicos" }, { status: 400 });
     }
 
-    const items = await prisma.c_vehiculos_corporativos.findMany({
-      where,
-      orderBy: { id: "desc" },
-      include: {
-        c_imagenes_vehiculos_corporativos: true,
-        c_usos_vehiculos_corporativos: true,
-        c_mantenimiento_vehiculos_corporativos: true,
+    const items = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "c_vehiculos_corporativos",
+        operation: "findMany",
+        where,
+        orderBy: { id: "desc" },
+        include: {
+          c_imagenes_vehiculos_corporativos: true,
+          c_usos_vehiculos_corporativos: true,
+          c_mantenimiento_vehiculos_corporativos: true,
+        },
       },
     });
 
+    const itemsArray = Array.isArray(items) ? items : [];
     // Adjuntamos el registro de bitácora a cada uso (si existe)
     const bitacoraIds = Array.from(
       new Set(
-        items
-          .flatMap((v: any) => (v.c_usos_vehiculos_corporativos || []).map((u: any) => u.bitacora_id))
+        itemsArray
+          .flatMap((v: any) => (Array.isArray(v.c_usos_vehiculos_corporativos) ? v.c_usos_vehiculos_corporativos : []).map((u: any) => u.bitacora_id))
           .filter((id: any): id is number => typeof id === "number" && Number.isFinite(id))
       )
     );
     const bitacoras = bitacoraIds.length
-      ? await prisma.c_bitacora_vehiculo_detenido.findMany({ where: { id: { in: bitacoraIds } } })
+      ? await callDynamicPrisma({
+          req,
+          data: {
+            action: "GET",
+            table: "c_bitacora_vehiculo_detenido",
+            operation: "findMany",
+            where: { id: { in: bitacoraIds } },
+          },
+        })
       : [];
-    const bitacoraById = new Map(bitacoras.map((b: any) => [b.id, b]));
+    const bitacorasArray = Array.isArray(bitacoras) ? bitacoras : [];
+    const bitacoraById = new Map(bitacorasArray.map((b: any) => [b.id, b]));
 
-    const mapped = items.map((r: any) => ({
+    const baseUrl = req.nextUrl.origin;
+    const mapped = itemsArray.map((r: any) => ({
       ...r,
       id_local: "",
       corpo_id: r.sucursal_id, // compat con móvil
       empresa_id: r.empresa_id,
       cliente_id: r.cliente_id,
-      images: (r.c_imagenes_vehiculos_corporativos || []).map((i: any) => ({
+      images: (Array.isArray(r.c_imagenes_vehiculos_corporativos) ? r.c_imagenes_vehiculos_corporativos : []).map((i: any) => ({
         id: i.id,
         name: i.name,
+        url: baseUrl ? `${baseUrl}/api/corporate-vehicles/${r.id}/get-image/${i.name}` : "",
       })),
-      usos: (r.c_usos_vehiculos_corporativos || []).map((u: any) => ({
+      usos: (Array.isArray(r.c_usos_vehiculos_corporativos) ? r.c_usos_vehiculos_corporativos : []).map((u: any) => ({
         ...u,
         bitacora: u.bitacora_id ? bitacoraById.get(u.bitacora_id) ?? null : null,
       })),
-      mantenimientos: (r.c_mantenimiento_vehiculos_corporativos || []).map((m: any) => ({
+      mantenimientos: (Array.isArray(r.c_mantenimiento_vehiculos_corporativos) ? r.c_mantenimiento_vehiculos_corporativos : []).map((m: any) => ({
         ...m,
       })),
     }));
@@ -112,16 +138,9 @@ function safeParseJson<T>(value: any, fallback: T): T {
   }
 }
 
-function normalizeBase64(b64: string): string {
-  if (!b64) return "";
-  const idx = b64.indexOf("base64,");
-  if (idx !== -1) return b64.slice(idx + "base64,".length);
-  return b64;
-}
-
 export async function POST(req: NextRequest) {
   try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
     if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
     const {
@@ -161,50 +180,75 @@ export async function POST(req: NextRequest) {
     }
 
     const createdAt = toZonedTime(new Date(), "America/Costa_Rica");
-    const createdBy = payload.id !== undefined && payload.id !== null ? Number(payload.id) : 0;
+    const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
 
-    const newRecord = await prisma.c_vehiculos_corporativos.create({
+    const newRecord = await callDynamicPrisma({
+      req,
       data: {
-        empresa_id: empresaId,
-        cliente_id: clienteId,
-        sucursal_id: sucursalId,
-        placa: String(placa ?? ""),
-        tipo: String(tipo ?? ""),
-        estado: String(estado ?? "Activo"),
-        kilometraje: Number(kilometraje ?? 0),
-        prox_cambio_aceite: Number(prox_cambio_aceite ?? 0),
-        modelo: String(modelo ?? ""),
-        anno: Number(anno ?? 0),
-        descripcion: String(descripcion ?? ""),
-        titulo_propiedad: Boolean(titulo_propiedad ?? true),
-        rtv: Boolean(rtv ?? true),
-        marchamo: Boolean(marchamo ?? true),
-        firma_responsable: String(firma_responsable ?? ""),
-        created_by: createdBy,
-        created_at: createdAt,
+        action: "POST",
+        table: "c_vehiculos_corporativos",
+        operation: "create",
+        data: {
+          empresa_id: empresaId,
+          cliente_id: clienteId,
+          sucursal_id: sucursalId,
+          placa: String(placa ?? ""),
+          tipo: String(tipo ?? ""),
+          estado: String(estado ?? "Activo"),
+          kilometraje: Number(kilometraje ?? 0),
+          prox_cambio_aceite: Number(prox_cambio_aceite ?? 0),
+          modelo: String(modelo ?? ""),
+          anno: Number(anno ?? 0),
+          descripcion: String(descripcion ?? ""),
+          titulo_propiedad: Boolean(titulo_propiedad ?? true),
+          rtv: Boolean(rtv ?? true),
+          marchamo: Boolean(marchamo ?? true),
+          firma_responsable: String(firma_responsable ?? ""),
+          created_by: createdBy,
+          created_at: createdAt.toISOString(),
+        },
+        include: { c_imagenes_vehiculos_corporativos: true },
       },
-      include: { c_imagenes_vehiculos_corporativos: true },
     });
+    const newRecordObj = newRecord as any;
 
-    if (newRecord) {
+    if (newRecordObj) {
       let empNombre = "Desconocido";
       let sucursalNombre = "Desconocida";
       let fechaRegistro = createdAt.toISOString().split("T")[0];
       let horaRegistro = createdAt.toISOString().split("T")[1].split(".")[0];
-      if (newRecord.created_by) {
-        const empleado = await prisma.c_empleado.findUnique({ where: { id: newRecord.created_by } });
+      if (newRecordObj.created_by) {
+        const empleado = await callDynamicPrisma({
+          req,
+          data: {
+            action: "GET",
+            table: "c_empleado",
+            operation: "findUnique",
+            where: { id: newRecordObj.created_by },
+          },
+        });
         if (empleado) {
-          empNombre = empleado.nombre + " " + empleado.primer_apellido + " " + empleado.segundo_apellido;
+          const empleadoObj = empleado as any;
+          empNombre = empleadoObj.nombre + " " + empleadoObj.primer_apellido + " " + empleadoObj.segundo_apellido;
         }
       }
-      if (newRecord.sucursal_id) {
-        const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: newRecord.sucursal_id } });
+      if (newRecordObj.sucursal_id) {
+        const sucursal = await callDynamicPrisma({
+          req,
+          data: {
+            action: "GET",
+            table: "e_estructura_sucursal",
+            operation: "findUnique",
+            where: { id: newRecordObj.sucursal_id },
+          },
+        });
         if (sucursal) {
-          sucursalNombre = sucursal.nombre;
+          const sucursalObj = sucursal as any;
+          sucursalNombre = sucursalObj.nombre;
         }
       }
       const descriptionNotificacion = "El empleado " + empNombre + " ha registrado un vehículo corporativo en la sucursal " + sucursalNombre + " el día " + fechaRegistro + " a las " + horaRegistro;
-      sendNotificationByRole(newRecord.sucursal_id, [Number(newRecord.created_by)], "Vehículo corporativo registrado", descriptionNotificacion, ["ADMINISTRATIVO", "SUPERVISOR"]);
+      await sendNotificationByRole(req, newRecordObj.sucursal_id, [Number(newRecordObj.created_by)], "Vehículo corporativo registrado", descriptionNotificacion, ["ADMINISTRATIVO", "SUPERVISOR"]);
     }
 
     // Imágenes anexas
@@ -214,77 +258,98 @@ export async function POST(req: NextRequest) {
     }
 
     if (imagesParsed.length > 0) {
-      const dir = path.join(process.cwd(), "public", "uploads", "corporate-vehicles", `${newRecord.id}`);
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      const uploadResp = await uploadDynamicFiles({
+        req,
+        folderPath: `corporate-vehicles/${newRecordObj.id}`,
+        files: imagesParsed
+          .filter((img) => img?.file_base64 && img?.extension)
+          .map((img) => ({
+            type: "image",
+            extension: String(img.extension).replace(".", "").trim() || "jpg",
+            original_name: img.original_name,
+            file_base64: img.file_base64,
+          })),
+      });
 
-      for (const img of imagesParsed) {
-        if (!img?.file_base64 || !img?.extension) continue;
-        let buffer: Buffer;
-        try {
-          buffer = Buffer.from(normalizeBase64(String(img.file_base64)), "base64");
-        } catch {
-          continue;
-        }
-
-        const ext = String(img.extension).replace(".", "").trim() || "jpg";
-        const fileName = `${uuidv4()}.${ext}`;
-        fs.writeFileSync(path.join(dir, fileName), buffer);
-
-        await prisma.c_imagenes_vehiculos_corporativos.create({
+      const uploadedFiles = Array.isArray(uploadResp?.files) ? uploadResp.files : [];
+      for (const uploaded of uploadedFiles) {
+        await callDynamicPrisma({
+          req,
           data: {
-            name: fileName,
-            vehiculo_id: newRecord.id,
+            action: "POST",
+            table: "c_imagenes_vehiculos_corporativos",
+            operation: "create",
+            data: {
+              name: uploaded.name,
+              vehiculo_id: newRecordObj.id,
+            },
           },
         });
       }
     }
 
-    const fullRecord = await prisma.c_vehiculos_corporativos.findUnique({
-      where: { id: newRecord.id },
-      include: { c_imagenes_vehiculos_corporativos: true },
-    });
-
-    // Registrar cambio de creación
-    await prisma.c_cambios_apps_modules.create({
+    const fullRecord = await callDynamicPrisma({
+      req,
       data: {
-        nombre_tabla: "c_vehiculos_corporativos",
-        registro_id: newRecord.id,
-        cambios: JSON.stringify([{
-          prop: "__created__",
-          before: null,
-          after: {
-            id: newRecord.id,
-            empresa_id: newRecord.empresa_id,
-            cliente_id: newRecord.cliente_id,
-            sucursal_id: newRecord.sucursal_id,
-            placa: newRecord.placa,
-            tipo: newRecord.tipo,
-            estado: (newRecord as any).estado,
-            kilometraje: newRecord.kilometraje,
-            prox_cambio_aceite: newRecord.prox_cambio_aceite,
-            modelo: newRecord.modelo,
-            anno: newRecord.anno,
-            descripcion: newRecord.descripcion,
-            titulo_propiedad: newRecord.titulo_propiedad,
-            rtv: newRecord.rtv,
-            marchamo: newRecord.marchamo,
-          },
-        }]),
-        created_at: createdAt,
-        created_by: createdBy,
+        action: "GET",
+        table: "c_vehiculos_corporativos",
+        operation: "findUnique",
+        where: { id: newRecordObj.id },
+        include: { c_imagenes_vehiculos_corporativos: true },
       },
     });
 
+    // Registrar cambio de creación
+    await callDynamicPrisma({
+      req,
+      data: {
+        action: "POST",
+        table: "c_cambios_apps_modules",
+        operation: "create",
+        data: {
+          nombre_tabla: "c_vehiculos_corporativos",
+          registro_id: newRecordObj.id,
+          cambios: JSON.stringify([{
+            prop: "__created__",
+            before: null,
+            after: {
+              id: newRecordObj.id,
+              empresa_id: newRecordObj.empresa_id,
+              cliente_id: newRecordObj.cliente_id,
+              sucursal_id: newRecordObj.sucursal_id,
+              placa: newRecordObj.placa,
+              tipo: newRecordObj.tipo,
+              estado: newRecordObj.estado,
+              kilometraje: newRecordObj.kilometraje,
+              prox_cambio_aceite: newRecordObj.prox_cambio_aceite,
+              modelo: newRecordObj.modelo,
+              anno: newRecordObj.anno,
+              descripcion: newRecordObj.descripcion,
+              titulo_propiedad: newRecordObj.titulo_propiedad,
+              rtv: newRecordObj.rtv,
+              marchamo: newRecordObj.marchamo,
+            },
+          }]),
+          created_at: createdAt.toISOString(),
+          created_by: createdBy,
+        },
+      },
+    });
+
+    const fullRecordObj = fullRecord as any;
+    const imagenesArray = Array.isArray(fullRecordObj?.c_imagenes_vehiculos_corporativos) ? fullRecordObj.c_imagenes_vehiculos_corporativos : [];
+    const baseUrlPost = req.nextUrl.origin;
     return NextResponse.json(
       {
         status: true,
         message: "Vehículo corporativo creado correctamente",
         data: {
-          ...(fullRecord ?? newRecord),
+          ...(fullRecordObj ?? newRecordObj),
           id_local: "",
-          images: ((fullRecord as any)?.c_imagenes_vehiculos_corporativos || []).map((i: any) => ({
+          images: imagenesArray.map((i: any) => ({
             id: i.id,
             name: i.name,
+            url: baseUrlPost ? `${baseUrlPost}/api/corporate-vehicles/${fullRecordObj?.id}/get-image/${i.name}` : "",
           })),
         },
       },

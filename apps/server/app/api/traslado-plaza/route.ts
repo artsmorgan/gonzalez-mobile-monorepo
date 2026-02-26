@@ -1,67 +1,80 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../utils/verifyToken";
-import { prisma } from "../../../utils/prismaClient";
-import { toZonedTime } from "date-fns-tz";
-import fs from "fs";
-import path from "path";
-import { v4 as uuidv4 } from "uuid";
+import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 
 export async function GET(req: NextRequest) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(req);
-        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
-
-        // ?emp=[id]&plaza=[id]
-        const searchParams = new URL(req.url).searchParams;
-        const emp = searchParams.get('emp');
-        const plaza = searchParams.get('plaza');
-
-        if (!emp || !plaza) {
-            return NextResponse.json({ status: false, message: "Empleado o plaza no especificados" }, { status: 400 });
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
+        if (!valid) {
+            return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
         }
 
-        const empleado = await prisma.c_empleado.findFirst({ where: { id: parseInt(emp) } });
-        if (!empleado) {
-            return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 404 });
+        const empleadoId = payload?.id ? parseInt(String(payload.id), 10) : 0;
+        if (!empleadoId) {
+            return NextResponse.json({ status: false, message: "Empleado no encontrado en token" }, { status: 401 });
         }
 
-        const intercambio_return: any = [];
+        const acciones = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_accion_personal",
+                operation: "findMany",
+                where: {
+                    empleado_id: empleadoId,
+                    document: null,
+                },
+                orderBy: { fecha_insercion: "desc" },
+            },
+        });
 
-        const intercambio_empleado = await prisma.c_intercambio_linea.findMany({ where: { empleado_id: parseInt(emp), OR: [{ plazaInicio_id: parseInt(plaza) }, { plazaFin_id: parseInt(plaza) }] } });
+        const accionesArray = Array.isArray(acciones) ? acciones : [];
+        const acciones_return: any[] = [];
 
-        for (const intercambio of intercambio_empleado) {
-            if (intercambio.intercambio_id === null) continue;
+        for (const accion of accionesArray) {
+            const [cliente, sucursal, puesto, tipoAccion] = await Promise.all([
+                accion.cliente_id
+                    ? callDynamicPrisma({
+                        req,
+                        data: { action: "GET", table: "e_estructura_cliente", operation: "findUnique", where: { id: accion.cliente_id } },
+                    })
+                    : null,
+                accion.corpo_id
+                    ? callDynamicPrisma({
+                        req,
+                        data: { action: "GET", table: "e_estructura_sucursal", operation: "findUnique", where: { id: accion.corpo_id } },
+                    })
+                    : null,
+                accion.puesto_id
+                    ? callDynamicPrisma({
+                        req,
+                        data: { action: "GET", table: "e_estructura_puesto", operation: "findUnique", where: { id: accion.puesto_id } },
+                    })
+                    : null,
+                accion.tipoAccion_id
+                    ? callDynamicPrisma({
+                        req,
+                        data: { action: "GET", table: "c_tipo_accion", operation: "findUnique", where: { id: accion.tipoAccion_id } },
+                    })
+                    : null,
+            ]);
 
-            const intercambio_data = await prisma.c_intercambio.findFirst({ where: { id: intercambio.intercambio_id } });
-            if (!intercambio_data) continue;
-
-            let empleado_sustituido = null;
-            if (intercambio.empleadoSustituido_id !== null) {
-                empleado_sustituido = await prisma.c_empleado.findFirst({ where: { id: intercambio.empleadoSustituido_id } });
-            }
-
-            let plaza_inicio = null;
-            if (intercambio.plazaInicio_id !== null) {
-                plaza_inicio = await prisma.e_estructura_plazas.findFirst({ where: { id: intercambio.plazaInicio_id } });
-            }
-
-            let plaza_fin = null;
-            if (intercambio.plazaFin_id !== null) {
-                plaza_fin = await prisma.e_estructura_plazas.findFirst({ where: { id: intercambio.plazaFin_id } });
-            }
-
-            intercambio_return.push({
-                intercambio: intercambio_data,
-                intercambio_linea: intercambio,
-                empleado_sustituido: empleado_sustituido,
-                plaza_inicio: plaza_inicio,
-                plaza_fin: plaza_fin,
+            acciones_return.push({
+                id: accion.id,
+                consecutivo: accion.consecutivo || null,
+                cliente: cliente?.nombre || null,
+                sucursal: sucursal?.nombre || null,
+                puesto: puesto?.nombre || null,
+                tipo_accion: tipoAccion?.nombre || null,
+                fecha_vence_subir_adjunto: accion.fecha_vence_subir_adjunto || null,
+                document: accion.document || null,
+                mobile_upload: accion.mobile_upload ?? false,
             });
         }
 
-        return NextResponse.json({ status: true, intercambio_return: intercambio_return }, { status: 200 });
+        return NextResponse.json({ status: true, acciones_return }, { status: 200 });
     } catch (error) {
-        return NextResponse.json({ status: false, message: "Error al obtener los traslados de plaza" }, { status: 500 });
+        return NextResponse.json({ status: false, message: "Error al obtener archivos de acciones" }, { status: 500 });
     }
 }

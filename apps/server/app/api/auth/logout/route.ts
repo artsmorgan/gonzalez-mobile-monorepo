@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 import { NextRequest, NextResponse } from "next/server";
 const jwt = require("jsonwebtoken");
-import { prisma } from "../../../../utils/prismaClient";
+import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 
 export async function POST(req: NextRequest) {
     try {
@@ -32,9 +32,18 @@ export async function POST(req: NextRequest) {
         }
 
         // Revocar el token
-        await prisma.refresh_token.updateMany({
-            where: { empleadoId: decoded.id, revoked: false },
-            data: { revoked: true },
+        await callDynamicPrisma({
+            req,
+            shouldVerifyAccessToken: false,
+            data: {
+                action: "UPDATE",
+                table: "refresh_token",
+                operation: "updateMany",
+                many: true,
+                where: { empleadoId: decoded.id, revoked: false },
+                data: { revoked: true },
+                returning: false
+            }
         });
 
         return NextResponse.json(

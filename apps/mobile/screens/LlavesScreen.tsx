@@ -22,6 +22,8 @@ import { useQRScanner } from '../hooks/useQRScanner';
 import authedFetch from '../hooks/authedFetch';
 import { createLlave, deleteLlave, listLlaves, LlaveItem, updateLlave } from '../hooks/llavesFunctions';
 import { createMovimientoLlave, deleteMovimientoLlave, updateMovimientoLlave } from '../hooks/movimientosLlavesFunctions';
+import { createLlavero, deleteLlavero, listLlaveros, LlaveroItem, updateLlavero } from '../hooks/llaverosFunctions';
+import { createMovimientoLlavero, deleteMovimientoLlavero, updateMovimientoLlavero } from '../hooks/movimientosLlaverosFunctions';
 
 type LlaveUI = LlaveItem & { id_local?: string };
 type MovimientoUI = {
@@ -33,8 +35,23 @@ type MovimientoUI = {
   nombre_persona_entrega: string;
   departamento: string;
   telefono: string;
-  entrega: string;
-  recibe: string;
+  fecha: string;
+  hora: string;
+  firma_entrega: string;
+  firma_recibe: string;
+  firma_responsable: string;
+};
+
+type LlaveroUI = LlaveroItem & { id_local?: string };
+type MovimientoLlaveroUI = {
+  id: number;
+  id_local?: string;
+  llavero_id: number;
+  llaveroLocalId?: string;
+  nombre_persona_recibe: string;
+  nombre_persona_entrega: string;
+  departamento: string;
+  telefono: string;
   fecha: string;
   hora: string;
   firma_entrega: string;
@@ -59,6 +76,47 @@ export default function LlavesScreen() {
 
   const [llaves, setLlaves] = useState<LlaveUI[]>([]);
 
+  // Tab selector: Llaves / Llaveros
+  const [activeTab, setActiveTab] = useState<'llaves' | 'llaveros'>('llaves');
+
+  // Submódulo: Llaveros
+  const [llaveros, setLlaveros] = useState<LlaveroUI[]>([]);
+  const [isLlaveroCreating, setIsLlaveroCreating] = useState(false);
+  const [llaveroEditing, setLlaveroEditing] = useState<LlaveroUI | null>(null);
+  const [llaveroNombre, setLlaveroNombre] = useState('');
+  const [llaveroObservaciones, setLlaveroObservaciones] = useState('');
+  const [llaveroFirmaResponsable, setLlaveroFirmaResponsable] = useState('');
+  const [llaveroSelectedLlaves, setLlaveroSelectedLlaves] = useState<number[]>([]);
+  const [isLlaveroLlavesExpanded, setIsLlaveroLlavesExpanded] = useState(false);
+  const [isGeneratingLlaveroFirma, setIsGeneratingLlaveroFirma] = useState(false);
+  const [llaveroFilterSearch, setLlaveroFilterSearch] = useState('');
+  const [llaveroFilterFecha, setLlaveroFilterFecha] = useState('');
+  const [showLlaveroFilterFechaPicker, setShowLlaveroFilterFechaPicker] = useState(false);
+  const [isLlaveroFiltersExpanded, setIsLlaveroFiltersExpanded] = useState(false);
+
+  // Submódulo: Movimiento de llaveros (CRUD dentro de modal)
+  const [isLlaveroMovModalVisible, setIsLlaveroMovModalVisible] = useState(false);
+  const [movLlavero, setMovLlavero] = useState<LlaveroUI | null>(null);
+  const [llaveroMovimientos, setLlaveroMovimientos] = useState<MovimientoLlaveroUI[]>([]);
+  const [llaveroMovIsCreating, setLlaveroMovIsCreating] = useState(false);
+  const [llaveroMovEditing, setLlaveroMovEditing] = useState<MovimientoLlaveroUI | null>(null);
+  const [llaveroMovFilterSearch, setLlaveroMovFilterSearch] = useState('');
+  const [llaveroMovFilterFecha, setLlaveroMovFilterFecha] = useState('');
+  const [showLlaveroMovFilterFechaPicker, setShowLlaveroMovFilterFechaPicker] = useState(false);
+  const [isLlaveroMovFiltersExpanded, setIsLlaveroMovFiltersExpanded] = useState(false);
+  const [llaveroMovNombreRecibe, setLlaveroMovNombreRecibe] = useState('');
+  const [llaveroMovNombreEntrega, setLlaveroMovNombreEntrega] = useState('');
+  const [llaveroMovDepartamento, setLlaveroMovDepartamento] = useState('');
+  const [llaveroMovTelefono, setLlaveroMovTelefono] = useState('');
+  const [llaveroMovFecha, setLlaveroMovFecha] = useState('');
+  const [llaveroMovHora, setLlaveroMovHora] = useState('');
+  const [showLlaveroMovFechaPicker, setShowLlaveroMovFechaPicker] = useState(false);
+  const [showLlaveroMovHoraPicker, setShowLlaveroMovHoraPicker] = useState(false);
+  const [llaveroMovFirmaEntrega, setLlaveroMovFirmaEntrega] = useState('');
+  const [llaveroMovFirmaRecibe, setLlaveroMovFirmaRecibe] = useState('');
+  const [llaveroMovFirmaResponsable, setLlaveroMovFirmaResponsable] = useState('');
+  const [isGeneratingLlaveroMovFirma, setIsGeneratingLlaveroMovFirma] = useState(false);
+
   // Submódulo: Movimiento de llaves (CRUD dentro de modal)
   const [isMovModalVisible, setIsMovModalVisible] = useState(false);
   const [movLlave, setMovLlave] = useState<LlaveUI | null>(null);
@@ -75,8 +133,6 @@ export default function LlavesScreen() {
   const [movNombreEntrega, setMovNombreEntrega] = useState('');
   const [movDepartamento, setMovDepartamento] = useState('');
   const [movTelefono, setMovTelefono] = useState('');
-  const [movEntrega, setMovEntrega] = useState('');
-  const [movRecibe, setMovRecibe] = useState('');
   const [movFecha, setMovFecha] = useState('');
   const [movHora, setMovHora] = useState('');
   const [showMovFechaPicker, setShowMovFechaPicker] = useState(false);
@@ -116,6 +172,8 @@ export default function LlavesScreen() {
 
   const [isGeneratingFirma, setIsGeneratingFirma] = useState(false);
   const [location, setLocation] = useState<Location.LocationObject | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitResponse, setSubmitResponse] = useState<{ type: 'success' | 'error', message: string } | null>(null);
 
   const decodeFirmaHash = (hash?: string | null) => {
     try {
@@ -297,19 +355,87 @@ export default function LlavesScreen() {
     }
   };
 
+  const fetchLlaveros = async () => {
+    try {
+      setIsLoading(true);
+      setError(null);
+      const current = await loadMarcaContext();
+      if (!current) {
+        setIsLoading(false);
+        return;
+      }
+
+      const isConnected = await getConnectionStatus();
+      if (isConnected) {
+        const res = await listLlaveros({
+          marcaId: current.id,
+          refreshAccessToken,
+          logout,
+        });
+        if (res.status) {
+          const list = (res.data || []).map((it: any) => ({
+            ...it,
+            id_local: it.id_local || '',
+            movimientos: (it.movimientos || []).map((m: any) => ({ ...m, id_local: m.id_local || '' })),
+            llaves: (it.llaves || []).map((l: any) => ({ ...l })),
+          }));
+          setLlaveros(list);
+          await AsyncStorage.setItem('llaveros_cache', JSON.stringify(list));
+        } else {
+          setError(res.message || 'Error al cargar llaveros');
+          const cacheStr = await AsyncStorage.getItem('llaveros_cache');
+          if (cacheStr) setLlaveros(JSON.parse(cacheStr));
+        }
+      } else {
+        const cacheStr = await AsyncStorage.getItem('llaveros_cache');
+        if (cacheStr) setLlaveros(JSON.parse(cacheStr));
+      }
+    } catch (e: any) {
+      setError(e.message || 'Error al cargar llaveros');
+      const cacheStr = await AsyncStorage.getItem('llaveros_cache');
+      if (cacheStr) setLlaveros(JSON.parse(cacheStr));
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   useFocusEffect(
     useCallback(() => {
-      fetchLlaves();
-    }, [])
+      if (activeTab === 'llaves') {
+        fetchLlaves();
+      } else {
+        fetchLlaveros();
+      }
+    }, [activeTab])
   );
 
   useEffect(() => {
-    const handler = () => fetchLlaves();
+    const handler = () => {
+      if (activeTab === 'llaves') {
+        fetchLlaves();
+      } else {
+        fetchLlaveros();
+      }
+    };
     eventBus.on('connectionRestored', handler);
     return () => {
       eventBus.off('connectionRestored', handler);
     };
-  }, []);
+  }, [activeTab]);
+
+  // Sincronizar movimientos de llaveros cuando cambie la lista principal
+  useEffect(() => {
+    if (!isLlaveroMovModalVisible || !movLlavero) return;
+    const found = llaveros.find((it) => {
+      if (movLlavero.id && movLlavero.id !== 0) return it.id === movLlavero.id;
+      if (movLlavero.id_local) return it.id_local === movLlavero.id_local;
+      return false;
+    });
+    if (found) {
+      setMovLlavero(found);
+      setLlaveroMovimientos((found as any).movimientos || []);
+    }
+  }, [llaveros, isLlaveroMovModalVisible, movLlavero?.id, movLlavero?.id_local]);
 
   // Si el modal de movimientos está abierto, mantenerlo sincronizado cuando cambie la lista principal (online/offline)
   useEffect(() => {
@@ -468,8 +594,6 @@ export default function LlavesScreen() {
     setMovNombreEntrega('');
     setMovDepartamento('');
     setMovTelefono('');
-    setMovEntrega('');
-    setMovRecibe('');
     setMovFecha('');
     setMovHora('');
     setMovFirmaEntrega('');
@@ -518,8 +642,6 @@ export default function LlavesScreen() {
       { label: 'Nombre persona que recibe', v: movNombreRecibe },
       { label: 'Departamento', v: movDepartamento },
       { label: 'Teléfono', v: movTelefono },
-      { label: 'Entrega', v: movEntrega },
-      { label: 'Recibe', v: movRecibe },
       { label: 'Fecha', v: movFecha },
       { label: 'Hora', v: movHora },
     ];
@@ -552,8 +674,6 @@ export default function LlavesScreen() {
       nombre_persona_entrega: movNombreEntrega,
       departamento: movDepartamento,
       telefono: movTelefono,
-      entrega: movEntrega,
-      recibe: movRecibe,
       fecha: movFecha,
       hora: movHora,
       firma_entrega: movFirmaEntrega,
@@ -632,8 +752,6 @@ export default function LlavesScreen() {
     setMovNombreEntrega(m.nombre_persona_entrega || '');
     setMovDepartamento(m.departamento || '');
     setMovTelefono(m.telefono || '');
-    setMovEntrega(m.entrega || '');
-    setMovRecibe(m.recibe || '');
     setMovFecha(m.fecha ? String(m.fecha).split('T')[0] : '');
     const horaStr = String(m.hora || '');
     setMovHora(horaStr.includes('T') ? horaStr.split('T')[1]?.split('.')[0] || '' : horaStr);
@@ -691,8 +809,6 @@ export default function LlavesScreen() {
           nombre_persona_entrega: payload.nombre_persona_entrega,
           departamento: payload.departamento,
           telefono: payload.telefono,
-          entrega: payload.entrega,
-          recibe: payload.recibe,
           fecha: payload.fecha,
           hora: payload.hora,
           firma_entrega: payload.firma_entrega,
@@ -742,8 +858,6 @@ export default function LlavesScreen() {
           nombre_persona_entrega: payload.nombre_persona_entrega,
           departamento: payload.departamento,
           telefono: payload.telefono,
-          entrega: payload.entrega,
-          recibe: payload.recibe,
           fecha: payload.fecha,
           hora: payload.hora,
           firma_entrega: payload.firma_entrega,
@@ -851,8 +965,14 @@ export default function LlavesScreen() {
       return;
     }
 
-    if (drawSignatureTarget === 'entrega') setMovFirmaEntrega(sig);
-    else setMovFirmaRecibe(sig);
+    // Determinar si estamos en movimientos de llaves o llaveros
+    if (isMovModalVisible) {
+      if (drawSignatureTarget === 'entrega') setMovFirmaEntrega(sig);
+      else setMovFirmaRecibe(sig);
+    } else if (isLlaveroMovModalVisible) {
+      if (drawSignatureTarget === 'entrega') setLlaveroMovFirmaEntrega(sig);
+      else setLlaveroMovFirmaRecibe(sig);
+    }
 
     setIsReadingSignature(false);
     closeDrawSignatureModal();
@@ -880,91 +1000,549 @@ export default function LlavesScreen() {
     if (!employee) return;
     if (!validateForm()) return;
 
-    const isConnected = await getConnectionStatus();
-    const payload = await buildPayload();
+    setIsSubmitting(true);
+    setSubmitResponse(null);
 
-    // create
-    if (!editing) {
-      if (isConnected) {
-        const res = await createLlave({ requestData: payload, refreshAccessToken, logout });
-        if (res.status) {
-          Alert.alert('Éxito', 'Llave creada correctamente');
+    try {
+      const isConnected = await getConnectionStatus();
+      const payload = await buildPayload();
+
+      // create
+      if (!editing) {
+        if (isConnected) {
+          const res = await createLlave({ requestData: payload, refreshAccessToken, logout });
+          if (res.status) {
+            setSubmitResponse({ type: 'success', message: res.message || 'Llave creada correctamente' });
+            setIsCreating(false);
+            await fetchLlaves();
+          } else {
+            setSubmitResponse({ type: 'error', message: res.message || 'No se pudo crear la llave' });
+          }
+        } else {
+          const localId = `local-${Date.now()}`;
+          const nowIso = new Date().toISOString();
+          const localItem: LlaveUI = {
+            id: 0,
+            id_local: localId,
+            cliente_id: 0,
+            corpo_id: 0,
+            puesto_id: 0,
+            lugar_abre: payload.lugar_abre,
+            cantidad_copias: payload.cantidad_copias,
+            observaciones: payload.observaciones,
+            firma_responsable: payload.firma_responsable,
+            created_by: Number(employee.id) || 0,
+            created_at: nowIso,
+          };
+
+          const next = [localItem, ...llaves];
+          setLlaves(next);
+          await AsyncStorage.setItem('llaves_cache', JSON.stringify(next));
+          await upsertAction({ type: 'create', id: localId, requestData: payload });
+
+          setSubmitResponse({ type: 'success', message: 'La llave se sincronizará cuando vuelva la conexión.' });
           setIsCreating(false);
+        }
+        return;
+      }
+
+      // update
+      const isLocal = !!editing.id_local || editing.id === 0;
+      if (isConnected && !isLocal) {
+        const res = await updateLlave({ id: editing.id, requestData: payload, refreshAccessToken, logout });
+        if (res.status) {
+          setSubmitResponse({ type: 'success', message: res.message || 'Llave actualizada correctamente' });
+          setIsCreating(false);
+          setEditing(null);
           await fetchLlaves();
         } else {
-          Alert.alert('Error', res.message || 'No se pudo crear la llave');
+          setSubmitResponse({ type: 'error', message: res.message || 'No se pudo actualizar la llave' });
         }
       } else {
-        const localId = `local-${Date.now()}`;
-        const nowIso = new Date().toISOString();
-        const localItem: LlaveUI = {
-          id: 0,
-          id_local: localId,
-          cliente_id: 0,
-          corpo_id: 0,
-          puesto_id: 0,
-          lugar_abre: payload.lugar_abre,
-          cantidad_copias: payload.cantidad_copias,
-          observaciones: payload.observaciones,
-          firma_responsable: payload.firma_responsable,
-          created_by: Number(employee.id) || 0,
-          created_at: nowIso,
-        };
-
-        const next = [localItem, ...llaves];
+        // offline update (o item aún no sincronizado)
+        const next = llaves.map((it) => {
+          const match =
+            (editing.id_local && it.id_local === editing.id_local) ||
+            (!editing.id_local && it.id === editing.id);
+          if (!match) return it;
+          return {
+            ...it,
+            lugar_abre: payload.lugar_abre,
+            cantidad_copias: payload.cantidad_copias,
+            observaciones: payload.observaciones,
+            firma_responsable: payload.firma_responsable,
+          };
+        });
         setLlaves(next);
         await AsyncStorage.setItem('llaves_cache', JSON.stringify(next));
-        await upsertAction({ type: 'create', id: localId, requestData: payload });
 
-        Alert.alert('Guardado (offline)', 'La llave se sincronizará cuando vuelva la conexión.');
+        if (editing.id_local) {
+          const updated = await updateCreateActionForLocalId(editing.id_local, payload);
+          if (!updated) {
+            await upsertAction({ type: 'create', id: editing.id_local, requestData: payload });
+          }
+        } else {
+          await upsertAction({ type: 'update', id: editing.id, requestData: payload });
+        }
+
+        setSubmitResponse({ type: 'success', message: 'Los cambios se sincronizarán cuando vuelva la conexión.' });
         setIsCreating(false);
+        setEditing(null);
+      }
+    } catch (error) {
+      console.error('Error saving llave:', error);
+      setSubmitResponse({ type: 'error', message: 'Error al guardar la llave' });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Funciones CRUD para Llaveros
+  const validateLlaveroForm = () => {
+    if (!llaveroNombre.trim()) {
+      Alert.alert('Error', 'El nombre del llavero es obligatorio');
+      return false;
+    }
+    if (!llaveroFirmaResponsable) {
+      Alert.alert('Error', 'Debes registrar la firma responsable');
+      return false;
+    }
+    return true;
+  };
+
+  const buildLlaveroPayload = async () => {
+    const current = await loadMarcaContext();
+    if (!current?.id) throw new Error('Marca no encontrada');
+    return {
+      marca_id: current.id,
+      nombre_llavero: llaveroNombre.trim(),
+      observaciones: llaveroObservaciones.trim(),
+      firma_responsable: llaveroFirmaResponsable,
+      llaves: llaveroSelectedLlaves,
+    };
+  };
+
+  const handleLlaveroSave = async () => {
+    if (!employee) return;
+    if (!validateLlaveroForm()) return;
+
+    setIsSubmitting(true);
+    setSubmitResponse(null);
+
+    try {
+      const isConnected = await getConnectionStatus();
+      const payload = await buildLlaveroPayload();
+
+      // create
+      if (!llaveroEditing) {
+        if (isConnected) {
+          const res = await createLlavero({ requestData: payload, refreshAccessToken, logout });
+          if (res.status) {
+            setSubmitResponse({ type: 'success', message: res.message || 'Llavero creado correctamente' });
+            setIsLlaveroCreating(false);
+            await fetchLlaveros();
+          } else {
+            setSubmitResponse({ type: 'error', message: res.message || 'No se pudo crear el llavero' });
+          }
+        } else {
+          const localId = `local-llavero-${Date.now()}`;
+          const nowIso = new Date().toISOString();
+          const current = await loadMarcaContext();
+          const localItem: LlaveroUI = {
+            id: 0,
+            id_local: localId,
+            cliente_id: current?.cliente_id || 0,
+            corpo_id: current?.corpo_id || 0,
+            puesto_id: current?.puesto_id || 0,
+            nombre_llavero: payload.nombre_llavero,
+            observaciones: payload.observaciones,
+            firma_responsable: payload.firma_responsable,
+            created_by: Number(employee.id) || 0,
+            created_at: nowIso,
+            llaves: payload.llaves.map((llaveId: number) => ({ id: 0, llave_id: llaveId, llavero_id: 0 })),
+          };
+
+          const next = [localItem, ...llaveros];
+          setLlaveros(next);
+          await AsyncStorage.setItem('llaveros_cache', JSON.stringify(next));
+          await upsertLlaveroAction({ type: 'create', id: localId, requestData: payload });
+
+          setSubmitResponse({ type: 'success', message: 'El llavero se sincronizará cuando vuelva la conexión.' });
+          setIsLlaveroCreating(false);
+        }
+        return;
+      }
+
+      // update
+      const isLocal = !!llaveroEditing.id_local || llaveroEditing.id === 0;
+      if (isConnected && !isLocal) {
+        const res = await updateLlavero({ id: llaveroEditing.id, requestData: payload, refreshAccessToken, logout });
+        if (res.status) {
+          setSubmitResponse({ type: 'success', message: res.message || 'Llavero actualizado correctamente' });
+          setIsLlaveroCreating(false);
+          setLlaveroEditing(null);
+          await fetchLlaveros();
+        } else {
+          setSubmitResponse({ type: 'error', message: res.message || 'No se pudo actualizar el llavero' });
+        }
+      } else {
+        // offline update
+        const next = llaveros.map((it) => {
+          const match =
+            (llaveroEditing.id_local && it.id_local === llaveroEditing.id_local) ||
+            (!llaveroEditing.id_local && it.id === llaveroEditing.id);
+          if (!match) return it;
+          return {
+            ...it,
+            nombre_llavero: payload.nombre_llavero,
+            observaciones: payload.observaciones,
+            firma_responsable: payload.firma_responsable,
+            llaves: payload.llaves.map((llaveId: number) => ({ id: 0, llave_id: llaveId, llavero_id: it.id || 0 })),
+          };
+        });
+        setLlaveros(next);
+        await AsyncStorage.setItem('llaveros_cache', JSON.stringify(next));
+
+        if (llaveroEditing.id_local) {
+          await upsertLlaveroAction({ type: 'create', id: llaveroEditing.id_local, requestData: payload });
+        } else {
+          await upsertLlaveroAction({ type: 'update', id: llaveroEditing.id, requestData: payload });
+        }
+
+        setSubmitResponse({ type: 'success', message: 'Los cambios se sincronizarán cuando vuelva la conexión.' });
+        setIsLlaveroCreating(false);
+        setLlaveroEditing(null);
+      }
+    } catch (error) {
+      console.error('Error saving llavero:', error);
+      setSubmitResponse({ type: 'error', message: 'Error al guardar el llavero' });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleLlaveroDelete = async (it: LlaveroUI) => {
+    const current = await loadMarcaContext();
+    if (!current?.id) return;
+
+    Alert.alert('Confirmar', '¿Deseas eliminar este llavero?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Eliminar',
+        style: 'destructive',
+        onPress: async () => {
+          const isConnected = await getConnectionStatus();
+
+          // local-only
+          if (it.id_local || it.id === 0) {
+            const next = llaveros.filter((x) => x.id_local !== it.id_local);
+            setLlaveros(next);
+            await AsyncStorage.setItem('llaveros_cache', JSON.stringify(next));
+            if (it.id_local) await removeLlaveroActionsForLocalId(it.id_local);
+            return;
+          }
+
+          if (isConnected) {
+            const res = await deleteLlavero({ id: it.id, marcaId: current.id, refreshAccessToken, logout });
+            if (res.status) {
+              Alert.alert('Éxito', 'Llavero eliminado correctamente');
+              await fetchLlaveros();
+            } else {
+              Alert.alert('Error', res.message || 'No se pudo eliminar el llavero');
+            }
+          } else {
+            const next = llaveros.filter((x) => x.id !== it.id);
+            setLlaveros(next);
+            await AsyncStorage.setItem('llaveros_cache', JSON.stringify(next));
+            await upsertLlaveroAction({ type: 'delete', id: it.id, marcaId: current.id });
+            Alert.alert('Eliminado (offline)', 'La eliminación se sincronizará cuando vuelva la conexión.');
+          }
+        },
+      },
+    ]);
+  };
+
+  // Funciones de movimientos de llaveros (similar a movimientos de llaves)
+  const resetLlaveroMovForm = () => {
+    setLlaveroMovNombreRecibe('');
+    setLlaveroMovNombreEntrega('');
+    setLlaveroMovDepartamento('');
+    setLlaveroMovTelefono('');
+    setLlaveroMovFecha('');
+    setLlaveroMovHora('');
+    setLlaveroMovFirmaEntrega('');
+    setLlaveroMovFirmaRecibe('');
+    setLlaveroMovFirmaResponsable('');
+    setLlaveroMovEditing(null);
+  };
+
+  const validateLlaveroMovForm = () => {
+    const required = [
+      { label: 'Nombre persona que entrega', v: llaveroMovNombreEntrega },
+      { label: 'Nombre persona que recibe', v: llaveroMovNombreRecibe },
+      { label: 'Departamento', v: llaveroMovDepartamento },
+      { label: 'Teléfono', v: llaveroMovTelefono },
+      { label: 'Fecha', v: llaveroMovFecha },
+      { label: 'Hora', v: llaveroMovHora },
+    ];
+    const missing = required.find((x) => !x.v || String(x.v).trim().length === 0);
+    if (missing) {
+      Alert.alert('Error', `Campo requerido: ${missing.label}`);
+      return false;
+    }
+    if (!llaveroMovFirmaEntrega) {
+      Alert.alert('Error', 'Debes registrar la firma de entrega');
+      return false;
+    }
+    if (!llaveroMovFirmaRecibe) {
+      Alert.alert('Error', 'Debes registrar la firma de recibe');
+      return false;
+    }
+    if (!llaveroMovFirmaResponsable) {
+      Alert.alert('Error', 'Debes registrar la firma responsable');
+      return false;
+    }
+    return true;
+  };
+
+  const buildLlaveroMovPayload = async () => {
+    const current = await loadMarcaContext();
+    if (!current?.id) throw new Error('Marca no encontrada');
+    return {
+      marca_id: current.id,
+      nombre_persona_recibe: llaveroMovNombreRecibe,
+      nombre_persona_entrega: llaveroMovNombreEntrega,
+      departamento: llaveroMovDepartamento,
+      telefono: llaveroMovTelefono,
+      fecha: llaveroMovFecha,
+      hora: llaveroMovHora,
+      firma_entrega: llaveroMovFirmaEntrega,
+      firma_recibe: llaveroMovFirmaRecibe,
+      firma_responsable: llaveroMovFirmaResponsable,
+    };
+  };
+
+  const openLlaveroMovimientosModal = (it: LlaveroUI) => {
+    setMovLlavero(it);
+    const list = (it.movimientos || []).map((m: any) => ({ ...m, id_local: m.id_local || '' }));
+    setLlaveroMovimientos(list);
+    setLlaveroMovIsCreating(false);
+    setLlaveroMovEditing(null);
+    resetLlaveroMovForm();
+    setLlaveroMovFilterSearch('');
+    setLlaveroMovFilterFecha('');
+    setIsLlaveroMovModalVisible(true);
+  };
+
+  const closeLlaveroMovimientosModal = () => {
+    setIsLlaveroMovModalVisible(false);
+    setMovLlavero(null);
+    setLlaveroMovimientos([]);
+    setLlaveroMovIsCreating(false);
+    setLlaveroMovEditing(null);
+    resetLlaveroMovForm();
+    setIsLlaveroMovFiltersExpanded(false);
+  };
+
+  const startLlaveroMovCreating = () => {
+    resetLlaveroMovForm();
+    setLlaveroMovIsCreating(true);
+    setLlaveroMovEditing(null);
+    setLlaveroMovFecha(dateToLocalString(new Date()));
+    setLlaveroMovHora(timeToHHMMSS(new Date()));
+  };
+
+  const startLlaveroMovEditing = (m: MovimientoLlaveroUI) => {
+    setLlaveroMovEditing(m);
+    setLlaveroMovIsCreating(true);
+    setLlaveroMovNombreRecibe(m.nombre_persona_recibe || '');
+    setLlaveroMovNombreEntrega(m.nombre_persona_entrega || '');
+    setLlaveroMovDepartamento(m.departamento || '');
+    setLlaveroMovTelefono(m.telefono || '');
+    setLlaveroMovFecha(m.fecha ? String(m.fecha).split('T')[0] : '');
+    const horaStr = String(m.hora || '');
+    setLlaveroMovHora(horaStr.includes('T') ? horaStr.split('T')[1]?.split('.')[0] || '' : horaStr);
+    setLlaveroMovFirmaEntrega(m.firma_entrega || '');
+    setLlaveroMovFirmaRecibe(m.firma_recibe || '');
+    setLlaveroMovFirmaResponsable(m.firma_responsable || '');
+  };
+
+  const cancelLlaveroMovCreating = () => {
+    setLlaveroMovIsCreating(false);
+    setLlaveroMovEditing(null);
+    resetLlaveroMovForm();
+  };
+
+  const persistMovimientosToLlaverosCache = async (llavero: LlaveroUI, nextMovs: MovimientoLlaveroUI[]) => {
+    const nextLlaveros = llaveros.map((it) => {
+      const match = (llavero.id_local && it.id_local === llavero.id_local) || (!llavero.id_local && it.id === llavero.id);
+      if (!match) return it;
+      return { ...it, movimientos: nextMovs };
+    });
+    setLlaveros(nextLlaveros);
+    await AsyncStorage.setItem('llaveros_cache', JSON.stringify(nextLlaveros));
+
+    setLlaveroMovimientos(nextMovs);
+    setMovLlavero((prev) => (prev ? { ...prev, movimientos: nextMovs } : prev));
+  };
+
+  const handleLlaveroMovSave = async () => {
+    if (!employee) return;
+    if (!movLlavero) return;
+    if (!validateLlaveroMovForm()) return;
+
+    const payload = await buildLlaveroMovPayload();
+    const isConnected = await getConnectionStatus();
+
+    // create
+    if (!llaveroMovEditing) {
+      if (isConnected && movLlavero.id && movLlavero.id !== 0) {
+        const res = await createMovimientoLlavero({ llaveroId: movLlavero.id, requestData: payload, refreshAccessToken, logout });
+        if (res.status) {
+          Alert.alert('Éxito', 'Movimiento creado correctamente');
+          setLlaveroMovIsCreating(false);
+          await fetchLlaveros();
+        } else {
+          Alert.alert('Error', res.message || 'No se pudo crear el movimiento');
+        }
+      } else {
+        const localId = `local-mov-llavero-${Date.now()}`;
+        const localItem: MovimientoLlaveroUI = {
+          id: 0,
+          id_local: localId,
+          llavero_id: movLlavero.id || 0,
+          llaveroLocalId: movLlavero.id_local || '',
+          nombre_persona_recibe: payload.nombre_persona_recibe,
+          nombre_persona_entrega: payload.nombre_persona_entrega,
+          departamento: payload.departamento,
+          telefono: payload.telefono,
+          fecha: payload.fecha,
+          hora: payload.hora,
+          firma_entrega: payload.firma_entrega,
+          firma_recibe: payload.firma_recibe,
+          firma_responsable: payload.firma_responsable,
+        };
+        const next = [localItem, ...llaveroMovimientos];
+        await persistMovimientosToLlaverosCache(movLlavero, next);
+        await upsertLlaveroMovAction({
+          type: 'create',
+          id: localId,
+          llaveroId: movLlavero.id || 0,
+          llaveroLocalId: movLlavero.id_local || '',
+          requestData: payload,
+        });
+        Alert.alert('Guardado (offline)', 'El movimiento se sincronizará cuando vuelva la conexión.');
+        setLlaveroMovIsCreating(false);
       }
       return;
     }
 
     // update
-    const isLocal = !!editing.id_local || editing.id === 0;
-    if (isConnected && !isLocal) {
-      const res = await updateLlave({ id: editing.id, requestData: payload, refreshAccessToken, logout });
+    const isLocalMov = !!llaveroMovEditing.id_local || llaveroMovEditing.id === 0;
+    if (isConnected && !isLocalMov && movLlavero.id && movLlavero.id !== 0) {
+      const res = await updateMovimientoLlavero({
+        llaveroId: movLlavero.id,
+        id: llaveroMovEditing.id,
+        requestData: payload,
+        refreshAccessToken,
+        logout,
+      });
       if (res.status) {
-        Alert.alert('Éxito', 'Llave actualizada correctamente');
-        setIsCreating(false);
-        setEditing(null);
-        await fetchLlaves();
+        Alert.alert('Éxito', 'Movimiento actualizado correctamente');
+        setLlaveroMovIsCreating(false);
+        setLlaveroMovEditing(null);
+        await fetchLlaveros();
       } else {
-        Alert.alert('Error', res.message || 'No se pudo actualizar la llave');
+        Alert.alert('Error', res.message || 'No se pudo actualizar el movimiento');
       }
     } else {
-      // offline update (o item aún no sincronizado)
-      const next = llaves.map((it) => {
-        const match =
-          (editing.id_local && it.id_local === editing.id_local) ||
-          (!editing.id_local && it.id === editing.id);
-        if (!match) return it;
+      const next = llaveroMovimientos.map((m) => {
+        const match = (llaveroMovEditing.id_local && m.id_local === llaveroMovEditing.id_local) || (!llaveroMovEditing.id_local && m.id === llaveroMovEditing.id);
+        if (!match) return m;
         return {
-          ...it,
-          lugar_abre: payload.lugar_abre,
-          cantidad_copias: payload.cantidad_copias,
-          observaciones: payload.observaciones,
+          ...m,
+          nombre_persona_recibe: payload.nombre_persona_recibe,
+          nombre_persona_entrega: payload.nombre_persona_entrega,
+          departamento: payload.departamento,
+          telefono: payload.telefono,
+          fecha: payload.fecha,
+          hora: payload.hora,
+          firma_entrega: payload.firma_entrega,
+          firma_recibe: payload.firma_recibe,
           firma_responsable: payload.firma_responsable,
         };
       });
-      setLlaves(next);
-      await AsyncStorage.setItem('llaves_cache', JSON.stringify(next));
-
-      if (editing.id_local) {
-        const updated = await updateCreateActionForLocalId(editing.id_local, payload);
-        if (!updated) {
-          await upsertAction({ type: 'create', id: editing.id_local, requestData: payload });
-        }
+      await persistMovimientosToLlaverosCache(movLlavero, next);
+      if (llaveroMovEditing.id_local) {
+        await upsertLlaveroMovAction({
+          type: 'create',
+          id: llaveroMovEditing.id_local,
+          llaveroId: movLlavero.id || 0,
+          llaveroLocalId: movLlavero.id_local || '',
+          requestData: payload,
+        });
       } else {
-        await upsertAction({ type: 'update', id: editing.id, requestData: payload });
+        await upsertLlaveroMovAction({
+          type: 'update',
+          id: llaveroMovEditing.id,
+          llaveroId: movLlavero.id || 0,
+          requestData: payload,
+        });
       }
-
       Alert.alert('Guardado (offline)', 'Los cambios se sincronizarán cuando vuelva la conexión.');
-      setIsCreating(false);
-      setEditing(null);
+      setLlaveroMovIsCreating(false);
+      setLlaveroMovEditing(null);
     }
+  };
+
+  const handleLlaveroMovDelete = async (m: MovimientoLlaveroUI) => {
+    if (!movLlavero) return;
+    const current = await loadMarcaContext();
+    if (!current?.id) return;
+
+    Alert.alert('Confirmar', '¿Deseas eliminar este movimiento?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Eliminar',
+        style: 'destructive',
+        onPress: async () => {
+          const isConnected = await getConnectionStatus();
+
+          if (m.id_local || m.id === 0) {
+            const next = llaveroMovimientos.filter((x) => x.id_local !== m.id_local);
+            await persistMovimientosToLlaverosCache(movLlavero, next);
+            if (m.id_local) await removeLlaveroMovActionsForLocalId(m.id_local);
+            return;
+          }
+
+          if (isConnected && movLlavero.id && movLlavero.id !== 0) {
+            const res = await deleteMovimientoLlavero({
+              llaveroId: movLlavero.id,
+              id: m.id,
+              marcaId: current.id,
+              refreshAccessToken,
+              logout,
+            });
+            if (res.status) {
+              Alert.alert('Éxito', 'Movimiento eliminado correctamente');
+              await fetchLlaveros();
+            } else {
+              Alert.alert('Error', res.message || 'No se pudo eliminar el movimiento');
+            }
+          } else {
+            const next = llaveroMovimientos.filter((x) => x.id !== m.id);
+            await persistMovimientosToLlaverosCache(movLlavero, next);
+            await upsertLlaveroMovAction({
+              type: 'delete',
+              id: m.id,
+              llaveroId: movLlavero.id || 0,
+              marcaId: current.id,
+            });
+            Alert.alert('Eliminado (offline)', 'La eliminación se sincronizará cuando vuelva la conexión.');
+          }
+        },
+      },
+    ]);
   };
 
   const handleDelete = async (it: LlaveUI) => {
@@ -1008,9 +1586,76 @@ export default function LlavesScreen() {
     ]);
   };
 
+  // Funciones para Llaveros (similar a Llaves)
+  const resetLlaveroForm = () => {
+    setLlaveroNombre('');
+    setLlaveroObservaciones('');
+    setLlaveroFirmaResponsable('');
+    setLlaveroSelectedLlaves([]);
+  };
+
+  const startLlaveroCreating = () => {
+    resetLlaveroForm();
+    setLlaveroEditing(null);
+    setIsLlaveroCreating(true);
+  };
+
+  const startLlaveroEditing = (it: LlaveroUI) => {
+    setLlaveroEditing(it);
+    setIsLlaveroCreating(true);
+    setLlaveroNombre(it.nombre_llavero || '');
+    setLlaveroObservaciones(it.observaciones || '');
+    setLlaveroFirmaResponsable(it.firma_responsable || '');
+    const selectedLlaves = (it.llaves || []).map((l: any) => l.llave_id).filter((id: number) => id && id > 0);
+    setLlaveroSelectedLlaves(selectedLlaves);
+  };
+
+  const cancelLlaveroCreating = () => {
+    setIsLlaveroCreating(false);
+    setLlaveroEditing(null);
+    resetLlaveroForm();
+  };
+
+  const upsertLlaveroAction = async (action: any) => {
+    const actionsStr = await AsyncStorage.getItem('llaveros_actions');
+    const actions = actionsStr ? JSON.parse(actionsStr) : [];
+    const filtered = actions.filter((a: any) => !(a.id === action.id && a.type === action.type));
+    filtered.push({ ...action, id: action.id || `local-${Date.now()}` });
+    await AsyncStorage.setItem('llaveros_actions', JSON.stringify(filtered));
+  };
+
+  const removeLlaveroActionsForLocalId = async (localId: string) => {
+    const actionsStr = await AsyncStorage.getItem('llaveros_actions');
+    if (!actionsStr) return;
+    const actions = JSON.parse(actionsStr) || [];
+    const updated = actions.filter((a: any) => a.id !== localId);
+    await AsyncStorage.setItem('llaveros_actions', JSON.stringify(updated));
+  };
+
+  const upsertLlaveroMovAction = async (action: any) => {
+    const actionsStr = await AsyncStorage.getItem('movimientos_llaveros_actions');
+    const actions = actionsStr ? JSON.parse(actionsStr) : [];
+    const filtered = actions.filter((a: any) => !(a.id === action.id && a.type === action.type));
+    filtered.push({ ...action, id: action.id || `local-${Date.now()}` });
+    await AsyncStorage.setItem('movimientos_llaveros_actions', JSON.stringify(filtered));
+  };
+
+  const removeLlaveroMovActionsForLocalId = async (localId: string) => {
+    const actionsStr = await AsyncStorage.getItem('movimientos_llaveros_actions');
+    if (!actionsStr) return;
+    const actions = JSON.parse(actionsStr) || [];
+    const updated = actions.filter((a: any) => a.id !== localId);
+    await AsyncStorage.setItem('movimientos_llaveros_actions', JSON.stringify(updated));
+  };
+
   const resetAllFilters = () => {
     setFilterSearch('');
     setFilterFecha('');
+  };
+
+  const resetLlaveroFilters = () => {
+    setLlaveroFilterSearch('');
+    setLlaveroFilterFecha('');
   };
 
   const filteredLlaves = useMemo(() => {
@@ -1025,6 +1670,107 @@ export default function LlavesScreen() {
       return haystack.includes(q);
     });
   }, [llaves, filterSearch, filterFecha]);
+
+  const filteredLlaveros = useMemo(() => {
+    const q = llaveroFilterSearch.trim().toLowerCase();
+    return llaveros.filter((it) => {
+      if (llaveroFilterFecha) {
+        const d = it.created_at ? String(it.created_at).split('T')[0] : '';
+        if (d !== llaveroFilterFecha) return false;
+      }
+      if (!q) return true;
+      const haystack = `${it.nombre_llavero ?? ''} ${it.observaciones ?? ''}`.toLowerCase();
+      return haystack.includes(q);
+    });
+  }, [llaveros, llaveroFilterSearch, llaveroFilterFecha]);
+
+  // Obtener llaves disponibles para seleccionar (desde cache o API)
+  const getAvailableLlaves = async (): Promise<LlaveUI[]> => {
+    const isConnected = await getConnectionStatus();
+    if (isConnected) {
+      const current = await loadMarcaContext();
+      if (current) {
+        const res = await listLlaves({ marcaId: current.id, refreshAccessToken, logout });
+        if (res.status && res.data) {
+          return res.data.map((it: any) => ({ ...it, id_local: it.id_local || '' }));
+        }
+      }
+    }
+    const cacheStr = await AsyncStorage.getItem('llaves_cache');
+    if (cacheStr) {
+      return JSON.parse(cacheStr);
+    }
+    return [];
+  };
+
+  // Componente para seleccionar llaves en llavero
+  const LlaveroLlavesSelector = ({ selectedLlaves, onSelectionChange, getAvailableLlaves, isExpanded }: {
+    selectedLlaves: number[];
+    onSelectionChange: (llaves: number[]) => void;
+    getAvailableLlaves: () => Promise<LlaveUI[]>;
+    isExpanded: boolean;
+  }) => {
+    const [availableLlaves, setAvailableLlaves] = useState<LlaveUI[]>([]);
+    const [loadingLlaves, setLoadingLlaves] = useState(false);
+    const hasLoadedRef = useRef(false);
+
+    useEffect(() => {
+      // Solo cargar llaves cuando la sección se expande por primera vez
+      if (isExpanded && !hasLoadedRef.current) {
+        const loadLlaves = async () => {
+          setLoadingLlaves(true);
+          try {
+            const llaves = await getAvailableLlaves();
+            setAvailableLlaves(llaves);
+            hasLoadedRef.current = true;
+          } catch (error) {
+            console.error('Error loading llaves:', error);
+          } finally {
+            setLoadingLlaves(false);
+          }
+        };
+        loadLlaves();
+      }
+    }, [isExpanded]);
+
+    const toggleLlave = (llaveId: number) => {
+      if (selectedLlaves.includes(llaveId)) {
+        onSelectionChange(selectedLlaves.filter((id) => id !== llaveId));
+      } else {
+        onSelectionChange([...selectedLlaves, llaveId]);
+      }
+    };
+
+    return (
+      <ThemedView style={styles.llavesSelectorContainer}>
+        {loadingLlaves ? (
+          <ActivityIndicator size="small" color="#007AFF" />
+        ) : availableLlaves.length === 0 ? (
+          <ThemedText style={styles.emptyText}>No hay llaves disponibles</ThemedText>
+        ) : (
+          availableLlaves.map((llave) => {
+            const isSelected = selectedLlaves.includes(llave.id);
+            return (
+              <TouchableOpacity
+                key={llave.id || llave.id_local}
+                style={[styles.llaveSelectorItem, isSelected && styles.llaveSelectorItemSelected]}
+                onPress={() => toggleLlave(llave.id)}
+              >
+                <Ionicons
+                  name={isSelected ? 'checkbox' : 'checkbox-outline'}
+                  size={20}
+                  color={isSelected ? '#007AFF' : '#999'}
+                />
+                <ThemedText style={[styles.llaveSelectorText, isSelected && styles.llaveSelectorTextSelected]}>
+                  {llave.lugar_abre} ({llave.cantidad_copias} copias)
+                </ThemedText>
+              </TouchableOpacity>
+            );
+          })
+        )}
+      </ThemedView>
+    );
+  };
 
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const toggleExpanded = (key: string) => {
@@ -1130,199 +1876,608 @@ export default function LlavesScreen() {
     );
   };
 
+  // Renderizar llaveros
+  const renderLlaveroItem = (it: LlaveroUI, index: number) => {
+    const key = it.id !== 0 ? `llavero-${it.id}` : it.id_local ? `llavero-${it.id_local}` : `llavero-${index}`;
+    const isExpanded = expanded.has(key);
+    const fecha = it.created_at ? String(it.created_at).split('T')[0] : '';
+    const firmaInfo = decodeFirmaHash(it.firma_responsable);
+
+    return (
+      <ThemedView key={key} style={styles.bitacoraCard}>
+        <ThemedText style={styles.bitTitle}>
+          {it.nombre_llavero}
+          {it.id_local ? ' (offline)' : ''}
+        </ThemedText>
+
+        <ThemedText style={styles.bitLine}>
+          <ThemedText style={styles.bitLabel}>Fecha: </ThemedText>
+          <ThemedText style={styles.bitValue}>{formatYMDToDMY(fecha)}</ThemedText>
+        </ThemedText>
+
+        <TouchableOpacity style={styles.collapseButton} onPress={() => toggleExpanded(key)}>
+          <ThemedText style={styles.collapseButtonText}>{isExpanded ? 'Ocultar detalles' : 'Ver detalles'}</ThemedText>
+          <Ionicons name={isExpanded ? 'chevron-up' : 'chevron-down'} size={20} color="#007AFF" />
+        </TouchableOpacity>
+
+        {isExpanded && (
+          <ThemedView style={styles.collapsableContent}>
+            <ThemedText style={styles.bitLine}>
+              <ThemedText style={styles.bitLabel}>Observaciones: </ThemedText>
+              <ThemedText style={styles.bitValue}>{it.observaciones || '-'}</ThemedText>
+            </ThemedText>
+
+            <ThemedText style={styles.bitLine}>
+              <ThemedText style={styles.bitLabel}>Llaves asociadas: </ThemedText>
+              <ThemedText style={styles.bitValue}>{(it.llaves || []).length} llave(s)</ThemedText>
+            </ThemedText>
+            {(it.llaves || []).length > 0 && (
+              <ThemedView style={{ marginTop: 8 }}>
+                <ThemedText style={styles.bitLabel}>Lugares que abren:</ThemedText>
+                {(it.llaves || []).map((llaveRel: any, idx: number) => {
+                  const lugarAbre = llaveRel.llave?.lugar_abre || 'N/A';
+                  return (
+                    <ThemedText key={idx} style={[styles.bitValue, { marginTop: 4 }]}>
+                      • {lugarAbre}
+                    </ThemedText>
+                  );
+                })}
+              </ThemedView>
+            )}
+
+            {!it.firma_responsable ? (
+              <ThemedText style={styles.signatureHintMuted}>Aún no hay firma responsable.</ThemedText>
+            ) : (
+              <ThemedView style={[styles.firmaInfoBox, { marginTop: 10 }]}>
+                <ThemedView style={{ flex: 1, paddingRight: 10 }}>
+                  <ThemedText style={styles.firmaInfoTitle}>Información de la firma:</ThemedText>
+                  {(() => {
+                    const info = decodeFirmaHash(it.firma_responsable);
+                    if (!info) {
+                      return <ThemedText style={styles.firmaInfoValue}>Formato no decodificable</ThemedText>;
+                    }
+                    return (
+                      <>
+                        <ThemedText style={styles.firmaInfoValue}>Sesión: {info.sessionId || 'N/A'}</ThemedText>
+                        <ThemedText style={styles.firmaInfoValue}>Empleado: {info.empleadoId || 'N/A'}</ThemedText>
+                        <ThemedText style={styles.firmaInfoValue}>Lat: {info.latitud || 'N/A'} | Long: {info.longitud || 'N/A'}</ThemedText>
+                        <ThemedText style={styles.firmaInfoValue}>Hora: {info.timestamp || 'N/A'}</ThemedText>
+                      </>
+                    );
+                  })()}
+                </ThemedView>
+              </ThemedView>
+            )}
+          </ThemedView>
+        )}
+
+        <ThemedView style={styles.listItemButtons}>
+          <TouchableOpacity style={[styles.listItemButton, styles.editButton]} onPress={() => startLlaveroEditing(it)}>
+            <Ionicons name="pencil" size={18} color="#FFFFFF" />
+            <ThemedText style={styles.listItemButtonText}>Editar</ThemedText>
+          </TouchableOpacity>
+          {!(it.id_local || it.id === 0) && (
+            <TouchableOpacity
+              style={[styles.listItemButton, styles.changesButton]}
+              onPress={() => {
+                setCambiosTitle(`Cambios - Llavero #${it.id}`);
+                fetchCambios('e_llavero', it.id);
+              }}
+            >
+              <Ionicons name="list-outline" size={18} color="#FFFFFF" />
+              <ThemedText style={styles.listItemButtonText}>Cambios</ThemedText>
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity style={[styles.listItemButton, styles.deleteButton]} onPress={() => handleLlaveroDelete(it)}>
+            <Ionicons name="trash" size={18} color="#FFFFFF" />
+            <ThemedText style={styles.listItemButtonText}>Eliminar</ThemedText>
+          </TouchableOpacity>
+        </ThemedView>
+        <ThemedView style={styles.listItemButtons}>
+          <TouchableOpacity style={[styles.listItemButton, styles.movementsButton]} onPress={() => openLlaveroMovimientosModal(it)}>
+            <Ionicons name="repeat" size={18} color="#FFFFFF" />
+            <ThemedText style={styles.listItemButtonText}>Movimientos</ThemedText>
+          </TouchableOpacity>
+        </ThemedView>
+      </ThemedView>
+    );
+  };
+
   return (
     <ThemedView style={styles.container}>
-      <AppHeader onMenuPress={handleMenuPress} title="Llaves" />
+      <AppHeader onMenuPress={handleMenuPress} title={activeTab === 'llaves' ? 'Llaves' : 'Llaveros'} />
 
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
         <ThemedView style={styles.content}>
           {error ? <ThemedText style={styles.errorText}>{error}</ThemedText> : null}
 
-          <ThemedView style={styles.titleContainer}>
-            <ThemedText type="title" style={styles.title}>
-              <Ionicons name="key" size={22} color="#000000" /> Llaves
-            </ThemedText>
-            <ThemedText style={styles.subtitle}>Gestiona el registro y control de llaves</ThemedText>
+          {/* Tabs */}
+          <ThemedView style={styles.tabsContainer}>
+            <TouchableOpacity
+              style={[styles.tabButton, activeTab === 'llaves' && styles.tabButtonActive]}
+              onPress={() => setActiveTab('llaves')}
+            >
+              <Ionicons name="key" size={20} color={activeTab === 'llaves' ? '#FFFFFF' : '#007AFF'} />
+              <ThemedText style={[styles.tabButtonText, activeTab === 'llaves' && styles.tabButtonTextActive]}>
+                Llaves
+              </ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.tabButton, activeTab === 'llaveros' && styles.tabButtonActive]}
+              onPress={() => setActiveTab('llaveros')}
+            >
+              <Ionicons name="key-outline" size={20} color={activeTab === 'llaveros' ? '#FFFFFF' : '#007AFF'} />
+              <ThemedText style={[styles.tabButtonText, activeTab === 'llaveros' && styles.tabButtonTextActive]}>
+                Llaveros
+              </ThemedText>
+            </TouchableOpacity>
           </ThemedView>
 
-          {/* Filtros (collapsable) */}
-          {!isCreating && !isLoading && (
-            <ThemedView style={styles.filtersMain}>
-              <ThemedView style={styles.filterHeader}>
-                <TouchableOpacity
-                  style={styles.filterToggleButton}
-                  onPress={() => setIsFiltersExpanded(!isFiltersExpanded)}
-                >
-                  <ThemedText style={styles.filterToggleText}>Filtros</ThemedText>
-                  <Ionicons
-                    name={isFiltersExpanded ? 'chevron-up' : 'chevron-down'}
-                    size={20}
-                    color="#007AFF"
-                  />
-                </TouchableOpacity>
-
-                {isFiltersExpanded && (
-                  <TouchableOpacity style={styles.resetFiltersButton} onPress={resetAllFilters}>
-                    <Ionicons name="refresh" size={16} color="#FF3B30" />
-                    <ThemedText style={styles.resetFiltersText}>Reiniciar</ThemedText>
-                  </TouchableOpacity>
-                )}
+          {activeTab === 'llaves' && (
+            <>
+              <ThemedView style={styles.titleContainer}>
+                <ThemedText type="title" style={styles.title}>
+                  <Ionicons name="key" size={22} color="#000000" /> Llaves
+                </ThemedText>
+                <ThemedText style={styles.subtitle}>Gestiona el registro y control de llaves</ThemedText>
               </ThemedView>
 
-              {isFiltersExpanded && (
-                <ThemedView style={styles.filterContent}>
-                  <ThemedView style={styles.filterGroupSearch}>
-                    <ThemedText style={styles.filterLabel}>Buscar (lugar/observaciones):</ThemedText>
-                    <TextInput
-                      style={styles.searchInput}
-                      value={filterSearch}
-                      onChangeText={setFilterSearch}
-                      placeholder="Ej: Bodega / Portón / Observación"
-                      placeholderTextColor="#999"
-                    />
+              {/* Filtros (collapsable) */}
+              {!isCreating && !isLoading && (
+                <ThemedView style={styles.filtersMain}>
+                  <ThemedView style={styles.filterHeader}>
+                    <TouchableOpacity
+                      style={styles.filterToggleButton}
+                      onPress={() => setIsFiltersExpanded(!isFiltersExpanded)}
+                    >
+                      <ThemedText style={styles.filterToggleText}>Filtros</ThemedText>
+                      <Ionicons
+                        name={isFiltersExpanded ? 'chevron-up' : 'chevron-down'}
+                        size={20}
+                        color="#007AFF"
+                      />
+                    </TouchableOpacity>
+
+                    {isFiltersExpanded && (
+                      <TouchableOpacity style={styles.resetFiltersButton} onPress={resetAllFilters}>
+                        <Ionicons name="refresh" size={16} color="#FF3B30" />
+                        <ThemedText style={styles.resetFiltersText}>Reiniciar</ThemedText>
+                      </TouchableOpacity>
+                    )}
                   </ThemedView>
 
-                  <ThemedView style={styles.filterGroupSearch}>
-                    <ThemedText style={styles.filterLabel}>Fecha de registro:</ThemedText>
+                  {isFiltersExpanded && (
+                    <ThemedView style={styles.filterContent}>
+                      <ThemedView style={styles.filterGroupSearch}>
+                        <ThemedText style={styles.filterLabel}>Buscar (lugar/observaciones):</ThemedText>
+                        <TextInput
+                          style={styles.searchInput}
+                          value={filterSearch}
+                          onChangeText={setFilterSearch}
+                          placeholder="Ej: Bodega / Portón / Observación"
+                          placeholderTextColor="#999"
+                        />
+                      </ThemedView>
+
+                      <ThemedView style={styles.filterGroupSearch}>
+                        <ThemedText style={styles.filterLabel}>Fecha de registro:</ThemedText>
+                        <TouchableOpacity
+                          style={styles.dateButton}
+                          onPress={() => setShowFilterFechaPicker(true)}
+                        >
+                          <ThemedText style={styles.dateButtonText}>
+                            {filterFecha ? formatYMDToDMY(filterFecha) : 'Seleccionar fecha'}
+                          </ThemedText>
+                          <Ionicons name="calendar-outline" size={18} color="#007AFF" />
+                        </TouchableOpacity>
+                      </ThemedView>
+                    </ThemedView>
+                  )}
+                </ThemedView>
+              )}
+
+              {!hasCurrentMarca ? (
+                <ThemedView style={styles.emptyContainer}>
+                  <ThemedText style={styles.errorText}>Debes tener una marca activa para usar este módulo.</ThemedText>
+                </ThemedView>
+              ) : null}
+
+              {!isCreating && !isLoading && (
+                <TouchableOpacity style={styles.createButton} onPress={startCreating}>
+                  <ThemedText style={styles.createButtonText}>
+                    <Ionicons name="add" size={20} color="#FFFFFF" /> Nuevo registro
+                  </ThemedText>
+                </TouchableOpacity>
+              )}
+
+              {isCreating && (
+                <ThemedView style={styles.formCard}>
+                  <ThemedText style={styles.formTitle}>{editing ? 'Editar registro' : 'Nuevo registro'}</ThemedText>
+
+                  <ThemedText style={styles.label}>Lugar que abre *</ThemedText>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Ej: Bodega, Oficina, Portón..."
+                    placeholderTextColor="#999"
+                    value={lugarAbre}
+                    onChangeText={setLugarAbre}
+                  />
+
+                  <ThemedText style={styles.label}>Cantidad de copias *</ThemedText>
+                  <TextInput
+                    style={styles.input}
+                    keyboardType="number-pad"
+                    placeholder="1"
+                    placeholderTextColor="#999"
+                    value={cantidadCopias}
+                    onChangeText={setCantidadCopias}
+                  />
+
+                  <ThemedText style={styles.label}>Observaciones</ThemedText>
+                  <TextInput
+                    style={[styles.input, styles.textArea]}
+                    multiline
+                    placeholder="Observaciones..."
+                    placeholderTextColor="#999"
+                    value={observaciones}
+                    onChangeText={setObservaciones}
+                  />
+
+                  <ThemedText style={styles.sectionTitle}>Firma responsable *</ThemedText>
+                  <ThemedView style={styles.signatureButtons}>
                     <TouchableOpacity
-                      style={styles.dateButton}
-                      onPress={() => setShowFilterFechaPicker(true)}
+                      style={[styles.signatureButton, isGeneratingFirma && styles.signatureButtonDisabled]}
+                      onPress={handleGenerateFirmaResponsable}
+                      disabled={isGeneratingFirma}
                     >
-                      <ThemedText style={styles.dateButtonText}>
-                        {filterFecha ? formatYMDToDMY(filterFecha) : 'Seleccionar fecha'}
+                      {isGeneratingFirma ? (
+                        <ActivityIndicator size="small" color="#FFFFFF" />
+                      ) : (
+                        <>
+                          <Ionicons name="finger-print" size={18} color="#FFFFFF" />
+                          <ThemedText style={styles.signatureButtonText}>Generar</ThemedText>
+                        </>
+                      )}
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.signatureButton} onPress={handleScanFirmaResponsable}>
+                      <Ionicons name="qr-code" size={18} color="#FFFFFF" />
+                      <ThemedText style={styles.signatureButtonText}>Escanear QR</ThemedText>
+                    </TouchableOpacity>
+                  </ThemedView>
+
+                  {!firmaResponsable ? (
+                    <ThemedText style={styles.signatureHintMuted}>Aún no hay firma responsable.</ThemedText>
+                  ) : (
+                    <ThemedView style={styles.firmaInfoBox}>
+                      <ThemedView style={{ flex: 1, paddingRight: 10 }}>
+                        <ThemedText style={styles.firmaInfoTitle}>Información de la firma:</ThemedText>
+                        {(() => {
+                          const info = decodeFirmaHash(firmaResponsable);
+                          if (!info) {
+                            return <ThemedText style={styles.firmaInfoValue}>Formato no decodificable</ThemedText>;
+                          }
+                          return (
+                            <>
+                              <ThemedText style={styles.firmaInfoValue}>Sesión: {info.sessionId || 'N/A'}</ThemedText>
+                              <ThemedText style={styles.firmaInfoValue}>Empleado: {info.empleadoId || 'N/A'}</ThemedText>
+                              <ThemedText style={styles.firmaInfoValue}>Lat: {info.latitud || 'N/A'} | Long: {info.longitud || 'N/A'}</ThemedText>
+                              <ThemedText style={styles.firmaInfoValue}>Hora: {info.timestamp || 'N/A'}</ThemedText>
+                            </>
+                          );
+                        })()}
+                      </ThemedView>
+                      <TouchableOpacity style={styles.firmaClearButtonTiny} onPress={() => setFirmaResponsable('')}>
+                        <Ionicons name="trash" size={18} color="#FFFFFF" />
+                      </TouchableOpacity>
+                    </ThemedView>
+                  )}
+
+                  {submitResponse && (
+                    <ThemedView style={[styles.responseContainer, submitResponse.type === 'success' ? styles.responseSuccess : styles.responseError]}>
+                      <ThemedText style={styles.responseText}>
+                        {submitResponse.type === 'success' ? '✓ ' : '✗ '}
+                        {submitResponse.message}
                       </ThemedText>
-                      <Ionicons name="calendar-outline" size={18} color="#007AFF" />
+                    </ThemedView>
+                  )}
+                  <ThemedView style={styles.formActions}>
+                    <TouchableOpacity style={[styles.formActionButton, styles.formActionCancel]} onPress={cancelCreating} disabled={isSubmitting}>
+                      <Ionicons name="close" size={18} color="#000" />
+                      <ThemedText style={styles.formActionCancelText}>Cancelar</ThemedText>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.formActionButton, styles.formActionSave, isSubmitting && styles.buttonDisabled]}
+                      onPress={handleSave}
+                      disabled={isSubmitting}
+                    >
+                      {isSubmitting ? (
+                        <ActivityIndicator size="small" color="#fff" />
+                      ) : (
+                        <>
+                          <Ionicons name="save" size={18} color="#fff" />
+                          <ThemedText style={styles.formActionSaveText}>Guardar</ThemedText>
+                        </>
+                      )}
                     </TouchableOpacity>
                   </ThemedView>
                 </ThemedView>
               )}
-            </ThemedView>
-          )}
 
-          {!hasCurrentMarca ? (
-            <ThemedView style={styles.emptyContainer}>
-              <ThemedText style={styles.errorText}>Debes tener una marca activa para usar este módulo.</ThemedText>
-            </ThemedView>
-          ) : null}
-
-          {!isCreating && !isLoading && (
-            <TouchableOpacity style={styles.createButton} onPress={startCreating}>
-              <ThemedText style={styles.createButtonText}>
-                <Ionicons name="add" size={20} color="#FFFFFF" /> Nuevo registro
-              </ThemedText>
-            </TouchableOpacity>
-          )}
-
-          {isCreating && (
-            <ThemedView style={styles.formCard}>
-              <ThemedText style={styles.formTitle}>{editing ? 'Editar registro' : 'Nuevo registro'}</ThemedText>
-
-              <ThemedText style={styles.label}>Lugar que abre *</ThemedText>
-              <TextInput
-                style={styles.input}
-                placeholder="Ej: Bodega, Oficina, Portón..."
-                placeholderTextColor="#999"
-                value={lugarAbre}
-                onChangeText={setLugarAbre}
-              />
-
-              <ThemedText style={styles.label}>Cantidad de copias *</ThemedText>
-              <TextInput
-                style={styles.input}
-                keyboardType="number-pad"
-                placeholder="1"
-                placeholderTextColor="#999"
-                value={cantidadCopias}
-                onChangeText={setCantidadCopias}
-              />
-
-              <ThemedText style={styles.label}>Observaciones</ThemedText>
-              <TextInput
-                style={[styles.input, styles.textArea]}
-                multiline
-                placeholder="Observaciones..."
-                placeholderTextColor="#999"
-                value={observaciones}
-                onChangeText={setObservaciones}
-              />
-
-              <ThemedText style={styles.sectionTitle}>Firma responsable *</ThemedText>
-              <ThemedView style={styles.signatureButtons}>
-                <TouchableOpacity
-                  style={[styles.signatureButton, isGeneratingFirma && styles.signatureButtonDisabled]}
-                  onPress={handleGenerateFirmaResponsable}
-                  disabled={isGeneratingFirma}
-                >
-                  {isGeneratingFirma ? (
-                    <ActivityIndicator size="small" color="#FFFFFF" />
+              {!isCreating && (
+                <>
+                  {isLoading ? (
+                    <ThemedView style={styles.loadingContainer}>
+                      <ActivityIndicator size="large" color="#007AFF" />
+                      <ThemedText style={styles.loadingText}>Cargando...</ThemedText>
+                    </ThemedView>
+                  ) : filteredLlaves.length === 0 ? (
+                    <ThemedView style={styles.emptyContainer}>
+                      <ThemedText style={styles.emptyText}>No hay registros</ThemedText>
+                    </ThemedView>
                   ) : (
-                    <>
-                      <Ionicons name="finger-print" size={18} color="#FFFFFF" />
-                      <ThemedText style={styles.signatureButtonText}>Generar</ThemedText>
-                    </>
+                    <ThemedView style={styles.listContainer}>
+                      {filteredLlaves.map(renderItem)}
+                    </ThemedView>
                   )}
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.signatureButton} onPress={handleScanFirmaResponsable}>
-                  <Ionicons name="qr-code" size={18} color="#FFFFFF" />
-                  <ThemedText style={styles.signatureButtonText}>Escanear QR</ThemedText>
-                </TouchableOpacity>
+                </>
+              )}
+            </>
+          )}
+
+          {activeTab === 'llaveros' && (
+            <>
+              <ThemedView style={styles.titleContainer}>
+                <ThemedText type="title" style={styles.title}>
+                  <Ionicons name="key-outline" size={22} color="#000000" /> Llaveros
+                </ThemedText>
+                <ThemedText style={styles.subtitle}>Gestiona el registro y control de llaveros</ThemedText>
               </ThemedView>
 
-              {!firmaResponsable ? (
-                <ThemedText style={styles.signatureHintMuted}>Aún no hay firma responsable.</ThemedText>
-              ) : (
-                <ThemedView style={styles.firmaInfoBox}>
-                  <ThemedView style={{ flex: 1, paddingRight: 10 }}>
-                    <ThemedText style={styles.firmaInfoTitle}>Información de la firma:</ThemedText>
-                    {(() => {
-                      const info = decodeFirmaHash(firmaResponsable);
-                      if (!info) {
-                        return <ThemedText style={styles.firmaInfoValue}>Formato no decodificable</ThemedText>;
-                      }
-                      return (
-                        <>
-                          <ThemedText style={styles.firmaInfoValue}>Sesión: {info.sessionId || 'N/A'}</ThemedText>
-                          <ThemedText style={styles.firmaInfoValue}>Empleado: {info.empleadoId || 'N/A'}</ThemedText>
-                          <ThemedText style={styles.firmaInfoValue}>Lat: {info.latitud || 'N/A'} | Long: {info.longitud || 'N/A'}</ThemedText>
-                          <ThemedText style={styles.firmaInfoValue}>Hora: {info.timestamp || 'N/A'}</ThemedText>
-                        </>
-                      );
-                    })()}
+              {/* Filtros (collapsable) */}
+              {!isLlaveroCreating && !isLoading && (
+                <ThemedView style={styles.filtersMain}>
+                  <ThemedView style={styles.filterHeader}>
+                    <TouchableOpacity
+                      style={styles.filterToggleButton}
+                      onPress={() => setIsLlaveroFiltersExpanded(!isLlaveroFiltersExpanded)}
+                    >
+                      <ThemedText style={styles.filterToggleText}>Filtros</ThemedText>
+                      <Ionicons
+                        name={isLlaveroFiltersExpanded ? 'chevron-up' : 'chevron-down'}
+                        size={20}
+                        color="#007AFF"
+                      />
+                    </TouchableOpacity>
+
+                    {isLlaveroFiltersExpanded && (
+                      <TouchableOpacity style={styles.resetFiltersButton} onPress={resetLlaveroFilters}>
+                        <Ionicons name="refresh" size={16} color="#FF3B30" />
+                        <ThemedText style={styles.resetFiltersText}>Reiniciar</ThemedText>
+                      </TouchableOpacity>
+                    )}
                   </ThemedView>
-                  <TouchableOpacity style={styles.firmaClearButtonTiny} onPress={() => setFirmaResponsable('')}>
-                    <Ionicons name="trash" size={18} color="#FFFFFF" />
-                  </TouchableOpacity>
+
+                  {isLlaveroFiltersExpanded && (
+                    <ThemedView style={styles.filterContent}>
+                      <ThemedView style={styles.filterGroupSearch}>
+                        <ThemedText style={styles.filterLabel}>Buscar (nombre/observaciones):</ThemedText>
+                        <TextInput
+                          style={styles.searchInput}
+                          value={llaveroFilterSearch}
+                          onChangeText={setLlaveroFilterSearch}
+                          placeholder="Ej: Llavero principal / Observación"
+                          placeholderTextColor="#999"
+                        />
+                      </ThemedView>
+
+                      <ThemedView style={styles.filterGroupSearch}>
+                        <ThemedText style={styles.filterLabel}>Fecha de registro:</ThemedText>
+                        <TouchableOpacity
+                          style={styles.dateButton}
+                          onPress={() => setShowLlaveroFilterFechaPicker(true)}
+                        >
+                          <ThemedText style={styles.dateButtonText}>
+                            {llaveroFilterFecha ? formatYMDToDMY(llaveroFilterFecha) : 'Seleccionar fecha'}
+                          </ThemedText>
+                          <Ionicons name="calendar-outline" size={18} color="#007AFF" />
+                        </TouchableOpacity>
+                      </ThemedView>
+                    </ThemedView>
+                  )}
                 </ThemedView>
               )}
 
-              <ThemedView style={styles.formActions}>
-                <TouchableOpacity style={[styles.formActionButton, styles.formActionCancel]} onPress={cancelCreating}>
-                  <Ionicons name="close" size={18} color="#000" />
-                  <ThemedText style={styles.formActionCancelText}>Cancelar</ThemedText>
-                </TouchableOpacity>
-                <TouchableOpacity style={[styles.formActionButton, styles.formActionSave]} onPress={handleSave}>
-                  <Ionicons name="save" size={18} color="#fff" />
-                  <ThemedText style={styles.formActionSaveText}>Guardar</ThemedText>
-                </TouchableOpacity>
-              </ThemedView>
-            </ThemedView>
-          )}
-
-          {!isCreating && (
-            <>
-              {isLoading ? (
-                <ThemedView style={styles.loadingContainer}>
-                  <ActivityIndicator size="large" color="#007AFF" />
-                  <ThemedText style={styles.loadingText}>Cargando...</ThemedText>
-                </ThemedView>
-              ) : filteredLlaves.length === 0 ? (
+              {!hasCurrentMarca ? (
                 <ThemedView style={styles.emptyContainer}>
-                  <ThemedText style={styles.emptyText}>No hay registros</ThemedText>
+                  <ThemedText style={styles.errorText}>Debes tener una marca activa para usar este módulo.</ThemedText>
                 </ThemedView>
-              ) : (
-                <ThemedView style={styles.listContainer}>
-                  {filteredLlaves.map(renderItem)}
+              ) : null}
+
+              {!isLlaveroCreating && !isLoading && (
+                <TouchableOpacity style={styles.createButton} onPress={startLlaveroCreating}>
+                  <ThemedText style={styles.createButtonText}>
+                    <Ionicons name="add" size={20} color="#FFFFFF" /> Nuevo registro
+                  </ThemedText>
+                </TouchableOpacity>
+              )}
+
+              {isLlaveroCreating && (
+                <ThemedView style={styles.formCard}>
+                  <ThemedText style={styles.formTitle}>{llaveroEditing ? 'Editar registro' : 'Nuevo registro'}</ThemedText>
+
+                  <ThemedText style={styles.label}>Nombre del llavero *</ThemedText>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Ej: Llavero principal, Llavero oficina..."
+                    placeholderTextColor="#999"
+                    value={llaveroNombre}
+                    onChangeText={setLlaveroNombre}
+                  />
+
+                  <ThemedText style={styles.label}>Observaciones</ThemedText>
+                  <TextInput
+                    style={[styles.input, styles.textArea]}
+                    multiline
+                    placeholder="Observaciones..."
+                    placeholderTextColor="#999"
+                    value={llaveroObservaciones}
+                    onChangeText={setLlaveroObservaciones}
+                  />
+
+                  {/* Lista expandible de llaves */}
+                  <ThemedView style={styles.formGroup}>
+                    <TouchableOpacity
+                      style={styles.expandableHeader}
+                      onPress={() => setIsLlaveroLlavesExpanded(!isLlaveroLlavesExpanded)}
+                    >
+                      <ThemedText style={styles.label}>Llaves asociadas ({llaveroSelectedLlaves.length})</ThemedText>
+                      <Ionicons
+                        name={isLlaveroLlavesExpanded ? 'chevron-up' : 'chevron-down'}
+                        size={20}
+                        color="#007AFF"
+                      />
+                    </TouchableOpacity>
+                    {isLlaveroLlavesExpanded && (
+                      <ThemedView style={styles.expandableContent}>
+                        <LlaveroLlavesSelector
+                          selectedLlaves={llaveroSelectedLlaves}
+                          onSelectionChange={setLlaveroSelectedLlaves}
+                          getAvailableLlaves={getAvailableLlaves}
+                          isExpanded={isLlaveroLlavesExpanded}
+                        />
+                      </ThemedView>
+                    )}
+                  </ThemedView>
+
+                  <ThemedText style={styles.sectionTitle}>Firma responsable *</ThemedText>
+                  <ThemedView style={styles.signatureButtons}>
+                    <TouchableOpacity
+                      style={[styles.signatureButton, isGeneratingLlaveroFirma && styles.signatureButtonDisabled]}
+                      onPress={async () => {
+                        if (isGeneratingLlaveroFirma) return;
+                        setIsGeneratingLlaveroFirma(true);
+                        try {
+                          const loc = location ?? (await requestLocation());
+                          if (!loc || !employee) {
+                            Alert.alert('Error', 'No se pudo obtener ubicación o usuario');
+                            return;
+                          }
+                          const token = await AsyncStorage.getItem('access_token');
+                          if (!token) throw new Error('No authentication token found');
+                          const decodedToken: any = jwtDecode(token);
+                          const sessionId = decodedToken.sessionId;
+                          const horaAccion = await getHoraAccion();
+                          const hash = btoa(`${sessionId}:${employee.id}:${loc.coords.latitude}:${loc.coords.longitude}:${horaAccion}`);
+                          setLlaveroFirmaResponsable(hash);
+                        } catch (e: any) {
+                          Alert.alert('Error', e.message || 'No se pudo generar la firma');
+                        } finally {
+                          setIsGeneratingLlaveroFirma(false);
+                        }
+                      }}
+                      disabled={isGeneratingLlaveroFirma}
+                    >
+                      {isGeneratingLlaveroFirma ? (
+                        <ActivityIndicator size="small" color="#FFFFFF" />
+                      ) : (
+                        <>
+                          <Ionicons name="finger-print" size={18} color="#FFFFFF" />
+                          <ThemedText style={styles.signatureButtonText}>Generar</ThemedText>
+                        </>
+                      )}
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.signatureButton}
+                      onPress={async () => {
+                        try {
+                          const qrData = await scanQR();
+                          if (!qrData) return;
+                          setLlaveroFirmaResponsable(qrData);
+                        } catch {
+                          Alert.alert('Error', 'No se pudo escanear el QR');
+                        }
+                      }}
+                    >
+                      <Ionicons name="qr-code" size={18} color="#FFFFFF" />
+                      <ThemedText style={styles.signatureButtonText}>Escanear QR</ThemedText>
+                    </TouchableOpacity>
+                  </ThemedView>
+
+                  {!llaveroFirmaResponsable ? (
+                    <ThemedText style={styles.signatureHintMuted}>Aún no hay firma responsable.</ThemedText>
+                  ) : (
+                    <ThemedView style={styles.firmaInfoBox}>
+                      <ThemedView style={{ flex: 1, paddingRight: 10 }}>
+                        <ThemedText style={styles.firmaInfoTitle}>Información de la firma:</ThemedText>
+                        {(() => {
+                          const info = decodeFirmaHash(llaveroFirmaResponsable);
+                          if (!info) {
+                            return <ThemedText style={styles.firmaInfoValue}>Formato no decodificable</ThemedText>;
+                          }
+                          return (
+                            <>
+                              <ThemedText style={styles.firmaInfoValue}>Sesión: {info.sessionId || 'N/A'}</ThemedText>
+                              <ThemedText style={styles.firmaInfoValue}>Empleado: {info.empleadoId || 'N/A'}</ThemedText>
+                              <ThemedText style={styles.firmaInfoValue}>Lat: {info.latitud || 'N/A'} | Long: {info.longitud || 'N/A'}</ThemedText>
+                              <ThemedText style={styles.firmaInfoValue}>Hora: {info.timestamp || 'N/A'}</ThemedText>
+                            </>
+                          );
+                        })()}
+                      </ThemedView>
+                      <TouchableOpacity style={styles.firmaClearButtonTiny} onPress={() => setLlaveroFirmaResponsable('')}>
+                        <Ionicons name="trash" size={18} color="#FFFFFF" />
+                      </TouchableOpacity>
+                    </ThemedView>
+                  )}
+
+                  {submitResponse && (
+                    <ThemedView style={[styles.responseContainer, submitResponse.type === 'success' ? styles.responseSuccess : styles.responseError]}>
+                      <ThemedText style={styles.responseText}>
+                        {submitResponse.type === 'success' ? '✓ ' : '✗ '}
+                        {submitResponse.message}
+                      </ThemedText>
+                    </ThemedView>
+                  )}
+                  <ThemedView style={styles.formActions}>
+                    <TouchableOpacity style={[styles.formActionButton, styles.formActionCancel]} onPress={cancelLlaveroCreating} disabled={isSubmitting}>
+                      <Ionicons name="close" size={18} color="#000" />
+                      <ThemedText style={styles.formActionCancelText}>Cancelar</ThemedText>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.formActionButton, styles.formActionSave, isSubmitting && styles.buttonDisabled]}
+                      onPress={handleLlaveroSave}
+                      disabled={isSubmitting}
+                    >
+                      {isSubmitting ? (
+                        <ActivityIndicator size="small" color="#fff" />
+                      ) : (
+                        <>
+                          <Ionicons name="save" size={18} color="#fff" />
+                          <ThemedText style={styles.formActionSaveText}>Guardar</ThemedText>
+                        </>
+                      )}
+                    </TouchableOpacity>
+                  </ThemedView>
                 </ThemedView>
+              )}
+
+              {!isLlaveroCreating && (
+                <>
+                  {isLoading ? (
+                    <ThemedView style={styles.loadingContainer}>
+                      <ActivityIndicator size="large" color="#007AFF" />
+                      <ThemedText style={styles.loadingText}>Cargando...</ThemedText>
+                    </ThemedView>
+                  ) : filteredLlaveros.length === 0 ? (
+                    <ThemedView style={styles.emptyContainer}>
+                      <ThemedText style={styles.emptyText}>No hay registros</ThemedText>
+                    </ThemedView>
+                  ) : (
+                    <ThemedView style={styles.listContainer}>
+                      {filteredLlaveros.map(renderLlaveroItem)}
+                    </ThemedView>
+                  )}
+                </>
               )}
             </>
           )}
@@ -1337,6 +2492,54 @@ export default function LlavesScreen() {
           onChange={(event, date) => {
             setShowFilterFechaPicker(false);
             if (date) setFilterFecha(dateToLocalString(date));
+          }}
+        />
+      )}
+
+      {showLlaveroFilterFechaPicker && (
+        <DateTimePicker
+          value={llaveroFilterFecha ? parseDateStringToDate(llaveroFilterFecha) : new Date()}
+          mode="date"
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          onChange={(event, date) => {
+            setShowLlaveroFilterFechaPicker(false);
+            if (date) setLlaveroFilterFecha(dateToLocalString(date));
+          }}
+        />
+      )}
+
+      {showLlaveroMovFilterFechaPicker && (
+        <DateTimePicker
+          value={llaveroMovFilterFecha ? parseDateStringToDate(llaveroMovFilterFecha) : new Date()}
+          mode="date"
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          onChange={(event, date) => {
+            setShowLlaveroMovFilterFechaPicker(false);
+            if (date) setLlaveroMovFilterFecha(dateToLocalString(date));
+          }}
+        />
+      )}
+
+      {showLlaveroMovFechaPicker && (
+        <DateTimePicker
+          value={llaveroMovFecha ? parseDateStringToDate(llaveroMovFecha) : new Date()}
+          mode="date"
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          onChange={(event, date) => {
+            setShowLlaveroMovFechaPicker(false);
+            if (date) setLlaveroMovFecha(dateToLocalString(date));
+          }}
+        />
+      )}
+
+      {showLlaveroMovHoraPicker && (
+        <DateTimePicker
+          value={llaveroMovHora ? new Date(`1970-01-01T${llaveroMovHora}`) : new Date()}
+          mode="time"
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          onChange={(event, date) => {
+            setShowLlaveroMovHoraPicker(false);
+            if (date) setLlaveroMovHora(timeToHHMMSS(date));
           }}
         />
       )}
@@ -1434,11 +2637,6 @@ export default function LlavesScreen() {
                 <ThemedText style={styles.label}>Teléfono *</ThemedText>
                 <TextInput style={styles.input} placeholder="Teléfono" placeholderTextColor="#999" value={movTelefono} onChangeText={setMovTelefono} keyboardType="phone-pad" />
 
-                <ThemedText style={styles.label}>Entrega *</ThemedText>
-                <TextInput style={styles.input} placeholder="Entrega" placeholderTextColor="#999" value={movEntrega} onChangeText={setMovEntrega} />
-
-                <ThemedText style={styles.label}>Recibe *</ThemedText>
-                <TextInput style={styles.input} placeholder="Recibe" placeholderTextColor="#999" value={movRecibe} onChangeText={setMovRecibe} />
 
                 <ThemedText style={styles.label}>Fecha *</ThemedText>
                 <TouchableOpacity style={styles.dateButton} onPress={() => setShowMovFechaPicker(true)}>
@@ -1675,6 +2873,364 @@ export default function LlavesScreen() {
         </ThemedView>
       </Modal>
 
+      {/* Modal Movimientos de llaveros */}
+      <Modal visible={isLlaveroMovModalVisible} animationType="slide" transparent={false} onRequestClose={closeLlaveroMovimientosModal}>
+        <ThemedView style={styles.modalContainer}>
+          <ThemedView style={styles.modalHeader}>
+            <ThemedText style={styles.modalTitle}>Movimientos de llaveros</ThemedText>
+            <TouchableOpacity onPress={closeLlaveroMovimientosModal}>
+              <Ionicons name="close" size={24} color="#333" />
+            </TouchableOpacity>
+          </ThemedView>
+
+          <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16 }}>
+            <ThemedView style={styles.modalCard}>
+              <ThemedText style={styles.modalCardTitle}>Llavero:</ThemedText>
+              <ThemedText style={styles.modalCardValue}>{movLlavero?.nombre_llavero || '-'}</ThemedText>
+            </ThemedView>
+
+            {/* Filtros movimientos (collapsable) */}
+            <ThemedView style={styles.filtersMain}>
+              <ThemedView style={styles.filterHeader}>
+                <TouchableOpacity
+                  style={styles.filterToggleButton}
+                  onPress={() => setIsLlaveroMovFiltersExpanded(!isLlaveroMovFiltersExpanded)}
+                >
+                  <ThemedText style={styles.filterToggleText}>Filtros</ThemedText>
+                  <Ionicons
+                    name={isLlaveroMovFiltersExpanded ? 'chevron-up' : 'chevron-down'}
+                    size={20}
+                    color="#007AFF"
+                  />
+                </TouchableOpacity>
+
+                {isLlaveroMovFiltersExpanded && (
+                  <TouchableOpacity
+                    style={styles.resetFiltersButton}
+                    onPress={() => {
+                      setLlaveroMovFilterSearch('');
+                      setLlaveroMovFilterFecha('');
+                    }}
+                  >
+                    <Ionicons name="refresh" size={16} color="#FF3B30" />
+                    <ThemedText style={styles.resetFiltersText}>Reiniciar</ThemedText>
+                  </TouchableOpacity>
+                )}
+              </ThemedView>
+
+              {isLlaveroMovFiltersExpanded && (
+                <ThemedView style={styles.filterContent}>
+                  <ThemedView style={styles.filterGroupSearch}>
+                    <ThemedText style={styles.filterLabel}>Buscar (persona/depto):</ThemedText>
+                    <TextInput
+                      style={styles.searchInput}
+                      value={llaveroMovFilterSearch}
+                      onChangeText={setLlaveroMovFilterSearch}
+                      placeholder="Ej: Juan / Seguridad / Bodega"
+                      placeholderTextColor="#999"
+                    />
+                  </ThemedView>
+
+                  <ThemedView style={styles.filterGroupSearch}>
+                    <ThemedText style={styles.filterLabel}>Fecha:</ThemedText>
+                    <TouchableOpacity style={styles.dateButton} onPress={() => setShowLlaveroMovFilterFechaPicker(true)}>
+                      <ThemedText style={styles.dateButtonText}>{llaveroMovFilterFecha ? formatYMDToDMY(llaveroMovFilterFecha) : 'Seleccionar fecha'}</ThemedText>
+                      <Ionicons name="calendar-outline" size={18} color="#007AFF" />
+                    </TouchableOpacity>
+                  </ThemedView>
+                </ThemedView>
+              )}
+            </ThemedView>
+
+            {!llaveroMovIsCreating && (
+              <TouchableOpacity style={styles.createButton} onPress={startLlaveroMovCreating}>
+                <ThemedText style={styles.createButtonText}>
+                  <Ionicons name="add" size={20} color="#FFFFFF" /> Nuevo movimiento
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+
+            {llaveroMovIsCreating && (
+              <ThemedView style={styles.formCard}>
+                <ThemedText style={styles.formTitle}>{llaveroMovEditing ? 'Editar movimiento' : 'Nuevo movimiento'}</ThemedText>
+
+                <ThemedText style={styles.label}>Nombre persona que entrega *</ThemedText>
+                <TextInput style={styles.input} placeholder="Nombre" placeholderTextColor="#999" value={llaveroMovNombreEntrega} onChangeText={setLlaveroMovNombreEntrega} />
+
+                <ThemedText style={styles.label}>Nombre persona que recibe *</ThemedText>
+                <TextInput style={styles.input} placeholder="Nombre" placeholderTextColor="#999" value={llaveroMovNombreRecibe} onChangeText={setLlaveroMovNombreRecibe} />
+
+                <ThemedText style={styles.label}>Departamento *</ThemedText>
+                <TextInput style={styles.input} placeholder="Departamento" placeholderTextColor="#999" value={llaveroMovDepartamento} onChangeText={setLlaveroMovDepartamento} />
+
+                <ThemedText style={styles.label}>Teléfono *</ThemedText>
+                <TextInput style={styles.input} placeholder="Teléfono" placeholderTextColor="#999" value={llaveroMovTelefono} onChangeText={setLlaveroMovTelefono} keyboardType="phone-pad" />
+
+
+                <ThemedText style={styles.label}>Fecha *</ThemedText>
+                <TouchableOpacity style={styles.dateButton} onPress={() => setShowLlaveroMovFechaPicker(true)}>
+                  <ThemedText style={styles.dateButtonText}>{llaveroMovFecha ? formatYMDToDMY(llaveroMovFecha) : 'Seleccionar fecha'}</ThemedText>
+                  <Ionicons name="calendar-outline" size={18} color="#007AFF" />
+                </TouchableOpacity>
+
+                <ThemedText style={styles.label}>Hora *</ThemedText>
+                <TouchableOpacity style={styles.dateButton} onPress={() => setShowLlaveroMovHoraPicker(true)}>
+                  <ThemedText style={styles.dateButtonText}>{llaveroMovHora || 'Seleccionar hora'}</ThemedText>
+                  <Ionicons name="time-outline" size={18} color="#007AFF" />
+                </TouchableOpacity>
+
+                <ThemedText style={styles.sectionTitle}>Firma entrega *</ThemedText>
+                {llaveroMovFirmaEntrega ? (
+                  <ThemedView style={styles.signaturePreviewContainer}>
+                    <Image source={{ uri: llaveroMovFirmaEntrega }} style={styles.signaturePreview} resizeMode="contain" />
+                    <TouchableOpacity style={styles.removeSignatureButton} onPress={() => setLlaveroMovFirmaEntrega('')}>
+                      <Ionicons name="trash" size={18} color="#FFFFFF" />
+                    </TouchableOpacity>
+                  </ThemedView>
+                ) : null}
+                <TouchableOpacity style={styles.openSignatureButton} onPress={() => openDrawSignatureModal('entrega')}>
+                  <Ionicons name="create-outline" size={20} color="#000000" />
+                  <ThemedText style={styles.openSignatureButtonText}>{llaveroMovFirmaEntrega ? 'Modificar firma' : 'Agregar firma'}</ThemedText>
+                </TouchableOpacity>
+
+                <ThemedText style={styles.sectionTitle}>Firma recibe *</ThemedText>
+                {llaveroMovFirmaRecibe ? (
+                  <ThemedView style={styles.signaturePreviewContainer}>
+                    <Image source={{ uri: llaveroMovFirmaRecibe }} style={styles.signaturePreview} resizeMode="contain" />
+                    <TouchableOpacity style={styles.removeSignatureButton} onPress={() => setLlaveroMovFirmaRecibe('')}>
+                      <Ionicons name="trash" size={18} color="#FFFFFF" />
+                    </TouchableOpacity>
+                  </ThemedView>
+                ) : null}
+                <TouchableOpacity style={styles.openSignatureButton} onPress={() => openDrawSignatureModal('recibe')}>
+                  <Ionicons name="create-outline" size={20} color="#000000" />
+                  <ThemedText style={styles.openSignatureButtonText}>{llaveroMovFirmaRecibe ? 'Modificar firma' : 'Agregar firma'}</ThemedText>
+                </TouchableOpacity>
+
+                <ThemedText style={styles.sectionTitle}>Firma responsable *</ThemedText>
+                <ThemedView style={styles.signatureButtons}>
+                  <TouchableOpacity
+                    style={[styles.signatureButton, isGeneratingLlaveroMovFirma && styles.signatureButtonDisabled]}
+                    onPress={async () => {
+                      if (isGeneratingLlaveroMovFirma) return;
+                      setIsGeneratingLlaveroMovFirma(true);
+                      try {
+                        const loc = location ?? (await requestLocation());
+                        if (!loc || !employee) {
+                          Alert.alert('Error', 'No se pudo obtener ubicación o usuario');
+                          return;
+                        }
+                        const token = await AsyncStorage.getItem('access_token');
+                        if (!token) throw new Error('No authentication token found');
+                        const decodedToken: any = jwtDecode(token);
+                        const sessionId = decodedToken.sessionId;
+                        const horaAccion = await getHoraAccion();
+                        const hash = btoa(`${sessionId}:${employee.id}:${loc.coords.latitude}:${loc.coords.longitude}:${horaAccion}`);
+                        setLlaveroMovFirmaResponsable(hash);
+                      } catch (e: any) {
+                        Alert.alert('Error', e.message || 'No se pudo generar la firma');
+                      } finally {
+                        setIsGeneratingLlaveroMovFirma(false);
+                      }
+                    }}
+                    disabled={isGeneratingLlaveroMovFirma}
+                  >
+                    {isGeneratingLlaveroMovFirma ? (
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                      <>
+                        <Ionicons name="finger-print" size={18} color="#FFFFFF" />
+                        <ThemedText style={styles.signatureButtonText}>Generar</ThemedText>
+                      </>
+                    )}
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.signatureButton} onPress={async () => {
+                    try {
+                      const qrData = await scanQR();
+                      if (!qrData) return;
+                      setLlaveroMovFirmaResponsable(qrData);
+                    } catch {
+                      Alert.alert('Error', 'No se pudo escanear el QR');
+                    }
+                  }}>
+                    <Ionicons name="qr-code" size={18} color="#FFFFFF" />
+                    <ThemedText style={styles.signatureButtonText}>Escanear QR</ThemedText>
+                  </TouchableOpacity>
+                </ThemedView>
+
+                {!llaveroMovFirmaResponsable ? (
+                  <ThemedText style={styles.signatureHintMuted}>Aún no hay firma responsable.</ThemedText>
+                ) : (
+                  <ThemedView style={styles.firmaInfoBox}>
+                    <ThemedView style={{ flex: 1, paddingRight: 10 }}>
+                      <ThemedText style={styles.firmaInfoTitle}>Información de la firma:</ThemedText>
+                      {(() => {
+                        const info = decodeFirmaHash(llaveroMovFirmaResponsable);
+                        if (!info) return <ThemedText style={styles.firmaInfoValue}>Formato no decodificable</ThemedText>;
+                        return (
+                          <>
+                            <ThemedText style={styles.firmaInfoValue}>Sesión: {info.sessionId || 'N/A'}</ThemedText>
+                            <ThemedText style={styles.firmaInfoValue}>Empleado: {info.empleadoId || 'N/A'}</ThemedText>
+                            <ThemedText style={styles.firmaInfoValue}>Lat: {info.latitud || 'N/A'} | Long: {info.longitud || 'N/A'}</ThemedText>
+                            <ThemedText style={styles.firmaInfoValue}>Hora: {info.timestamp || 'N/A'}</ThemedText>
+                          </>
+                        );
+                      })()}
+                    </ThemedView>
+                    <TouchableOpacity style={styles.firmaClearButtonTiny} onPress={() => setLlaveroMovFirmaResponsable('')}>
+                      <Ionicons name="trash" size={18} color="#FFFFFF" />
+                    </TouchableOpacity>
+                  </ThemedView>
+                )}
+
+                <ThemedView style={styles.formActions}>
+                  <TouchableOpacity style={[styles.formActionButton, styles.formActionCancel]} onPress={cancelLlaveroMovCreating}>
+                    <Ionicons name="close" size={18} color="#000" />
+                    <ThemedText style={styles.formActionCancelText}>Cancelar</ThemedText>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={[styles.formActionButton, styles.formActionSave]} onPress={handleLlaveroMovSave}>
+                    <Ionicons name="save" size={18} color="#fff" />
+                    <ThemedText style={styles.formActionSaveText}>Guardar</ThemedText>
+                  </TouchableOpacity>
+                </ThemedView>
+              </ThemedView>
+            )}
+
+            {/* Lista (oculta mientras se crea/edita para evitar confusión) */}
+            {!llaveroMovIsCreating && (
+              <ThemedView style={{ marginTop: 12 }}>
+                {(() => {
+                  const q = llaveroMovFilterSearch.trim().toLowerCase();
+                  const filtered = llaveroMovimientos.filter((m) => {
+                    if (llaveroMovFilterFecha) {
+                      const d = m.fecha ? String(m.fecha).split('T')[0] : '';
+                      if (d !== llaveroMovFilterFecha) return false;
+                    }
+                    if (!q) return true;
+                    const hay = `${m.nombre_persona_entrega ?? ''} ${m.nombre_persona_recibe ?? ''} ${m.departamento ?? ''}`.toLowerCase();
+                    return hay.includes(q);
+                  });
+
+                  if (filtered.length === 0) {
+                    return (
+                      <ThemedView style={styles.emptyContainer}>
+                        <ThemedText style={styles.emptyText}>No hay movimientos</ThemedText>
+                      </ThemedView>
+                    );
+                  }
+
+                  return filtered.map((m, idx) => {
+                    const k = m.id !== 0 ? `mv-llavero-${m.id}` : m.id_local ? `mv-llavero-${m.id_local}` : `mv-llavero-${idx}`;
+                    const fecha = m.fecha ? String(m.fecha).split('T')[0] : '';
+                    const hora = String(m.hora || '').includes('T') ? String(m.hora).split('T')[1]?.split('.')[0] : String(m.hora || '');
+
+                    return (
+                      <ThemedView key={k} style={styles.bitacoraCard}>
+                        <ThemedText style={styles.bitTitle}>
+                          {m.nombre_persona_entrega} → {m.nombre_persona_recibe}
+                          {m.id_local ? ' (offline)' : ''}
+                        </ThemedText>
+
+                        <ThemedText style={styles.bitLine}>
+                          <ThemedText style={styles.bitLabel}>Depto: </ThemedText>
+                          <ThemedText style={styles.bitValue}>{m.departamento}</ThemedText>
+                        </ThemedText>
+                        <ThemedText style={styles.bitLine}>
+                          <ThemedText style={styles.bitLabel}>Fecha/Hora: </ThemedText>
+                          <ThemedText style={styles.bitValue}>{formatYMDToDMY(fecha)} {hora}</ThemedText>
+                        </ThemedText>
+
+                        {/* Firma responsable visible con datos */}
+                        {!m.firma_responsable ? (
+                          <ThemedText style={styles.signatureHintMuted}>Aún no hay firma responsable.</ThemedText>
+                        ) : (
+                          <ThemedView style={[styles.firmaInfoBox, { marginTop: 10 }]}>
+                            <ThemedView style={{ flex: 1, paddingRight: 10 }}>
+                              <ThemedText style={styles.firmaInfoTitle}>Información de la firma:</ThemedText>
+                              {(() => {
+                                const info = decodeFirmaHash(m.firma_responsable);
+                                if (!info) return <ThemedText style={styles.firmaInfoValue}>Formato no decodificable</ThemedText>;
+                                return (
+                                  <>
+                                    <ThemedText style={styles.firmaInfoValue}>Sesión: {info.sessionId || 'N/A'}</ThemedText>
+                                    <ThemedText style={styles.firmaInfoValue}>Empleado: {info.empleadoId || 'N/A'}</ThemedText>
+                                    <ThemedText style={styles.firmaInfoValue}>Lat: {info.latitud || 'N/A'} | Long: {info.longitud || 'N/A'}</ThemedText>
+                                    <ThemedText style={styles.firmaInfoValue}>Hora: {info.timestamp || 'N/A'}</ThemedText>
+                                  </>
+                                );
+                              })()}
+                            </ThemedView>
+                          </ThemedView>
+                        )}
+
+                        <ThemedView style={styles.listItemButtons}>
+                          <TouchableOpacity style={[styles.listItemButton, styles.editButton]} onPress={() => startLlaveroMovEditing(m)}>
+                            <Ionicons name="pencil" size={18} color="#FFFFFF" />
+                            <ThemedText style={styles.listItemButtonText}>Editar</ThemedText>
+                          </TouchableOpacity>
+                          {!(m.id_local || m.id === 0) && (
+                            <TouchableOpacity
+                              style={[styles.listItemButton, styles.changesButton]}
+                              onPress={() => {
+                                setCambiosTitle(`Cambios - Movimiento #${m.id}`);
+                                fetchCambios('e_movimiento_llavero', m.id);
+                              }}
+                            >
+                              <Ionicons name="list-outline" size={18} color="#FFFFFF" />
+                              <ThemedText style={styles.listItemButtonText}>Cambios</ThemedText>
+                            </TouchableOpacity>
+                          )}
+                          <TouchableOpacity style={[styles.listItemButton, styles.deleteButton]} onPress={() => handleLlaveroMovDelete(m)}>
+                            <Ionicons name="trash" size={18} color="#FFFFFF" />
+                            <ThemedText style={styles.listItemButtonText}>Eliminar</ThemedText>
+                          </TouchableOpacity>
+                        </ThemedView>
+                      </ThemedView>
+                    );
+                  });
+                })()}
+              </ThemedView>
+            )}
+          </ScrollView>
+
+          {showLlaveroMovFilterFechaPicker && (
+            <DateTimePicker
+              value={llaveroMovFilterFecha ? parseDateStringToDate(llaveroMovFilterFecha) : new Date()}
+              mode="date"
+              display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+              onChange={(event, date) => {
+                setShowLlaveroMovFilterFechaPicker(false);
+                if (date) setLlaveroMovFilterFecha(dateToLocalString(date));
+              }}
+            />
+          )}
+
+          {showLlaveroMovFechaPicker && (
+            <DateTimePicker
+              value={llaveroMovFecha ? parseDateStringToDate(llaveroMovFecha) : new Date()}
+              mode="date"
+              display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+              onChange={(event, date) => {
+                setShowLlaveroMovFechaPicker(false);
+                if (date) setLlaveroMovFecha(dateToLocalString(date));
+              }}
+            />
+          )}
+
+          {showLlaveroMovHoraPicker && (
+            <DateTimePicker
+              value={llaveroMovHora ? new Date(`1970-01-01T${llaveroMovHora}`) : new Date()}
+              mode="time"
+              display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+              onChange={(event, date) => {
+                setShowLlaveroMovHoraPicker(false);
+                if (date) setLlaveroMovHora(timeToHHMMSS(date));
+              }}
+            />
+          )}
+        </ThemedView>
+      </Modal>
+
       {/* Modal flotante para dibujar firma (entrega/recibe) */}
       <Modal
         visible={isDrawSignatureModalVisible}
@@ -1835,6 +3391,82 @@ const styles = StyleSheet.create({
   scrollContent: { padding: 16 },
   content: { width: '100%', maxWidth: 800, alignSelf: 'center' },
 
+  // Tabs
+  tabsContainer: {
+    flexDirection: 'row',
+    marginBottom: 16,
+    backgroundColor: '#F0F0F0',
+    borderRadius: 8,
+    padding: 4,
+  },
+  tabButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 6,
+    gap: 8,
+  },
+  tabButtonActive: {
+    backgroundColor: '#007AFF',
+  },
+  tabButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#007AFF',
+  },
+  tabButtonTextActive: {
+    color: '#FFFFFF',
+  },
+
+  // Expandable
+  expandableHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: '#F9F9F9',
+    borderRadius: 6,
+    marginTop: 10,
+  },
+  expandableContent: {
+    marginTop: 8,
+    padding: 12,
+    backgroundColor: '#F9F9F9',
+    borderRadius: 6,
+    maxHeight: 300,
+  },
+  llavesSelectorContainer: {
+    maxHeight: 250,
+  },
+  llaveSelectorItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 6,
+    marginBottom: 6,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    gap: 8,
+  },
+  llaveSelectorItemSelected: {
+    backgroundColor: '#E3F2FD',
+    borderColor: '#007AFF',
+  },
+  llaveSelectorText: {
+    fontSize: 14,
+    color: '#333',
+  },
+  llaveSelectorTextSelected: {
+    fontWeight: '600',
+    color: '#007AFF',
+  },
+
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 },
   loadingText: { marginTop: 16, fontSize: 16, opacity: 0.7 },
   errorText: { color: '#FF3B30', textAlign: 'center', marginBottom: 12 },
@@ -1951,6 +3583,28 @@ const styles = StyleSheet.create({
   formActionCancelText: { color: '#000', fontWeight: '800' },
   formActionSave: { backgroundColor: '#007AFF' },
   formActionSaveText: { color: '#fff', fontWeight: '800' },
+  buttonDisabled: {
+    opacity: 0.6,
+  },
+  responseContainer: {
+    padding: 12,
+    borderRadius: 6,
+    marginBottom: 12,
+  },
+  responseSuccess: {
+    backgroundColor: '#D4EDDA',
+    borderWidth: 1,
+    borderColor: '#C3E6CB',
+  },
+  responseError: {
+    backgroundColor: '#F8D7DA',
+    borderWidth: 1,
+    borderColor: '#F5C6CB',
+  },
+  responseText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
 
   listContainer: {},
   emptyContainer: { padding: 24, alignItems: 'center' },
@@ -2124,6 +3778,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#F8F9FA',
   },
   floatModalCardMovimientos: { backgroundColor: '#FFFFFF', borderRadius: 12, width: '100%', maxWidth: 500, maxHeight: '80%', borderWidth: 1, borderColor: '#E0E0E0', overflow: 'hidden' },
+  floatModalScroll: { flex: 1 },
+  floatModalScrollContent: { padding: 16 },
+  floatModalFilters: { marginBottom: 16 },
+  formGroup: { marginTop: 10, marginBottom: 10 },
   cambioCollapsableMain: { width: '100%', marginBottom: 10, backgroundColor: '#fff', borderRadius: 6, borderWidth: 1, borderColor: '#E0E0E0', overflow: 'hidden' },
   cambioCollapsableHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, backgroundColor: '#F8F9FA' },
   cambioCollapsableTitle: { fontSize: 14, fontWeight: '600', color: '#007AFF', flex: 1 },

@@ -1660,14 +1660,16 @@ interface DeleteCorporateVehicleParams {
 
 export type CorporateVehicleUseRequest = {
   nombre_conductor: string;
-  fecha: string; // ISO
-  hora_inicio: string; // ISO
-  hora_fin: string; // ISO
-  combustible_inicio: number;
-  combustible_fin: number;
+  codigo_conductor: string;
+  fecha: string; // ISO (fecha del registro)
+  inicio: string; // ISO (fecha + hora inicio)
+  fin: string; // ISO (fecha + hora fin)
+  combustible_inicio: string;
+  combustible_fin: string;
   km_inicio: number;
   km_fin: number;
   motivo: string;
+  firma_conductor: string;
   firma_responsable: string;
   // bitacora_id ignorado por solicitud
 };
@@ -3444,6 +3446,7 @@ interface CreateAgendaMinutaParams {
     autor: string;
     participantes: string; // JSON string
     acuerdos: string; // JSON string
+    temas_a_tratar?: string; // JSON string (array of strings)
     observaciones: string;
     firma_responsable: string;
   };
@@ -7510,6 +7513,69 @@ export const listPermitRequestByCorpo = async ({
   }
 };
 
+interface ListPermitRequestMineParams {
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+export const listPermitRequestMine = async ({
+  refreshAccessToken,
+  logout,
+}: ListPermitRequestMineParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        if (logout) await logout();
+        throw new Error('Sesión expirada');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/permit-request?mode=mine`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+    });
+
+    if (response.status === 401) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        return listPermitRequestMine({ refreshAccessToken, logout });
+      }
+      await logout();
+      throw new Error('Sesión expirada');
+    }
+
+    if (response.status === 403) {
+      await logout();
+      throw new Error('Acceso denegado');
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    return (await response.json()) as ApiResponse;
+  } catch (error) {
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al listar solicitudes de permiso',
+      data: [],
+    };
+  }
+};
+
 // =========================
 // Acta de entrega de productos
 // =========================
@@ -7899,14 +7965,15 @@ export const listActaEntregaProductoByCorpo = async ({
 interface CreateAttendanceControlParams {
   requestData: {
     marca_id: number;
-    cliente?: string | null;
+    empresa_id?: number;
+    cliente_id?: number;
+    division_id?: number;
+    contrato_id?: number;
+    corpo_id?: number;
     fecha?: string | null;
     turno?: string | null;
-    area_piso?: string | null;
-    total_presentes?: string | null;
-    fijos?: string | null;
-    colaboradores?: string | null;
     firma_responsable?: string | null;
+    imagenes?: string;
   };
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
@@ -7915,14 +7982,16 @@ interface CreateAttendanceControlParams {
 interface UpdateAttendanceControlParams {
   id: string;
   requestData: {
-    cliente?: string | null;
+    empresa_id?: number;
+    cliente_id?: number;
+    division_id?: number;
+    contrato_id?: number;
+    corpo_id?: number;
     fecha?: string | null;
     turno?: string | null;
-    area_piso?: string | null;
-    total_presentes?: string | null;
-    fijos?: string | null;
-    colaboradores?: string | null;
     firma_responsable?: string | null;
+    imagenes?: string;
+    delete_imagenes?: string;
   };
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
@@ -8977,6 +9046,7 @@ interface CreateGeneralInductionRegisterParams {
     colaboradores: string;
     capacitadores: string;
     firma_responsable: string;
+    imagenes?: string | null; // JSON string [{file_base64, extension, original_name}]
   };
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
@@ -8991,6 +9061,7 @@ interface UpdateGeneralInductionRegisterParams {
     colaboradores?: string;
     capacitadores?: string;
     firma_responsable?: string;
+    imagenes?: string | null; // JSON string [{file_base64, extension, original_name}]
   };
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;

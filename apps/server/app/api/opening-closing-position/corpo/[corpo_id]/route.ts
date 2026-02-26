@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../../../utils/verifyToken";
-import { prisma } from "../../../../../utils/prismaClient";
+import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 
 export async function GET(
     req: NextRequest,
     context: { params: Promise<{ corpo_id: string }> }
 ) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
 
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
@@ -22,23 +22,30 @@ export async function GET(
         const host = req.headers.get("x-forwarded-host") || req.headers.get("host") || "";
         const baseUrl = host ? `${proto}://${host}` : "";
 
-        const records = await prisma.c_apertura_cierre_puesto.findMany({
-            where: {
-                corpo_id: corpoId
-            },
-            orderBy: {
-                created_at: 'desc'
-            },
-            include: {
-                c_imagenes_apertura_cierre_puesto: true,
-                e_estructura_cliente: { select: { nombre: true } },
-                e_estructura_sucursal: { select: { nombre: true } },
-                e_estructura_puesto: { select: { nombre: true } },
-                n_division: { select: { nombre: true } },
+        const records = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_apertura_cierre_puesto",
+                operation: "findMany",
+                where: {
+                    corpo_id: corpoId
+                },
+                orderBy: {
+                    created_at: 'desc'
+                },
+                include: {
+                    c_imagenes_apertura_cierre_puesto: true,
+                    e_estructura_cliente: { select: { nombre: true } },
+                    e_estructura_sucursal: { select: { nombre: true } },
+                    e_estructura_puesto: { select: { nombre: true } },
+                    n_division: { select: { nombre: true } },
+                },
             },
         });
 
-        const recordsWithIdLocal = records.map((record: any) => ({
+        const recordsArray = Array.isArray(records) ? records : [];
+        const recordsWithIdLocal = recordsArray.map((record: any) => ({
             ...record,
             id_local: "",
             cliente_nombre: record.e_estructura_cliente?.nombre || null,

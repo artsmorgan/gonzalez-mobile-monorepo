@@ -34,56 +34,26 @@ import authedFetch from '@/hooks/authedFetch';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'TrasladoPlazas'>;
 
-type TrasladoPlazaItem = {
-    intercambio: {
-        id: number;
-        nombre: string | null;
-        fecha: string | Date;
-        descripcion: string | null;
-        fecha_insercion: string | Date | null;
-        usuario_insercion: string | null;
-        fecha_actualizacion: string | Date | null;
-        usuario_actualizacion: string | null;
-        fecha_reversion: string | Date | null;
-        usuario_reversion: string | null;
-        observaciones_motivo_traslado: string | null;
-        observaciones_cambio_salario: string | null;
-        consecutivo: string | null;
-    };
-    intercambio_linea: {
-        id: number;
-        intercambio_id: number | null;
-        empleado_id: number | null;
-        plazaInicio_id: number | null;
-        plazaFin_id: number | null;
-        empleadoSustituido_id: number | null;
-        archivo_adjunto_id: string | null;
-        archivo_adjunto_nombre: string | null;
-    };
-    empleado_sustituido: {
-        id: number;
-        nombre: string;
-        apellido: string;
-        cedula: string | null;
-    } | null;
-    plaza_inicio: {
-        id: number;
-        nombre: string;
-    } | null;
-    plaza_fin: {
-        id: number;
-        nombre: string;
-    } | null;
+type ArchivoAccionItem = {
+    id: number;
+    consecutivo: string | null;
+    cliente: string | null;
+    sucursal: string | null;
+    puesto: string | null;
+    tipo_accion: string | null;
+    fecha_vence_subir_adjunto: string | Date | null;
+    document: string | null;
+    mobile_upload: boolean;
 };
 
-type TrasladoPlazaUI = TrasladoPlazaItem & {
+type ArchivoAccionUI = ArchivoAccionItem & {
     id_local?: string;
     synced?: boolean;
 };
 
 type LocalFile = {
     id: string;
-    intercambio_linea_id: number | string;
+    accion_id: number | string;
     type: 'image' | 'audio' | 'video' | 'document';
     name: string;
     extension: string;
@@ -126,10 +96,12 @@ const getBase64Only = (value: string | null | undefined): string => {
     return s;
 };
 
-const buildFileUrl = (intercambioLineaId: number | string, fileName: string, fileType: string): string => {
+const buildFileUrl = (accionId: number | string, fileName: string, fileType: string, accessToken?: string | null): string => {
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-    if (apiUrl && typeof intercambioLineaId === 'number' && intercambioLineaId > 0) {
-        return `${apiUrl}/api/traslado-plaza/${intercambioLineaId}/get-file/${encodeURIComponent(fileName)}`;
+    if (apiUrl && typeof accionId === 'number' && accionId > 0) {
+        const url = `${apiUrl}/api/traslado-plaza/${accionId}/get-file/${encodeURIComponent(fileName)}`;
+        if (!accessToken || accessToken.trim().length === 0) return url;
+        return `${url}${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(accessToken)}`;
     }
     return '';
 };
@@ -149,16 +121,16 @@ export default function TrasladoPlazasScreen() {
         }
     };
     const navigation = useNavigation<Nav>();
-    const { employee, refreshAccessToken, logout } = useAuth();
+    const { employee, refreshAccessToken, logout, accessToken } = useAuth();
 
     const [isMenuVisible, setIsMenuVisible] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [records, setRecords] = useState<TrasladoPlazaUI[]>([]);
+    const [records, setRecords] = useState<ArchivoAccionUI[]>([]);
     const [expanded, setExpanded] = useState<Set<string>>(new Set());
     const [uploadingFile, setUploadingFile] = useState<string | null>(null);
     const [localFiles, setLocalFiles] = useState<LocalFile[]>([]);
-    const [pendingFile, setPendingFile] = useState<{ intercambioLineaId: number | string; file: LocalFile } | null>(null);
+    const [pendingFile, setPendingFile] = useState<{ accionId: number | string; file: LocalFile } | null>(null);
 
     const toggleExpanded = (key: string) => {
         setExpanded((prev) => {
@@ -172,7 +144,7 @@ export default function TrasladoPlazasScreen() {
         });
     };
 
-    const fetchTraslados = useCallback(async () => {
+    const fetchArchivosAcciones = useCallback(async () => {
         try {
             setIsLoading(true);
             setError(null);
@@ -192,18 +164,8 @@ export default function TrasladoPlazasScreen() {
                     throw new Error('Server URL not configured');
                 }
 
-                const currentMarca = await AsyncStorage.getItem('current_marca');
-                if (!currentMarca) {
-                    throw new Error('No se encontró la marca actual');
-                }
-                const currentMarcaData = JSON.parse(currentMarca);
-                const plazaId = currentMarcaData.plaza?.id;
-                if (!plazaId) {
-                    throw new Error('No se encontró la ID de la plaza');
-                }
-
                 const response = await authedFetch({
-                    url: `${apiUrl}/api/traslado-plaza?emp=${empleadoId}&plaza=${plazaId}`,
+                    url: `${apiUrl}/api/traslado-plaza`,
                     init: {
                         method: 'GET',
                         headers: {
@@ -220,19 +182,19 @@ export default function TrasladoPlazasScreen() {
                 }
 
                 const data = await response.json();
-                if (data.status && data.intercambio_return) {
-                    const recordsWithUI: TrasladoPlazaUI[] = data.intercambio_return.map((item: TrasladoPlazaItem) => ({
+                if (data.status && data.acciones_return) {
+                    const recordsWithUI: ArchivoAccionUI[] = data.acciones_return.map((item: ArchivoAccionItem) => ({
                         ...item,
                         synced: true,
                     }));
                     setRecords(recordsWithUI);
-                    await AsyncStorage.setItem('traslado_plazas_cache', JSON.stringify(recordsWithUI));
+                    await AsyncStorage.setItem('archivos_acciones_cache', JSON.stringify(recordsWithUI));
                 } else {
-                    setError(data.message || 'Error al cargar los traslados');
+                    setError(data.message || 'Error al cargar archivos de acciones');
                 }
             } else {
                 // Modo offline: cargar desde cache
-                const cacheStr = await AsyncStorage.getItem('traslado_plazas_cache');
+                const cacheStr = await AsyncStorage.getItem('archivos_acciones_cache');
                 if (cacheStr) {
                     const cached = JSON.parse(cacheStr);
                     setRecords(cached);
@@ -241,8 +203,8 @@ export default function TrasladoPlazasScreen() {
                 }
             }
         } catch (err: any) {
-            console.error('Error fetching traslados:', err);
-            setError(err.message || 'Error al cargar los traslados');
+            console.error('Error fetching archivos de acciones:', err);
+            setError(err.message || 'Error al cargar archivos de acciones');
         } finally {
             setIsLoading(false);
         }
@@ -250,22 +212,22 @@ export default function TrasladoPlazasScreen() {
 
     useFocusEffect(
         useCallback(() => {
-            fetchTraslados();
-        }, [fetchTraslados])
+            fetchArchivosAcciones();
+        }, [fetchArchivosAcciones])
     );
 
     useEffect(() => {
         const handler = () => {
-            fetchTraslados();
+            fetchArchivosAcciones();
         };
         eventBus.on('syncCompleted', handler);
         return () => {
             eventBus.off('syncCompleted', handler);
         };
-    }, [fetchTraslados]);
+    }, [fetchArchivosAcciones]);
 
 
-    const handleAddFile = async (intercambioLineaId: number | string, type: 'image' | 'audio' | 'video' | 'document') => {
+    const handleAddFile = async (accionId: number | string, type: 'image' | 'audio' | 'video' | 'document') => {
         try {
             let pickerTypes: string | string[] | undefined;
             switch (type) {
@@ -326,7 +288,7 @@ export default function TrasladoPlazasScreen() {
             const localFileId = `local_file_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
             const localFile: LocalFile = {
                 id: localFileId,
-                intercambio_linea_id: intercambioLineaId,
+                accion_id: accionId,
                 type,
                 name: asset.name || `archivo.${extension || 'dat'}`,
                 extension: extension || 'dat',
@@ -335,7 +297,7 @@ export default function TrasladoPlazasScreen() {
             };
 
             // Mostrar vista previa antes de subir
-            setPendingFile({ intercambioLineaId, file: localFile });
+            setPendingFile({ accionId, file: localFile });
         } catch (e: any) {
             console.error('Error picking file:', e);
             Alert.alert('Error', 'No se pudo seleccionar el archivo.');
@@ -344,17 +306,29 @@ export default function TrasladoPlazasScreen() {
 
     const confirmUpload = async () => {
         if (!pendingFile) return;
-        const { intercambioLineaId, file } = pendingFile;
+        const { accionId, file } = pendingFile;
         setPendingFile(null);
         setLocalFiles((prev) => [...prev, file]);
-        await uploadFile(intercambioLineaId, file);
+        Alert.alert(
+            'Confirmar subida',
+            '¿Deseas subir este adjunto?',
+            [
+                { text: 'Cancelar', style: 'cancel', onPress: () => setLocalFiles((prev) => prev.filter((f) => f.id !== file.id)) },
+                {
+                    text: 'Subir',
+                    onPress: async () => {
+                        await uploadFile(accionId, file);
+                    },
+                },
+            ],
+        );
     };
 
     const cancelUpload = () => {
         setPendingFile(null);
     };
 
-    const uploadFile = async (intercambioLineaId: number | string, file: LocalFile) => {
+    const uploadFile = async (accionId: number | string, file: LocalFile) => {
         try {
             setUploadingFile(file.id);
             const isConnected = await getConnectionStatus();
@@ -367,14 +341,14 @@ export default function TrasladoPlazasScreen() {
                 mimeType: file.mimeType,
             };
 
-            if (isConnected && typeof intercambioLineaId === 'number' && intercambioLineaId > 0) {
+            if (isConnected && typeof accionId === 'number' && accionId > 0) {
                 const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
                 if (!apiUrl) {
                     throw new Error('Server URL not configured');
                 }
 
                 const response = await authedFetch({
-                    url: `${apiUrl}/api/traslado-plaza/${intercambioLineaId}/upload-file`,
+                    url: `${apiUrl}/api/traslado-plaza/${accionId}/upload-file`,
                     init: {
                         method: 'PUT',
                         headers: {
@@ -396,43 +370,40 @@ export default function TrasladoPlazasScreen() {
                 if (data.status) {
                     Alert.alert('Éxito', 'Archivo subido correctamente');
                     setLocalFiles((prev) => prev.filter((f) => f.id !== file.id));
-                    await fetchTraslados();
+                    await fetchArchivosAcciones();
                 } else {
                     throw new Error(data.message || 'Error al subir el archivo');
                 }
             } else {
                 // Modo offline: guardar en actions
-                const actionsStr = await AsyncStorage.getItem('traslado_plazas_actions');
+                const actionsStr = await AsyncStorage.getItem('archivos_acciones_actions');
                 const actions = actionsStr ? JSON.parse(actionsStr) : [];
                 const actionId = `action_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
                 actions.push({
                     id: actionId,
                     action: 'upload_file',
-                    type: 'traslado_plaza',
-                    intercambio_linea_id: intercambioLineaId,
+                    type: 'archivo_accion',
+                    accion_id: accionId,
                     payload: requestData,
                     synced: false,
                 });
-                await AsyncStorage.setItem('traslado_plazas_actions', JSON.stringify(actions));
+                await AsyncStorage.setItem('archivos_acciones_actions', JSON.stringify(actions));
 
                 // Actualizar cache local
-                const cacheStr = await AsyncStorage.getItem('traslado_plazas_cache');
+                const cacheStr = await AsyncStorage.getItem('archivos_acciones_cache');
                 const cache = cacheStr ? JSON.parse(cacheStr) : [];
-                const updatedCache = cache.map((item: TrasladoPlazaUI) => {
-                    if (item.intercambio_linea.id === intercambioLineaId || item.intercambio_linea.id === Number(intercambioLineaId)) {
+                const updatedCache = cache.map((item: ArchivoAccionUI) => {
+                    if (item.id === accionId || item.id === Number(accionId)) {
                         return {
                             ...item,
-                            intercambio_linea: {
-                                ...item.intercambio_linea,
-                                archivo_adjunto_id: `pending_${file.id}`,
-                                archivo_adjunto_nombre: file.name,
-                            },
+                            document: `pending_${file.id}_${file.name}`,
+                            mobile_upload: true,
                             synced: false,
                         };
                     }
                     return item;
                 });
-                await AsyncStorage.setItem('traslado_plazas_cache', JSON.stringify(updatedCache));
+                await AsyncStorage.setItem('archivos_acciones_cache', JSON.stringify(updatedCache));
                 setRecords(updatedCache);
 
                 // Mantener el archivo local para reconstrucción
@@ -446,19 +417,19 @@ export default function TrasladoPlazasScreen() {
         }
     };
 
-    const getFileUrl = (item: TrasladoPlazaUI): string | null => {
-        if (!item.intercambio_linea.archivo_adjunto_id) return null;
+    const getFileUrl = (item: ArchivoAccionUI): string | null => {
+        if (!item.document || String(item.document).startsWith('pending_')) return null;
 
-        // Si hay un archivo local para este intercambio
-        const localFile = localFiles.find((f) => f.intercambio_linea_id === item.intercambio_linea.id);
+        // Si hay un archivo local para esta acción
+        const localFile = localFiles.find((f) => f.accion_id === item.id);
         if (localFile) {
             const mime = guessMimeType(localFile);
             return `data:${mime};base64,${localFile.base64}`;
         }
 
         // Si está sincronizado, usar la API
-        if (item.synced && typeof item.intercambio_linea.id === 'number' && item.intercambio_linea.id > 0) {
-            const fileName = item.intercambio_linea.archivo_adjunto_id;
+        if (item.synced && typeof item.id === 'number' && item.id > 0 && item.document) {
+            const fileName = item.document;
             const extension = fileName.includes('.') ? fileName.split('.').pop()?.toLowerCase() : '';
             const fileType = ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(extension || '')
                 ? 'image'
@@ -467,19 +438,18 @@ export default function TrasladoPlazasScreen() {
                     : ['mp4', 'mov', 'avi', 'mkv'].includes(extension || '')
                         ? 'video'
                         : 'document';
-            return buildFileUrl(item.intercambio_linea.id, fileName, fileType);
+            return buildFileUrl(item.id, fileName, fileType, accessToken);
         }
 
         return null;
     };
 
-    const renderFilePreview = (item: TrasladoPlazaUI) => {
+    const renderFilePreview = (item: ArchivoAccionUI) => {
         const fileUrl = getFileUrl(item);
         if (!fileUrl) return null;
 
-        const fileName = item.intercambio_linea.archivo_adjunto_nombre || item.intercambio_linea.archivo_adjunto_id || 'archivo';
-        // Usar archivo_adjunto_id para determinar el tipo (tiene la extensión del archivo guardado)
-        const fileId = item.intercambio_linea.archivo_adjunto_id || '';
+        const fileName = item.document || 'archivo';
+        const fileId = item.document || '';
         const extension = fileId.includes('.') ? fileId.split('.').pop()?.toLowerCase() : '';
         const isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(extension || '');
         const isAudio = ['mp3', 'wav', 'm4a', 'aac'].includes(extension || '');
@@ -588,7 +558,7 @@ export default function TrasladoPlazasScreen() {
             return (
                 <ThemedView style={styles.centerContainer}>
                     <ActivityIndicator size="large" color="#007AFF" />
-                    <ThemedText style={styles.loadingText}>Cargando traslados...</ThemedText>
+                    <ThemedText style={styles.loadingText}>Cargando archivos de acciones...</ThemedText>
                 </ThemedView>
             );
         }
@@ -598,7 +568,7 @@ export default function TrasladoPlazasScreen() {
                 <ThemedView style={styles.centerContainer}>
                     <Ionicons name="alert-circle-outline" size={48} color="#FF3B30" />
                     <ThemedText style={styles.errorText}>{error}</ThemedText>
-                    <TouchableOpacity style={styles.retryButton} onPress={fetchTraslados}>
+                    <TouchableOpacity style={styles.retryButton} onPress={fetchArchivosAcciones}>
                         <ThemedText style={styles.retryButtonText}>Reintentar</ThemedText>
                     </TouchableOpacity>
                 </ThemedView>
@@ -609,7 +579,7 @@ export default function TrasladoPlazasScreen() {
             return (
                 <ThemedView style={styles.centerContainer}>
                     <Ionicons name="document-outline" size={48} color="#999" />
-                    <ThemedText style={styles.emptyText}>No hay traslados de plaza registrados</ThemedText>
+                    <ThemedText style={styles.emptyText}>No hay acciones pendientes de adjunto</ThemedText>
                 </ThemedView>
             );
         }
@@ -619,68 +589,52 @@ export default function TrasladoPlazasScreen() {
                 <ThemedView style={styles.contentContainer}>
                     <ThemedView style={styles.titleContainer}>
                         <ThemedText type="title" style={styles.title}>
-                            Traslado de plazas
+                            Archivos de acciones
                         </ThemedText>
                         <ThemedText style={styles.subtitle}>
-                            Gestiona los traslados de plaza registrados.
+                            Gestiona y sube adjuntos pendientes de acciones de personal.
                         </ThemedText>
                     </ThemedView>
 
                     <ThemedView style={styles.listContainer}>
                         {records.map((item, index) => {
-                            const key = `traslado-${item.intercambio.id || index}`;
+                            const key = `accion-${item.id || index}`;
                             const isExpanded = expanded.has(key);
-                            const isUploading = uploadingFile && localFiles.some((f) => f.intercambio_linea_id === item.intercambio_linea.id);
+                            const isUploading = uploadingFile && localFiles.some((f) => f.accion_id === item.id);
 
                             return (
                                 <ThemedView key={key} style={styles.card}>
                                     <ThemedText style={styles.cardTitle}>
-                                        {item.intercambio.nombre || `Traslado #${item.intercambio.id}`}
+                                        {item.consecutivo || `Acción #${item.id}`}
                                         {!item.synced && ' (offline)'}
                                     </ThemedText>
 
-                                    {item.intercambio.consecutivo && (
-                                        <ThemedText style={styles.cardLine}>
-                                            <ThemedText style={styles.cardLabel}>Consecutivo: </ThemedText>
-                                            <ThemedText style={styles.cardValue}>{item.intercambio.consecutivo}</ThemedText>
-                                        </ThemedText>
-                                    )}
-
-                                    {item.intercambio.fecha && (
-                                        <ThemedText style={styles.cardLine}>
-                                            <ThemedText style={styles.cardLabel}>Fecha: </ThemedText>
-                                            <ThemedText style={styles.cardValue}>
-                                                {formatDateDMY(item.intercambio.fecha)}
-                                            </ThemedText>
-                                        </ThemedText>
-                                    )}
-
-                                    {item.intercambio.descripcion && (
-                                        <ThemedText style={styles.cardLine}>
-                                            <ThemedText style={styles.cardLabel}>Descripción: </ThemedText>
-                                            <ThemedText style={styles.cardValue}>{item.intercambio.descripcion}</ThemedText>
-                                        </ThemedText>
-                                    )}
-
                                     <ThemedText style={styles.cardLine}>
-                                        <ThemedText style={styles.cardLabel}>Plaza inicio: </ThemedText>
-                                        <ThemedText style={styles.cardValue}>{item.plaza_inicio?.nombre || '-'}</ThemedText>
+                                        <ThemedText style={styles.cardLabel}>Cliente: </ThemedText>
+                                        <ThemedText style={styles.cardValue}>{item.cliente || '-'}</ThemedText>
                                     </ThemedText>
 
                                     <ThemedText style={styles.cardLine}>
-                                        <ThemedText style={styles.cardLabel}>Plaza fin: </ThemedText>
-                                        <ThemedText style={styles.cardValue}>{item.plaza_fin?.nombre || '-'}</ThemedText>
+                                        <ThemedText style={styles.cardLabel}>Sucursal: </ThemedText>
+                                        <ThemedText style={styles.cardValue}>{item.sucursal || '-'}</ThemedText>
                                     </ThemedText>
 
-                                    {item.empleado_sustituido && (
-                                        <ThemedText style={styles.cardLine}>
-                                            <ThemedText style={styles.cardLabel}>Empleado sustituido: </ThemedText>
-                                            <ThemedText style={styles.cardValue}>
-                                                {item.empleado_sustituido.nombre} {item.empleado_sustituido.apellido}
-                                                {item.empleado_sustituido.cedula ? ` (${item.empleado_sustituido.cedula})` : ''}
-                                            </ThemedText>
+                                    <ThemedText style={styles.cardLine}>
+                                        <ThemedText style={styles.cardLabel}>Puesto: </ThemedText>
+                                        <ThemedText style={styles.cardValue}>{item.puesto || '-'}</ThemedText>
+                                    </ThemedText>
+
+                                    <ThemedText style={styles.cardLine}>
+                                        <ThemedText style={styles.cardLabel}>Tipo de acción: </ThemedText>
+                                        <ThemedText style={styles.cardValue}>{item.tipo_accion || '-'}</ThemedText>
+                                    </ThemedText>
+
+                                    <ThemedText style={styles.cardLine}>
+                                        <ThemedText style={styles.cardLabel}>Fecha vence subir adjunto: </ThemedText>
+                                        <ThemedText style={styles.cardValue}>
+                                            {item.fecha_vence_subir_adjunto ? formatDateDMY(item.fecha_vence_subir_adjunto) : '-'}
                                         </ThemedText>
-                                    )}
+                                    </ThemedText>
 
                                     <TouchableOpacity
                                         style={styles.collapseButton}
@@ -700,56 +654,30 @@ export default function TrasladoPlazasScreen() {
                                     {isExpanded && (
                                         <ThemedView style={styles.collapsableContent}>
                                             <ThemedText style={styles.sectionTitle}>Archivo adjunto</ThemedText>
-                                            {item.intercambio_linea.archivo_adjunto_id ? (
+                                            {(item.document && !String(item.document).startsWith('pending_')) ? (
                                                 <ThemedView style={styles.fileContainer}>
-                                                    {item.intercambio_linea.archivo_adjunto_nombre && (
-                                                        <ThemedText style={styles.fileNameLabel}>
-                                                            Nombre: {item.intercambio_linea.archivo_adjunto_nombre}
-                                                        </ThemedText>
-                                                    )}
+                                                    <ThemedText style={styles.fileNameLabel}>
+                                                        Nombre: {item.document}
+                                                    </ThemedText>
                                                     {renderFilePreview(item)}
                                                 </ThemedView>
                                             ) : (
                                                 <ThemedText style={styles.emptyText}>No hay archivo adjunto</ThemedText>
                                             )}
 
-                                            {!item.intercambio_linea.archivo_adjunto_id && (
+                                            {(!item.document || String(item.document).startsWith('pending_')) && (
                                                 <ThemedView style={styles.fileButtonsContainer}>
                                                     {(() => {
-                                                        const isUploadingThis = !!uploadingFile && localFiles.some((f) => f.intercambio_linea_id === item.intercambio_linea.id && f.id === uploadingFile);
+                                                        const isUploadingThis = !!uploadingFile && localFiles.some((f) => f.accion_id === item.id && f.id === uploadingFile);
                                                         return (
                                                             <>
                                                                 <TouchableOpacity
                                                                     style={[styles.addFileButton, isUploadingThis && styles.uploadButtonDisabled]}
-                                                                    onPress={() => handleAddFile(item.intercambio_linea.id, 'image')}
+                                                                    onPress={() => handleAddFile(item.id, 'document')}
                                                                     disabled={isUploadingThis}
                                                                 >
-                                                                    <Ionicons name="image-outline" size={18} color="#007AFF" />
-                                                                    <ThemedText style={styles.addFileButtonText}>Añadir imagen</ThemedText>
-                                                                </TouchableOpacity>
-                                                                <TouchableOpacity
-                                                                    style={[styles.addFileButton, isUploadingThis && styles.uploadButtonDisabled]}
-                                                                    onPress={() => handleAddFile(item.intercambio_linea.id, 'audio')}
-                                                                    disabled={isUploadingThis}
-                                                                >
-                                                                    <Ionicons name="mic-outline" size={18} color="#007AFF" />
-                                                                    <ThemedText style={styles.addFileButtonText}>Añadir audio</ThemedText>
-                                                                </TouchableOpacity>
-                                                                <TouchableOpacity
-                                                                    style={[styles.addFileButton, isUploadingThis && styles.uploadButtonDisabled]}
-                                                                    onPress={() => handleAddFile(item.intercambio_linea.id, 'video')}
-                                                                    disabled={isUploadingThis}
-                                                                >
-                                                                    <Ionicons name="videocam-outline" size={18} color="#007AFF" />
-                                                                    <ThemedText style={styles.addFileButtonText}>Añadir video</ThemedText>
-                                                                </TouchableOpacity>
-                                                                <TouchableOpacity
-                                                                    style={[styles.addFileButton, isUploadingThis && styles.uploadButtonDisabled]}
-                                                                    onPress={() => handleAddFile(item.intercambio_linea.id, 'document')}
-                                                                    disabled={isUploadingThis}
-                                                                >
-                                                                    <Ionicons name="document-text-outline" size={18} color="#007AFF" />
-                                                                    <ThemedText style={styles.addFileButtonText}>Añadir archivo de texto</ThemedText>
+                                                                    <Ionicons name="document-attach-outline" size={18} color="#007AFF" />
+                                                                    <ThemedText style={styles.addFileButtonText}>Añadir archivo</ThemedText>
                                                                 </TouchableOpacity>
                                                                 {isUploadingThis && (
                                                                     <ThemedView style={styles.uploadingIndicator}>
@@ -846,7 +774,7 @@ export default function TrasladoPlazasScreen() {
 
     return (
         <ThemedView style={styles.container}>
-            <AppHeader title="Traslado de plazas" onMenuPress={() => setIsMenuVisible(true)} />
+            <AppHeader title="Archivos de acciones" onMenuPress={() => setIsMenuVisible(true)} />
             <SlideMenu isVisible={isMenuVisible} onClose={() => setIsMenuVisible(false)} onHomePress={() => navigation.navigate('Home')} currentRoute="TrasladoPlazas" />
             {renderList()}
             {renderPendingFileModal()}

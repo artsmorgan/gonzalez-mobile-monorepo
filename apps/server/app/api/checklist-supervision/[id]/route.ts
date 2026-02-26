@@ -1,11 +1,9 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../../utils/verifyToken";
-import { prisma } from "../../../../utils/prismaClient";
+import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
-import fs from "fs";
-import path from "path";
-import { v4 as uuidv4 } from "uuid";
+import { uploadDynamicFiles } from "../../../../utils/callDynamicFilesApi";
 
 function safeParseJson<T>(value: any, fallback: T): T {
   if (!value) return fallback;
@@ -19,71 +17,45 @@ function safeParseJson<T>(value: any, fallback: T): T {
   return value as T;
 }
 
-function normalizeBase64(b64: string): string {
-  if (!b64) return "";
-  const idx = b64.indexOf("base64,");
-  if (idx !== -1) return b64.slice(idx + "base64,".length);
-  return b64;
-}
-
-// Función recursiva para procesar imágenes en la evaluación (como StaffEvaluationsScreen)
-function processEvaluationImages(evaluation: any, checklistId: number): any {
+async function processEvaluationImages(req: NextRequest, evaluation: any, checklistId: number): Promise<any> {
   if (!evaluation || typeof evaluation !== "object") return evaluation;
 
-  if (Array.isArray(evaluation)) {
-    return evaluation.map((item) => processEvaluationImages(item, checklistId));
-  }
-
-  const processed: any = { ...evaluation };
-
-  // Si es un input de tipo photo con value (data URI), procesar la imagen
-  if (processed.type === "photo" && processed.value && typeof processed.value === "string" && processed.value.startsWith("data:image/")) {
-    try {
-      console.log(`Procesando imagen para input ID: ${processed.id}, value length: ${processed.value.length}`);
-      const dir = path.join(process.cwd(), "public", "uploads", "checklist-supervision", `${checklistId}`);
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-
-      // Extraer base64 del data URI
-      const normalizedBase64 = normalizeBase64(String(processed.value));
-      console.log(`Base64 normalizado length: ${normalizedBase64.length}`);
-
-      // Determinar extensión desde el data URI o usar jpg por defecto
-      const mimeMatch = processed.value.match(/data:image\/([^;]+)/);
-      const ext = mimeMatch ? mimeMatch[1].replace("jpeg", "jpg") : "jpg";
-
-      const buffer = Buffer.from(normalizedBase64, "base64");
-      const fileName = `${uuidv4()}.${ext}`;
-      const filePath = path.join(dir, fileName);
-
-      fs.writeFileSync(filePath, buffer);
-      console.log(`Imagen guardada: ${filePath}, tamaño: ${buffer.length} bytes`);
-
-      // Guardar el nombre del archivo y mantener imageOrientation si existe
-      processed.file_name = fileName;
-      // No eliminar value, pero el backend puede usar file_name para servir la imagen
-      // El frontend seguirá usando value para mostrar la imagen localmente
-      console.log(`Imagen procesada correctamente, file_name: ${fileName}`);
-    } catch (error) {
-      console.error("Error procesando imagen en evaluación:", error);
-      // Si falla, mantener el value original
+  const photoInputs: Array<{ input: any; value: string }> = [];
+  function collectPhotos(obj: any) {
+    if (!obj || typeof obj !== "object") return;
+    if (Array.isArray(obj)) {
+      obj.forEach(collectPhotos);
+      return;
     }
+    if (obj.type === "photo" && obj.value && typeof obj.value === "string" && obj.value.startsWith("data:image/")) {
+      photoInputs.push({ input: obj, value: obj.value });
+    }
+    if (obj.subsections) obj.subsections.forEach(collectPhotos);
+    if (obj.inputs) obj.inputs.forEach(collectPhotos);
   }
+  collectPhotos(evaluation);
 
-  // Procesar recursivamente subsections e inputs
-  if (processed.subsections && Array.isArray(processed.subsections)) {
-    processed.subsections = processed.subsections.map((sub: any) => processEvaluationImages(sub, checklistId));
+  if (photoInputs.length > 0) {
+    const getExt = (v: string) => {
+      const m = v.match(/data:image\/([^;]+)/);
+      return m ? m[1].replace("jpeg", "jpg") : "jpg";
+    };
+    const uploadResp = await uploadDynamicFiles({
+      req,
+      folderPath: `checklist-supervision/${checklistId}`,
+      files: photoInputs.map(({ value }) => ({ type: "image", extension: getExt(value), file_base64: value })),
+    });
+    const uploaded = Array.isArray(uploadResp?.files) ? uploadResp.files : [];
+    photoInputs.forEach(({ input }, i) => {
+      if (uploaded[i]) input.file_name = uploaded[i].name;
+    });
   }
-
-  if (processed.inputs && Array.isArray(processed.inputs)) {
-    processed.inputs = processed.inputs.map((input: any) => processEvaluationImages(input, checklistId));
-  }
-
-  return processed;
+  return evaluation;
 }
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
     if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
     const resolvedParams = await context.params;
@@ -92,19 +64,25 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
       return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
     }
 
-    const row = await prisma.c_checklist_supervision.findUnique({
-      where: { id },
-      include: {
-        e_estructura_cliente: {
-          select: { id: true, nombre: true },
-        },
-        e_estructura_sucursal: {
-          select: { id: true, nombre: true },
-        },
-        e_estructura_puesto: {
-          select: { id: true, nombre: true, codigo: true },
-        },
-      },
+    const row = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "c_checklist_supervision",
+        operation: "findUnique",
+        where: { id },
+        include: {
+          e_estructura_cliente: {
+            select: { id: true, nombre: true },
+          },
+          e_estructura_sucursal: {
+            select: { id: true, nombre: true },
+          },
+          e_estructura_puesto: {
+            select: { id: true, nombre: true, codigo: true },
+          },
+        }
+      }
     });
 
     if (!row) {
@@ -140,7 +118,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
     if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
     const resolvedParams = await context.params;
@@ -163,7 +141,10 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       firma_responsable,
     } = body ?? {};
 
-    const existing = await prisma.c_checklist_supervision.findUnique({ where: { id } });
+    const existing = await callDynamicPrisma({
+      req,
+      data: { action: "GET", table: "c_checklist_supervision", operation: "findUnique", where: { id } }
+    });
     if (!existing) {
       return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 200 });
     }
@@ -196,7 +177,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
       // Procesar imágenes en la evaluación
       try {
-        const processedEvaluation = processEvaluationImages(evaluationParsed, id);
+        const processedEvaluation = await processEvaluationImages(req, evaluationParsed, id);
         updateData.evaluacion = JSON.stringify(processedEvaluation);
       } catch (error) {
         console.error("Error procesando imágenes en evaluación:", error);
@@ -219,23 +200,43 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       }
     }
 
-    await prisma.c_checklist_supervision.update({
-      where: { id },
-      data: updateData,
+    // Convertir fechas a ISO strings para la API dinámica
+    const updateDataForApi: any = {};
+    for (const [k, v] of Object.entries(updateData)) {
+      if (v instanceof Date) {
+        updateDataForApi[k] = v.toISOString();
+      } else {
+        updateDataForApi[k] = v;
+      }
+    }
+
+    await callDynamicPrisma({
+      req,
+      data: {
+        action: "UPDATE",
+        table: "c_checklist_supervision",
+        where: { id },
+        data: updateDataForApi
+      }
     });
 
     // Registrar cambios si hay alguno
     if (cambiosArr.length > 0) {
       const createdBy = parseInt(String((payload as any)?.id ?? 0)) || 0;
       const createdAt = toZonedTime(new Date(), "America/Costa_Rica") as Date;
-      await prisma.c_cambios_apps_modules.create({
+      await callDynamicPrisma({
+        req,
         data: {
-          nombre_tabla: "c_checklist_supervision",
-          registro_id: id,
-          cambios: JSON.stringify(cambiosArr),
-          created_at: createdAt,
-          created_by: createdBy,
-        },
+          action: "POST",
+          table: "c_cambios_apps_modules",
+          data: {
+            nombre_tabla: "c_checklist_supervision",
+            registro_id: id,
+            cambios: JSON.stringify(cambiosArr),
+            created_at: createdAt.toISOString(),
+            created_by: createdBy,
+          }
+        }
       });
     }
 
@@ -249,7 +250,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
 export async function DELETE(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
     if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
     const resolvedParams = await context.params;
@@ -258,7 +259,10 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
       return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
     }
 
-    const existing = await prisma.c_checklist_supervision.findUnique({ where: { id } });
+    const existing = await callDynamicPrisma({
+      req,
+      data: { action: "GET", table: "c_checklist_supervision", operation: "findUnique", where: { id } }
+    });
     if (!existing) {
       return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 200 });
     }
@@ -266,33 +270,42 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
     // Registrar cambio de eliminación antes de eliminar
     const createdBy = parseInt(String((payload as any)?.id ?? 0)) || 0;
     const createdAt = toZonedTime(new Date(), "America/Costa_Rica") as Date;
-    await prisma.c_cambios_apps_modules.create({
+    const fechaExisting = existing.fecha instanceof Date ? existing.fecha.toISOString() : existing.fecha;
+    await callDynamicPrisma({
+      req,
       data: {
-        nombre_tabla: "c_checklist_supervision",
-        registro_id: id,
-        cambios: JSON.stringify([{
-          prop: "__deleted__",
-          before: {
-            id: existing.id,
-            cliente_id: existing.cliente_id,
-            division_id: existing.division_id,
-            corpo_id: existing.corpo_id,
-            puesto_id: existing.puesto_id,
-            fecha: existing.fecha.toISOString(),
-            ejecutivo_cuenta: existing.ejecutivo_cuenta,
-            evaluacion: existing.evaluacion,
-            articulos_puesto: (existing as any).articulos_puesto || null,
-            firma_supervisor: existing.firma_supervisor,
-            firma_responsable: existing.firma_responsable,
-          },
-          after: null,
-        }]),
-        created_at: createdAt,
-        created_by: createdBy,
-      },
+        action: "POST",
+        table: "c_cambios_apps_modules",
+        data: {
+          nombre_tabla: "c_checklist_supervision",
+          registro_id: id,
+          cambios: JSON.stringify([{
+            prop: "__deleted__",
+            before: {
+              id: existing.id,
+              cliente_id: existing.cliente_id,
+              division_id: existing.division_id,
+              corpo_id: existing.corpo_id,
+              puesto_id: existing.puesto_id,
+              fecha: fechaExisting,
+              ejecutivo_cuenta: existing.ejecutivo_cuenta,
+              evaluacion: existing.evaluacion,
+              articulos_puesto: (existing as any).articulos_puesto || null,
+              firma_supervisor: existing.firma_supervisor,
+              firma_responsable: existing.firma_responsable,
+            },
+            after: null,
+          }]),
+          created_at: createdAt.toISOString(),
+          created_by: createdBy,
+        }
+      }
     });
 
-    await prisma.c_checklist_supervision.delete({ where: { id } });
+    await callDynamicPrisma({
+      req,
+      data: { action: "DELETE", table: "c_checklist_supervision", where: { id } }
+    });
     return NextResponse.json({ status: true, message: "Checklist eliminado correctamente" }, { status: 200 });
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";

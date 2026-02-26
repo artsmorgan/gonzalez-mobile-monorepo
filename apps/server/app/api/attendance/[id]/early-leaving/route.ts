@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { toZonedTime } from "date-fns-tz";
-import { prisma } from "../../../../../utils/prismaClient";
+import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
@@ -14,7 +14,10 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             return NextResponse.json({ status: false, message: "Tiempo de finalización no especificado" }, { status: 200 });
         }
 
-        const marcaDia = await prisma.c_marca_dia.findFirst({ where: { empleadoFijo_id: id }, orderBy: { id: "desc" } });
+        const marcaDia = await callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "c_marca_dia", operation: "findFirst", where: { empleadoFijo_id: id }, orderBy: { id: "desc" } }
+        });
         if (!marcaDia) {
             return NextResponse.json({ status: false, message: "No se encontró la marca del dia" }, { status: 200 });
         }

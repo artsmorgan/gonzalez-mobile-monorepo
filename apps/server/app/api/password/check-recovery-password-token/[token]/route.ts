@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { toZonedTime } from 'date-fns-tz';
-
-import { prisma } from "../../../../../utils/prismaClient";
+import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 
 export async function GET(req: NextRequest, context: { params: Promise<{ token: string }> }) {
     try {
@@ -9,19 +8,56 @@ export async function GET(req: NextRequest, context: { params: Promise<{ token: 
         const token = resolvedParams.token;
 
         // Desconvertir el token de base64 a string
-        const token_recovery = await prisma.a_recovery_password_token.findFirst({ where: { token: token } });
+        const token_recovery = await callDynamicPrisma({
+            req,
+            shouldVerifyAccessToken: false,
+            data: {
+                action: "GET",
+                table: "a_recovery_password_token",
+                operation: "findFirst",
+                where: { token: token }
+            }
+        });
 
         if (!token_recovery) return NextResponse.json({ message: "Token no encontrado" });
 
-        const expires_in_date = new Date(token_recovery.expira_en + token_recovery.creacion.getTime());
+        const tokenCreationDate = new Date(token_recovery.creacion);
+        const expires_in_date = new Date(token_recovery.expira_en + tokenCreationDate.getTime());
         if (expires_in_date < toZonedTime(new Date(), "America/Costa_Rica")) {
-            await prisma.a_recovery_password_token.delete({ where: { id: token_recovery.id } });
+            await callDynamicPrisma({
+                req,
+                shouldVerifyAccessToken: false,
+                data: {
+                    action: "DELETE",
+                    table: "a_recovery_password_token",
+                    where: { id: token_recovery.id },
+                    returning: false
+                }
+            });
             return NextResponse.json({ status: false, message: "Token de recuperación de contraseña expirado" });
         }
 
-        const empleado = await prisma.c_empleado.findUnique({ where: { id: token_recovery.empleadoId } });
+        const empleado = await callDynamicPrisma({
+            req,
+            shouldVerifyAccessToken: false,
+            data: {
+                action: "GET",
+                table: "c_empleado",
+                operation: "findUnique",
+                where: { id: token_recovery.empleadoId }
+            }
+        });
         if (!empleado) {
-            await prisma.a_recovery_password_token.delete({ where: { id: token_recovery.id } });
+            await callDynamicPrisma({
+                req,
+                shouldVerifyAccessToken: false,
+                data: {
+                    action: "DELETE",
+                    table: "a_recovery_password_token",
+                    where: { id: token_recovery.id },
+                    returning: false
+                }
+            });
             return NextResponse.json({ status: false, message: "Empleado no encontrado" });
         }
 

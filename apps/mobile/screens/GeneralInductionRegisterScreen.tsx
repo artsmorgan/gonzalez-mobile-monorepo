@@ -12,6 +12,7 @@ import {
   View,
   Dimensions,
 } from 'react-native';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Picker } from '@react-native-picker/picker';
 import SignatureScreen from 'react-native-signature-canvas';
@@ -49,7 +50,8 @@ type GeneralInductionRegisterScreenNavigationProp = NativeStackNavigationProp<
   'GeneralInductionRegister'
 >;
 
-type MainStructurePlazaNode = { id: number; nombre: string };
+type MainStructureEmpleadoNode = { id: number; nombre: string; cedula?: string | null };
+type MainStructurePlazaNode = { id: number; nombre: string; empleados?: MainStructureEmpleadoNode[] };
 type MainStructurePuestoNode = { id: number; nombre: string; plazas: MainStructurePlazaNode[] };
 type MainStructureSucursalNode = { id: number; nombre: string; puestos: MainStructurePuestoNode[] };
 type MainStructureContratoNode = { id: number; nombre: string; sucursales: MainStructureSucursalNode[] };
@@ -89,6 +91,7 @@ type GeneralInductionRegisterRecord = {
   empresa_nombre?: string | null;
   cliente_nombre?: string | null;
   corpo_nombre?: string | null;
+  images?: Array<{ id?: number; name?: string; base64?: string; extension?: string; url?: string }>;
   synced?: boolean;
 };
 
@@ -375,7 +378,7 @@ const TEMAS_DATA_EMPTY: TemaData = { flat: [], leafTextById: {} };
 
 export default function GeneralInductionRegisterScreen() {
   const navigation = useNavigation<GeneralInductionRegisterScreenNavigationProp>();
-  const { employee, refreshAccessToken, logout } = useAuth();
+  const { employee, refreshAccessToken, logout, accessToken } = useAuth();
   const { scanQR, QRScannerComponent } = useQRScanner();
 
   const [isMenuVisible, setIsMenuVisible] = useState(false);
@@ -412,10 +415,10 @@ export default function GeneralInductionRegisterScreen() {
   const [expandedCambioId, setExpandedCambioId] = useState<number | null>(null);
 
   // Filtros jerárquicos
+  const [isHierarchyFiltersExpanded, setIsHierarchyFiltersExpanded] = useState(false);
   const [filterEmpresaId, setFilterEmpresaId] = useState<number | null>(null);
   const [filterClienteId, setFilterClienteId] = useState<number | null>(null);
   const [filterCorpoId, setFilterCorpoId] = useState<number | null>(null);
-  const [isHierarchyFiltersExpanded, setIsHierarchyFiltersExpanded] = useState(false);
 
   // IDs de current_marca para inicialización
   const [marcaEmpresaId, setMarcaEmpresaId] = useState<number | null>(null);
@@ -439,6 +442,8 @@ export default function GeneralInductionRegisterScreen() {
   // form
   const [isCreating, setIsCreating] = useState(false);
   const [editingRecord, setEditingRecord] = useState<EditingRecord | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitResponse, setSubmitResponse] = useState<{ type: 'success' | 'error', message: string } | null>(null);
 
   const [fecha, setFecha] = useState<Date>(new Date());
   const [showDatePicker, setShowDatePicker] = useState(false);
@@ -450,6 +455,13 @@ export default function GeneralInductionRegisterScreen() {
   const [capacitadoresList, setCapacitadoresList] = useState<PersonaItem[]>([]);
   const [expandedColaboradores, setExpandedColaboradores] = useState<string[]>([]);
   const [expandedCapacitadores, setExpandedCapacitadores] = useState<string[]>([]);
+  const [colaboradorCodigoInput, setColaboradorCodigoInput] = useState<Record<string, string>>({});
+
+  const [images, setImages] = useState<Array<{ id?: number; name?: string; base64?: string; extension?: string; url?: string }>>([]);
+  const [photosDirty, setPhotosDirty] = useState(false);
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+  const cameraRef = useRef<CameraView | null>(null);
+  const [isCameraVisible, setIsCameraVisible] = useState(false);
 
   const [firmaResponsableHash, setFirmaResponsableHash] = useState('');
   const [isGeneratingFirmaResponsable, setIsGeneratingFirmaResponsable] = useState(false);
@@ -458,6 +470,8 @@ export default function GeneralInductionRegisterScreen() {
   const [signatureTarget, setSignatureTarget] = useState<{ list: 'colab' | 'cap'; id_local: string } | null>(null);
   const signatureRef = useRef<any>(null);
   const [signatureKey, setSignatureKey] = useState(0);
+  const [isImagePreviewVisible, setIsImagePreviewVisible] = useState(false);
+  const [selectedImageUrl, setSelectedImageUrl] = useState<string | null>(null);
 
   const signatureWebStyle = `
     .m-signature-pad { box-shadow: none; border: none; }
@@ -497,6 +511,80 @@ export default function GeneralInductionRegisterScreen() {
     }
     onSignatureOK(formatted);
   };
+
+  const appendTokenToUrl = (url?: string | null) => {
+    const raw = String(url || '').trim();
+    if (!raw) return '';
+    if (!accessToken) return raw;
+    return `${raw}${raw.includes('?') ? '&' : '?'}token=${encodeURIComponent(String(accessToken))}`;
+  };
+
+  const loadImageFromServer = useCallback(async (registroId: number, imageName: string): Promise<string | null> => {
+    try {
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) return null;
+
+      const resp = await authedFetch({
+        url: appendTokenToUrl(`${apiUrl}/api/general-induction-register/${registroId}/get-image/${encodeURIComponent(imageName)}?t=${Date.now()}`),
+        init: {
+          method: 'GET',
+        },
+        refreshAccessToken,
+        logout,
+      });
+      if (!resp) return null;
+      if (!resp.ok) return null;
+
+      const blob = await resp.blob();
+      const dataUrl = await new Promise<string | null>((resolve) => {
+        const reader = new FileReader();
+        reader.onerror = () => resolve(null);
+        reader.onloadend = () => resolve((reader.result as string) || null);
+        reader.readAsDataURL(blob);
+      });
+      return dataUrl;
+    } catch (e) {
+      console.error('Error loading general induction image from server:', e);
+      return null;
+    }
+  }, [refreshAccessToken, logout, accessToken]);
+
+  const preloadServerImagesForList = useCallback(async (recordsInput: GeneralInductionRegisterRecord[]) => {
+    try {
+      const isConnected = await getConnectionStatus();
+      if (!isConnected) return recordsInput;
+
+      const nextRecords: GeneralInductionRegisterRecord[] = [];
+      for (const rec of recordsInput) {
+        const recId = typeof rec.id === 'number' ? rec.id : parseInt(String(rec.id || ''), 10);
+        const imgs = Array.isArray((rec as any).images) ? (rec as any).images : [];
+        if (!recId || imgs.length === 0) {
+          nextRecords.push(rec);
+          continue;
+        }
+
+        const nextImgs: any[] = [];
+        for (const img of imgs) {
+          if (img?.base64) {
+            nextImgs.push(img);
+            continue;
+          }
+          if (!img?.name) {
+            nextImgs.push(img);
+            continue;
+          }
+          const dataUrl = await loadImageFromServer(recId, String(img.name));
+          if (dataUrl) nextImgs.push({ ...img, base64: dataUrl, extension: img.extension || 'jpg' });
+          else nextImgs.push(img);
+        }
+        nextRecords.push({ ...rec, images: nextImgs });
+      }
+      return nextRecords;
+    } catch (e) {
+      console.error('Error preloading general induction images for list:', e);
+      return recordsInput;
+    }
+  }, [loadImageFromServer]);
 
   const fetchMainStructure = useCallback(async () => {
     setIsStructureLoading(true);
@@ -697,8 +785,6 @@ export default function GeneralInductionRegisterScreen() {
         return;
       }
 
-      await fetchMainStructure();
-
       // Usar filtros jerárquicos si están disponibles, sino usar current_marca
       const empresaId = filterEmpresaId ?? marcaEmpresaId ?? Number(current?.empresa?.id ?? current?.empresa_id ?? 0);
       const clienteId = filterClienteId ?? marcaClienteId ?? Number(current?.cliente?.id ?? current?.cliente_id ?? 0);
@@ -710,7 +796,7 @@ export default function GeneralInductionRegisterScreen() {
 
       const isConnected = await getConnectionStatus();
       if (!corpoId) {
-        setRecords(local);
+        setRecords(await preloadServerImagesForList(local));
         return;
       }
 
@@ -728,9 +814,9 @@ export default function GeneralInductionRegisterScreen() {
           synced: true,
         }));
         const merged = [...local, ...serverRecords];
-        setRecords(merged);
+        setRecords(await preloadServerImagesForList(merged));
       } else {
-        setRecords(local);
+        setRecords(await preloadServerImagesForList(local));
       }
     } catch (e) {
       console.error('Error fetching general induction register records:', e);
@@ -743,14 +829,21 @@ export default function GeneralInductionRegisterScreen() {
         const cacheStr = await AsyncStorage.getItem('evaluations_cache');
         const cache = cacheStr ? JSON.parse(cacheStr) : [];
         const local = (cache || []).filter((i: any) => i.type === 'general_induction_register');
-        setRecords(local);
+        setRecords(await preloadServerImagesForList(local));
       } catch {
         // ignore
       }
     } finally {
       setIsLoading(false);
     }
-  }, [fetchMainStructure, refreshAccessToken, logout, filterEmpresaId, filterClienteId, filterCorpoId, marcaEmpresaId, marcaClienteId, marcaCorpoId, loadMarcaContext]);
+  }, [refreshAccessToken, logout, filterEmpresaId, filterClienteId, filterCorpoId, marcaEmpresaId, marcaClienteId, marcaCorpoId, loadMarcaContext, preloadServerImagesForList]);
+
+  // Cargar main_structure solo una vez al abrir la pantalla
+  useFocusEffect(
+    useCallback(() => {
+      fetchMainStructure();
+    }, [fetchMainStructure])
+  );
 
   useFocusEffect(
     useCallback(() => {
@@ -856,6 +949,10 @@ export default function GeneralInductionRegisterScreen() {
   const puestosForSelectedSucursal = useMemo(() => {
     return (selectedSucursalNode?.puestos || []) as MainStructurePuestoNode[];
   }, [selectedSucursalNode]);
+  const plazasForSelectedSucursal = useMemo(
+    () => puestosForSelectedSucursal.flatMap((p) => (Array.isArray(p.plazas) ? p.plazas : [])),
+    [puestosForSelectedSucursal]
+  );
 
   const temasData = useMemo(() => {
     if (selectedDivisionId === 5) return TEMAS_DATA_AYL;
@@ -864,14 +961,21 @@ export default function GeneralInductionRegisterScreen() {
   }, [selectedDivisionId]);
   const temasFlat = temasData.flat;
   const temasLeafTextById = temasData.leafTextById;
+  const allTemasLeafSelected = useMemo<TemaSelectedItem[]>(
+    () =>
+      temasFlat
+        .filter((t) => t.isLeaf)
+        .map((t) => ({ id: t.id, text: t.text })),
+    [temasFlat]
+  );
   const temasVisible = useMemo(() => temasFlat.slice(0, temasVisibleCount), [temasFlat, temasVisibleCount]);
   const selectedTemaIdSet = useMemo(() => new Set(selectedTemas.map((t) => t.id)), [selectedTemas]);
 
   useEffect(() => {
     // Reiniciar cantidad visible cuando cambie la división (formulario dinámico)
     setTemasVisibleCount(60);
-    if (!editingRecord) setSelectedTemas([]);
-  }, [selectedDivisionId]);
+    if (!editingRecord) setSelectedTemas(allTemasLeafSelected);
+  }, [selectedDivisionId, editingRecord, allTemasLeafSelected]);
 
   const handleEmpresaChange = (empresaId: number | null) => {
     setSelectedEmpresaId(empresaId);
@@ -906,19 +1010,7 @@ export default function GeneralInductionRegisterScreen() {
     }
   }, [selectedClienteNode, editingRecord, isStructureLoading]);
 
-  // 2) Luego auto-seleccionar la división dependiendo de la marca
-  useEffect(() => {
-    if (editingRecord) return;
-    if (isStructureLoading || isDivisionOptionsLoading) return;
-    if (!selectedClienteId || !marcaDivisionId) {
-      setSelectedDivisionId(null);
-      return;
-    }
-    const marcaDivId = Number(marcaDivisionId);
-    const found = divisionOptions.find((d) => Number(d.id) === marcaDivId) ?? null;
-    const nextId = found ? Number(found.id) : null;
-    setSelectedDivisionId((prev) => (prev === nextId ? prev : nextId));
-  }, [selectedClienteId, marcaDivisionId, editingRecord, isStructureLoading, isDivisionOptionsLoading, divisionOptions]);
+  // 2) La división ya no se auto-selecciona; el usuario debe elegirla manualmente
 
   // Cascada: si cambia división/contrato, limpiar selecciones inferiores (patrón de OpeningClosingPositionScreen)
   useEffect(() => {
@@ -1059,11 +1151,152 @@ export default function GeneralInductionRegisterScreen() {
     }
   };
 
+  const findEmployeeInMain = useCallback((empleadoId: number) => {
+    // Prioridad: sucursal seleccionada en formulario
+    for (const puesto of puestosForSelectedSucursal) {
+      for (const plaza of (puesto.plazas || [])) {
+        const empleados = Array.isArray((plaza as any).empleados) ? (plaza as any).empleados : [];
+        if (empleados.some((emp: any) => Number(emp?.id) === Number(empleadoId))) {
+          return { puesto_id: puesto.id, puesto_text: puesto.nombre };
+        }
+      }
+    }
+
+    // Fallback: búsqueda global en main_structure
+    for (const empresa of structure || []) {
+      for (const cliente of (empresa.clientes || [])) {
+        for (const division of (cliente.division || [])) {
+          for (const contrato of (division.contratos || [])) {
+            for (const sucursal of (contrato.sucursales || [])) {
+              for (const puesto of (sucursal.puestos || [])) {
+                for (const plaza of (puesto.plazas || [])) {
+                  const empleados = Array.isArray((plaza as any).empleados) ? (plaza as any).empleados : [];
+                  if (empleados.some((emp: any) => Number(emp?.id) === Number(empleadoId))) {
+                    return { puesto_id: puesto.id, puesto_text: puesto.nombre };
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return null;
+  }, [puestosForSelectedSucursal, structure]);
+
+  const applyEmployeeToColaborador = useCallback(
+    (id_local: string, empleado: any) => {
+      const id = Number(empleado?.id || 0);
+      const nombre = [
+        String(empleado?.nombre || '').trim(),
+        String(empleado?.primer_apellido || '').trim(),
+        String(empleado?.segundo_apellido || '').trim(),
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .trim() || String(empleado?.nombre_completo || '').trim();
+      const cedula = String(empleado?.cedula || '').trim();
+
+      const foundInMain = id ? findEmployeeInMain(id) : null;
+      updatePersona('colab', id_local, {
+        nombre,
+        cedula,
+        puesto_id: foundInMain?.puesto_id ?? null,
+        puesto_text: foundInMain?.puesto_text ?? '',
+      });
+      if (!foundInMain) {
+        Alert.alert('Aviso', 'Empleado encontrado, pero no se ubicó en main_structure para autocompletar el puesto.');
+      }
+    },
+    [findEmployeeInMain]
+  );
+
+  const fetchEmpleadoByIdForColaborador = useCallback(
+    async (id_local: string, empleadoId: number) => {
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) throw new Error('Server URL not configured');
+      const response = await authedFetch({
+        url: `${apiUrl}/api/empleados/${empleadoId}`,
+        init: {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json' },
+        },
+        refreshAccessToken,
+        logout,
+      });
+      if (!response) return;
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData?.message || 'No se pudo obtener el empleado por ID');
+      }
+      const empleadoData = await response.json();
+      applyEmployeeToColaborador(id_local, empleadoData);
+    },
+    [refreshAccessToken, logout, applyEmployeeToColaborador]
+  );
+
+  const fetchEmpleadoByCodigoForColaborador = useCallback(
+    async (id_local: string, codigo: string) => {
+      const code = String(codigo || '').trim();
+      if (!code) {
+        Alert.alert('Error', 'Debes ingresar un código');
+        return;
+      }
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) throw new Error('Server URL not configured');
+      const response = await authedFetch({
+        url: `${apiUrl}/api/empleados/codigo/${encodeURIComponent(code)}`,
+        init: {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json' },
+        },
+        refreshAccessToken,
+        logout,
+      });
+      if (!response) return;
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData?.message || 'No se pudo obtener el empleado por código');
+      }
+      const data = await response.json();
+      if (!data?.status || !data?.data) {
+        throw new Error(data?.message || 'No se encontró el empleado');
+      }
+      applyEmployeeToColaborador(id_local, data.data);
+    },
+    [refreshAccessToken, logout, applyEmployeeToColaborador]
+  );
+
+  const handleScanColaboradorQR = useCallback(async (id_local: string) => {
+    try {
+      const isConnected = await getConnectionStatus();
+      if (!isConnected) {
+        Alert.alert('Sin conexión', 'Esta función requiere internet');
+        return;
+      }
+      const qrData = await scanQR();
+      if (!qrData) return;
+      const decoded = decodeFirmaHash(qrData);
+      if (!decoded?.empleadoId) {
+        Alert.alert('Error', 'El QR no contiene un ID de empleado válido');
+        return;
+      }
+      await fetchEmpleadoByIdForColaborador(id_local, Number(decoded.empleadoId));
+    } catch (e: any) {
+      console.error('Error scanning collaborator QR:', e);
+      Alert.alert('Error', e?.message || 'No se pudo leer el QR del colaborador');
+    }
+  }, [scanQR, fetchEmpleadoByIdForColaborador]);
+
   const resetForm = () => {
     setFecha(new Date());
-    setSelectedTemas([]);
+    setSelectedTemas(allTemasLeafSelected);
     setColaboradoresList([]);
     setCapacitadoresList([]);
+    setColaboradorCodigoInput({});
+    setImages([]);
+    setPhotosDirty(false);
     setFirmaResponsableHash('');
     setEditingRecord(null);
   };
@@ -1123,6 +1356,8 @@ export default function GeneralInductionRegisterScreen() {
         firma: p.firma ? formatSignatureForDisplay(String(p.firma)) : null,
       })));
 
+      setImages(Array.isArray((record as any).images) ? (record as any).images : []);
+      setPhotosDirty(false);
       setFirmaResponsableHash(record.firma_responsable || '');
     } catch (e) {
       console.error('Error startEditing general induction register:', e);
@@ -1156,24 +1391,103 @@ export default function GeneralInductionRegisterScreen() {
     return { meta, selected: selectedSafe, leafs };
   };
 
+  const openCamera = async () => {
+    try {
+      if (editingRecord?.id && !(await getConnectionStatus())) {
+        Alert.alert('Sin conexión', 'Necesitas conexión para agregar fotos en un registro ya sincronizado.');
+        return;
+      }
+      if (!cameraPermission?.granted) {
+        const result = await requestCameraPermission();
+        if (!result.granted) {
+          Alert.alert('Permiso denegado', 'Se necesita permiso para usar la cámara');
+          return;
+        }
+      }
+      setIsCameraVisible(true);
+    } catch (e) {
+      console.error('Error opening camera:', e);
+      Alert.alert('Error', 'No se pudo abrir la cámara');
+    }
+  };
+
+  const capturePhoto = async () => {
+    if (!cameraRef.current) {
+      Alert.alert('Error', 'La cámara no está lista');
+      return;
+    }
+    try {
+      const photo = await cameraRef.current.takePictureAsync({
+        base64: true,
+        quality: 0.7,
+        skipProcessing: false,
+      });
+      if (!photo?.base64) {
+        Alert.alert('Error', 'No se pudo capturar la foto');
+        setIsCameraVisible(false);
+        return;
+      }
+      const base64Image = `data:image/jpeg;base64,${photo.base64}`;
+      setIsCameraVisible(false);
+      setTimeout(() => {
+        setPhotosDirty(true);
+        setImages((prev) => [...prev, { base64: base64Image, extension: 'jpg' }]);
+      }, 100);
+    } catch (e) {
+      console.error('Error capturing photo:', e);
+      Alert.alert('Error', 'No se pudo capturar la foto');
+      setIsCameraVisible(false);
+    }
+  };
+
+  const removeImage = (index: number) => {
+    Alert.alert('Confirmar', '¿Eliminar esta foto?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Eliminar',
+        style: 'destructive',
+        onPress: () => {
+          setPhotosDirty(true);
+          setImages((prev) => prev.filter((_, i) => i !== index));
+        },
+      },
+    ]);
+  };
+
+  const buildImagenesJson = () =>
+    JSON.stringify(
+      images.map((img, idx) => ({
+        file_base64: img.base64 || '',
+        extension: img.extension || 'jpg',
+        original_name: img.name || `general-induction-${Date.now()}-${idx + 1}.jpg`,
+      }))
+    );
+
   const saveHandler = async () => {
+    setIsSubmitting(true);
+    setSubmitResponse(null);
+
     try {
       if (!selectedEmpresaId || !selectedClienteId || !selectedSucursalId) {
-        Alert.alert('Error', 'Empresa, Cliente y Sucursal son obligatorios');
+        setSubmitResponse({ type: 'error', message: 'Empresa, Cliente y Sucursal son obligatorios' });
+        setIsSubmitting(false);
         return;
       }
       if (!selectedDivisionId || !selectedDivisionNode) {
-        Alert.alert('Error', 'No se pudo determinar la división (marca actual)');
+        setSubmitResponse({ type: 'error', message: 'No se pudo determinar la división (marca actual)' });
+        setIsSubmitting(false);
         return;
       }
       if (!firmaResponsableHash.trim()) {
-        Alert.alert('Error', 'Firma responsable (QR/Generar) es obligatoria');
+        setSubmitResponse({ type: 'error', message: 'Firma responsable (QR/Generar) es obligatoria' });
+        setIsSubmitting(false);
         return;
       }
 
       const temasPayload = buildTemasPayload();
       if (!Array.isArray(temasPayload.selected) || temasPayload.selected.length === 0) {
-        Alert.alert('Error', 'Debe seleccionar al menos 1 tema (checkbox)');
+        setSubmitResponse({ type: 'error', message: 'Debe seleccionar al menos 1 tema (checkbox)' });
+        setIsSubmitting(false);
         return;
       }
 
@@ -1204,6 +1518,7 @@ export default function GeneralInductionRegisterScreen() {
           }))
         ),
         firma_responsable: firmaResponsableHash.trim(),
+        imagenes: buildImagenesJson(),
       };
 
       const isConnected = await getConnectionStatus();
@@ -1217,10 +1532,12 @@ export default function GeneralInductionRegisterScreen() {
             logout,
           });
           if (!result.status) throw new Error(result.message || 'No se pudo crear el registro');
-          Alert.alert('Éxito', 'Registro creado correctamente');
-          setIsCreating(false);
-          resetForm();
-          fetchRecords();
+          setSubmitResponse({ type: 'success', message: result.message || 'Registro creado correctamente' });
+          setTimeout(() => {
+            setIsCreating(false);
+            resetForm();
+            fetchRecords();
+          }, 2000);
         } else {
           const id_local = generateRandomId();
           const newCacheRecord: GeneralInductionRegisterRecord = {
@@ -1256,10 +1573,12 @@ export default function GeneralInductionRegisterScreen() {
           cache.push({ ...newCacheRecord, type: 'general_induction_register' });
           await AsyncStorage.setItem('evaluations_cache', JSON.stringify(cache));
 
-          setIsCreating(false);
-          resetForm();
-          fetchRecords();
-          Alert.alert('Guardado offline', 'Se guardó localmente y se sincronizará al recuperar conexión');
+          setSubmitResponse({ type: 'success', message: 'Se guardó localmente y se sincronizará al recuperar conexión' });
+          setTimeout(() => {
+            setIsCreating(false);
+            resetForm();
+            fetchRecords();
+          }, 2000);
         }
         return;
       }
@@ -1279,15 +1598,18 @@ export default function GeneralInductionRegisterScreen() {
               colaboradores: requestData.colaboradores,
               capacitadores: requestData.capacitadores,
               firma_responsable: requestData.firma_responsable,
+              ...(photosDirty ? { imagenes: requestData.imagenes } : {}),
             },
             refreshAccessToken,
             logout,
           });
           if (!result.status) throw new Error(result.message || 'No se pudo actualizar el registro');
-          Alert.alert('Éxito', 'Registro actualizado correctamente');
-          setIsCreating(false);
-          resetForm();
-          fetchRecords();
+          setSubmitResponse({ type: 'success', message: result.message || 'Registro actualizado correctamente' });
+          setTimeout(() => {
+            setIsCreating(false);
+            resetForm();
+            fetchRecords();
+          }, 2000);
           return;
         } catch (e: any) {
           const msg = String(e?.message || e || '');
@@ -1331,13 +1653,17 @@ export default function GeneralInductionRegisterScreen() {
         });
         await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
 
-        setIsCreating(false);
-        resetForm();
-        fetchRecords();
-        Alert.alert('Actualizado offline', 'El servidor no está disponible. Se guardó localmente y se sincronizará al recuperar conexión');
+        setSubmitResponse({ type: 'success', message: 'El servidor no está disponible. Se guardó localmente y se sincronizará al recuperar conexión' });
+        setTimeout(() => {
+          setIsCreating(false);
+          resetForm();
+          fetchRecords();
+        }, 2000);
       }
     } catch (e: any) {
-      Alert.alert('Error', e?.message || 'No se pudo guardar el registro');
+      setSubmitResponse({ type: 'error', message: e?.message || 'No se pudo guardar el registro' });
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -1407,6 +1733,7 @@ export default function GeneralInductionRegisterScreen() {
   const [expandedColaboradoresById, setExpandedColaboradoresById] = useState<Record<string, boolean>>({});
   const [expandedCapacitadoresById, setExpandedCapacitadoresById] = useState<Record<string, boolean>>({});
   const [expandedFirmaById, setExpandedFirmaById] = useState<Record<string, boolean>>({});
+  const [expandedImagesById, setExpandedImagesById] = useState<Record<string, boolean>>({});
 
   const renderList = () => {
     if (isLoading) {
@@ -1449,11 +1776,13 @@ export default function GeneralInductionRegisterScreen() {
 
           const colaboradores = safeJsonParse<any[]>(r.colaboradores, []);
           const capacitadores = safeJsonParse<any[]>(r.capacitadores, []);
+          const images = Array.isArray((r as any).images) ? (r as any).images : [];
 
           const isTemasOpen = !!expandedTemasById[itemKey];
           const isColabsOpen = !!expandedColaboradoresById[itemKey];
           const isCapsOpen = !!expandedCapacitadoresById[itemKey];
           const isFirmaOpen = !!expandedFirmaById[itemKey];
+          const isImagesOpen = !!expandedImagesById[itemKey];
 
           return (
             <ThemedView key={r.id || r.id_local} style={styles.listItem}>
@@ -1567,6 +1896,42 @@ export default function GeneralInductionRegisterScreen() {
                           </ThemedView>
                         );
                       })
+                    )}
+                  </ThemedView>
+                )}
+
+                <TouchableOpacity
+                  style={styles.collapseButton}
+                  onPress={() => setExpandedImagesById((prev) => ({ ...prev, [itemKey]: !prev[itemKey] }))}
+                  activeOpacity={0.8}
+                >
+                  <ThemedText style={styles.collapseButtonText}>Imágenes ({images.length})</ThemedText>
+                  <Ionicons name={isImagesOpen ? 'chevron-up' : 'chevron-down'} size={18} color="#007AFF" />
+                </TouchableOpacity>
+                {isImagesOpen && (
+                  <ThemedView style={styles.collapsableContent}>
+                    {images.length === 0 ? (
+                      <ThemedText style={styles.detailLine}>—</ThemedText>
+                    ) : (
+                      <ThemedView style={styles.listImagesRow}>
+                        {images.map((img: any, idx: number) => {
+                          const base64Uri = String(img?.base64 || '').trim();
+                          const uri = base64Uri || appendTokenToUrl(String(img?.url || '').trim());
+                          if (!uri) return null;
+                          return (
+                            <TouchableOpacity
+                              key={`img-${itemKey}-${String(img?.id || idx)}`}
+                              activeOpacity={0.85}
+                              onPress={() => {
+                                setSelectedImageUrl(uri);
+                                setIsImagePreviewVisible(true);
+                              }}
+                            >
+                              <Image source={{ uri }} style={styles.listImageThumb} />
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </ThemedView>
                     )}
                   </ThemedView>
                 )}
@@ -1688,6 +2053,55 @@ export default function GeneralInductionRegisterScreen() {
 
                 {expanded && (
                   <ThemedView style={styles.expandContent}>
+                    {listKey === 'colab' && (
+                      <ThemedView style={styles.formGroup}>
+                        <ThemedText style={styles.formLabel}>Autocompletar colaborador (online)</ThemedText>
+                        <ThemedView style={styles.firmaButtonsRow}>
+                          <TouchableOpacity
+                            style={styles.firmaBlueButton}
+                            onPress={() => handleScanColaboradorQR(p.id_local)}
+                            activeOpacity={0.85}
+                          >
+                            <Ionicons name="scan-outline" size={18} color="#FFFFFF" />
+                            <ThemedText style={styles.firmaBlueButtonText}>Escanear QR</ThemedText>
+                          </TouchableOpacity>
+                        </ThemedView>
+                        <ThemedView style={styles.codeRow}>
+                          <TextInput
+                            style={[styles.formInput, styles.codeInput]}
+                            value={colaboradorCodigoInput[p.id_local] || ''}
+                            onChangeText={(t) =>
+                              setColaboradorCodigoInput((prev) => ({ ...prev, [p.id_local]: t }))
+                            }
+                            placeholder="Código del empleado"
+                            placeholderTextColor="#999"
+                          />
+                          <TouchableOpacity
+                            style={styles.codeSearchButton}
+                            onPress={async () => {
+                              try {
+                                const isConnected = await getConnectionStatus();
+                                if (!isConnected) {
+                                  Alert.alert('Sin conexión', 'Esta función requiere internet');
+                                  return;
+                                }
+                                await fetchEmpleadoByCodigoForColaborador(
+                                  p.id_local,
+                                  colaboradorCodigoInput[p.id_local] || ''
+                                );
+                              } catch (e: any) {
+                                Alert.alert('Error', e?.message || 'No se pudo buscar por código');
+                              }
+                            }}
+                            activeOpacity={0.85}
+                          >
+                            <Ionicons name="search" size={18} color="#FFFFFF" />
+                            <ThemedText style={styles.buttonText}>Buscar</ThemedText>
+                          </TouchableOpacity>
+                        </ThemedView>
+                      </ThemedView>
+                    )}
+
                     <ThemedView style={styles.formGroup}>
                       <ThemedText style={styles.formLabel}>Nombre</ThemedText>
                       <TextInput
@@ -1794,6 +2208,41 @@ export default function GeneralInductionRegisterScreen() {
     );
   };
 
+  const renderPhotosSection = () => (
+    <ThemedView style={styles.sectionContainer}>
+      <ThemedView style={styles.sectionHeader}>
+        <ThemedText style={styles.sectionTitle}>Fotos (opcional)</ThemedText>
+      </ThemedView>
+      <ThemedView style={styles.sectionBody}>
+        <TouchableOpacity style={styles.captureImageButton} onPress={openCamera}>
+          <Ionicons name="camera" size={20} color="#007AFF" />
+          <ThemedText style={styles.captureImageButtonText}>
+            {images.length > 0 ? 'Agregar otra foto' : 'Capturar foto'}
+          </ThemedText>
+        </TouchableOpacity>
+
+        {images.length === 0 ? (
+          <ThemedText style={styles.hintText}>Agrega una o varias fotos.</ThemedText>
+        ) : (
+          <ThemedView style={styles.thumbRow}>
+            {images.map((img, idx) => {
+              const uri = img.base64 || img.url || '';
+              if (!uri) return null;
+              return (
+                <ThemedView key={`img-${idx}`} style={styles.thumbWrapper}>
+                  <Image source={{ uri }} style={styles.thumb} />
+                  <TouchableOpacity style={styles.thumbDelete} onPress={() => removeImage(idx)}>
+                    <Ionicons name="close" size={16} color="#FFFFFF" />
+                  </TouchableOpacity>
+                </ThemedView>
+              );
+            })}
+          </ThemedView>
+        )}
+      </ThemedView>
+    </ThemedView>
+  );
+
   return (
     <ThemedView style={styles.container}>
       <AppHeader onMenuPress={handleMenuPress} title="Registro inducción general" />
@@ -1817,154 +2266,113 @@ export default function GeneralInductionRegisterScreen() {
 
           {!isCreating ? (
             <>
-              {/* Filtros Jerárquicos */}
-              {!isLoading && (
-                <ThemedView style={styles.filtersContainer}>
-                  <ThemedView style={styles.filtersHeader}>
-                    <TouchableOpacity
-                      style={styles.filterToggleButton}
-                      onPress={() => setIsHierarchyFiltersExpanded(!isHierarchyFiltersExpanded)}
-                    >
-                      <ThemedText style={styles.filtersTitle}>
-                        Filtros Jerárquicos
-                      </ThemedText>
-                      <Ionicons
-                        name={isHierarchyFiltersExpanded ? "chevron-up" : "chevron-down"}
-                        size={20}
-                        color="#007AFF"
-                      />
-                    </TouchableOpacity>
-                    {isHierarchyFiltersExpanded && (
-                      <TouchableOpacity
-                        style={styles.resetFiltersButton}
-                        onPress={() => {
-                          setFilterEmpresaId(null);
+          {!isLoading && !isStructureLoading && Array.isArray(structure) && structure.length > 0 && (
+            <ThemedView style={styles.filtersContainer}>
+              <TouchableOpacity
+                style={styles.filtersHeader}
+                onPress={() => setIsHierarchyFiltersExpanded((prev) => !prev)}
+                activeOpacity={0.85}
+              >
+                <ThemedView style={styles.filterToggleButton}>
+                  <ThemedText style={styles.filtersTitle}>Filtros jerárquicos</ThemedText>
+                </ThemedView>
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  <TouchableOpacity
+                    style={styles.resetFiltersButton}
+                    onPress={() => {
+                      setFilterEmpresaId(null);
+                      setFilterClienteId(null);
+                      setFilterCorpoId(null);
+                    }}
+                    activeOpacity={0.85}
+                  >
+                    <Ionicons name="refresh" size={16} color="#FF3B30" />
+                    <ThemedText style={styles.resetFiltersText}>Reiniciar</ThemedText>
+                  </TouchableOpacity>
+                  <Ionicons
+                    name={isHierarchyFiltersExpanded ? 'chevron-up' : 'chevron-down'}
+                    size={18}
+                    color="#007AFF"
+                    style={{ marginLeft: 8 }}
+                  />
+                </View>
+              </TouchableOpacity>
+              {isHierarchyFiltersExpanded && (
+                <ThemedView style={styles.filtersContent}>
+                  <ThemedView style={styles.filterGroup}>
+                    <ThemedText style={styles.filterLabel}>Empresa:</ThemedText>
+                    <View style={styles.pickerWrapper}>
+                      <Picker
+                        selectedValue={filterEmpresaId || ''}
+                        onValueChange={(value) => {
+                          setFilterEmpresaId(value && value !== '' ? Number(value) : null);
                           setFilterClienteId(null);
                           setFilterCorpoId(null);
                         }}
+                        style={styles.picker}
                       >
-                        <Ionicons name="refresh" size={16} color="#FF3B30" />
-                        <ThemedText style={styles.resetFiltersText}>Reiniciar</ThemedText>
-                      </TouchableOpacity>
-                    )}
+                        <Picker.Item label="Seleccionar..." value="" />
+                        {filterEmpresas.map((e: any) => (
+                          <Picker.Item key={e.id} label={e.nombre} value={e.id} />
+                        ))}
+                      </Picker>
+                    </View>
                   </ThemedView>
-                  {isHierarchyFiltersExpanded && (
-                    <ThemedView style={styles.filtersContent}>
-                      <ThemedView style={styles.filterGroup}>
-                        <ThemedText style={styles.filterLabel}>Empresa:</ThemedText>
-                        <View style={styles.pickerWrapper}>
-                          <Picker
-                            selectedValue={filterEmpresaId || ''}
-                            onValueChange={(value) => {
-                              setFilterEmpresaId(value && value !== '' ? Number(value) : null);
-                              setFilterClienteId(null);
-                              setFilterCorpoId(null);
-                            }}
-                            style={styles.picker}
-                          >
-                            <Picker.Item label="Seleccionar..." value="" />
-                            {filterEmpresas.map((e: any) => (
-                              <Picker.Item key={e.id} label={e.nombre} value={e.id} />
-                            ))}
-                          </Picker>
-                        </View>
-                      </ThemedView>
 
-                      {filterEmpresaId && (
-                        <ThemedView style={styles.filterGroup}>
-                          <ThemedText style={styles.filterLabel}>Cliente:</ThemedText>
-                          <View style={styles.pickerWrapper}>
-                            <Picker
-                              selectedValue={filterClienteId || ''}
-                              onValueChange={(value) => {
-                                setFilterClienteId(value && value !== '' ? Number(value) : null);
-                                setFilterCorpoId(null);
-                              }}
-                              style={styles.picker}
-                            >
-                              <Picker.Item label="Seleccionar..." value="" />
-                              {filterClientes.map((c: any) => (
-                                <Picker.Item key={c.id} label={c.nombre} value={c.id} />
-                              ))}
-                            </Picker>
-                          </View>
-                        </ThemedView>
-                      )}
+                  <ThemedView style={styles.filterGroup}>
+                    <ThemedText style={styles.filterLabel}>Cliente:</ThemedText>
+                    <View style={styles.pickerWrapper}>
+                      <Picker
+                        selectedValue={filterClienteId || ''}
+                        onValueChange={(value) => {
+                          setFilterClienteId(value && value !== '' ? Number(value) : null);
+                          setFilterCorpoId(null);
+                        }}
+                        style={styles.picker}
+                      >
+                        <Picker.Item label="Seleccionar..." value="" />
+                        {filterClientes.map((c: any) => (
+                          <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                        ))}
+                      </Picker>
+                    </View>
+                  </ThemedView>
 
-                      {filterClienteId && (
-                        <ThemedView style={styles.filterGroup}>
-                          <ThemedText style={styles.filterLabel}>División:</ThemedText>
-                          <View style={styles.pickerWrapper}>
-                            <Picker
-                              selectedValue={''}
-                              enabled={false}
-                              style={styles.picker}
-                            >
-                              <Picker.Item label="Seleccionar..." value="" />
-                              {filterDivisiones.map((d: any) => (
-                                <Picker.Item key={d.id} label={d.nombre} value={d.id} />
-                              ))}
-                            </Picker>
-                          </View>
-                        </ThemedView>
-                      )}
-
-                      {filterClienteId && (
-                        <ThemedView style={styles.filterGroup}>
-                          <ThemedText style={styles.filterLabel}>Contrato:</ThemedText>
-                          <View style={styles.pickerWrapper}>
-                            <Picker
-                              selectedValue={''}
-                              enabled={false}
-                              style={styles.picker}
-                            >
-                              <Picker.Item label="Seleccionar..." value="" />
-                              {filterContratos.map((c: any) => (
-                                <Picker.Item key={c.id} label={c.nombre} value={c.id} />
-                              ))}
-                            </Picker>
-                          </View>
-                        </ThemedView>
-                      )}
-
-                      {filterClienteId && (
-                        <ThemedView style={styles.filterGroup}>
-                          <ThemedText style={styles.filterLabel}>Sucursal:</ThemedText>
-                          <View style={styles.pickerWrapper}>
-                            <Picker
-                              selectedValue={filterCorpoId || ''}
-                              onValueChange={(value) => {
-                                setFilterCorpoId(value && value !== '' ? Number(value) : null);
-                              }}
-                              style={styles.picker}
-                            >
-                              <Picker.Item label="Seleccionar..." value="" />
-                              {filterSucursales.map((s: any) => (
-                                <Picker.Item key={s.id} label={s.nombre} value={s.id} />
-                              ))}
-                            </Picker>
-                          </View>
-                        </ThemedView>
-                      )}
-                    </ThemedView>
-                  )}
+                  <ThemedView style={styles.filterGroup}>
+                    <ThemedText style={styles.filterLabel}>Sucursal:</ThemedText>
+                    <View style={styles.pickerWrapper}>
+                      <Picker
+                        selectedValue={filterCorpoId || ''}
+                        onValueChange={(value) => {
+                          setFilterCorpoId(value && value !== '' ? Number(value) : null);
+                        }}
+                        style={styles.picker}
+                      >
+                        <Picker.Item label="Seleccionar..." value="" />
+                        {filterSucursales.map((s: any) => (
+                          <Picker.Item key={s.id} label={s.nombre} value={s.id} />
+                        ))}
+                      </Picker>
+                    </View>
+                  </ThemedView>
                 </ThemedView>
               )}
+            </ThemedView>
+          )}
 
+          {!!offlineMessage && !error && (
+            <ThemedView style={styles.offlineBanner}>
+              <Ionicons name="cloud-offline-outline" size={18} color="#8A6D00" />
+              <ThemedText style={styles.offlineBannerText}>{offlineMessage}</ThemedText>
+            </ThemedView>
+          )}
 
-              {!!offlineMessage && !error && (
-                <ThemedView style={styles.offlineBanner}>
-                  <Ionicons name="cloud-offline-outline" size={18} color="#8A6D00" />
-                  <ThemedText style={styles.offlineBannerText}>{offlineMessage}</ThemedText>
-                </ThemedView>
-              )}
-
-              {!isLoading && !error && (
-                <TouchableOpacity style={styles.createButton} onPress={startCreate} activeOpacity={0.85}>
-                  <Ionicons name="add" size={24} color="#FFFFFF" />
-                </TouchableOpacity>
-              )}
-              {renderList()}
+          {!isLoading && !error && (
+            <TouchableOpacity style={styles.createButton} onPress={startCreate} activeOpacity={0.85}>
+              <Ionicons name="add" size={24} color="#FFFFFF" />
+            </TouchableOpacity>
+          )}
+          {renderList()}
             </>
           ) : (
             <ThemedView style={styles.formContainer}>
@@ -2048,21 +2456,30 @@ export default function GeneralInductionRegisterScreen() {
                     </ThemedView>
 
                     <ThemedView style={styles.formGroup}>
-                      <ThemedText style={styles.formLabel}>División (automática)</ThemedText>
+                      <ThemedText style={styles.formLabel}>División</ThemedText>
                       <ThemedView style={styles.pickerWrapper}>
-                        <Picker selectedValue={selectedDivisionId ?? 0} onValueChange={() => { }} enabled={false} style={styles.picker}>
+                        <Picker
+                          selectedValue={selectedDivisionId ?? 0}
+                          onValueChange={(v) => {
+                            const next = Number(v) || null;
+                            setSelectedDivisionId(next);
+                            setSelectedContratoId(null);
+                            setSelectedSucursalId(null);
+                          }}
+                          enabled={selectedClienteId !== null && divisionOptions.length > 0}
+                          style={styles.picker}
+                        >
                           <Picker.Item
-                            label={
-                              selectedClienteId
-                                ? (selectedDivisionId ? (divisionOptions.find((d) => d.id === selectedDivisionId)?.nombre || 'División') : 'No disponible para su marca')
-                                : 'Seleccione cliente primero'
-                            }
+                            label={selectedClienteId ? 'Seleccione división...' : 'Seleccione cliente primero'}
                             value={0}
                           />
+                          {divisionOptions.map((d) => (
+                            <Picker.Item key={d.id} label={d.nombre} value={d.id} />
+                          ))}
                         </Picker>
                       </ThemedView>
-                      {selectedClienteId && !selectedDivisionId && (
-                        <ThemedText style={styles.hintText}>La división de su marca no existe para el cliente seleccionado.</ThemedText>
+                      {selectedClienteId !== null && divisionOptions.length === 0 && (
+                        <ThemedText style={styles.hintText}>No hay divisiones disponibles para este cliente.</ThemedText>
                       )}
                     </ThemedView>
 
@@ -2174,6 +2591,7 @@ export default function GeneralInductionRegisterScreen() {
               {/* Participantes (listas expandibles) */}
               {renderPersonaSection('Colaboradores', 'colab', colaboradoresList)}
               {renderPersonaSection('Capacitadores', 'cap', capacitadoresList)}
+              {renderPhotosSection()}
 
               {/* Firma responsable (QR) */}
               <ThemedView style={styles.sectionContainer}>
@@ -2224,10 +2642,29 @@ export default function GeneralInductionRegisterScreen() {
                 </ThemedView>
               </ThemedView>
 
+              {submitResponse && (
+                <ThemedView style={[styles.responseContainer, submitResponse.type === 'success' ? styles.responseSuccess : styles.responseError]}>
+                  <ThemedText style={styles.responseText}>
+                    {submitResponse.type === 'success' ? '✓ ' : '✗ '}
+                    {submitResponse.message}
+                  </ThemedText>
+                </ThemedView>
+              )}
               <ThemedView style={styles.actionButtons}>
-                <TouchableOpacity style={[styles.listItemButton, styles.saveButton]} onPress={saveHandler} activeOpacity={0.85}>
-                  <Ionicons name="checkmark" size={20} color="#FFFFFF" />
-                  <ThemedText style={styles.buttonText}>Guardar</ThemedText>
+                <TouchableOpacity
+                  style={[styles.listItemButton, styles.saveButton, isSubmitting && styles.buttonDisabled]}
+                  onPress={saveHandler}
+                  activeOpacity={0.85}
+                  disabled={isSubmitting}
+                >
+                  {isSubmitting ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <>
+                      <Ionicons name="checkmark" size={20} color="#FFFFFF" />
+                      <ThemedText style={styles.buttonText}>Guardar</ThemedText>
+                    </>
+                  )}
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.listItemButton, styles.cancelButton]}
@@ -2236,6 +2673,7 @@ export default function GeneralInductionRegisterScreen() {
                     resetForm();
                   }}
                   activeOpacity={0.85}
+                  disabled={isSubmitting}
                 >
                   <Ionicons name="close" size={20} color="#FFFFFF" />
                   <ThemedText style={styles.buttonText}>Cancelar</ThemedText>
@@ -2292,6 +2730,21 @@ export default function GeneralInductionRegisterScreen() {
             </ThemedView>
           </ThemedView>
         </ThemedView>
+      </Modal>
+
+      {/* Camera Modal */}
+      <Modal visible={isCameraVisible} animationType="slide" onRequestClose={() => setIsCameraVisible(false)}>
+        <View style={styles.cameraContainer}>
+          <CameraView ref={cameraRef} style={styles.camera} facing="back" />
+          <View style={styles.cameraControls}>
+            <TouchableOpacity style={styles.cameraCancelButton} onPress={() => setIsCameraVisible(false)}>
+              <Ionicons name="close" size={30} color="#FFFFFF" />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.cameraCaptureButton} onPress={capturePhoto}>
+              <View style={styles.cameraCaptureButtonInner} />
+            </TouchableOpacity>
+          </View>
+        </View>
       </Modal>
 
       {/* Modal: ver cambios */}
@@ -2373,6 +2826,35 @@ export default function GeneralInductionRegisterScreen() {
               )}
             </ScrollView>
           </ThemedView>
+        </View>
+      </Modal>
+
+      {/* Modal: vista previa de imagen */}
+      <Modal
+        visible={isImagePreviewVisible}
+        animationType="fade"
+        transparent
+        onRequestClose={() => {
+          setIsImagePreviewVisible(false);
+          setSelectedImageUrl(null);
+        }}
+      >
+        <View style={styles.modalOverlayDark}>
+          <TouchableOpacity
+            style={styles.imagePreviewClose}
+            onPress={() => {
+              setIsImagePreviewVisible(false);
+              setSelectedImageUrl(null);
+            }}
+            activeOpacity={0.85}
+          >
+            <Ionicons name="close" size={28} color="#FFFFFF" />
+          </TouchableOpacity>
+          {selectedImageUrl ? (
+            <Image source={{ uri: selectedImageUrl }} style={styles.imagePreviewFull} resizeMode="contain" />
+          ) : (
+            <ThemedText style={styles.emptyText}>No se pudo cargar la imagen</ThemedText>
+          )}
         </View>
       </Modal>
 
@@ -2537,12 +3019,52 @@ const styles = StyleSheet.create({
   signatureButtonText: { color: '#007AFF', fontWeight: '700' },
   signatureSaved: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 },
   signatureSavedText: { color: '#000', opacity: 0.7 },
+  codeRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 },
+  codeInput: { flex: 1, marginBottom: 0 },
+  codeSearchButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: '#007AFF',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+  },
 
   // acciones / agregar
   addButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 12, backgroundColor: '#E8F5E9', borderRadius: 8, marginTop: 10, gap: 8 },
   addButtonText: { color: '#4CAF50', fontSize: 14, fontWeight: '600' },
   addButtonGray: { backgroundColor: '#F2F2F7' },
   addButtonTextGray: { color: '#8E8E93' },
+  captureImageButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    borderWidth: 1,
+    borderColor: '#007AFF',
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    backgroundColor: '#FFFFFF',
+    marginBottom: 10,
+  },
+  captureImageButtonText: { color: '#007AFF', fontWeight: '700' },
+  thumbRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  thumbWrapper: { position: 'relative' },
+  thumb: { width: 90, height: 90, borderRadius: 8, borderWidth: 1, borderColor: '#E0E0E0', backgroundColor: '#F5F5F5' },
+  thumbDelete: {
+    position: 'absolute',
+    top: -8,
+    right: -8,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#FF3B30',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 
   // firma responsable
   signatureQRButtonDisabled: { opacity: 0.6 },
@@ -2647,6 +3169,15 @@ const styles = StyleSheet.create({
   collapsableContent: { marginTop: 8, padding: 10, borderRadius: 8, backgroundColor: '#F8F9FA' },
   detailLine: { marginBottom: 6, color: '#000' },
   fullTemaRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
+  listImagesRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  listImageThumb: {
+    width: 84,
+    height: 84,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    backgroundColor: '#FFFFFF',
+  },
 
   actionButtons: { flexDirection: 'row', justifyContent: 'space-between', gap: 12, marginTop: 10 },
   listItemButton: {
@@ -2664,6 +3195,28 @@ const styles = StyleSheet.create({
   saveButton: { backgroundColor: '#007AFF' },
   cancelButton: { backgroundColor: '#8E8E93' },
   buttonText: { color: '#FFFFFF', fontSize: 14, fontWeight: '700' },
+  buttonDisabled: {
+    opacity: 0.6,
+  },
+  responseContainer: {
+    padding: 12,
+    borderRadius: 6,
+    marginBottom: 12,
+  },
+  responseSuccess: {
+    backgroundColor: '#D4EDDA',
+    borderWidth: 1,
+    borderColor: '#C3E6CB',
+  },
+  responseError: {
+    backgroundColor: '#F8D7DA',
+    borderWidth: 1,
+    borderColor: '#F5C6CB',
+  },
+  responseText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
   overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 },
   floatModalCardMovimientos: { backgroundColor: '#FFFFFF', borderRadius: 12, width: '100%', maxWidth: 500, maxHeight: '80%', borderWidth: 1, borderColor: '#E0E0E0', overflow: 'hidden' },
   floatModalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#E0E0E0' },
@@ -2722,6 +3275,59 @@ const styles = StyleSheet.create({
   modalSignatureContainer: {
     height: 300,
     width: '100%',
+  },
+  cameraContainer: { flex: 1, backgroundColor: '#000000' },
+  camera: { flex: 1 },
+  cameraControls: {
+    position: 'absolute',
+    bottom: 30,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'center',
+    paddingHorizontal: 30,
+  },
+  cameraCancelButton: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: 'rgba(255,255,255,0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  cameraCaptureButton: {
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    borderWidth: 4,
+    borderColor: '#FFFFFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  cameraCaptureButtonInner: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: '#FFFFFF',
+  },
+  modalOverlayDark: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.92)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 16,
+  },
+  imagePreviewFull: {
+    width: '100%',
+    height: '85%',
+  },
+  imagePreviewClose: {
+    position: 'absolute',
+    top: 45,
+    right: 20,
+    zIndex: 10,
+    padding: 6,
   },
   modalActions: {
     flexDirection: 'row',

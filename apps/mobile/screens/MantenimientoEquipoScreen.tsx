@@ -153,7 +153,7 @@ const getActionIcon = (action: string) => {
 };
 
 // Componente para visualizar archivos del activo
-function ActivoFilesViewer({ activoId, files }: { activoId: number; files: ActivoFileRemote[] }) {
+function ActivoFilesViewer({ activoId, files, accessToken }: { activoId: number; files: ActivoFileRemote[]; accessToken?: string | null }) {
     const [isExpanded, setIsExpanded] = useState(false);
     const list = Array.isArray(files) ? files : [];
     if (list.length === 0) return null;
@@ -166,17 +166,23 @@ function ActivoFilesViewer({ activoId, files }: { activoId: number; files: Activ
     const buildFileUrl = (file: ActivoFileRemote) => {
         const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
         if (!apiUrl) return '';
+        const appendTokenToUrl = (url: string) => {
+            if (!accessToken || accessToken.trim().length === 0) return url;
+            if (/[?&]token=/.test(url)) return url;
+            const sep = url.includes('?') ? '&' : '?';
+            return `${url}${sep}token=${encodeURIComponent(accessToken)}`;
+        };
 
         if (file.type === 'image') {
-            return `${apiUrl}/api/articulo-mantenimiento/${activoId}/get-image/${encodeURIComponent(file.name)}`;
+            return appendTokenToUrl(`${apiUrl}/api/articulo-mantenimiento/${activoId}/get-image/${encodeURIComponent(file.name)}`);
         }
         if (file.type === 'audio') {
-            return `${apiUrl}/api/articulo-mantenimiento/${activoId}/get-audio/${encodeURIComponent(file.name)}`;
+            return appendTokenToUrl(`${apiUrl}/api/articulo-mantenimiento/${activoId}/get-audio/${encodeURIComponent(file.name)}`);
         }
         if (file.type === 'video') {
-            return `${apiUrl}/api/articulo-mantenimiento/${activoId}/get-video/${encodeURIComponent(file.name)}`;
+            return appendTokenToUrl(`${apiUrl}/api/articulo-mantenimiento/${activoId}/get-video/${encodeURIComponent(file.name)}`);
         }
-        return `${apiUrl}/api/articulo-mantenimiento/${activoId}/get-file/${encodeURIComponent(file.name)}`;
+        return appendTokenToUrl(`${apiUrl}/api/articulo-mantenimiento/${activoId}/get-file/${encodeURIComponent(file.name)}`);
     };
 
     const getFileDisplayName = (file: ActivoFileRemote) => {
@@ -455,7 +461,14 @@ interface ActivoFileRemote {
 
 export default function MantenimientoEquipoScreen() {
     const navigation = useNavigation<any>();
-    const { employee, refreshAccessToken, logout } = useAuth();
+    const { employee, refreshAccessToken, logout, accessToken } = useAuth();
+    const appendTokenToUrl = (url: string) => {
+        if (!url) return '';
+        if (!accessToken || accessToken.trim().length === 0) return url;
+        if (/[?&]token=/.test(url)) return url;
+        const sep = url.includes('?') ? '&' : '?';
+        return `${url}${sep}token=${encodeURIComponent(accessToken)}`;
+    };
 
     const [isMenuVisible, setIsMenuVisible] = useState(false);
     const handleMenuPress = () => setIsMenuVisible(true);
@@ -489,6 +502,8 @@ export default function MantenimientoEquipoScreen() {
     // Nota: este módulo ahora lista artículos del puesto (Plan + Asignado) y sus mantenimientos
     const [reportes, setReportes] = useState<ArticuloPuestoMantenimientoItem[]>([]);
     const [selectedReporte, setSelectedReporte] = useState<ArticuloPuestoMantenimientoItem | null>(null);
+    const [isSubmitting, setIsSubmitting] = useState(false);
+    const [submitResponse, setSubmitResponse] = useState<{ type: 'success' | 'error', message: string } | null>(null);
     const [activos, setActivos] = useState<ArticuloMantenimiento[]>([]);
     const [showActivos, setShowActivos] = useState(false);
     const [selectedActivo, setSelectedActivo] = useState<ArticuloMantenimiento | null>(null);
@@ -1768,19 +1783,19 @@ export default function MantenimientoEquipoScreen() {
     const getActivoImageUrl = (activoId: number, fileName: string) => {
         const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
         if (!apiUrl) return '';
-        return `${apiUrl}/api/articulo-mantenimiento/${activoId}/get-image/${encodeURIComponent(fileName)}`;
+        return appendTokenToUrl(`${apiUrl}/api/articulo-mantenimiento/${activoId}/get-image/${encodeURIComponent(fileName)}`);
     };
 
     const getActivoAudioUrl = (activoId: number, fileName: string) => {
         const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
         if (!apiUrl) return '';
-        return `${apiUrl}/api/articulo-mantenimiento/${activoId}/get-audio/${encodeURIComponent(fileName)}`;
+        return appendTokenToUrl(`${apiUrl}/api/articulo-mantenimiento/${activoId}/get-audio/${encodeURIComponent(fileName)}`);
     };
 
     const getActivoVideoUrl = (activoId: number, fileName: string) => {
         const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
         if (!apiUrl) return '';
-        return `${apiUrl}/api/articulo-mantenimiento/${activoId}/get-video/${encodeURIComponent(fileName)}`;
+        return appendTokenToUrl(`${apiUrl}/api/articulo-mantenimiento/${activoId}/get-video/${encodeURIComponent(fileName)}`);
     };
 
     const buildFileUrl = (activoId: number | undefined, file: ActivoFileRemote) => {
@@ -1795,10 +1810,10 @@ export default function MantenimientoEquipoScreen() {
             if (file.type === 'audio') return getActivoAudioUrl(activoId, file.name);
             if (file.type === 'video') return getActivoVideoUrl(activoId, file.name);
             const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-            if (apiUrl) return `${apiUrl}/api/articulo-mantenimiento/${activoId}/get-file/${encodeURIComponent(file.name)}`;
+            if (apiUrl) return appendTokenToUrl(`${apiUrl}/api/articulo-mantenimiento/${activoId}/get-file/${encodeURIComponent(file.name)}`);
         }
 
-        if (file.url) return file.url;
+        if (file.url) return appendTokenToUrl(file.url);
         return '';
     };
 
@@ -1866,10 +1881,14 @@ export default function MantenimientoEquipoScreen() {
     const handleSave = async () => {
         if (!selectedActivo) return;
 
+        setIsSubmitting(true);
+        setSubmitResponse(null);
+
         const isConnected = await getConnectionStatus();
         const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
         if (!apiUrl) {
-            Alert.alert('Error', 'Server URL not configured');
+            setSubmitResponse({ type: 'error', message: 'Server URL not configured' });
+            setIsSubmitting(false);
             return;
         }
 
@@ -2016,23 +2035,27 @@ export default function MantenimientoEquipoScreen() {
                             mantenimientoId: selectedActivo.id,
                             patch: mainStructurePatch,
                         });
-                        Alert.alert('Éxito', 'Mantenimiento actualizado correctamente');
-                        setIsUpdating(false);
-                        setSelectedActivo(null);
-                        setShowActivos(true);
-                        resetForm();
-                        if (selectedReporte) {
-                            await fetchActivos(selectedReporte);
-                        }
-                        await fetchReportes();
+                        setSubmitResponse({ type: 'success', message: data.message || 'Mantenimiento actualizado correctamente' });
+                        setTimeout(async () => {
+                            setIsUpdating(false);
+                            setSelectedActivo(null);
+                            setShowActivos(true);
+                            resetForm();
+                            if (selectedReporte) {
+                                await fetchActivos(selectedReporte);
+                            }
+                            await fetchReportes();
+                        }, 2000);
                     } else {
-                        Alert.alert('Error', data.message || 'No se pudo actualizar el mantenimiento');
+                        setSubmitResponse({ type: 'error', message: data.message || 'No se pudo actualizar el mantenimiento' });
                     }
                 } else {
-                    Alert.alert('Error', 'No se pudo actualizar el mantenimiento');
+                    setSubmitResponse({ type: 'error', message: 'No se pudo actualizar el mantenimiento' });
                 }
             } catch (error: any) {
-                Alert.alert('Error', error.message || 'No se pudo actualizar el mantenimiento');
+                setSubmitResponse({ type: 'error', message: error.message || 'No se pudo actualizar el mantenimiento' });
+            } finally {
+                setIsSubmitting(false);
             }
         } else {
             // Modo offline
@@ -2097,12 +2120,19 @@ export default function MantenimientoEquipoScreen() {
                 patch: mainStructurePatch,
             });
 
-            Alert.alert('Guardado (offline)', 'Los cambios se sincronizarán cuando vuelva la conexión.');
-            setIsUpdating(false);
-            setSelectedActivo(null);
-            setShowActivos(true);
-            resetForm();
+            setSubmitResponse({ type: 'success', message: 'Los cambios se sincronizarán cuando vuelva la conexión.' });
+            setTimeout(async () => {
+                setIsUpdating(false);
+                setSelectedActivo(null);
+                setShowActivos(true);
+                resetForm();
+                if (selectedReporte) {
+                    await fetchActivos(selectedReporte);
+                }
+                await fetchReportes();
+            }, 2000);
         }
+        setIsSubmitting(false);
     };
 
     const renderReporte = (reporte: ArticuloPuestoMantenimientoItem) => {
@@ -2218,7 +2248,7 @@ export default function MantenimientoEquipoScreen() {
                 </ThemedText>
 
                 {archivos.length > 0 && (
-                    <ActivoFilesViewer activoId={activo.id} files={archivos} />
+                    <ActivoFilesViewer activoId={activo.id} files={archivos} accessToken={accessToken} />
                 )}
 
                 <ThemedView style={styles.listItemButtons}>
@@ -3537,13 +3567,31 @@ export default function MantenimientoEquipoScreen() {
                 </ThemedView>
 
                 <ThemedView style={styles.formActions}>
-                    <TouchableOpacity style={[styles.formActionButton, styles.formActionCancel]} onPress={cancelUpdating}>
+                    {submitResponse && (
+                        <ThemedView style={[styles.responseContainer, submitResponse.type === 'success' ? styles.responseSuccess : styles.responseError]}>
+                            <ThemedText style={styles.responseText}>
+                                {submitResponse.type === 'success' ? '✓ ' : '✗ '}
+                                {submitResponse.message}
+                            </ThemedText>
+                        </ThemedView>
+                    )}
+                    <TouchableOpacity style={[styles.formActionButton, styles.formActionCancel]} onPress={cancelUpdating} disabled={isSubmitting}>
                         <Ionicons name="close" size={18} color="#000" />
                         <ThemedText style={styles.formActionCancelText}>Cancelar</ThemedText>
                     </TouchableOpacity>
-                    <TouchableOpacity style={[styles.formActionButton, styles.formActionSave]} onPress={handleSave}>
-                        <Ionicons name="save" size={18} color="#fff" />
-                        <ThemedText style={styles.formActionSaveText}>Confirmar</ThemedText>
+                    <TouchableOpacity
+                        style={[styles.formActionButton, styles.formActionSave, isSubmitting && styles.buttonDisabled]}
+                        onPress={handleSave}
+                        disabled={isSubmitting}
+                    >
+                        {isSubmitting ? (
+                            <ActivityIndicator size="small" color="#fff" />
+                        ) : (
+                            <>
+                                <Ionicons name="save" size={18} color="#fff" />
+                                <ThemedText style={styles.formActionSaveText}>Confirmar</ThemedText>
+                            </>
+                        )}
                     </TouchableOpacity>
                 </ThemedView>
             </ThemedView>
@@ -4576,6 +4624,28 @@ const styles = StyleSheet.create({
     formActionCancelText: { color: '#000', fontWeight: '800' },
     formActionSave: { backgroundColor: '#007AFF' },
     formActionSaveText: { color: '#fff', fontWeight: '800' },
+    buttonDisabled: {
+        opacity: 0.6,
+    },
+    responseContainer: {
+        padding: 12,
+        borderRadius: 6,
+        marginBottom: 12,
+    },
+    responseSuccess: {
+        backgroundColor: '#D4EDDA',
+        borderWidth: 1,
+        borderColor: '#C3E6CB',
+    },
+    responseError: {
+        backgroundColor: '#F8D7DA',
+        borderWidth: 1,
+        borderColor: '#F5C6CB',
+    },
+    responseText: {
+        fontSize: 14,
+        fontWeight: '600',
+    },
 
     listContainer: {},
     emptyContainer: { padding: 24, alignItems: 'center' },

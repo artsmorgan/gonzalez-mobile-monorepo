@@ -1,12 +1,12 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../../utils/verifyToken";
-import { prisma } from "../../../../utils/prismaClient";
+import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
     if (!valid) {
       return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
     }
@@ -23,12 +23,18 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
     }
 
-    const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(String(marca_id)) } });
+    const marcaDia = await callDynamicPrisma({
+      req,
+      data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: parseInt(String(marca_id)) } }
+    });
     if (!marcaDia) {
       return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
     }
 
-    const existing = await prisma.e_llave.findUnique({ where: { id } });
+    const existing = await callDynamicPrisma({
+      req,
+      data: { action: "GET", table: "e_llave", operation: "findUnique", where: { id } }
+    });
     if (!existing) {
       return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 200 });
     }
@@ -72,23 +78,43 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       }
     }
 
-    await prisma.e_llave.update({
-      where: { id },
-      data: updateData,
+    // Convertir fechas a ISO strings para la API dinámica
+    const updateDataForApi: any = {};
+    for (const [k, v] of Object.entries(updateData)) {
+      if (v instanceof Date) {
+        updateDataForApi[k] = v.toISOString();
+      } else {
+        updateDataForApi[k] = v;
+      }
+    }
+
+    await callDynamicPrisma({
+      req,
+      data: {
+        action: "UPDATE",
+        table: "e_llave",
+        where: { id },
+        data: updateDataForApi
+      }
     });
 
     // Registrar cambios si hay alguno
     if (cambiosArr.length > 0) {
       const createdBy = parseInt(String((payload as any)?.id ?? 0)) || 0;
       const createdAt = toZonedTime(new Date(), "America/Costa_Rica") as Date;
-      await prisma.c_cambios_apps_modules.create({
+      await callDynamicPrisma({
+        req,
         data: {
-          nombre_tabla: "e_llave",
-          registro_id: id,
-          cambios: JSON.stringify(cambiosArr),
-          created_at: createdAt,
-          created_by: createdBy,
-        },
+          action: "POST",
+          table: "c_cambios_apps_modules",
+          data: {
+            nombre_tabla: "e_llave",
+            registro_id: id,
+            cambios: JSON.stringify(cambiosArr),
+            created_at: createdAt.toISOString(),
+            created_by: createdBy,
+          }
+        }
       });
     }
 
@@ -102,7 +128,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
 export async function DELETE(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
     if (!valid) {
       return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
     }
@@ -117,12 +143,18 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
     if (!marcaIdStr) {
       return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
     }
-    const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(marcaIdStr) } });
+    const marcaDia = await callDynamicPrisma({
+      req,
+      data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: parseInt(marcaIdStr) } }
+    });
     if (!marcaDia) {
       return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
     }
 
-    const existing = await prisma.e_llave.findUnique({ where: { id } });
+    const existing = await callDynamicPrisma({
+      req,
+      data: { action: "GET", table: "e_llave", operation: "findUnique", where: { id } }
+    });
     if (!existing) {
       return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 200 });
     }
@@ -133,29 +165,37 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
     // Registrar cambio de eliminación antes de eliminar
     const createdBy = parseInt(String((payload as any)?.id ?? 0)) || 0;
     const createdAt = toZonedTime(new Date(), "America/Costa_Rica") as Date;
-    await prisma.c_cambios_apps_modules.create({
+    await callDynamicPrisma({
+      req,
       data: {
-        nombre_tabla: "e_llave",
-        registro_id: id,
-        cambios: JSON.stringify([{
-          prop: "__deleted__",
-          before: {
-            id: existing.id,
-            cliente_id: existing.cliente_id,
-            corpo_id: existing.corpo_id,
-            puesto_id: existing.puesto_id,
-            lugar_abre: existing.lugar_abre,
-            cantidad_copias: existing.cantidad_copias,
-            observaciones: existing.observaciones,
-          },
-          after: null,
-        }]),
-        created_at: createdAt,
-        created_by: createdBy,
-      },
+        action: "POST",
+        table: "c_cambios_apps_modules",
+        data: {
+          nombre_tabla: "e_llave",
+          registro_id: id,
+          cambios: JSON.stringify([{
+            prop: "__deleted__",
+            before: {
+              id: existing.id,
+              cliente_id: existing.cliente_id,
+              corpo_id: existing.corpo_id,
+              puesto_id: existing.puesto_id,
+              lugar_abre: existing.lugar_abre,
+              cantidad_copias: existing.cantidad_copias,
+              observaciones: existing.observaciones,
+            },
+            after: null,
+          }]),
+          created_at: createdAt.toISOString(),
+          created_by: createdBy,
+        }
+      }
     });
 
-    await prisma.e_llave.delete({ where: { id } });
+    await callDynamicPrisma({
+      req,
+      data: { action: "DELETE", table: "e_llave", where: { id } }
+    });
     return NextResponse.json({ status: true, message: "Llave eliminada correctamente" }, { status: 200 });
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";

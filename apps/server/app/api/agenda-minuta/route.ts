@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../utils/verifyToken";
-import { prisma } from "../../../utils/prismaClient";
+import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
 
@@ -49,7 +49,7 @@ function ensureStringJson(value: any, fallback: string) {
 
 export async function GET(req: NextRequest) {
   try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
+    const { valid, expired, message } = await verifyAccessTokenByApi(req);
     if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
     // Parámetros de la jerarquía completa
@@ -66,11 +66,17 @@ export async function GET(req: NextRequest) {
     // Solo se aplica si no hay filtro más específico de cliente
     if (empresaIdStr && !clienteIdStr) {
       const empresaId = parseInt(empresaIdStr);
-      const clientes = await prisma.e_estructura_cliente.findMany({
-        where: { empresa_id: empresaId },
-        select: { id: true },
+      const clientes = await callDynamicPrisma({
+        req,
+        data: {
+          action: "GET",
+          table: "e_estructura_cliente",
+          operation: "findMany",
+          where: { empresa_id: empresaId },
+          select: { id: true },
+        },
       });
-      const clienteIds = clientes.map((c) => c.id);
+      const clienteIds = Array.isArray(clientes) ? clientes.map((c: any) => c.id) : [];
       if (clienteIds.length > 0) {
         where.cliente_id = { in: clienteIds };
       } else {
@@ -92,11 +98,17 @@ export async function GET(req: NextRequest) {
     // Solo se aplica si no hay filtro más específico de corpo
     if (contratoIdStr && !corpoIdStr) {
       const contratoId = parseInt(contratoIdStr);
-      const sucursales = await prisma.e_estructura_sucursal.findMany({
-        where: { contrato_id: contratoId },
-        select: { id: true },
+      const sucursales = await callDynamicPrisma({
+        req,
+        data: {
+          action: "GET",
+          table: "e_estructura_sucursal",
+          operation: "findMany",
+          where: { contrato_id: contratoId },
+          select: { id: true },
+        },
       });
-      const sucursalIds = sucursales.map((s) => s.id);
+      const sucursalIds = Array.isArray(sucursales) ? sucursales.map((s: any) => s.id) : [];
       if (sucursalIds.length > 0) {
         where.corpo_id = { in: sucursalIds };
       } else {
@@ -115,17 +127,24 @@ export async function GET(req: NextRequest) {
       where.puesto_id = parseInt(puestoIdStr);
     }
 
-    const records = await prisma.c_agenda_minuta.findMany({
-      where,
-      orderBy: { created_at: "desc" },
-      include: {
-        e_estructura_cliente: { select: { nombre: true } },
-        e_estructura_sucursal: { select: { nombre: true, nro_sucursal: true } },
-        e_estructura_puesto: { select: { nombre: true, codigo: true } },
+    const records = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "c_agenda_minuta",
+        operation: "findMany",
+        where,
+        orderBy: { created_at: "desc" },
+        include: {
+          e_estructura_cliente: { select: { nombre: true } },
+          e_estructura_sucursal: { select: { nombre: true, nro_sucursal: true } },
+          e_estructura_puesto: { select: { nombre: true, codigo: true } },
+        },
       },
     });
 
-    const recordsWithNames = records.map((r: any) => ({
+    const recordsArray = Array.isArray(records) ? records : [];
+    const recordsWithNames = recordsArray.map((r: any) => ({
       ...r,
       id_local: "",
       cliente_nombre: r.e_estructura_cliente?.nombre || null,
@@ -148,7 +167,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
     if (!valid) return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
 
     const {
@@ -163,6 +182,7 @@ export async function POST(req: NextRequest) {
       autor,
       participantes,
       acuerdos,
+      temas_a_tratar,
       observaciones,
       firma_responsable,
     } = await req.json();
@@ -204,28 +224,34 @@ export async function POST(req: NextRequest) {
     if (!horaFinParsed) return NextResponse.json({ status: false, message: "Hora fin inválida" }, { status: 400 });
 
     const createdAt = toZonedTime(new Date(), "America/Costa_Rica");
-    const record = await prisma.c_agenda_minuta.create({
+    const record = await callDynamicPrisma({
+      req,
       data: {
-        cliente_id: clienteIdNum,
-        corpo_id: corpoIdNum,
-        puesto_id: puestoIdNum,
-        numero: numeroNum,
-        titulo: String(titulo).trim(),
-        fecha: fechaParsed,
-        hora_inicio: horaInicioParsed,
-        hora_fin: horaFinParsed,
-        autor: String(autor),
-        participantes: ensureStringJson(participantes, "[]"),
-        acuerdos: ensureStringJson(acuerdos, "[]"),
-        observaciones: String(observaciones),
-        firma_responsable: String(firma_responsable),
-        created_at: createdAt,
-        created_by: payload.id?.toString?.() || "",
-      },
-      include: {
-        e_estructura_cliente: { select: { nombre: true } },
-        e_estructura_sucursal: { select: { nombre: true, nro_sucursal: true } },
-        e_estructura_puesto: { select: { nombre: true, codigo: true } },
+        action: "POST",
+        table: "c_agenda_minuta",
+        data: {
+          cliente_id: clienteIdNum,
+          corpo_id: corpoIdNum,
+          puesto_id: puestoIdNum,
+          numero: numeroNum,
+          titulo: String(titulo).trim(),
+          fecha: fechaParsed instanceof Date ? fechaParsed.toISOString() : fechaParsed,
+          hora_inicio: horaInicioParsed instanceof Date ? horaInicioParsed.toISOString() : horaInicioParsed,
+          hora_fin: horaFinParsed instanceof Date ? horaFinParsed.toISOString() : horaFinParsed,
+          autor: String(autor),
+          participantes: ensureStringJson(participantes, "[]"),
+          acuerdos: ensureStringJson(acuerdos, "[]"),
+          temas_a_tratar: temas_a_tratar !== undefined ? ensureStringJson(temas_a_tratar, "[]") : "[]",
+          observaciones: String(observaciones),
+          firma_responsable: String(firma_responsable),
+          created_at: createdAt.toISOString(),
+          created_by: payload.id?.toString?.() || "",
+        },
+        include: {
+          e_estructura_cliente: { select: { nombre: true } },
+          e_estructura_sucursal: { select: { nombre: true, nro_sucursal: true } },
+          e_estructura_puesto: { select: { nombre: true, codigo: true } },
+        },
       },
     });
 
@@ -236,54 +262,86 @@ export async function POST(req: NextRequest) {
       let fechaRegistro = createdAt.toISOString().split("T")[0];
       let horaRegistro = createdAt.toISOString().split("T")[1].split(".")[0];
       if (record.created_by) {
-        const empleado = await prisma.c_empleado.findUnique({ where: { id: parseInt(String(record.created_by), 10) } });
-        if (empleado) {
-          empNombre = empleado.nombre + " " + empleado.primer_apellido + " " + empleado.segundo_apellido;
+        const empleado = await callDynamicPrisma({
+          req,
+          data: {
+            action: "GET",
+            table: "c_empleado",
+            operation: "findUnique",
+            where: { id: parseInt(String(record.created_by), 10) },
+          },
+        });
+        if (empleado && empleado.id) {
+          empNombre = (empleado.nombre || "") + " " + (empleado.primer_apellido || "") + " " + (empleado.segundo_apellido || "");
         }
       }
       if (record.corpo_id) {
-        const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: record.corpo_id } });
-        if (sucursal) {
-          sucursalNombre = sucursal.nombre;
+        const sucursal = await callDynamicPrisma({
+          req,
+          data: {
+            action: "GET",
+            table: "e_estructura_sucursal",
+            operation: "findUnique",
+            where: { id: record.corpo_id },
+          },
+        });
+        if (sucursal && sucursal.id) {
+          sucursalNombre = sucursal.nombre || "Desconocida";
         }
       }
       if (record.puesto_id) {
-        const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: record.puesto_id } });
-        if (puesto) {
-          puestoNombre = puesto.nombre + " (" + puesto.codigo + ")";
+        const puesto = await callDynamicPrisma({
+          req,
+          data: {
+            action: "GET",
+            table: "e_estructura_puesto",
+            operation: "findUnique",
+            where: { id: record.puesto_id },
+          },
+        });
+        if (puesto && puesto.id) {
+          puestoNombre = (puesto.nombre || "") + " (" + (puesto.codigo || "") + ")";
         }
       }
       const description = "El empleado " + empNombre + " ha registrado una agenda minuta titulada " + record.titulo + " en el puesto " + puestoNombre + " de la sucursal " + sucursalNombre + " el día " + fechaRegistro + " a las " + horaRegistro;
-      sendNotificationByRole(record.corpo_id, [parseInt(String(record.created_by), 10)], "Agenda minuta registrada", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+      await sendNotificationByRole(req, record.corpo_id, [parseInt(String(record.created_by), 10)], "Agenda minuta registrada", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
     }
 
     // Registrar cambio de creación
     const createdBy = parseInt(String(payload.id ?? 0), 10) || 0;
-    await prisma.c_cambios_apps_modules.create({
+    const fechaRecord = record.fecha instanceof Date ? record.fecha : new Date(record.fecha);
+    const horaInicioRecord = record.hora_inicio instanceof Date ? record.hora_inicio : new Date(record.hora_inicio);
+    const horaFinRecord = record.hora_fin instanceof Date ? record.hora_fin : new Date(record.hora_fin);
+    await callDynamicPrisma({
+      req,
       data: {
-        nombre_tabla: "c_agenda_minuta",
-        registro_id: record.id,
-        cambios: JSON.stringify([{
-          prop: "__created__",
-          before: null,
-          after: {
-            id: record.id,
-            cliente_id: record.cliente_id,
-            corpo_id: record.corpo_id,
-            puesto_id: record.puesto_id,
-            numero: record.numero,
-            titulo: record.titulo,
-            fecha: record.fecha.toISOString(),
-            hora_inicio: record.hora_inicio.toISOString(),
-            hora_fin: record.hora_fin.toISOString(),
-            autor: record.autor,
-            participantes: record.participantes,
-            acuerdos: record.acuerdos,
-            observaciones: record.observaciones,
-          },
-        }]),
-        created_at: createdAt,
-        created_by: createdBy,
+        action: "POST",
+        table: "c_cambios_apps_modules",
+        data: {
+          nombre_tabla: "c_agenda_minuta",
+          registro_id: record.id,
+          cambios: JSON.stringify([{
+            prop: "__created__",
+            before: null,
+            after: {
+              id: record.id,
+              cliente_id: record.cliente_id,
+              corpo_id: record.corpo_id,
+              puesto_id: record.puesto_id,
+              numero: record.numero,
+              titulo: record.titulo,
+              fecha: fechaRecord.toISOString(),
+              hora_inicio: horaInicioRecord.toISOString(),
+              hora_fin: horaFinRecord.toISOString(),
+              autor: record.autor,
+              participantes: record.participantes,
+              acuerdos: record.acuerdos,
+              observaciones: record.observaciones,
+            },
+          }]),
+          created_at: createdAt.toISOString(),
+          created_by: createdBy,
+        },
       },
     });
 

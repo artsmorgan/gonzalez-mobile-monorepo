@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
+import { fetchDynamicFile } from "../../../../../utils/callDynamicFilesApi";
 
 export const runtime = 'nodejs'; // 👈 necesario para usar fs
 
-import { prisma } from "../../../../../utils/prismaClient";
+import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
 
@@ -15,38 +14,35 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         return NextResponse.json({ status: false, message: 'ID faltante' }, { status: 400 });
     }
 
-    const capacitacion = await prisma.e_registro_capacitaciones.findUnique({ where: { id } });
-    if (!capacitacion || !capacitacion.file) {
+    const capacitacion = await callDynamicPrisma({
+        req,
+        data: {
+            action: "GET",
+            table: "e_registro_capacitaciones",
+            operation: "findUnique",
+            where: { id },
+        },
+    });
+    if (!capacitacion) {
         return NextResponse.json({ status: false, message: 'Capacitación no encontrada' }, { status: 404 });
     }
 
-    const filePath = path.join(
-        process.cwd(),
-        'public',
-        'uploads',
-        'training',
-        `${capacitacion.id}`,
-        capacitacion.file
-    );
-
-    console.log('📂 Buscando archivo en:', filePath);
-
-    if (!fs.existsSync(filePath)) {
-        return NextResponse.json({ status: false, message: 'Archivo no encontrado' }, { status: 404 });
+    const capacitacionObj = capacitacion as any;
+    if (!capacitacionObj.file) {
+        return NextResponse.json({ status: false, message: 'Capacitación no encontrada' }, { status: 404 });
     }
 
-    const file = await fs.promises.readFile(filePath);
-    const ext = path.extname(filePath).toLowerCase();
+    const fetched = await fetchDynamicFile({
+        req,
+        type: 'image',
+        url: `training/${capacitacionObj.id}/${capacitacionObj.file}`,
+        download: false,
+    });
 
-    let contentType = 'application/octet-stream';
-    if (ext === '.jpg' || ext === '.jpeg') contentType = 'image/jpeg';
-    if (ext === '.png') contentType = 'image/png';
-    if (ext === '.webp') contentType = 'image/webp';
-
-    return new NextResponse(Buffer.from(file), {
+    return new NextResponse(fetched.buffer, {
         headers: {
-            'Content-Type': contentType,
-            'Cache-Control': 'public, max-age=31536000',
+            'Content-Type': fetched.headers.contentType,
+            'Cache-Control': fetched.headers.cacheControl,
         },
     });
 }

@@ -1,272 +1,324 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../utils/verifyToken";
+import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { toZonedTime } from "date-fns-tz";
-import { prisma } from "../../../utils/prismaClient";
-import { sendNotificationByRole } from "../../../utils/sendNotification";
+import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
+import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
+
+type AttendanceControlImageInput = {
+  file_base64: string;
+  extension?: string;
+  original_name?: string;
+};
+
+function safeParseJson<T>(value: any, fallback: T): T {
+  try {
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (trimmed.length === 0) return fallback;
+      return JSON.parse(trimmed) as T;
+    }
+    if (value === null || value === undefined) return fallback;
+    return value as T;
+  } catch {
+    return fallback;
+  }
+}
+
+function parseDateInput(value: any): Date | null {
+  if (!value) return null;
+  const str = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
+    const [y, m, d] = str.split("-").map((x) => parseInt(x, 10));
+    const date = new Date(y, m - 1, d);
+    if (Number.isNaN(date.getTime())) return null;
+    return date;
+  }
+  const d = new Date(str);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function getTurnoLetter(turno: string): string {
+  return String(turno || "").trim().charAt(0).toUpperCase();
+}
+
+async function buildColaboradoresFromMarcas(req: NextRequest, params: { fecha: Date; corpo_id: number; turno: string }) {
+  const turnoLetter = getTurnoLetter(params.turno);
+  if (!["D", "M", "N"].includes(turnoLetter)) {
+    throw new Error("Turno inválido");
+  }
+
+  const start = new Date(params.fecha.getFullYear(), params.fecha.getMonth(), params.fecha.getDate(), 0, 0, 0, 0);
+  const end = new Date(params.fecha.getFullYear(), params.fecha.getMonth(), params.fecha.getDate(), 23, 59, 59, 999);
+
+  const marcas = await callDynamicPrisma({
+    req,
+    data: {
+      action: "GET",
+      table: "c_marca_dia",
+      operation: "findMany",
+      where: {
+        corpo_id: params.corpo_id,
+        tipo_turno: turnoLetter,
+        fecha: {
+          gte: start.toISOString(),
+          lte: end.toISOString(),
+        },
+      },
+      include: {
+        c_empleado_c_marca_dia_empleadoFijo_idToc_empleado: {
+          select: {
+            id: true,
+            nombre: true,
+            primer_apellido: true,
+            segundo_apellido: true,
+            cedula: true,
+          },
+        },
+        e_estructura_cliente: { select: { id: true, nombre: true } },
+        e_estructura_sucursal: { select: { id: true, nombre: true } },
+        e_estructura_puesto: { select: { id: true, nombre: true } },
+      },
+      orderBy: [{ hora_inicio: "asc" }, { id: "asc" }],
+    },
+  });
+
+  const colaboradores = (Array.isArray(marcas) ? marcas : []).map((m: any) => {
+    const emp = m.c_empleado_c_marca_dia_empleadoFijo_idToc_empleado;
+    const nombre = [emp?.nombre, emp?.primer_apellido, emp?.segundo_apellido].filter(Boolean).join(" ").trim();
+    const ausente = !m.hora_entrada_digitada;
+    return {
+      empleado_id: emp?.id || m.empleadoFijo_id || null,
+      marca_id: m.id,
+      ausente,
+      nombre: nombre || "",
+      cedula: emp?.cedula || "",
+      cliente: m.e_estructura_cliente?.nombre || "",
+      sucursal: m.e_estructura_sucursal?.nombre || "",
+      puesto: m.e_estructura_puesto?.nombre || "",
+      hora_inicio: m.hora_inicio ? new Date(m.hora_inicio).toISOString() : null,
+      hora_fin: m.hora_fin ? new Date(m.hora_fin).toISOString() : null,
+      tipo_turno: m.tipo_turno || null,
+    };
+  });
+
+  const totalPresentes = colaboradores.filter((c: any) => !c.ausente).length;
+  return { colaboradores, totalPresentes };
+}
+
+function normalizeRecord(record: any, baseUrl: string, sucursalNombreMap?: Record<number, string>) {
+  const corpoId = Number(record?.corpo_id || 0);
+  return {
+    ...record,
+    id_local: "",
+    cliente: record?.nombre_cliente || null,
+    sucursal_nombre: (corpoId && sucursalNombreMap ? sucursalNombreMap[corpoId] : null) || null,
+    total_presentes: record?.total_presentes !== null && record?.total_presentes !== undefined ? String(record.total_presentes) : null,
+    images: (record?.c_imagenes_control_asistencia || []).map((f: any) => ({
+      id: f.id,
+      name: f.name,
+      original_name: f.original_name,
+      url: baseUrl ? `${baseUrl}/api/attendance-control/${record.id}/get-image/${f.name}` : "",
+    })),
+  };
+}
 
 export async function GET(req: NextRequest) {
   try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
-    if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
+    const { valid, expired, message } = await verifyAccessTokenByApi(req);
+    if (!valid) return NextResponse.json({ status: false, expired, message }, { status: expired ? 401 : 403 });
 
     const empresaIdStr = req.nextUrl.searchParams.get("empresa_id");
     const clienteIdStr = req.nextUrl.searchParams.get("cliente_id");
     const divisionIdStr = req.nextUrl.searchParams.get("division_id");
     const contratoIdStr = req.nextUrl.searchParams.get("contrato_id");
     const corpoIdStr = req.nextUrl.searchParams.get("corpo_id");
-
     const where: any = {};
 
-    // Prioridad: corpo_id > contrato_id > division_id > cliente_id > empresa_id
-    if (corpoIdStr) {
-      where.corpo_id = parseInt(corpoIdStr);
-    } else if (contratoIdStr) {
-      where.contrato_id = parseInt(contratoIdStr);
-    } else if (divisionIdStr) {
-      where.division_id = parseInt(divisionIdStr);
-    } else if (clienteIdStr) {
-      where.cliente_id = parseInt(clienteIdStr);
-    } else if (empresaIdStr) {
-      // Si hay empresa pero no cliente, buscar todos los clientes de la empresa
-      const empresaId = parseInt(empresaIdStr);
-      const clientes = await prisma.e_estructura_cliente.findMany({
-        where: { empresa_id: empresaId },
-        select: { id: true },
-      });
-      const clienteIds = clientes.map((c) => c.id);
-      if (clienteIds.length > 0) {
-        where.cliente_id = { in: clienteIds };
-      } else {
-        return NextResponse.json({ status: true, data: [] }, { status: 200 });
-      }
-    } else {
-      return NextResponse.json({ status: false, message: "Debe especificar filtros jerárquicos" }, { status: 400 });
-    }
+    if (corpoIdStr) where.corpo_id = parseInt(corpoIdStr, 10);
+    else if (contratoIdStr) where.contrato_id = parseInt(contratoIdStr, 10);
+    else if (divisionIdStr) where.division_id = parseInt(divisionIdStr, 10);
+    else if (clienteIdStr) where.cliente_id = parseInt(clienteIdStr, 10);
+    else if (empresaIdStr) where.empresa_id = parseInt(empresaIdStr, 10);
+    else return NextResponse.json({ status: false, message: "Debe especificar filtros jerárquicos" }, { status: 400 });
 
-    const records = await prisma.c_control_asistencia.findMany({
-      where,
-      orderBy: {
-        created_at: 'desc'
-      }
+    const records = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "c_control_asistencia",
+        operation: "findMany",
+        where,
+        orderBy: { created_at: "desc" },
+        include: { c_imagenes_control_asistencia: true },
+      },
     });
 
-    const recordsWithIdLocal = records.map(record => ({
-      ...record,
-      id_local: ""
-    }));
+    const recordsArray = Array.isArray(records) ? records : [];
+    const uniqueCorpoIds = Array.from(new Set(recordsArray.map((r: any) => Number(r?.corpo_id || 0)).filter((id: number) => id > 0)));
+    let sucursalNombreMap: Record<number, string> = {};
+    if (uniqueCorpoIds.length > 0) {
+      const sucursales = await callDynamicPrisma({
+        req,
+        data: {
+          action: "GET",
+          table: "e_estructura_sucursal",
+          operation: "findMany",
+          where: { id: { in: uniqueCorpoIds } },
+          select: { id: true, nombre: true },
+        },
+      });
+      const sucursalesArray = Array.isArray(sucursales) ? sucursales : [];
+      sucursalNombreMap = sucursalesArray.reduce((acc: Record<number, string>, item: any) => {
+        const id = Number(item?.id || 0);
+        if (id > 0) acc[id] = String(item?.nombre || "");
+        return acc;
+      }, {});
+    }
 
-    return NextResponse.json({
-      status: true,
-      message: "Controles de asistencia obtenidos correctamente",
-      data: recordsWithIdLocal
-    }, { status: 200 });
-
+    const baseUrl = req.nextUrl.origin;
+    const normalized = recordsArray.map((r: any) => normalizeRecord(r, baseUrl, sucursalNombreMap));
+    return NextResponse.json({ status: true, message: "Controles de asistencia obtenidos correctamente", data: normalized }, { status: 200 });
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
-    console.error(errorMessage);
     return NextResponse.json({ status: false, message: errorMessage, data: [] }, { status: 400 });
   }
 }
 
-function parseDDMMYYYYToDate(value: unknown): Date | null {
-  if (!value) return null;
-  if (value instanceof Date) return value;
-  const str = String(value).trim();
-  // expected: dd/mm/yyyy
-  const parts = str.split("/");
-  if (parts.length !== 3) return null;
-  const dd = parseInt(parts[0], 10);
-  const mm = parseInt(parts[1], 10);
-  const yyyy = parseInt(parts[2], 10);
-  if (!dd || !mm || !yyyy) return null;
-  const d = new Date(yyyy, mm - 1, dd);
-  // validate roundtrip
-  if (d.getFullYear() !== yyyy || d.getMonth() !== mm - 1 || d.getDate() !== dd) return null;
-  return d;
-}
-
-function toIntOrNull(value: unknown): number | null {
-  if (value === null || value === undefined) return null;
-  const n = typeof value === "number" ? value : parseInt(String(value), 10);
-  return Number.isFinite(n) ? n : null;
-}
-
 export async function POST(req: NextRequest) {
   try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
+    if (!valid) return NextResponse.json({ status: false, expired, message }, { status: expired ? 401 : 403 });
 
-    if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
+    const body = await req.json();
+    const empresa_id = parseInt(String(body?.empresa_id || 0), 10);
+    const cliente_id = parseInt(String(body?.cliente_id || 0), 10);
+    const division_id = parseInt(String(body?.division_id || 0), 10);
+    const contrato_id = parseInt(String(body?.contrato_id || 0), 10);
+    const corpo_id = parseInt(String(body?.corpo_id || 0), 10);
+    const fechaDate = parseDateInput(body?.fecha);
+    const turno = String(body?.turno || "").trim();
+    const firma_responsable = String(body?.firma_responsable || "").trim();
+    const imagenes = body?.imagenes;
 
-    const {
-      marca_id,
-      empresa_id,
-      cliente_id,
-      division_id,
-      contrato_id,
-      corpo_id,
-      cliente,
-      fecha,
-      turno,
-      area_piso,
-      total_presentes,
-      fijos,
-      colaboradores,
-      firma_responsable
-    } = await req.json();
-
-    if (!marca_id) {
-      return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 400 });
-    }
-    if (!firma_responsable) {
-      return NextResponse.json({ status: false, message: "Firma del responsable es obligatoria" }, { status: 400 });
+    if (!empresa_id || !cliente_id || !division_id || !contrato_id || !corpo_id || !fechaDate || !turno || !firma_responsable) {
+      return NextResponse.json({ status: false, message: "Faltan campos obligatorios para crear el control de asistencia" }, { status: 400 });
     }
 
-    const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(marca_id) } });
-    if (!marcaDia) {
-      return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 404 });
-    }
+    const { colaboradores, totalPresentes } = await buildColaboradoresFromMarcas(req, { fecha: fechaDate, corpo_id, turno });
+    const created_at = toZonedTime(new Date(), "America/Costa_Rica").toISOString();
+    const created_by = Number(payload?.id || 0);
 
-    if (!marcaDia.empleadoFijo_id) {
-      return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 404 });
-    }
-
-    const fechaDate = parseDDMMYYYYToDate(fecha);
-    const totalPresentesInt = toIntOrNull(total_presentes);
-    const fijosInt = toIntOrNull(fijos);
-
-    if (!cliente) {
-      return NextResponse.json({ status: false, message: "Nombre de cliente es obligatorio" }, { status: 400 });
-    }
-    if (!fechaDate) {
-      return NextResponse.json({ status: false, message: "Fecha inválida (formato esperado dd/mm/yyyy)" }, { status: 400 });
-    }
-    if (!turno) {
-      return NextResponse.json({ status: false, message: "Turno es obligatorio" }, { status: 400 });
-    }
-    if (!area_piso) {
-      return NextResponse.json({ status: false, message: "Área/Piso es obligatorio" }, { status: 400 });
-    }
-    if (totalPresentesInt === null) {
-      return NextResponse.json({ status: false, message: "Total presentes inválido" }, { status: 400 });
-    }
-    if (fijosInt === null) {
-      return NextResponse.json({ status: false, message: "Fijos inválido" }, { status: 400 });
-    }
-    if (!colaboradores) {
-      return NextResponse.json({ status: false, message: "Colaboradores es obligatorio" }, { status: 400 });
-    }
-
-    const contrato = await prisma.e_estructura_contrato.findUnique({ where: { id: parseInt(contrato_id) } });
-    if (!contrato) {
-      return NextResponse.json({ status: false, message: "Contrato no encontrado" }, { status: 404 });
-    }
-
-    // Usar campos jerárquicos del request o de la marca
-    const empresaId = empresa_id || marcaDia.empresa_id;
-    const clienteId = cliente_id || marcaDia.cliente_id;
-    const divisionId = division_id || contrato.division_id;
-    const contratoId = contrato_id || marcaDia.contrato_id;
-    const corpoId = corpo_id || marcaDia.corpo_id;
-
-    if (!empresaId || !clienteId || !divisionId || !contratoId || !corpoId) {
-      return NextResponse.json({ status: false, message: "Faltan campos jerárquicos requeridos (empresa_id, cliente_id, division_id, contrato_id, corpo_id)" }, { status: 400 });
-    }
-
-    // Autocompletar campos desde la marca
-    const createdAt = toZonedTime(new Date(), "America/Costa_Rica");
-    const createdBy = payload.id !== undefined && payload.id !== null ? Number(payload.id) : 0;
-
-    const new_record = await prisma.c_control_asistencia.create({
+    const created = await callDynamicPrisma({
+      req,
       data: {
-        empresa_id: empresaId,
-        cliente_id: clienteId,
-        division_id: divisionId,
-        contrato_id: contratoId,
-        corpo_id: corpoId,
-        nombre_cliente: String(cliente),
-        fecha: fechaDate,
-        turno: String(turno),
-        area_piso: String(area_piso),
-        total_presentes: totalPresentesInt,
-        fijos: fijosInt,
-        colaboradores: String(colaboradores),
-        firma_responsable: String(firma_responsable),
-        created_at: createdAt,
-        created_by: createdBy
-      }
-    });
-
-    // Registrar cambio de creación
-    await prisma.c_cambios_apps_modules.create({
-      data: {
-        nombre_tabla: "c_control_asistencia",
-        registro_id: new_record.id,
-        cambios: JSON.stringify([{
-          prop: "__created__",
-          before: null,
-          after: {
-            id: new_record.id,
-            empresa_id: new_record.empresa_id,
-            cliente_id: new_record.cliente_id,
-            division_id: new_record.division_id,
-            contrato_id: new_record.contrato_id,
-            corpo_id: new_record.corpo_id,
-            nombre_cliente: (new_record as any).nombre_cliente,
-            fecha: (new_record as any).fecha ? (new_record as any).fecha.toISOString() : null,
-            turno: (new_record as any).turno,
-            area_piso: (new_record as any).area_piso,
-            total_presentes: (new_record as any).total_presentes,
-            fijos: (new_record as any).fijos,
-            colaboradores: (new_record as any).colaboradores,
-          },
-        }]),
-        created_at: createdAt,
-        created_by: createdBy,
+        action: "POST",
+        table: "c_control_asistencia",
+        operation: "create",
+        data: {
+          empresa_id,
+          cliente_id,
+          division_id,
+          contrato_id,
+          corpo_id,
+          fecha: fechaDate.toISOString(),
+          turno,
+          total_presentes: totalPresentes,
+          colaboradores: JSON.stringify(colaboradores),
+          firma_responsable,
+          created_at,
+          created_by,
+        },
       },
     });
 
-    if (new_record) {
-      let empNombre = "Desconocido";
-      let sucursalNombre = "Desconocida";
-      let fechaRegistro = new_record.created_at.toISOString().split("T")[0];
-      if (new_record.created_by) {
-        const empleado = await prisma.c_empleado.findUnique({ where: { id: parseInt(String(new_record.created_by), 10) } });
-        if (empleado) {
-          empNombre = empleado.nombre + " " + empleado.primer_apellido + " " + empleado.segundo_apellido;
-        }
+    const createdObj = created as any;
+    await callDynamicPrisma({
+      req,
+      data: {
+        action: "POST",
+        table: "c_cambios_apps_modules",
+        operation: "create",
+        data: {
+          nombre_tabla: "c_control_asistencia",
+          registro_id: createdObj.id,
+          cambios: JSON.stringify([{ prop: "__created__", before: null, after: { id: createdObj.id } }]),
+          created_at,
+          created_by,
+        },
+      },
+    });
+
+    const imagesParsed: AttendanceControlImageInput[] = imagenes ? safeParseJson<AttendanceControlImageInput[]>(imagenes, []) : [];
+    if (imagesParsed.length > 0) {
+      const uploadResp = await uploadDynamicFiles({
+        req,
+        folderPath: `attendance-control/${createdObj.id}`,
+        files: imagesParsed
+          .filter((img) => img?.file_base64)
+          .map((img) => ({
+            type: "image",
+            extension: String(img.extension || "jpg").replace(".", "").trim() || "jpg",
+            original_name: img.original_name,
+            file_base64: img.file_base64,
+          })),
+      });
+      const uploadedFiles = Array.isArray(uploadResp?.files) ? uploadResp.files : [];
+      for (const uploaded of uploadedFiles) {
+        await callDynamicPrisma({
+          req,
+          data: {
+            action: "POST",
+            table: "c_imagenes_control_asistencia",
+            operation: "create",
+            data: {
+              name: uploaded.name,
+              original_name: uploaded.original_name || uploaded.name,
+              control_id: createdObj.id,
+            },
+          },
+        });
       }
-      if (new_record.corpo_id) {
-        const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: new_record.corpo_id } });
-        if (sucursal) {
-          sucursalNombre = sucursal.nombre + " (" + sucursal.nro_sucursal + ")";
-        }
-      }
-      const descriptionNotificacion = "El empleado " + empNombre + " ha creado un registro decontrol de asistencia en la sucursal " + sucursalNombre + " el día " + fechaRegistro;
-      sendNotificationByRole(new_record.corpo_id, [parseInt(String(new_record.created_by), 10)], "Control de asistencia creado", descriptionNotificacion, ["ADMINISTRATIVO", "SUPERVISOR"]);
     }
 
-    return NextResponse.json({
-      status: true,
-      message: "Control de asistencia creado correctamente",
+    const fullRecord = await callDynamicPrisma({
+      req,
       data: {
-        id: new_record.id,
-        nombre_cliente: (new_record as any).nombre_cliente,
-        fecha: (new_record as any).fecha,
-        turno: (new_record as any).turno,
-        area_piso: (new_record as any).area_piso,
-        total_presentes: (new_record as any).total_presentes,
-        fijos: (new_record as any).fijos,
-        colaboradores: (new_record as any).colaboradores,
-        firma_responsable: (new_record as any).firma_responsable,
-        created_at: (new_record as any).created_at,
-        created_by: (new_record as any).created_by,
-      }
-    }, { status: 200 });
+        action: "GET",
+        table: "c_control_asistencia",
+        operation: "findUnique",
+        where: { id: createdObj.id },
+        include: { c_imagenes_control_asistencia: true },
+      },
+    });
 
+    let sucursalNombreMap: Record<number, string> = {};
+    const createdCorpoId = Number((fullRecord as any)?.corpo_id || createdObj?.corpo_id || 0);
+    if (createdCorpoId > 0) {
+      const sucursal = await callDynamicPrisma({
+        req,
+        data: {
+          action: "GET",
+          table: "e_estructura_sucursal",
+          operation: "findUnique",
+          where: { id: createdCorpoId },
+          select: { id: true, nombre: true },
+        },
+      });
+      if (sucursal && (sucursal as any).id) {
+        sucursalNombreMap[Number((sucursal as any).id)] = String((sucursal as any).nombre || "");
+      }
+    }
+
+    return NextResponse.json(
+      {
+        status: true,
+        message: "Control de asistencia creado correctamente",
+        data: normalizeRecord(fullRecord || createdObj, req.nextUrl.origin, sucursalNombreMap),
+      },
+      { status: 200 }
+    );
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
-    console.error(errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
   }
 }
-

@@ -1,36 +1,43 @@
+import { NextRequest } from "next/server";
 import { toZonedTime } from "date-fns-tz";
-import { prisma } from "./prismaClient";
+import { callDynamicPrisma } from "./callDynamicPrisma";
 
-export async function getUserMarca(id: number) {
+export async function getUserMarca(req: NextRequest, id: number) {
     try {
         const now = toZonedTime(new Date(), "America/Costa_Rica");
         const nowPlus15 = new Date(now.getTime() + 15 * 60 * 1000);
 
         // Paso 1: Buscar si existe un registro dentro de los próximos 15 minutos
-        const proximo = await prisma.c_marca_dia.findFirst({
-            where: {
-                empleadoFijo_id: id,
-                // fecha + hora_inicio >= now
-                OR: [
-                    {
-                        fecha: {
-                            gt: now, // fecha futura
+        const proximo = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_marca_dia",
+                operation: "findFirst",
+                where: {
+                    empleadoFijo_id: id,
+                    // fecha + hora_inicio >= now
+                    OR: [
+                        {
+                            fecha: {
+                                gt: now, // fecha futura
+                            },
                         },
-                    },
-                    {
-                        fecha: {
-                            equals: new Date(now.toISOString().split("T")[0]),
+                        {
+                            fecha: {
+                                equals: new Date(now.toISOString().split("T")[0]),
+                            },
+                            hora_inicio: {
+                                gte: new Date("1970-01-01 " + now.toTimeString().slice(0, 8)),
+                            },
                         },
-                        hora_inicio: {
-                            gte: new Date("1970-01-01 "+now.toTimeString().slice(0, 8)),
-                        },
-                    },
+                    ],
+                },
+                orderBy: [
+                    { fecha: "asc" },
+                    { hora_inicio: "asc" },
                 ],
             },
-            orderBy: [
-                { fecha: "asc" },
-                { hora_inicio: "asc" },
-            ],
         });
 
         console.log("Primer paso");
@@ -46,29 +53,35 @@ export async function getUserMarca(id: number) {
         }
 
         // Paso 2: Si no hay ninguno dentro de 15 minutos, tomar el último anterior
-        const ultimo = await prisma.c_marca_dia.findFirst({
-            where: {
-                empleadoFijo_id: id,
-                OR: [
-                    {
-                        fecha: {
-                            lt: now, // fecha pasada
+        const ultimo = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_marca_dia",
+                operation: "findFirst",
+                where: {
+                    empleadoFijo_id: id,
+                    OR: [
+                        {
+                            fecha: {
+                                lt: now, // fecha pasada
+                            },
                         },
-                    },
-                    {
-                        fecha: {
-                            equals: new Date(now.toISOString().split("T")[0]),
+                        {
+                            fecha: {
+                                equals: new Date(now.toISOString().split("T")[0]),
+                            },
+                            hora_inicio: {
+                                lt: new Date("1970-01-01 " + now.toTimeString().slice(0, 8)),
+                            },
                         },
-                        hora_inicio: {
-                            lt: new Date("1970-01-01 "+now.toTimeString().slice(0, 8)),
-                        },
-                    },
+                    ],
+                },
+                orderBy: [
+                    { fecha: "desc" },
+                    { hora_inicio: "desc" },
                 ],
             },
-            orderBy: [
-                { fecha: "desc" },
-                { hora_inicio: "desc" },
-            ],
         });
 
         console.log("Segundo paso");

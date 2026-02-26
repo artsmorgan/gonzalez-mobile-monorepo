@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import fs from "fs";
-import path from "path";
+import { fetchDynamicFile } from "../../../../../../utils/callDynamicFilesApi";
 
 export const runtime = "nodejs";
 
@@ -13,19 +12,18 @@ export async function GET(
     const pncId = parseInt(String(id), 10);
     if (!pncId) return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
 
-    const dir = path.join(process.cwd(), "public", "uploads", "non-conforming-product", `${pncId}`);
-    const filePath = path.join(dir, image);
-    if (!fs.existsSync(filePath)) {
-      return NextResponse.json({ status: false, message: "Archivo no encontrado" }, { status: 404 });
-    }
+    const fetched = await fetchDynamicFile({
+      req,
+      type: "image",
+      url: `non-conforming-product/${pncId}/${image}`,
+      download: false,
+    });
 
-    const fileBuffer = fs.readFileSync(filePath);
-    return new NextResponse(fileBuffer, {
-      status: 200,
+    return new NextResponse(fetched.buffer, {
       headers: {
-        "Content-Type": "image/*",
-        "Content-Disposition": `inline; filename="${image}"`,
-        "Cache-Control": "public, max-age=31536000, immutable",
+        "Content-Type": fetched.headers.contentType,
+        ...(fetched.headers.contentDisposition ? { "Content-Disposition": fetched.headers.contentDisposition } : {}),
+        "Cache-Control": fetched.headers.cacheControl,
       },
     });
   } catch (error: unknown) {

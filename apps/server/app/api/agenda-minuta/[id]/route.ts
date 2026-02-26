@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../../utils/verifyToken";
-import { prisma } from "../../../../utils/prismaClient";
+import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
 
 function parseFechaInput(fecha: any): Date | undefined {
@@ -47,7 +47,7 @@ function ensureStringJson(value: any, fallback: string) {
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
     if (!valid) return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
 
     const resolvedParams = await context.params;
@@ -57,8 +57,16 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     }
 
     const body = await req.json();
-    const existingRecord = await prisma.c_agenda_minuta.findUnique({ where: { id: idNum } });
-    if (!existingRecord) {
+    const existingRecord = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "c_agenda_minuta",
+        operation: "findUnique",
+        where: { id: idNum },
+      },
+    });
+    if (!existingRecord || !existingRecord.id) {
       return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
     }
 
@@ -88,21 +96,22 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     if (body.fecha !== undefined) {
       const d = parseFechaInput(body.fecha);
       if (!d) return NextResponse.json({ status: false, message: "Fecha inválida" }, { status: 400 });
-      data.fecha = d;
+      data.fecha = d instanceof Date ? d.toISOString() : d;
     }
     if (body.hora_inicio !== undefined) {
       const t = parseTimeInput(body.hora_inicio);
       if (!t) return NextResponse.json({ status: false, message: "Hora inicio inválida" }, { status: 400 });
-      data.hora_inicio = t;
+      data.hora_inicio = t instanceof Date ? t.toISOString() : t;
     }
     if (body.hora_fin !== undefined) {
       const t = parseTimeInput(body.hora_fin);
       if (!t) return NextResponse.json({ status: false, message: "Hora fin inválida" }, { status: 400 });
-      data.hora_fin = t;
+      data.hora_fin = t instanceof Date ? t.toISOString() : t;
     }
     if (body.autor !== undefined) data.autor = String(body.autor);
     if (body.participantes !== undefined) data.participantes = ensureStringJson(body.participantes, "[]");
     if (body.acuerdos !== undefined) data.acuerdos = ensureStringJson(body.acuerdos, "[]");
+    if (body.temas_a_tratar !== undefined) data.temas_a_tratar = ensureStringJson(body.temas_a_tratar, "[]");
     if (body.observaciones !== undefined) data.observaciones = String(body.observaciones);
     if (body.firma_responsable !== undefined) data.firma_responsable = String(body.firma_responsable);
 
@@ -122,36 +131,49 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       if (k === "firma_responsable") continue;
 
       const before = (existingRecord as any)[k];
-      const after = v;
+      const after = typeof v === "string" && /^\d{4}-\d{2}-\d{2}T/.test(v) ? new Date(v) : v;
       if (!eq(before, after)) {
+        const beforeDate = before instanceof Date ? before : (typeof before === "string" && /^\d{4}-\d{2}-\d{2}T/.test(before) ? new Date(before) : null);
+        const afterDate = after instanceof Date ? after : (typeof after === "string" && /^\d{4}-\d{2}-\d{2}T/.test(after) ? new Date(after) : null);
         cambiosArr.push({
           prop: k,
-          before: before instanceof Date ? before.toISOString() : before,
-          after: after instanceof Date ? after.toISOString() : after,
+          before: beforeDate ? beforeDate.toISOString() : before,
+          after: afterDate ? afterDate.toISOString() : after,
         });
       }
     }
 
-    const updatedRecord = await prisma.c_agenda_minuta.update({
-      where: { id: idNum },
-      data,
-      include: {
-        e_estructura_cliente: { select: { nombre: true } },
-        e_estructura_sucursal: { select: { nombre: true, nro_sucursal: true } },
-        e_estructura_puesto: { select: { nombre: true, codigo: true } },
+    const updatedRecord = await callDynamicPrisma({
+      req,
+      data: {
+        action: "UPDATE",
+        table: "c_agenda_minuta",
+        where: { id: idNum },
+        data,
+        include: {
+          e_estructura_cliente: { select: { nombre: true } },
+          e_estructura_sucursal: { select: { nombre: true, nro_sucursal: true } },
+          e_estructura_puesto: { select: { nombre: true, codigo: true } },
+        },
       },
     });
 
     // Registrar cambios si hay alguno
     if (cambiosArr.length > 0) {
       const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
-      await prisma.c_cambios_apps_modules.create({
+      const createdAt = toZonedTime(new Date(), "America/Costa_Rica");
+      await callDynamicPrisma({
+        req,
         data: {
-          nombre_tabla: "c_agenda_minuta",
-          registro_id: idNum,
-          cambios: JSON.stringify(cambiosArr),
-          created_at: toZonedTime(new Date(), "America/Costa_Rica"),
-          created_by: createdBy,
+          action: "POST",
+          table: "c_cambios_apps_modules",
+          data: {
+            nombre_tabla: "c_agenda_minuta",
+            registro_id: idNum,
+            cambios: JSON.stringify(cambiosArr),
+            created_at: createdAt.toISOString(),
+            created_by: createdBy,
+          },
         },
       });
     }
@@ -183,7 +205,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
 export async function DELETE(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
     if (!valid) return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
 
     const resolvedParams = await context.params;
@@ -192,43 +214,66 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
       return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
     }
 
-    const existingRecord = await prisma.c_agenda_minuta.findUnique({ where: { id: idNum } });
-    if (!existingRecord) {
+    const existingRecord = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "c_agenda_minuta",
+        operation: "findUnique",
+        where: { id: idNum },
+      },
+    });
+    if (!existingRecord || !existingRecord.id) {
       return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
     }
 
     // Registrar cambio de eliminación antes de eliminar
     const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
     const createdAt = toZonedTime(new Date(), "America/Costa_Rica");
-    await prisma.c_cambios_apps_modules.create({
+    const fechaRecord = existingRecord.fecha instanceof Date ? existingRecord.fecha : new Date(existingRecord.fecha);
+    const horaInicioRecord = existingRecord.hora_inicio instanceof Date ? existingRecord.hora_inicio : new Date(existingRecord.hora_inicio);
+    const horaFinRecord = existingRecord.hora_fin instanceof Date ? existingRecord.hora_fin : new Date(existingRecord.hora_fin);
+    await callDynamicPrisma({
+      req,
       data: {
-        nombre_tabla: "c_agenda_minuta",
-        registro_id: idNum,
-        cambios: JSON.stringify([{
-          prop: "__deleted__",
-          before: {
-            id: existingRecord.id,
-            cliente_id: existingRecord.cliente_id,
-            corpo_id: existingRecord.corpo_id,
-            puesto_id: existingRecord.puesto_id,
-            numero: existingRecord.numero,
-            titulo: existingRecord.titulo,
-            fecha: existingRecord.fecha.toISOString(),
-            hora_inicio: existingRecord.hora_inicio.toISOString(),
-            hora_fin: existingRecord.hora_fin.toISOString(),
-            autor: existingRecord.autor,
-            participantes: existingRecord.participantes,
-            acuerdos: existingRecord.acuerdos,
-            observaciones: existingRecord.observaciones,
-          },
-          after: null,
-        }]),
-        created_at: createdAt,
-        created_by: createdBy,
+        action: "POST",
+        table: "c_cambios_apps_modules",
+        data: {
+          nombre_tabla: "c_agenda_minuta",
+          registro_id: idNum,
+          cambios: JSON.stringify([{
+            prop: "__deleted__",
+            before: {
+              id: existingRecord.id,
+              cliente_id: existingRecord.cliente_id,
+              corpo_id: existingRecord.corpo_id,
+              puesto_id: existingRecord.puesto_id,
+              numero: existingRecord.numero,
+              titulo: existingRecord.titulo,
+              fecha: fechaRecord.toISOString(),
+              hora_inicio: horaInicioRecord.toISOString(),
+              hora_fin: horaFinRecord.toISOString(),
+              autor: existingRecord.autor,
+              participantes: existingRecord.participantes,
+              acuerdos: existingRecord.acuerdos,
+              observaciones: existingRecord.observaciones,
+            },
+            after: null,
+          }]),
+          created_at: createdAt.toISOString(),
+          created_by: createdBy,
+        },
       },
     });
 
-    await prisma.c_agenda_minuta.delete({ where: { id: idNum } });
+    await callDynamicPrisma({
+      req,
+      data: {
+        action: "DELETE",
+        table: "c_agenda_minuta",
+        where: { id: idNum },
+      },
+    });
 
     return NextResponse.json({ status: true, message: "Agenda minuta eliminada correctamente" }, { status: 200 });
   } catch (error: unknown) {

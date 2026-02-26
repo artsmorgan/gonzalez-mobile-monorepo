@@ -1,15 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../../utils/verifyToken";
+import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
 import path from "path";
 import fs from "fs";
-import { v4 as uuidv4 } from 'uuid';
-
-import { prisma } from "../../../../utils/prismaClient";
+import { uploadDynamicFiles } from "../../../../utils/callDynamicFilesApi";
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
 
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
@@ -34,7 +33,10 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             activos,
         } = await req.json();
 
-        const visitor = await prisma.e_registro_personas.findUnique({ where: { id } });
+        const visitor = await callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "e_registro_personas", operation: "findUnique", where: { id } }
+        });
         if (!visitor) {
             return NextResponse.json({ status: false, message: "Visita no encontrada" }, { status: 200 });
         }
@@ -43,14 +45,14 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         const updateData: any = {
             nombre,
             cedula,
-            hora_entrada: new Date(hora_entrada),
-            hora_salida: hora_salida ? new Date(hora_salida) : null,
+            hora_entrada: new Date(hora_entrada).toISOString(),
+            hora_salida: hora_salida ? new Date(hora_salida).toISOString() : null,
             razon_visita,
             es_funcionario,
             observaciones,
             tipo_accion,
             pers_autoriza_salida,
-            updated_at: toZonedTime(new Date(), "America/Costa_Rica"),
+            updated_at: toZonedTime(new Date(), "America/Costa_Rica").toISOString(),
         };
 
         // Registrar cambios (solo campos actualizados)
@@ -64,8 +66,11 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         };
 
         // Obtener activos existentes antes de eliminarlos
-        const activosExistentes = await prisma.e_activo_visitante.findMany({ where: { visitante_id: visitor.id } });
-        const activosExistentesArray = activosExistentes.map(a => ({
+        const activosExistentes = await callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "e_activo_visitante", operation: "findMany", where: { visitante_id: visitor.id } }
+        });
+        const activosExistentesArray = activosExistentes.map((a: any) => ({
             tipo_id: a.tipo_id,
             detalles: a.detalles ? JSON.parse(a.detalles) : [],
             numero_serie: a.numero_serie,
@@ -99,37 +104,66 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             });
         }
 
-        await prisma.e_registro_personas.update({ where: { id }, data: updateData });
+        await callDynamicPrisma({
+            req,
+            data: {
+                action: "UPDATE",
+                table: "e_registro_personas",
+                where: { id },
+                data: updateData
+            }
+        });
 
         if (cambiosArr.length > 0) {
             const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
-            await prisma.c_cambios_apps_modules.create({
+            await callDynamicPrisma({
+                req,
                 data: {
-                    nombre_tabla: "e_registro_personas",
-                    registro_id: id,
-                    cambios: JSON.stringify(cambiosArr),
-                    created_at: toZonedTime(new Date(), "America/Costa_Rica"),
-                    created_by: createdBy,
-                },
+                    action: "POST",
+                    table: "c_cambios_apps_modules",
+                    data: {
+                        nombre_tabla: "e_registro_personas",
+                        registro_id: id,
+                        cambios: JSON.stringify(cambiosArr),
+                        created_at: toZonedTime(new Date(), "America/Costa_Rica").toISOString(),
+                        created_by: createdBy,
+                    }
+                }
             });
         }
 
         // Eliminar activos existentes
-        await prisma.e_activo_visitante.deleteMany({ where: { visitante_id: visitor.id } });
+        await callDynamicPrisma({
+            req,
+            data: {
+                action: "DELETE",
+                table: "e_activo_visitante",
+                many: true,
+                where: { visitante_id: visitor.id }
+            }
+        });
 
         // Crear nuevos activos
         if (activos.length > 0) {
             for (const a of activos) {
-                const tipo_activo = await prisma.n_tipo_activo_visitas.findUnique({ where: { id: a.tipo_id } });
+                const tipo_activo = await callDynamicPrisma({
+                    req,
+                    data: { action: "GET", table: "n_tipo_activo_visitas", operation: "findUnique", where: { id: a.tipo_id } }
+                });
                 if (tipo_activo) {
-                    await prisma.e_activo_visitante.create({
+                    await callDynamicPrisma({
+                        req,
                         data: {
-                            visitante_id: visitor.id,
-                            tipo_id: tipo_activo.id,
-                            detalles: JSON.stringify(a.detalles),
-                            numero_serie: a.numero_serie,
-                            numero_activo: a.numero_activo ? a.numero_activo : null,
-                        },
+                            action: "POST",
+                            table: "e_activo_visitante",
+                            data: {
+                                visitante_id: visitor.id,
+                                tipo_id: tipo_activo.id,
+                                detalles: JSON.stringify(a.detalles),
+                                numero_serie: a.numero_serie,
+                                numero_activo: a.numero_activo ? a.numero_activo : null,
+                            }
+                        }
                     });
                 }
             }
@@ -138,52 +172,34 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         console.log(foto_cedula);
 
         if (foto_cedula) {
-            // Debo eliminar 
             if (visitor.foto_cedula) {
                 const path_file = path.join(process.cwd(), "public", "uploads", "visitors", visitor.id.toString(), "cedula", visitor.foto_cedula);
-                if (fs.existsSync(path_file)) {
-                    fs.unlinkSync(path_file);
-                }
+                if (fs.existsSync(path_file)) fs.unlinkSync(path_file);
             }
-
             const matches = foto_cedula.match(/^data:(.+);base64,(.+)$/);
-            if (!matches) {
-                throw new Error("Formato base64 inválido");
-            }
-
-            const mimeType = matches[1];
-            const base64Data = matches[2];
-            const extension = mimeType.split("/")[1]; // ej. 'jpeg' o 'png'
-
-            const id_cedula = uuidv4();
-            const file_name = `${id_cedula}.${extension}`;
-
-            const dir = path.join(
-                process.cwd(),
-                "public",
-                "uploads",
-                "visitors",
-                `${visitor.id}`,
-                "cedula"
-            );
-
-            if (!fs.existsSync(dir)) {
-                fs.mkdirSync(dir, { recursive: true });
-            }
-
-            const filePath = path.join(dir, file_name);
-
-            // Escribir el archivo en binario
-            fs.writeFileSync(filePath, Buffer.from(base64Data, "base64"));
-
-            // Guardar el nombre del archivo en la BD
-            await prisma.e_registro_personas.update({
-                where: { id: visitor.id },
-                data: { foto_cedula: file_name },
+            if (!matches) throw new Error("Formato base64 inválido");
+            const extension = matches[1].split("/")[1]?.replace("jpeg", "jpg") || "jpg";
+            const uploadResp = await uploadDynamicFiles({
+                req,
+                folderPath: `visitors/${visitor.id}/cedula`,
+                files: [{ type: "image", extension, file_base64: foto_cedula }],
             });
+            const uploaded = Array.isArray(uploadResp?.files) ? uploadResp.files : [];
+            const file_name = uploaded[0]?.name || "";
+            if (file_name) {
+                await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "UPDATE",
+                        table: "e_registro_personas",
+                        where: { id: visitor.id },
+                        data: { foto_cedula: file_name }
+                    }
+                });
+            }
         }
 
-        return NextResponse.json({ status: true, message: "Vehículo actualizado correctamente" }, { status: 200 });
+        return NextResponse.json({ status: true, message: "Visita actualizada correctamente" }, { status: 200 });
     }
     catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
@@ -194,7 +210,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
 export async function DELETE(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
 
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
@@ -205,32 +221,43 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
             return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
         }
 
-        const existing = await prisma.e_registro_personas.findUnique({ where: { id } });
+        const existing = await callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "e_registro_personas", operation: "findUnique", where: { id } }
+        });
         if (!existing) {
             return NextResponse.json({ status: false, message: "Visita no encontrada" }, { status: 200 });
         }
 
-        await prisma.e_registro_personas.delete({ where: { id } });
+        await callDynamicPrisma({
+            req,
+            data: { action: "DELETE", table: "e_registro_personas", where: { id } }
+        });
 
         // Registrar cambio de eliminación
         const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
-        await prisma.c_cambios_apps_modules.create({
+        await callDynamicPrisma({
+            req,
             data: {
-                nombre_tabla: "e_registro_personas",
-                registro_id: id,
-                cambios: JSON.stringify([{
-                    prop: "__deleted__",
-                    before: {
-                        id: existing.id,
-                        nombre: existing.nombre,
-                        cedula: existing.cedula,
-                        razon_visita: existing.razon_visita,
-                    },
-                    after: null,
-                }]),
-                created_at: toZonedTime(new Date(), "America/Costa_Rica"),
-                created_by: createdBy,
-            },
+                action: "POST",
+                table: "c_cambios_apps_modules",
+                data: {
+                    nombre_tabla: "e_registro_personas",
+                    registro_id: id,
+                    cambios: JSON.stringify([{
+                        prop: "__deleted__",
+                        before: {
+                            id: existing.id,
+                            nombre: existing.nombre,
+                            cedula: existing.cedula,
+                            razon_visita: existing.razon_visita,
+                        },
+                        after: null,
+                    }]),
+                    created_at: toZonedTime(new Date(), "America/Costa_Rica").toISOString(),
+                    created_by: createdBy,
+                }
+            }
         });
 
         return NextResponse.json({ status: true, message: "Visita eliminada correctamente" }, { status: 200 });

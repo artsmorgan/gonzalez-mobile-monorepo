@@ -1,33 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../../../utils/verifyToken";
-import { prisma } from "../../../../../utils/prismaClient";
-import fs from "fs";
-import path from "path";
-import { v4 as uuidv4 } from "uuid";
-import { sendNotificationByEmployee, sendNotificationByPlaza } from "../../../../../utils/sendNotification";
+import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
+import { uploadDynamicFiles } from "../../../../../utils/callDynamicFilesApi";
 
 export const runtime = "nodejs";
-
-function normalizeBase64(b64: string): string {
-    if (!b64) return "";
-    const idx = b64.indexOf("base64,");
-    if (idx !== -1) return b64.slice(idx + "base64,".length);
-    return b64;
-}
 
 export async function PUT(
     req: NextRequest,
     context: { params: Promise<{ id: string }> }
 ) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
 
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         const resolvedParams = await context.params;
         const { id } = resolvedParams;
-        const intercambioLineaId = parseInt(String(id), 10);
-        if (!intercambioLineaId) {
+        const accionId = parseInt(String(id), 10);
+        if (!accionId) {
             return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
         }
 
@@ -37,88 +27,68 @@ export async function PUT(
             return NextResponse.json({ status: false, message: "Archivo no válido" }, { status: 400 });
         }
 
-        const existingRecord = await prisma.c_intercambio_linea.findUnique({
-            where: { id: intercambioLineaId },
+        const existingRecord = await callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "c_accion_personal", operation: "findUnique", where: { id: accionId } }
         });
 
         if (!existingRecord) {
             return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
         }
 
+        const tokenEmployeeId = payload?.id ? parseInt(String(payload.id), 10) : 0;
+        const recordEmployeeId = existingRecord?.empleado_id ? parseInt(String(existingRecord.empleado_id), 10) : 0;
+        if (!tokenEmployeeId || tokenEmployeeId !== recordEmployeeId) {
+            return NextResponse.json({ status: false, message: "No autorizado para subir archivo en este registro" }, { status: 403 });
+        }
+
         // Verificar si ya existe un archivo subido
-        if (existingRecord.archivo_adjunto_id) {
+        if (existingRecord.document) {
             return NextResponse.json(
                 { status: false, message: "Ya existe un archivo subido. No se pueden subir más archivos." },
                 { status: 400 }
             );
         }
 
-        // Eliminar archivo anterior si existe (por seguridad)
-        if (existingRecord.archivo_adjunto_id) {
-            const oldDir = path.join(process.cwd(), "public", "uploads", "traslado-plaza", `${intercambioLineaId}`);
-            const oldFilePath = path.join(oldDir, existingRecord.archivo_adjunto_id);
-            if (fs.existsSync(oldFilePath)) {
-                try {
-                    fs.unlinkSync(oldFilePath);
-                } catch {
-                    // Ignore error if file doesn't exist
+        const ext = String(extension).replace(".", "").trim() || "dat";
+        const fileType = (type === "image" || type === "video" || type === "audio") ? type : "file";
+        const documentName = String(original_name || "").trim() || `archivo.${ext}`;
+        const uploadResp = await uploadDynamicFiles({
+            req,
+            folderPath: `archivos-acciones/${accionId}`,
+            files: [{ type: fileType, extension: ext, name: documentName, original_name: documentName, file_base64: file_base64 }],
+        });
+        const uploaded = Array.isArray(uploadResp?.files) ? uploadResp.files : [];
+        const fileName = uploaded[0]?.name || "";
+
+        if (!fileName) {
+            return NextResponse.json({ status: false, message: "Error al subir el archivo" }, { status: 400 });
+        }
+
+        // Actualizar registro con el nombre original del archivo (no el generado)
+        const updatedRecord = await callDynamicPrisma({
+            req,
+            data: {
+                action: "UPDATE",
+                table: "c_accion_personal",
+                where: { id: accionId },
+                data: {
+                    document: documentName,
+                    mobile_upload: true,
                 }
             }
-        }
-
-        // Crear directorio si no existe
-        const dir = path.join(process.cwd(), "public", "uploads", "traslado-plaza", `${intercambioLineaId}`);
-        if (!fs.existsSync(dir)) {
-            fs.mkdirSync(dir, { recursive: true });
-        }
-
-        // Guardar archivo
-        let buffer: Buffer;
-        try {
-            buffer = Buffer.from(normalizeBase64(String(file_base64)), "base64");
-        } catch (error) {
-            return NextResponse.json({ status: false, message: "Error al procesar el archivo base64" }, { status: 400 });
-        }
-
-        const ext = String(extension).replace(".", "").trim() || "dat";
-        const fileName = `${uuidv4()}.${ext}`;
-        const filePath = path.join(dir, fileName);
-
-        fs.writeFileSync(filePath, buffer);
-
-        // Actualizar registro
-        const updatedRecord = await prisma.c_intercambio_linea.update({
-            where: { id: intercambioLineaId },
-            data: {
-                archivo_adjunto_id: fileName,
-                archivo_adjunto_nombre: original_name || fileName,
-            },
         });
 
-        if (updatedRecord && updatedRecord.plazaInicio_id) {
-            const corpo = await prisma.e_estructura_sucursal.findUnique({ where: { id: updatedRecord.plazaInicio_id } });
-            if (corpo) {
-                const plazaInicio = updatedRecord.plazaInicio_id ?? 0;
-                const plazaFin = updatedRecord.plazaFin_id ?? 0;
-                let empNombre = "Desconocido";
-                if (updatedRecord.empleado_id) {
-                    const empleado = await prisma.c_empleado.findUnique({ where: { id: updatedRecord.empleado_id } });
-                    if (empleado) {
-                        empNombre = empleado.nombre + " " + empleado.primer_apellido + " " + empleado.segundo_apellido;
-                    }
-                }
-                sendNotificationByPlaza(corpo.id, "Archivo subido correctamente", "El empleado " + empNombre + " ha subido un archivo al traslado de plazas en la sucursal " + corpo.nombre, [plazaInicio, plazaFin]);
-            }
-        }
-
+        const baseUrl = req.nextUrl.origin;
         return NextResponse.json(
             {
                 status: true,
                 message: "Archivo subido correctamente",
                 data: {
                     id: updatedRecord.id,
-                    archivo_adjunto_id: updatedRecord.archivo_adjunto_id,
-                    archivo_adjunto_nombre: updatedRecord.archivo_adjunto_nombre,
+                    document: updatedRecord.document,
+                    mobile_upload: updatedRecord.mobile_upload ?? false,
+                    url: baseUrl ? `${baseUrl}/api/traslado-plaza/${accionId}/get-file/${encodeURIComponent(fileName)}` : "",
                 },
             },
             { status: 200 }

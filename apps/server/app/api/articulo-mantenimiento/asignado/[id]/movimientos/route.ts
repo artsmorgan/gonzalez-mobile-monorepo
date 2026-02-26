@@ -1,8 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../../../../utils/verifyToken";
-import { prisma } from "../../../../../../utils/prismaClient";
-import { getUserMarca } from "../../../../../../utils/getUserMarca";
+import { verifyAccessTokenByApi } from "../../../../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../../../../utils/callDynamicPrisma";
 import { sendNotificationByRole } from "../../../../../../utils/sendNotification";
 
 function parseDateOnly(value: any): Date | null {
@@ -21,25 +20,43 @@ function parseTimeOnly(value: any): Date | null {
   return d;
 }
 
-async function getMarcaDiaOrFail(marcaId: number) {
-  const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: marcaId } });
+async function getMarcaDiaOrFail(req: NextRequest, marcaId: number) {
+  const marcaDia = await callDynamicPrisma({
+    req,
+    data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: marcaId } }
+  });
   if (!marcaDia) return { ok: false as const, marcaDia: null, message: "Marca no encontrada" };
   if (!marcaDia.empleadoFijo_id) return { ok: false as const, marcaDia: null, message: "Empleado no encontrado" };
 
-  const lastMarca = await getUserMarca(marcaDia.empleadoFijo_id);
+  const lastMarca = await callDynamicPrisma({
+    req,
+    data: {
+      action: "GET",
+      table: "c_marca_dia",
+      operation: "findFirst",
+      where: { empleadoFijo_id: marcaDia.empleadoFijo_id },
+      orderBy: [{ fecha: "desc" }, { hora_inicio: "desc" }]
+    }
+  });
   if (!lastMarca) return { ok: false as const, marcaDia: null, message: "No se encontró la última marca" };
   if (marcaDia.id !== lastMarca.id) return { ok: false as const, marcaDia: null, message: "Hay una nueva marca más reciente" };
   return { ok: true as const, marcaDia, message: "" };
 }
 
-async function validateAsignadoOwnership(asignadoId: number, marcaId: number) {
-  const marcaRes = await getMarcaDiaOrFail(marcaId);
+async function validateAsignadoOwnership(req: NextRequest, asignadoId: number, marcaId: number) {
+  const marcaRes = await getMarcaDiaOrFail(req, marcaId);
   if (!marcaRes.ok) return { ok: false as const, asignado: null, marcaDia: null, message: marcaRes.message };
   const marcaDia = marcaRes.marcaDia!;
 
-  const asignado = await prisma.e_estructura_articulo_corpo_puesto_entrega.findUnique({
-    where: { id: asignadoId },
-    include: { e_estructura_sucursal: true, e_estructura_puesto: true },
+  const asignado = await callDynamicPrisma({
+    req,
+    data: {
+      action: "GET",
+      table: "e_estructura_articulo_corpo_puesto_entrega",
+      operation: "findUnique",
+      where: { id: asignadoId },
+      include: { e_estructura_sucursal: true, e_estructura_puesto: true }
+    }
   });
   if (!asignado) return { ok: false as const, asignado: null, marcaDia: null, message: "Artículo asignado no encontrado" };
 
@@ -55,7 +72,7 @@ async function validateAsignadoOwnership(asignadoId: number, marcaId: number) {
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
-    const { valid, expired, message } = verifyAccessToken(req);
+    const { valid, expired, message } = await verifyAccessTokenByApi(req);
     if (!valid) return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
 
     const resolvedParams = await context.params;
@@ -66,12 +83,18 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
     if (!marcaIdStr) return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
     const marcaId = parseInt(marcaIdStr);
 
-    const own = await validateAsignadoOwnership(asignadoId, marcaId);
+    const own = await validateAsignadoOwnership(req, asignadoId, marcaId);
     if (!own.ok) return NextResponse.json({ status: false, message: own.message }, { status: 200 });
 
-    const rows = await prisma.c_movimientos_articulo_mantenimiento.findMany({
-      where: { articulo_asignado_id: asignadoId },
-      orderBy: { id: "desc" },
+    const rows = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "c_movimientos_articulo_mantenimiento",
+        operation: "findMany",
+        where: { articulo_asignado_id: asignadoId },
+        orderBy: { id: "desc" }
+      }
     });
 
     return NextResponse.json({ status: true, data: rows }, { status: 200 });
@@ -84,7 +107,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
 export async function POST(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
-    const { valid, expired, message, payload } = verifyAccessToken(req);
+    const { valid, expired, message, payload } = await verifyAccessTokenByApi(req);
     if (!valid) return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
 
     const resolvedParams = await context.params;
@@ -109,7 +132,7 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
 
     if (!marca_id) return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
 
-    const own = await validateAsignadoOwnership(asignadoId, parseInt(String(marca_id)));
+    const own = await validateAsignadoOwnership(req, asignadoId, parseInt(String(marca_id)));
     if (!own.ok) return NextResponse.json({ status: false, message: own.message }, { status: 200 });
 
     const fechaDate = parseDateOnly(fecha);
@@ -131,22 +154,27 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
       return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 200 });
     }
 
-    const created = await prisma.c_movimientos_articulo_mantenimiento.create({
+    const created = await callDynamicPrisma({
+      req,
       data: {
-        articulo_plan_id: null,
-        articulo_asignado_id: asignadoId,
-        nombre_persona_recibe: String(nombre_persona_recibe),
-        nombre_persona_entrega: String(nombre_persona_entrega),
-        departamento: String(departamento),
-        telefono: String(telefono),
-        entrega: String(entrega),
-        recibe: String(recibe),
-        fecha: fechaDate,
-        hora: horaDate,
-        firma_entrega: String(firma_entrega),
-        firma_recibe: String(firma_recibe),
-        firma_responsable: String(firma_responsable),
-      },
+        action: "POST",
+        table: "c_movimientos_articulo_mantenimiento",
+        data: {
+          articulo_plan_id: null,
+          articulo_asignado_id: asignadoId,
+          nombre_persona_recibe: String(nombre_persona_recibe),
+          nombre_persona_entrega: String(nombre_persona_entrega),
+          departamento: String(departamento),
+          telefono: String(telefono),
+          entrega: String(entrega),
+          recibe: String(recibe),
+          fecha: fechaDate.toISOString(),
+          hora: horaDate.toISOString(),
+          firma_entrega: String(firma_entrega),
+          firma_recibe: String(firma_recibe),
+          firma_responsable: String(firma_responsable),
+        }
+      }
     });
 
     if (created) {
@@ -164,14 +192,19 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
         { prop: "fecha", before: null, after: fechaDate.toISOString() },
         { prop: "hora", before: null, after: horaDate.toISOString() },
       ];
-      await prisma.c_cambios_apps_modules.create({
+      await callDynamicPrisma({
+        req,
         data: {
-          nombre_tabla: "c_movimientos_articulo_mantenimiento",
-          registro_id: created.id,
-          cambios: JSON.stringify(cambiosArr),
-          created_at: new Date(),
-          created_by: createdBy,
-        },
+          action: "POST",
+          table: "c_cambios_apps_modules",
+          data: {
+            nombre_tabla: "c_movimientos_articulo_mantenimiento",
+            registro_id: created.id,
+            cambios: JSON.stringify(cambiosArr),
+            created_at: new Date().toISOString(),
+            created_by: createdBy,
+          }
+        }
       });
     }
 
@@ -184,7 +217,7 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
 
       const description = `Se ha registrado un movimiento del artículo (Asignado) del puesto ${puestoNombre} de la sucursal ${sucursalNombre} el día ${fechaRegistro} a las ${horaRegistro} (Del empleado ${nombre_persona_entrega} a ${nombre_persona_recibe})`;
       if (own.asignado?.corpo_id) {
-        sendNotificationByRole(own.asignado.corpo_id, [], "Movimiento de artículo registrado", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+        await sendNotificationByRole(req, own.asignado.corpo_id, [], "Movimiento de artículo registrado", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
       }
     }
 

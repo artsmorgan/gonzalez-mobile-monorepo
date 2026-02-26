@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../../utils/verifyToken";
-import { prisma } from "../../../../utils/prismaClient";
+import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import fs from "fs";
 import path from "path";
 
@@ -11,7 +11,7 @@ export async function DELETE(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
     if (!valid) {
       return NextResponse.json(
         { status: false, expired: expired, message: message },
@@ -29,8 +29,9 @@ export async function DELETE(
       );
     }
 
-    const evaluation = await prisma.c_evaluacion_empleado.findUnique({
-      where: { id },
+    const evaluation = await callDynamicPrisma({
+      req,
+      data: { action: "GET", table: "c_evaluacion_empleado", operation: "findUnique", where: { id } }
     });
 
     if (!evaluation) {
@@ -40,7 +41,10 @@ export async function DELETE(
       );
     }
 
-    await prisma.c_evaluacion_empleado.delete({ where: { id } });
+    await callDynamicPrisma({
+      req,
+      data: { action: "DELETE", table: "c_evaluacion_empleado", where: { id } }
+    });
 
     const dir = path.join(
       process.cwd(),

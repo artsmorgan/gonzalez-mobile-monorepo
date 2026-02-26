@@ -137,8 +137,15 @@ const signatureWebStyle = `
 
 export default function ActaEntregaProductosScreen() {
   const navigation = useNavigation<NavProp>();
-  const { employee, isAuthenticated, isLoading, refreshAccessToken, logout } = useAuth();
+  const { employee, isAuthenticated, isLoading, refreshAccessToken, logout, accessToken } = useAuth();
   const { scanQR } = useQRScanner();
+  const appendTokenToUrl = (url: string) => {
+    if (!url) return '';
+    if (!accessToken || accessToken.trim().length === 0) return url;
+    if (/[?&]token=/.test(url)) return url;
+    const sep = url.includes('?') ? '&' : '?';
+    return `${url}${sep}token=${encodeURIComponent(accessToken)}`;
+  };
 
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const [isLoadingData, setIsLoadingData] = useState(true);
@@ -148,6 +155,8 @@ export default function ActaEntregaProductosScreen() {
   const [records, setRecords] = useState<ActaEntregaProducto[]>([]);
   const [isCreating, setIsCreating] = useState(false);
   const [editingRecord, setEditingRecord] = useState<ActaEntregaProducto | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitResponse, setSubmitResponse] = useState<{ type: 'success' | 'error', message: string } | null>(null);
 
   // Modal: ver cambios (auditoría)
   const [isCambiosModalVisible, setIsCambiosModalVisible] = useState(false);
@@ -491,7 +500,7 @@ export default function ActaEntregaProductosScreen() {
       if (!apiUrl) return null;
 
       const resp = await authedFetch({
-        url: `${apiUrl}/api/acta-entrega-productos/${actaId}/get-image/${encodeURIComponent(imageName)}?t=${Date.now()}`,
+        url: appendTokenToUrl(`${apiUrl}/api/acta-entrega-productos/${actaId}/get-image/${encodeURIComponent(imageName)}?t=${Date.now()}`),
         init: {
           method: 'GET',
         },
@@ -1016,6 +1025,8 @@ export default function ActaEntregaProductosScreen() {
       {
         text: 'Confirmar',
         onPress: async () => {
+          setIsSubmitting(true);
+          setSubmitResponse(null);
           try {
             const requestData = {
               marca_id: currentMarca.id,
@@ -1044,11 +1055,13 @@ export default function ActaEntregaProductosScreen() {
             if (isConnected) {
               const res = await createActaEntregaProducto({ requestData, refreshAccessToken, logout });
               if (res.status) {
-                Alert.alert('Éxito', 'Acta creada correctamente');
-                cancelCreating();
-                fetchRecords();
+                setSubmitResponse({ type: 'success', message: res.message || 'Acta creada correctamente' });
+                setTimeout(() => {
+                  cancelCreating();
+                  fetchRecords();
+                }, 2000);
               } else {
-                Alert.alert('Error', res.message || 'No se pudo crear el acta');
+                setSubmitResponse({ type: 'error', message: res.message || 'No se pudo crear el acta' });
               }
               return;
             }
@@ -1098,12 +1111,16 @@ export default function ActaEntregaProductosScreen() {
             cache.push({ ...newCacheRecord, type: 'acta_entrega_producto' });
             await AsyncStorage.setItem('evaluations_cache', JSON.stringify(cache));
 
-            Alert.alert('Modo Offline', 'Acta registrada localmente. Se sincronizará cuando haya conexión.');
-            cancelCreating();
-            fetchRecords();
+            setSubmitResponse({ type: 'success', message: 'Acta registrada localmente. Se sincronizará cuando haya conexión.' });
+            setTimeout(() => {
+              cancelCreating();
+              fetchRecords();
+            }, 2000);
           } catch (e) {
             console.error('Error saving acta:', e);
-            Alert.alert('Error', 'No se pudo guardar el acta');
+            setSubmitResponse({ type: 'error', message: 'No se pudo guardar el acta' });
+          } finally {
+            setIsSubmitting(false);
           }
         },
       },
@@ -1123,6 +1140,8 @@ export default function ActaEntregaProductosScreen() {
       {
         text: 'Confirmar',
         onPress: async () => {
+          setIsSubmitting(true);
+          setSubmitResponse(null);
           try {
             const requestData = {
               empresa_id: formEmpresaId,
@@ -1152,11 +1171,13 @@ export default function ActaEntregaProductosScreen() {
             if (isConnected && !isLocal && editingRecord.id) {
               const res = await updateActaEntregaProducto({ id: editingRecord.id, requestData, refreshAccessToken, logout });
               if (res.status) {
-                Alert.alert('Éxito', 'Acta actualizada correctamente');
-                cancelEditing();
-                fetchRecords();
+                setSubmitResponse({ type: 'success', message: res.message || 'Acta actualizada correctamente' });
+                setTimeout(() => {
+                  cancelEditing();
+                  fetchRecords();
+                }, 2000);
               } else {
-                Alert.alert('Error', res.message || 'No se pudo actualizar');
+                setSubmitResponse({ type: 'error', message: res.message || 'No se pudo actualizar' });
               }
               return;
             }
@@ -1191,12 +1212,16 @@ export default function ActaEntregaProductosScreen() {
             });
             await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
 
-            Alert.alert('Modo Offline', 'Cambios guardados localmente. Se sincronizarán al reconectar.');
-            cancelEditing();
-            fetchRecords();
+            setSubmitResponse({ type: 'success', message: 'Cambios guardados localmente. Se sincronizarán al reconectar.' });
+            setTimeout(() => {
+              cancelEditing();
+              fetchRecords();
+            }, 2000);
           } catch (e) {
             console.error('Error updating acta:', e);
-            Alert.alert('Error', 'No se pudo actualizar el acta');
+            setSubmitResponse({ type: 'error', message: 'No se pudo actualizar el acta' });
+          } finally {
+            setIsSubmitting(false);
           }
         },
       },
@@ -1329,7 +1354,7 @@ export default function ActaEntregaProductosScreen() {
               const uri = img.base64
                 ? img.base64
                 : (apiUrl && idNum && img.name)
-                  ? `${apiUrl}/api/acta-entrega-productos/${idNum}/get-image/${encodeURIComponent(img.name)}`
+                  ? appendTokenToUrl(`${apiUrl}/api/acta-entrega-productos/${idNum}/get-image/${encodeURIComponent(img.name)}`)
                   : '';
               if (!uri) return null;
               return (
@@ -1400,7 +1425,6 @@ export default function ActaEntregaProductosScreen() {
                   }}
                 >
                   <Ionicons name="list-outline" size={18} color="#FFFFFF" />
-                  <ThemedText style={styles.listItemButtonText}>Cambios</ThemedText>
                 </TouchableOpacity>
               )}
               <TouchableOpacity style={[styles.listItemButton, styles.deleteButton]} onPress={() => deleteHandler(r)}>
@@ -1947,18 +1971,32 @@ export default function ActaEntregaProductosScreen() {
 
               {renderPhotosSection()}
 
+              {submitResponse && (
+                <ThemedView style={[styles.responseContainer, submitResponse.type === 'success' ? styles.responseSuccess : styles.responseError]}>
+                  <ThemedText style={styles.responseText}>
+                    {submitResponse.type === 'success' ? '✓ ' : '✗ '}
+                    {submitResponse.message}
+                  </ThemedText>
+                </ThemedView>
+              )}
               <ThemedView style={styles.buttonRow}>
                 <TouchableOpacity
-                  style={styles.confirmButton}
+                  style={[styles.confirmButton, isSubmitting && styles.buttonDisabled]}
                   onPress={editingRecord ? updateHandler : saveHandler}
+                  disabled={isSubmitting}
                 >
-                  <ThemedText style={styles.confirmButtonText}>
-                    <Ionicons name="checkmark" size={18} color="#FFFFFF" />
-                  </ThemedText>
+                  {isSubmitting ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <ThemedText style={styles.confirmButtonText}>
+                      <Ionicons name="checkmark" size={18} color="#FFFFFF" />
+                    </ThemedText>
+                  )}
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={styles.cancelButton}
                   onPress={editingRecord ? cancelEditing : cancelCreating}
+                  disabled={isSubmitting}
                 >
                   <ThemedText style={styles.cancelButtonText}>
                     <Ionicons name="close" size={18} color="#FFFFFF" />
@@ -2352,6 +2390,28 @@ const styles = StyleSheet.create({
   confirmButtonText: { color: '#fff', fontSize: 14, fontWeight: '600' },
   cancelButton: { flex: 1, backgroundColor: '#8E8E93', padding: 12, borderRadius: 6, alignItems: 'center' },
   cancelButtonText: { color: '#fff', fontSize: 14, fontWeight: '600' },
+  buttonDisabled: {
+    opacity: 0.6,
+  },
+  responseContainer: {
+    padding: 12,
+    borderRadius: 6,
+    marginBottom: 12,
+  },
+  responseSuccess: {
+    backgroundColor: '#D4EDDA',
+    borderWidth: 1,
+    borderColor: '#C3E6CB',
+  },
+  responseError: {
+    backgroundColor: '#F8D7DA',
+    borderWidth: 1,
+    borderColor: '#F5C6CB',
+  },
+  responseText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
 
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 },
   loadingText: { marginTop: 16, fontSize: 16, opacity: 0.7 },

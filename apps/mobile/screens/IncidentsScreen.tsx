@@ -5,6 +5,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Picker } from '@react-native-picker/picker';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
+import SignatureScreen from 'react-native-signature-canvas';
 import * as Network from 'expo-network';
 import * as DocumentPicker from 'expo-document-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -39,6 +40,8 @@ type ManualFileLocal = {
   uri?: string;
   mimeType?: string;
 };
+
+const APORTE_SIGNATURE_FILE_NAME = '__firma_aporte_tercero__.png';
 
 type EditingIncident = {
   id: number | null;
@@ -91,7 +94,7 @@ const dateLabel = (iso: string) => {
 };
 
 // Helpers para construir URLs de archivos
-const buildIncidentFileUrl = (incidentId: number | undefined, file: any) => {
+const buildIncidentFileUrl = (incidentId: number | undefined, file: any, accessToken?: string | null) => {
   // Si es registro offline (tiene id_local no vacío), usamos base64
   const hasLocalId = file.id_local !== undefined && file.id_local !== null && file.id_local !== '';
   if (hasLocalId && file.base64) {
@@ -102,21 +105,27 @@ const buildIncidentFileUrl = (incidentId: number | undefined, file: any) => {
   // Para registros sincronizados, usar la API
   const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
   if (!apiUrl || !incidentId) return '';
+  const appendTokenToUrl = (url: string) => {
+    if (!accessToken || accessToken.trim().length === 0) return url;
+    if (/[?&]token=/.test(url)) return url;
+    const sep = url.includes('?') ? '&' : '?';
+    return `${url}${sep}token=${encodeURIComponent(accessToken)}`;
+  };
 
   if (file.type === 'image') {
-    return `${apiUrl}/api/incidents/${incidentId}/get-image/${encodeURIComponent(file.name)}`;
+    return appendTokenToUrl(`${apiUrl}/api/incidents/${incidentId}/get-image/${encodeURIComponent(file.name)}`);
   }
   if (file.type === 'audio') {
-    return `${apiUrl}/api/incidents/${incidentId}/get-audio/${encodeURIComponent(file.name)}`;
+    return appendTokenToUrl(`${apiUrl}/api/incidents/${incidentId}/get-audio/${encodeURIComponent(file.name)}`);
   }
   if (file.type === 'video') {
-    return `${apiUrl}/api/incidents/${incidentId}/get-video/${encodeURIComponent(file.name)}`;
+    return appendTokenToUrl(`${apiUrl}/api/incidents/${incidentId}/get-video/${encodeURIComponent(file.name)}`);
   }
   // document o cualquier otro tipo
-  return `${apiUrl}/api/incidents/${incidentId}/get-file/${encodeURIComponent(file.name)}`;
+  return appendTokenToUrl(`${apiUrl}/api/incidents/${incidentId}/get-file/${encodeURIComponent(file.name)}`);
 };
 
-const buildContributionFileUrl = (incidentId: number | undefined, contributionId: number | undefined, file: any) => {
+const buildContributionFileUrl = (incidentId: number | undefined, contributionId: number | undefined, file: any, accessToken?: string | null) => {
   const hasLocalId = file.id_local !== undefined && file.id_local !== null && file.id_local !== '';
   if (hasLocalId && file.base64) {
     const mime = file.mimeType || (file.type ? `${file.type}/${file.extension || 'octet-stream'}` : `application/${file.extension || 'octet-stream'}`);
@@ -125,17 +134,23 @@ const buildContributionFileUrl = (incidentId: number | undefined, contributionId
 
   const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
   if (!apiUrl || !incidentId || !contributionId) return '';
+  const appendTokenToUrl = (url: string) => {
+    if (!accessToken || accessToken.trim().length === 0) return url;
+    if (/[?&]token=/.test(url)) return url;
+    const sep = url.includes('?') ? '&' : '?';
+    return `${url}${sep}token=${encodeURIComponent(accessToken)}`;
+  };
 
   if (file.type === 'image') {
-    return `${apiUrl}/api/incidents/${incidentId}/contributions/${contributionId}/get-image/${encodeURIComponent(file.name)}`;
+    return appendTokenToUrl(`${apiUrl}/api/incidents/${incidentId}/contributions/${contributionId}/get-image/${encodeURIComponent(file.name)}`);
   }
   if (file.type === 'audio') {
-    return `${apiUrl}/api/incidents/${incidentId}/contributions/${contributionId}/get-audio/${encodeURIComponent(file.name)}`;
+    return appendTokenToUrl(`${apiUrl}/api/incidents/${incidentId}/contributions/${contributionId}/get-audio/${encodeURIComponent(file.name)}`);
   }
   if (file.type === 'video') {
-    return `${apiUrl}/api/incidents/${incidentId}/contributions/${contributionId}/get-video/${encodeURIComponent(file.name)}`;
+    return appendTokenToUrl(`${apiUrl}/api/incidents/${incidentId}/contributions/${contributionId}/get-video/${encodeURIComponent(file.name)}`);
   }
-  return `${apiUrl}/api/incidents/${incidentId}/contributions/${contributionId}/get-file/${encodeURIComponent(file.name)}`;
+  return appendTokenToUrl(`${apiUrl}/api/incidents/${incidentId}/contributions/${contributionId}/get-file/${encodeURIComponent(file.name)}`);
 };
 
 const getFileDisplayName = (file: any) => {
@@ -160,7 +175,7 @@ const canModifyAporte = (rolAporte: string, aporteEmpleadoId: number, currentEmp
 
 export default function IncidentsScreen() {
   const navigation = useNavigation<IncidentsScreenNavigationProp>();
-  const { employee, refreshAccessToken, logout } = useAuth();
+  const { employee, refreshAccessToken, logout, accessToken } = useAuth();
 
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -174,15 +189,24 @@ export default function IncidentsScreen() {
 
   const [isCreating, setIsCreating] = useState(false);
   const [editingIncident, setEditingIncident] = useState<EditingIncident | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitResponse, setSubmitResponse] = useState<{ type: 'success' | 'error', message: string } | null>(null);
 
   // Aportes (contribuciones)
+  const [isSubmittingAporte, setIsSubmittingAporte] = useState(false);
   const [isAportesVisible, setIsAportesVisible] = useState(false);
   const [selectedIncidentForAportes, setSelectedIncidentForAportes] = useState<Incident | null>(null);
   const [isLoadingAportes, setIsLoadingAportes] = useState(false);
   const [aportes, setAportes] = useState<IncidentContribution[]>([]);
   const [aporteText, setAporteText] = useState('');
+  const [aporteNombrePersonalizado, setAporteNombrePersonalizado] = useState('');
+  const [aporteFirmaManual, setAporteFirmaManual] = useState<string | null>(null);
   const [editingAporte, setEditingAporte] = useState<IncidentContribution | null>(null);
   const [showAporteComposer, setShowAporteComposer] = useState(false);
+  const [isAporteSignatureModalVisible, setIsAporteSignatureModalVisible] = useState(false);
+  const [isReadingAporteSignature, setIsReadingAporteSignature] = useState(false);
+  const [signatureAporteKey, setSignatureAporteKey] = useState(0);
+  const signatureAporteRef = useRef<any>(null);
 
   const [aporteTextFiles, setAporteTextFiles] = useState<ManualFileLocal[]>([]);
   const [aporteImageFiles, setAporteImageFiles] = useState<ManualFileLocal[]>([]);
@@ -240,9 +264,14 @@ export default function IncidentsScreen() {
   const [showLibroFechaPicker, setShowLibroFechaPicker] = useState(false);
   const [showFechaSolucionPicker, setShowFechaSolucionPicker] = useState(false);
   const [showFechaRealSolucionPicker, setShowFechaRealSolucionPicker] = useState(false);
+  const [showFilterFechaIncidentePicker, setShowFilterFechaIncidentePicker] = useState(false);
+  const [showFilterFechaReportePicker, setShowFilterFechaReportePicker] = useState(false);
 
   const [pickerDateValue, setPickerDateValue] = useState(new Date());
   const [searchText, setSearchText] = useState('');
+  const [filterFechaIncidente, setFilterFechaIncidente] = useState('');
+  const [filterFechaReporte, setFilterFechaReporte] = useState('');
+  const [isFiltersExpanded, setIsFiltersExpanded] = useState(false);
 
   const getConnectionStatus = async (): Promise<boolean> => {
     const networkState = await Network.getNetworkStateAsync();
@@ -345,19 +374,23 @@ export default function IncidentsScreen() {
 
   const filteredIncidents = useMemo(() => {
     const s = searchText.trim().toLowerCase();
-    if (!s) return incidents;
     return incidents.filter(i => {
       const ejecutivo = i.ejecutivo?.name || '';
       const clasif = i.clasificacion?.name || '';
-      return (
+      const matchesText = !s || (
         (i.descripcion || '').toLowerCase().includes(s) ||
         (i.nombre_responsable || '').toLowerCase().includes(s) ||
         (i.nombre_responsable_atencion || '').toLowerCase().includes(s) ||
         ejecutivo.toLowerCase().includes(s) ||
         clasif.toLowerCase().includes(s)
       );
+      const incidentDate = dateLabel(i.fecha_incidente);
+      const reportDate = dateLabel(i.fecha_reporte);
+      const matchesFechaIncidente = !filterFechaIncidente || incidentDate === filterFechaIncidente;
+      const matchesFechaReporte = !filterFechaReporte || reportDate === filterFechaReporte;
+      return matchesText && matchesFechaIncidente && matchesFechaReporte;
     });
-  }, [incidents, searchText]);
+  }, [incidents, searchText, filterFechaIncidente, filterFechaReporte]);
 
   const handleMenuPress = () => setIsMenuVisible(true);
   const handleMenuClose = () => setIsMenuVisible(false);
@@ -671,170 +704,175 @@ export default function IncidentsScreen() {
   const handleCreate = async () => {
     const validation = validateCreate();
     if (validation) {
-      Alert.alert('Error', validation);
+      setSubmitResponse({ type: 'error', message: validation });
       return;
     }
 
-    Alert.alert('Confirmar creación', '¿Estás seguro de que deseas crear este incidente?', [
-      { text: 'Cancelar', style: 'cancel' },
-      {
-        text: 'Crear',
-        onPress: async () => {
-          try {
-            const marcaId = await getCurrentMarcaId();
-            if (!marcaId) {
-              Alert.alert('Error', 'No se encontró la marca actual');
-              return;
-            }
+    setIsSubmitting(true);
+    setSubmitResponse(null);
 
-            const payload = {
-              marca_id: marcaId,
-              empleado_id: ejecutivoRef.current!,
-              fecha_incidente: fechaIncidenteRef.current,
-              fecha_reporte: fechaReporteRef.current,
-              nombre_responsable: nombreResponsableRef.current,
-              clasificacion_id: clasificacionRef.current!,
-              descripcion: descripcionRef.current,
-              involucrados: JSON.stringify(newIncident.involucrados.map(i => ({ codigo: i.codigo || '', nombre: i.nombre }))),
-              fecha_libro_novedades: JSON.stringify({ numero: newIncident.libro_numero, fecha: newIncident.libro_fecha }),
-              nombre_responsable_atencion: nombreResponsableAtencionRef.current,
-              archivos: JSON.stringify(buildArchivosPayload()),
-            };
+    try {
+      const marcaId = await getCurrentMarcaId();
+      if (!marcaId) {
+        setSubmitResponse({ type: 'error', message: 'No se encontró la marca actual' });
+        setIsSubmitting(false);
+        return;
+      }
 
-            const isConnected = await getConnectionStatus();
-            if (isConnected) {
-              const res = await createIncident({ requestData: payload, refreshAccessToken, logout });
-              if (res.status) {
-                Alert.alert('Éxito', res.message || 'Incidente creado correctamente');
-                setIsCreating(false);
-                setTextFiles([]); setImageFiles([]); setAudioFiles([]); setVideoFiles([]);
-                await fetchAll();
-              } else {
-                Alert.alert('Error', res.message || 'No se pudo crear el incidente');
-              }
-              return;
-            }
+      const payload = {
+        marca_id: marcaId,
+        empleado_id: ejecutivoRef.current!,
+        fecha_incidente: fechaIncidenteRef.current,
+        fecha_reporte: fechaReporteRef.current,
+        nombre_responsable: nombreResponsableRef.current,
+        clasificacion_id: clasificacionRef.current!,
+        descripcion: descripcionRef.current,
+        involucrados: JSON.stringify(newIncident.involucrados.map(i => ({ codigo: i.codigo || '', nombre: i.nombre }))),
+        fecha_libro_novedades: JSON.stringify({ numero: newIncident.libro_numero, fecha: newIncident.libro_fecha }),
+        nombre_responsable_atencion: nombreResponsableAtencionRef.current,
+        archivos: JSON.stringify(buildArchivosPayload()),
+      };
 
-            // Offline
-            const localId = generateRandomId();
-            const actionsStr = await AsyncStorage.getItem('incidents_actions');
-            const actions = actionsStr ? JSON.parse(actionsStr) : [];
-            actions.push({
-              requestData: payload,
-              marcaId,
-              id: localId,
-              type: 'create',
-            });
-            await AsyncStorage.setItem('incidents_actions', JSON.stringify(actions));
-
-            await createLocalCacheIncident(marcaId, localId);
-
-            Alert.alert('Modo Offline', 'Incidente registrado localmente. Se sincronizará cuando haya conexión.');
+      const isConnected = await getConnectionStatus();
+      if (isConnected) {
+        const res = await createIncident({ requestData: payload, refreshAccessToken, logout });
+        if (res.status) {
+          setSubmitResponse({ type: 'success', message: res.message || 'Incidente creado correctamente' });
+          setTimeout(async () => {
             setIsCreating(false);
             setTextFiles([]); setImageFiles([]); setAudioFiles([]); setVideoFiles([]);
-          } catch (e) {
-            console.error('Error creating incident:', e);
-            Alert.alert('Error', 'No se pudo crear el incidente');
-          }
-        },
-      },
-    ]);
+            await fetchAll();
+          }, 2000);
+        } else {
+          setSubmitResponse({ type: 'error', message: res.message || 'No se pudo crear el incidente' });
+        }
+        return;
+      }
+
+      // Offline
+      const localId = generateRandomId();
+      const actionsStr = await AsyncStorage.getItem('incidents_actions');
+      const actions = actionsStr ? JSON.parse(actionsStr) : [];
+      actions.push({
+        requestData: payload,
+        marcaId,
+        id: localId,
+        type: 'create',
+      });
+      await AsyncStorage.setItem('incidents_actions', JSON.stringify(actions));
+
+      await createLocalCacheIncident(marcaId, localId);
+
+      setSubmitResponse({ type: 'success', message: 'Incidente registrado localmente. Se sincronizará cuando haya conexión.' });
+      setTimeout(() => {
+        setIsCreating(false);
+        setTextFiles([]); setImageFiles([]); setAudioFiles([]); setVideoFiles([]);
+      }, 2000);
+    } catch (e) {
+      console.error('Error creating incident:', e);
+      setSubmitResponse({ type: 'error', message: 'No se pudo crear el incidente' });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleUpdate = async (incidentId: number) => {
     if (!editingIncident) return;
 
-    const marcaId = await getCurrentMarcaId();
-    if (!marcaId) {
-      Alert.alert('Error', 'No se encontró la marca actual');
-      return;
-    }
+    setIsSubmitting(true);
+    setSubmitResponse(null);
 
-    if (!solucionRef.current.trim() &&
-      !fechaSolucionRef.current &&
-      !fechaRealSolucionRef.current &&
-      !costoAsociadoRef.current.trim() &&
-      !consecutivoInformeRef.current.trim() &&
-      !linkInformeRef.current.trim()
-    ) {
-      Alert.alert('Error', 'Debes completar al menos un campo de la sección de solución/informe.');
-      return;
-    }
+    try {
+      const marcaId = await getCurrentMarcaId();
+      if (!marcaId) {
+        setSubmitResponse({ type: 'error', message: 'No se encontró la marca actual' });
+        setIsSubmitting(false);
+        return;
+      }
 
-    Alert.alert('Confirmar edición', '¿Estás seguro de que deseas guardar los cambios?', [
-      { text: 'Cancelar', style: 'cancel' },
-      {
-        text: 'Confirmar',
-        onPress: async () => {
-          try {
-            const body = {
-              marca_id: marcaId,
-              solucion: solucionRef.current,
-              fecha_solucion: fechaSolucionRef.current || '',
-              fecha_real_solucion: fechaRealSolucionRef.current || '',
-              costo_asociado: costoAsociadoRef.current,
-              consecutivo_informe: consecutivoInformeRef.current,
-              link_informe: linkInformeRef.current,
-            };
+      if (!solucionRef.current.trim() &&
+        !fechaSolucionRef.current &&
+        !fechaRealSolucionRef.current &&
+        !costoAsociadoRef.current.trim() &&
+        !consecutivoInformeRef.current.trim() &&
+        !linkInformeRef.current.trim()
+      ) {
+        setSubmitResponse({ type: 'error', message: 'Debes completar al menos un campo de la sección de solución/informe.' });
+        setIsSubmitting(false);
+        return;
+      }
 
-            const isConnected = await getConnectionStatus();
-            if (isConnected) {
-              const res = await updateIncident({ requestData: body, incidentId, refreshAccessToken, logout });
-              if (res.status) {
-                Alert.alert('Éxito', res.message || 'Incidente actualizado');
-                setEditingIncident(null);
-                await fetchAll();
-              } else {
-                Alert.alert('Error', res.message || 'No se pudo actualizar');
-              }
-              return;
-            }
+      const body = {
+        marca_id: marcaId,
+        solucion: solucionRef.current,
+        fecha_solucion: fechaSolucionRef.current || '',
+        fecha_real_solucion: fechaRealSolucionRef.current || '',
+        costo_asociado: costoAsociadoRef.current,
+        consecutivo_informe: consecutivoInformeRef.current,
+        link_informe: linkInformeRef.current,
+      };
 
-            // Offline
-            const actionsStr = await AsyncStorage.getItem('incidents_actions');
-            const actions = actionsStr ? JSON.parse(actionsStr) : [];
-
-            if (editingIncident.id_local && editingIncident.id_local !== '') {
-              // si aún no está sincronizado, actualizamos el payload de la acción create
-              const actionIndex = actions.findIndex((a: any) => a.id === editingIncident.id_local && a.type === 'create');
-              if (actionIndex !== -1) {
-                // No enviamos estos campos en create (según requerimiento), así que solo guardamos en cache local
-                // para que se vean en UI; al sincronizar create se enviará sin ellos.
-              }
-            } else {
-              const filtered = actions.filter((a: any) => !(a.type === 'update' && a.id === incidentId));
-              filtered.push({ requestData: body, id: incidentId, type: 'update' });
-              await AsyncStorage.setItem('incidents_actions', JSON.stringify(filtered));
-            }
-
-            // actualizar cache local (para reflejar UI offline)
-            const cache = (await getIncidentsCache()) || [];
-            const updated = cache.map(i => {
-              if (i.id === incidentId) {
-                return {
-                  ...i,
-                  solucion: body.solucion,
-                  fecha_solucion: body.fecha_solucion,
-                  fecha_solucion_real: body.fecha_real_solucion,
-                  costo_asociado: body.costo_asociado,
-                  consecutivo_informe: body.consecutivo_informe,
-                  link_informe: body.link_informe,
-                };
-              }
-              return i;
-            });
-            await setIncidentsCache(updated);
-            setIncidents(updated);
-
-            Alert.alert('Modo Offline', 'Incidente actualizado localmente. Se sincronizará cuando haya conexión.');
+      const isConnected = await getConnectionStatus();
+      if (isConnected) {
+        const res = await updateIncident({ requestData: body, incidentId, refreshAccessToken, logout });
+        if (res.status) {
+          setSubmitResponse({ type: 'success', message: res.message || 'Incidente actualizado' });
+          setTimeout(async () => {
             setEditingIncident(null);
-          } catch (e) {
-            console.error('Error updating incident:', e);
-            Alert.alert('Error', 'No se pudo actualizar el incidente');
-          }
-        },
-      },
-    ]);
+            await fetchAll();
+          }, 2000);
+        } else {
+          setSubmitResponse({ type: 'error', message: res.message || 'No se pudo actualizar' });
+        }
+        return;
+      }
+
+      // Offline
+      const actionsStr = await AsyncStorage.getItem('incidents_actions');
+      const actions = actionsStr ? JSON.parse(actionsStr) : [];
+
+      if (editingIncident.id_local && editingIncident.id_local !== '') {
+        // si aún no está sincronizado, actualizamos el payload de la acción create
+        const actionIndex = actions.findIndex((a: any) => a.id === editingIncident.id_local && a.type === 'create');
+        if (actionIndex !== -1) {
+          // No enviamos estos campos en create (según requerimiento), así que solo guardamos en cache local
+          // para que se vean en UI; al sincronizar create se enviará sin ellos.
+        }
+      } else {
+        const filtered = actions.filter((a: any) => !(a.type === 'update' && a.id === incidentId));
+        filtered.push({ requestData: body, id: incidentId, type: 'update' });
+        await AsyncStorage.setItem('incidents_actions', JSON.stringify(filtered));
+      }
+
+      // actualizar cache local (para reflejar UI offline)
+      const cache = (await getIncidentsCache()) || [];
+      const updated = cache.map(i => {
+        if (i.id === incidentId) {
+          return {
+            ...i,
+            solucion: body.solucion,
+            fecha_solucion: body.fecha_solucion,
+            fecha_solucion_real: body.fecha_real_solucion,
+            costo_asociado: body.costo_asociado,
+            consecutivo_informe: body.consecutivo_informe,
+            link_informe: body.link_informe,
+          };
+        }
+        return i;
+      });
+      await setIncidentsCache(updated);
+      setIncidents(updated);
+
+      setSubmitResponse({ type: 'success', message: 'Incidente actualizado localmente. Se sincronizará cuando haya conexión.' });
+      setTimeout(() => {
+        setEditingIncident(null);
+      }, 2000);
+    } catch (e) {
+      console.error('Error updating incident:', e);
+      setSubmitResponse({ type: 'error', message: 'No se pudo actualizar el incidente' });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleDelete = async (incident: Incident) => {
@@ -962,6 +1000,8 @@ export default function IncidentsScreen() {
     setEditingAporte(null);
     setShowAporteComposer(false);
     setAporteText('');
+    setAporteNombrePersonalizado('');
+    setAporteFirmaManual(null);
     setAporteTextFiles([]);
     setAporteImageFiles([]);
     setAporteAudioFiles([]);
@@ -978,11 +1018,15 @@ export default function IncidentsScreen() {
     setEditingAporte(null);
     setShowAporteComposer(false);
     setAporteText('');
+    setAporteNombrePersonalizado('');
+    setAporteFirmaManual(null);
     setAporteTextFiles([]);
     setAporteImageFiles([]);
     setAporteAudioFiles([]);
     setAporteVideoFiles([]);
     setAportes([]);
+    setIsAporteSignatureModalVisible(false);
+    setIsReadingAporteSignature(false);
   };
 
   const handleAddAporteFile = async (type: ManualFileLocal['type']) => {
@@ -1079,160 +1123,264 @@ export default function IncidentsScreen() {
     }));
   };
 
+  const buildAportePayloadWithSignature = (): IncidentContributionFileInput[] => {
+    // La firma ya no se incluye como archivo, se envía directamente en firma_aporte_tercero
+    return buildAporteArchivosPayload();
+  };
+
+  const getContributionSignatureUri = (incidentId: number, contribution: IncidentContribution): string | null => {
+    // Leer desde firma_aporte_tercero en lugar de buscar archivo
+    // La firma se guarda tal cual como viene del SignatureScreen (con prefijo data:image/png;base64,)
+    // Igual que en DigitalSignatureScreen.tsx donde se guarda manualSignature directamente
+    const firmaBase64 = (contribution as any).firma_aporte_tercero;
+    if (firmaBase64 && typeof firmaBase64 === 'string' && firmaBase64.trim().length > 0) {
+      return firmaBase64.trim();
+    }
+    return null;
+  };
+
+  const openAporteSignatureModal = () => {
+    setIsReadingAporteSignature(false);
+    setSignatureAporteKey((k) => k + 1);
+    setIsAporteSignatureModalVisible(true);
+  };
+
+  const closeAporteSignatureModal = () => {
+    setIsAporteSignatureModalVisible(false);
+    setIsReadingAporteSignature(false);
+  };
+
+  const clearAporteSignatureInModal = () => {
+    try {
+      signatureAporteRef.current?.clearSignature?.();
+    } catch {
+      // ignore
+    }
+    setIsReadingAporteSignature(false);
+    setSignatureAporteKey((k) => k + 1);
+  };
+
+  const acceptAporteSignature = () => {
+    try {
+      setIsReadingAporteSignature(true);
+      signatureAporteRef.current?.readSignature?.();
+    } catch {
+      setIsReadingAporteSignature(false);
+      Alert.alert('Error', 'No se pudo leer la firma. Intenta nuevamente.');
+    }
+  };
+
+  const handleAporteSignatureRead = (signature: string) => {
+    const sig = String(signature || '').trim();
+    if (!sig || sig.length < 10) {
+      Alert.alert('Error', 'No se detectó la firma. Intenta de nuevo.');
+      setIsReadingAporteSignature(false);
+      return;
+    }
+    // Guardar la firma tal como viene del SignatureScreen (ya incluye el prefijo data:image/png;base64,)
+    setAporteFirmaManual(sig);
+    setIsReadingAporteSignature(false);
+    closeAporteSignatureModal();
+  };
+
   const submitAporte = async () => {
     if (!selectedIncidentForAportes) return;
     if (!employee) return;
 
     const texto = (aporteText || '').trim();
+    const nombreAporte = (aporteNombrePersonalizado || '').trim();
     if (texto.length === 0) {
       Alert.alert('Error', 'Debes escribir un aporte');
       return;
     }
 
-    const incidentId = selectedIncidentForAportes.id;
-    const role = normalizeRoleName(currentRoleName);
+    setIsSubmittingAporte(true);
 
-    const isConnected = await getConnectionStatus();
+    try {
+      const incidentId = selectedIncidentForAportes.id;
+      const role = normalizeRoleName(currentRoleName);
 
-    // EDIT
-    if (editingAporte && editingAporte.id && editingAporte.id_local === '') {
-      const can = canModifyAporte(editingAporte.rol_aporte, editingAporte.empleado_id, parseInt(String(employee.id || '0'), 10), currentRoleName);
-      if (!can) {
-        Alert.alert('Sin permiso', 'No puedes editar este aporte');
-        return;
-      }
+      const isConnected = await getConnectionStatus();
 
-      if (isConnected) {
-        const res = await updateIncidentContribution({
+      // EDIT
+      if (editingAporte && editingAporte.id && editingAporte.id_local === '') {
+        const can = canModifyAporte(editingAporte.rol_aporte, editingAporte.empleado_id, parseInt(String(employee.id || '0'), 10), currentRoleName);
+        if (!can) {
+          Alert.alert('Sin permiso', 'No puedes editar este aporte');
+          setIsSubmittingAporte(false);
+          return;
+        }
+
+        if (isConnected) {
+          // Usar la firma directamente tal como viene del SignatureScreen (con prefijo data:image/png;base64,)
+          // Igual que en DigitalSignatureScreen.tsx donde se usa signature directamente
+          const res = await updateIncidentContribution({
+            incidentId,
+            contributionId: editingAporte.id,
+            requestData: {
+              aporte: texto,
+              nombre_aporte: nombreAporte || null,
+              firma_aporte_tercero: aporteFirmaManual || null,
+              archivos: buildAportePayloadWithSignature(),
+            },
+            refreshAccessToken,
+            logout,
+          });
+
+          if (res.status) {
+            setEditingAporte(null);
+            setShowAporteComposer(false);
+            setAporteText('');
+            setAporteNombrePersonalizado('');
+            setAporteFirmaManual(null);
+            setAporteTextFiles([]);
+            setAporteImageFiles([]);
+            setAporteAudioFiles([]);
+            setAporteVideoFiles([]);
+            await fetchAportesForIncident(incidentId);
+          } else {
+            Alert.alert('Error', res.message || 'No se pudo actualizar el aporte');
+          }
+          setIsSubmittingAporte(false);
+          return;
+        }
+
+        // Offline update (solo texto / agrega archivos) -> queue
+        // Usar la firma directamente tal como viene del SignatureScreen
+        const actions = await readContributionActions();
+        actions.push({
+          type: 'update',
           incidentId,
           contributionId: editingAporte.id,
           requestData: {
             aporte: texto,
-            archivos: buildAporteArchivosPayload(),
+            nombre_aporte: nombreAporte || null,
+            firma_aporte_tercero: aporteFirmaManual || null,
+            archivos: JSON.stringify(buildAportePayloadWithSignature()),
+          },
+        });
+        await writeContributionActions(actions);
+
+        // update cache + ui
+        const updated = aportes.map((a) => (a.id === editingAporte.id ? { ...a, aporte: texto, nombre_aporte: nombreAporte || null } : a));
+        setAportes(updated);
+        await updateIncidentAportesInIncidentsCache(incidentId, () => updated);
+
+        setEditingAporte(null);
+        setShowAporteComposer(false);
+        setAporteText('');
+        setAporteNombrePersonalizado('');
+        setAporteFirmaManual(null);
+        setAporteTextFiles([]);
+        setAporteImageFiles([]);
+        setAporteAudioFiles([]);
+        setAporteVideoFiles([]);
+
+        Alert.alert('Modo Offline', 'Aporte actualizado localmente. Se sincronizará cuando haya conexión.');
+        setIsSubmittingAporte(false);
+        return;
+      }
+
+      // CREATE
+      if (isConnected) {
+        // Usar la firma directamente tal como viene del SignatureScreen (con prefijo data:image/png;base64,)
+        // Igual que en DigitalSignatureScreen.tsx donde se usa signature directamente
+        const res = await createIncidentContribution({
+          incidentId,
+          requestData: {
+            aporte: texto,
+            nombre_aporte: nombreAporte || null,
+            firma_aporte_tercero: aporteFirmaManual || null,
+            rol_aporte: role || 'OPERATIVO',
+            archivos: buildAportePayloadWithSignature(),
           },
           refreshAccessToken,
           logout,
         });
 
         if (res.status) {
-          setEditingAporte(null);
-          setShowAporteComposer(false);
-          setAporteText('');
-          setAporteTextFiles([]);
-          setAporteImageFiles([]);
-          setAporteAudioFiles([]);
-          setAporteVideoFiles([]);
-          await fetchAportesForIncident(incidentId);
+          // Requerimiento: cerrar modal al crear aporte
+          closeAportesModal();
         } else {
-          Alert.alert('Error', res.message || 'No se pudo actualizar el aporte');
+          Alert.alert('Error', res.message || 'No se pudo crear el aporte');
         }
+        setIsSubmittingAporte(false);
         return;
       }
 
-      // Offline update (solo texto / agrega archivos) -> queue
+      // Offline create
+      // Usar la firma directamente tal como viene del SignatureScreen (con prefijo data:image/png;base64,)
+      const localId = generateRandomId();
+      const payloadFiles = buildAportePayloadWithSignature();
+      const newLocal: IncidentContribution = {
+        id: 0,
+        incidente_id: incidentId,
+        empleado_id: parseInt(String(employee.id || '0'), 10),
+        empleado_nombre: employee.name || '',
+        nombre_aporte: nombreAporte || null,
+        aporte: texto,
+        rol_aporte: role || 'OPERATIVO',
+        created_at: new Date().toISOString(),
+        files: [...payloadFiles].map((f) => ({
+          id: Date.now() + Math.random(),
+          id_local: `lf_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+          name: f.original_name || 'archivo',
+          original_name: f.original_name || 'archivo',
+          type: f.type,
+          extension: f.extension,
+          base64: f.file_base64,
+          mimeType: f.mimeType,
+        })),
+        id_local: localId,
+        firma_aporte_tercero: aporteFirmaManual || null,
+      } as any;
+
       const actions = await readContributionActions();
       actions.push({
-        type: 'update',
+        type: 'create',
+        id: localId,
         incidentId,
-        contributionId: editingAporte.id,
-        requestData: { aporte: texto, archivos: JSON.stringify(buildAporteArchivosPayload()) },
+        requestData: {
+          aporte: texto,
+          nombre_aporte: nombreAporte || null,
+          firma_aporte_tercero: aporteFirmaManual || null,
+          rol_aporte: role || 'OPERATIVO',
+          archivos: JSON.stringify(payloadFiles),
+        },
       });
       await writeContributionActions(actions);
 
-      // update cache + ui
-      const updated = aportes.map((a) => (a.id === editingAporte.id ? { ...a, aporte: texto } : a));
-      setAportes(updated);
-      await updateIncidentAportesInIncidentsCache(incidentId, () => updated);
+      const next = [newLocal, ...aportes];
+      setAportes(next);
+      await updateIncidentAportesInIncidentsCache(incidentId, (current) => [newLocal, ...(current || [])]);
 
-      setEditingAporte(null);
-      setShowAporteComposer(false);
       setAporteText('');
+      setAporteNombrePersonalizado('');
+      setAporteFirmaManual(null);
       setAporteTextFiles([]);
       setAporteImageFiles([]);
       setAporteAudioFiles([]);
       setAporteVideoFiles([]);
 
-      Alert.alert('Modo Offline', 'Aporte actualizado localmente. Se sincronizará cuando haya conexión.');
-      return;
+      Alert.alert('Modo Offline', 'Aporte registrado localmente. Se sincronizará cuando haya conexión.');
+      // Requerimiento: cerrar modal al crear aporte (offline)
+      closeAportesModal();
+    } catch (error) {
+      console.error('Error submitting aporte:', error);
+      Alert.alert('Error', 'No se pudo procesar el aporte');
+    } finally {
+      setIsSubmittingAporte(false);
     }
-
-    // CREATE
-    if (isConnected) {
-      const res = await createIncidentContribution({
-        incidentId,
-        requestData: {
-          aporte: texto,
-          rol_aporte: role || 'OPERATIVO',
-          archivos: buildAporteArchivosPayload(),
-        },
-        refreshAccessToken,
-        logout,
-      });
-
-      if (res.status) {
-        // Requerimiento: cerrar modal al crear aporte
-        closeAportesModal();
-      } else {
-        Alert.alert('Error', res.message || 'No se pudo crear el aporte');
-      }
-      return;
-    }
-
-    // Offline create
-    const localId = generateRandomId();
-    const newLocal: IncidentContribution = {
-      id: 0,
-      incidente_id: incidentId,
-      empleado_id: parseInt(String(employee.id || '0'), 10),
-      empleado_nombre: employee.name || '',
-      aporte: texto,
-      rol_aporte: role || 'OPERATIVO',
-      created_at: new Date().toISOString(),
-      files: [...buildAporteArchivosPayload()].map((f) => ({
-        id: Date.now() + Math.random(),
-        id_local: `lf_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-        name: f.original_name || 'archivo',
-        original_name: f.original_name || 'archivo',
-        type: f.type,
-        extension: f.extension,
-        base64: f.file_base64,
-        mimeType: f.mimeType,
-      })),
-      id_local: localId,
-    };
-
-    const actions = await readContributionActions();
-    actions.push({
-      type: 'create',
-      id: localId,
-      incidentId,
-      requestData: {
-        aporte: texto,
-        rol_aporte: role || 'OPERATIVO',
-        archivos: JSON.stringify(buildAporteArchivosPayload()),
-      },
-    });
-    await writeContributionActions(actions);
-
-    const next = [newLocal, ...aportes];
-    setAportes(next);
-    await updateIncidentAportesInIncidentsCache(incidentId, (current) => [newLocal, ...(current || [])]);
-
-    setAporteText('');
-    setAporteTextFiles([]);
-    setAporteImageFiles([]);
-    setAporteAudioFiles([]);
-    setAporteVideoFiles([]);
-
-    Alert.alert('Modo Offline', 'Aporte registrado localmente. Se sincronizará cuando haya conexión.');
-    // Requerimiento: cerrar modal al crear aporte (offline)
-    closeAportesModal();
   };
 
   const startEditingAporte = async (a: IncidentContribution) => {
     setEditingAporte(a);
     setShowAporteComposer(true);
     setAporteText(a.aporte || '');
+    setAporteNombrePersonalizado((a as any).nombre_aporte || '');
+    // Leer firma desde firma_aporte_tercero
+    const firmaUri = getContributionSignatureUri(selectedIncidentForAportes?.id || 0, a);
+    setAporteFirmaManual(firmaUri);
     setAporteTextFiles([]);
     setAporteImageFiles([]);
     setAporteAudioFiles([]);
@@ -1738,12 +1886,25 @@ export default function IncidentsScreen() {
           </>
         )}
 
+        {submitResponse && (
+          <ThemedView style={[styles.responseContainer, submitResponse.type === 'success' ? styles.responseSuccess : styles.responseError]}>
+            <ThemedText style={styles.responseText}>
+              {submitResponse.type === 'success' ? '✓ ' : '✗ '}
+              {submitResponse.message}
+            </ThemedText>
+          </ThemedView>
+        )}
         <ThemedView style={styles.buttonRow}>
           <TouchableOpacity
-            style={styles.confirmButton}
+            style={[styles.confirmButton, isSubmitting && styles.buttonDisabled]}
             onPress={isEdit ? () => handleUpdate(incident.id!) : handleCreate}
+            disabled={isSubmitting}
           >
-            <ThemedText style={styles.confirmButtonText}>{getActionIcon('confirm')}</ThemedText>
+            {isSubmitting ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <ThemedText style={styles.confirmButtonText}>{getActionIcon('confirm')}</ThemedText>
+            )}
           </TouchableOpacity>
           <TouchableOpacity
             style={styles.cancelButton}
@@ -1812,16 +1973,81 @@ export default function IncidentsScreen() {
 
           {!isCreating && !editingIncident && (
             <ThemedView style={styles.filtersMain}>
-              <ThemedView style={styles.filterContent}>
-                <ThemedText style={styles.filterLabel}>Buscar (responsables, ejecutivo, clasificación, descripción):</ThemedText>
-                <TextInput
-                  style={styles.searchInput}
-                  value={searchText}
-                  onChangeText={setSearchText}
-                  placeholder="Buscar..."
-                  placeholderTextColor="#999"
-                />
-              </ThemedView>
+              <TouchableOpacity
+                style={styles.filtersHeader}
+                onPress={() => {
+                  const next = !isFiltersExpanded;
+                  setIsFiltersExpanded(next);
+                  if (!next) {
+                    setShowFilterFechaIncidentePicker(false);
+                    setShowFilterFechaReportePicker(false);
+                  }
+                }}
+              >
+                <ThemedText style={styles.filtersHeaderText}>Filtros</ThemedText>
+                <Ionicons name={isFiltersExpanded ? 'chevron-up' : 'chevron-down'} size={18} color="#007AFF" />
+              </TouchableOpacity>
+              {isFiltersExpanded && (
+                <ThemedView style={styles.filterContent}>
+                  <ThemedText style={styles.filterLabel}>Buscar (responsables, ejecutivo, clasificación, descripción):</ThemedText>
+                  <TextInput
+                    style={styles.searchInput}
+                    value={searchText}
+                    onChangeText={setSearchText}
+                    placeholder="Buscar..."
+                    placeholderTextColor="#999"
+                  />
+                  <ThemedText style={styles.filterLabel}>Fecha incidente:</ThemedText>
+                  <TouchableOpacity
+                    style={styles.dateButton}
+                    onPress={() => {
+                      setPickerDateValue(filterFechaIncidente ? new Date(filterFechaIncidente) : new Date());
+                      setShowFilterFechaIncidentePicker(true);
+                    }}
+                  >
+                    <ThemedText style={styles.dateButtonText}>
+                      {filterFechaIncidente || 'Todas'}
+                    </ThemedText>
+                    <Ionicons name="calendar" size={18} color="#007AFF" />
+                  </TouchableOpacity>
+                  {renderDatePicker(
+                    showFilterFechaIncidentePicker,
+                    () => setShowFilterFechaIncidentePicker(false),
+                    (iso) => setFilterFechaIncidente(String(iso || '').split('T')[0])
+                  )}
+
+                  <ThemedText style={styles.filterLabel}>Fecha reporte:</ThemedText>
+                  <TouchableOpacity
+                    style={styles.dateButton}
+                    onPress={() => {
+                      setPickerDateValue(filterFechaReporte ? new Date(filterFechaReporte) : new Date());
+                      setShowFilterFechaReportePicker(true);
+                    }}
+                  >
+                    <ThemedText style={styles.dateButtonText}>
+                      {filterFechaReporte || 'Todas'}
+                    </ThemedText>
+                    <Ionicons name="calendar" size={18} color="#007AFF" />
+                  </TouchableOpacity>
+                  {renderDatePicker(
+                    showFilterFechaReportePicker,
+                    () => setShowFilterFechaReportePicker(false),
+                    (iso) => setFilterFechaReporte(String(iso || '').split('T')[0])
+                  )}
+
+                  <TouchableOpacity
+                    style={styles.clearFiltersButton}
+                    onPress={() => {
+                      setSearchText('');
+                      setFilterFechaIncidente('');
+                      setFilterFechaReporte('');
+                    }}
+                  >
+                    <Ionicons name="refresh" size={16} color="#FFFFFF" />
+                    <ThemedText style={styles.clearFiltersButtonText}>Limpiar filtros</ThemedText>
+                  </TouchableOpacity>
+                </ThemedView>
+              )}
             </ThemedView>
           )}
 
@@ -1858,7 +2084,7 @@ export default function IncidentsScreen() {
                     <ThemedText style={styles.cardInfo} numberOfLines={3}>Descripción: {i.descripcion || '-'}</ThemedText>
 
                     {Array.isArray(i.files) && i.files.length > 0 && (
-                      <IncidentFilesViewer incident={i} />
+                      <IncidentFilesViewer incident={i} accessToken={accessToken} />
                     )}
 
                     <ThemedView style={styles.buttonRow}>
@@ -1913,6 +2139,13 @@ export default function IncidentsScreen() {
                     {editingAporte ? 'Editar aporte' : 'Nuevo aporte'}
                   </ThemedText>
                   <TextInput
+                    style={styles.formInput}
+                    value={aporteNombrePersonalizado}
+                    onChangeText={setAporteNombrePersonalizado}
+                    placeholder="Nombre personalizado (opcional)"
+                    placeholderTextColor="#999"
+                  />
+                  <TextInput
                     style={[styles.formInput, styles.textArea]}
                     value={aporteText}
                     onChangeText={setAporteText}
@@ -1922,11 +2155,37 @@ export default function IncidentsScreen() {
                     numberOfLines={3}
                   />
 
+                  <ThemedView style={styles.formGroup}>
+                    <ThemedText style={styles.formLabel}>Firma del aporte (opcional)</ThemedText>
+                    {aporteFirmaManual ? (
+                      <ThemedView style={styles.signaturePreviewContainer}>
+                        <Image source={{ uri: aporteFirmaManual }} style={styles.signaturePreview} resizeMode="contain" />
+                        <TouchableOpacity style={styles.removeSignatureButton} onPress={() => setAporteFirmaManual(null)}>
+                          <Ionicons name="trash" size={18} color="#FFFFFF" />
+                        </TouchableOpacity>
+                      </ThemedView>
+                    ) : null}
+                    <TouchableOpacity style={styles.openSignatureButton} onPress={openAporteSignatureModal}>
+                      <Ionicons name="create-outline" size={20} color="#000000" />
+                      <ThemedText style={styles.openSignatureButtonText}>
+                        {aporteFirmaManual ? 'Modificar firma' : 'Dibujar firma'}
+                      </ThemedText>
+                    </TouchableOpacity>
+                  </ThemedView>
+
                   {renderAporteFilesSection()}
 
                   <ThemedView style={styles.buttonRow}>
-                    <TouchableOpacity style={styles.confirmButton} onPress={submitAporte}>
-                      <ThemedText style={styles.confirmButtonText}>{getActionIcon('confirm')}</ThemedText>
+                    <TouchableOpacity
+                      style={[styles.confirmButton, isSubmittingAporte && styles.buttonDisabled]}
+                      onPress={submitAporte}
+                      disabled={isSubmittingAporte}
+                    >
+                      {isSubmittingAporte ? (
+                        <ActivityIndicator size="small" color="#FFFFFF" />
+                      ) : (
+                        <ThemedText style={styles.confirmButtonText}>{getActionIcon('confirm')}</ThemedText>
+                      )}
                     </TouchableOpacity>
                     <TouchableOpacity
                       style={styles.cancelButton}
@@ -1934,11 +2193,14 @@ export default function IncidentsScreen() {
                         setEditingAporte(null);
                         setShowAporteComposer(false);
                         setAporteText('');
+                        setAporteNombrePersonalizado('');
+                        setAporteFirmaManual(null);
                         setAporteTextFiles([]);
                         setAporteImageFiles([]);
                         setAporteAudioFiles([]);
                         setAporteVideoFiles([]);
                       }}
+                      disabled={isSubmittingAporte}
                     >
                       <ThemedText style={styles.cancelButtonText}>{getActionIcon('cancel')}</ThemedText>
                     </TouchableOpacity>
@@ -1965,7 +2227,11 @@ export default function IncidentsScreen() {
                     <ThemedView key={a.id_local || String(a.id)} style={styles.aporteCard}>
                       <ThemedView style={styles.aporteHeaderRow}>
                         <ThemedText style={styles.aporteAuthor}>
-                          {a.empleado_nombre || 'Empleado'} ({a.rol_aporte || '-'}){isLocal ? ' • Pendiente' : ''}
+                          {(() => {
+                            const customName = String((a as any).nombre_aporte || '').trim();
+                            if (customName) return `${customName}${isLocal ? ' • Pendiente' : ''}`;
+                            return `${a.empleado_nombre || 'Empleado'} (${a.rol_aporte || '-'})${isLocal ? ' • Pendiente' : ''}`;
+                          })()}
                         </ThemedText>
                         {can && (
                           <ThemedView style={{ flexDirection: 'row', gap: 10, backgroundColor: 'transparent' }}>
@@ -1979,15 +2245,79 @@ export default function IncidentsScreen() {
                         {a.created_at ? new Date(a.created_at).toLocaleString() : ''}
                       </ThemedText>
                       <ThemedText style={styles.aporteText}>{a.aporte}</ThemedText>
+                      {selectedIncidentForAportes && !!getContributionSignatureUri(selectedIncidentForAportes.id, a) && (
+                        <ThemedView style={styles.signatureContributionContainer}>
+                          <ThemedText style={styles.signatureContributionLabel}>Firma:</ThemedText>
+                          <Image
+                            source={{ uri: getContributionSignatureUri(selectedIncidentForAportes.id, a) as string }}
+                            style={styles.signatureContributionImage}
+                            resizeMode="contain"
+                          />
+                        </ThemedView>
+                      )}
 
-                      {!!selectedIncidentForAportes?.id && (
-                        <ContributionFilesViewer incidentId={selectedIncidentForAportes.id} contribution={a} />
+                      {selectedIncidentForAportes && (
+                        <ContributionFilesViewer incidentId={selectedIncidentForAportes.id} contribution={a} accessToken={accessToken} />
                       )}
                     </ThemedView>
                   );
                 })
               )}
             </ScrollView>
+          </ThemedView>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={isAporteSignatureModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={closeAporteSignatureModal}
+      >
+        <View style={styles.modalOverlay}>
+          <ThemedView style={styles.signatureModalContainer}>
+            <View style={styles.modalHeader}>
+              <ThemedText style={styles.modalTitle}>Firma del aporte</ThemedText>
+              <TouchableOpacity onPress={closeAporteSignatureModal}>
+                <Ionicons name="close" size={24} color="#666666" />
+              </TouchableOpacity>
+            </View>
+            <ThemedText style={styles.signatureModalHint}>Firma dentro del recuadro blanco.</ThemedText>
+            <View style={styles.signaturePadBox}>
+              <SignatureScreen
+                ref={signatureAporteRef}
+                onOK={handleAporteSignatureRead}
+                onEmpty={() => {
+                  setIsReadingAporteSignature(false);
+                  Alert.alert('Error', 'No se detectó firma. Intenta de nuevo.');
+                }}
+                onEnd={() => setIsReadingAporteSignature(false)}
+                autoClear={false}
+                imageType="image/png"
+                webStyle={`
+                  .m-signature-pad--footer {display: none; margin: 0px;}
+                  .m-signature-pad {box-shadow: none; border: none;}
+                  body,html {height: 100%; margin: 0; padding: 0;}
+                `}
+                key={signatureAporteKey}
+              />
+            </View>
+            <ThemedView style={styles.modalActions}>
+              <TouchableOpacity style={styles.modalClearButton} onPress={clearAporteSignatureInModal}>
+                <ThemedText style={styles.modalClearButtonText}>Limpiar</ThemedText>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalAcceptButton, isReadingAporteSignature && styles.modalButtonDisabled]}
+                onPress={acceptAporteSignature}
+                disabled={isReadingAporteSignature}
+              >
+                {isReadingAporteSignature ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <ThemedText style={styles.modalAcceptButtonText}>Aceptar</ThemedText>
+                )}
+              </TouchableOpacity>
+            </ThemedView>
           </ThemedView>
         </View>
       </Modal>
@@ -2028,9 +2358,29 @@ const styles = StyleSheet.create({
   errorText: { color: '#B00020' },
 
   filtersMain: { width: '100%', marginBottom: 16, backgroundColor: '#fff', borderRadius: 8, borderWidth: 1, borderColor: '#E0E0E0', overflow: 'hidden' },
+  filtersHeader: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#F8F9FA',
+  },
+  filtersHeaderText: { fontSize: 15, fontWeight: '700', color: '#007AFF' },
   filterContent: { padding: 16, gap: 10, backgroundColor: '#F8F9FA' },
   filterLabel: { fontSize: 14, fontWeight: '600', marginBottom: 8, color: '#333' },
   searchInput: { width: '100%', padding: 12, borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 8, fontSize: 16, backgroundColor: '#F9F9F9', color: '#000000' },
+  clearFiltersButton: {
+    marginTop: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#007AFF',
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
+  clearFiltersButtonText: { color: '#FFFFFF', fontWeight: '600' },
 
   createButton: { backgroundColor: '#007AFF', padding: 16, borderRadius: 8, alignItems: 'center', marginBottom: 16 },
   createButtonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
@@ -2129,6 +2479,28 @@ const styles = StyleSheet.create({
   confirmButtonText: { color: '#fff', fontSize: 14, fontWeight: '600' },
   cancelButton: { backgroundColor: '#8E8E93', padding: 12, borderRadius: 6, alignItems: 'center' },
   cancelButtonText: { color: '#fff', fontSize: 14, fontWeight: '600' },
+  buttonDisabled: {
+    opacity: 0.6,
+  },
+  responseContainer: {
+    padding: 12,
+    borderRadius: 6,
+    marginBottom: 12,
+  },
+  responseSuccess: {
+    backgroundColor: '#D4EDDA',
+    borderWidth: 1,
+    borderColor: '#C3E6CB',
+  },
+  responseError: {
+    backgroundColor: '#F8D7DA',
+    borderWidth: 1,
+    borderColor: '#F5C6CB',
+  },
+  responseText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
 
   // Aportes modal styles
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center', alignItems: 'center', padding: 20 },
@@ -2144,6 +2516,91 @@ const styles = StyleSheet.create({
   aporteAuthor: { fontSize: 14, fontWeight: '700', color: '#007AFF', flex: 1, paddingRight: 10 },
   aporteDate: { fontSize: 12, color: '#666', marginTop: 2, marginBottom: 8 },
   aporteText: { fontSize: 14, color: '#333', marginBottom: 8 },
+  signatureContributionContainer: {
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    padding: 8,
+    marginBottom: 8,
+    backgroundColor: '#F9F9F9',
+  },
+  signatureContributionLabel: { fontSize: 13, color: '#555', marginBottom: 6, fontWeight: '600' },
+  signatureContributionImage: {
+    width: '100%',
+    height: 120,
+    borderRadius: 6,
+    backgroundColor: '#FFFFFF',
+  },
+  signaturePreviewContainer: {
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    height: 120,
+    backgroundColor: '#FFFFFF',
+    overflow: 'hidden',
+    marginBottom: 8,
+  },
+  signaturePreview: { width: '100%', height: '100%' },
+  removeSignatureButton: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#FF3B30',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  openSignatureButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    backgroundColor: '#F9F9F9',
+  },
+  openSignatureButtonText: { fontSize: 14, color: '#333', fontWeight: '600' },
+  signatureModalContainer: { width: '100%', maxWidth: 700, backgroundColor: '#fff', borderRadius: 12, overflow: 'hidden' },
+  signatureModalHint: { paddingHorizontal: 16, paddingTop: 12, color: '#666', fontSize: 13 },
+  signaturePadBox: {
+    margin: 12,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    overflow: 'hidden',
+    backgroundColor: '#FFFFFF',
+    height: 260,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    gap: 10,
+    paddingHorizontal: 12,
+    paddingBottom: 12,
+    backgroundColor: '#fff',
+  },
+  modalClearButton: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    paddingVertical: 10,
+    alignItems: 'center',
+    backgroundColor: '#F4F4F4',
+  },
+  modalClearButtonText: { color: '#333', fontWeight: '600' },
+  modalAcceptButton: {
+    flex: 1,
+    borderRadius: 8,
+    paddingVertical: 10,
+    alignItems: 'center',
+    backgroundColor: '#007AFF',
+  },
+  modalAcceptButtonText: { color: '#FFFFFF', fontWeight: '700' },
+  modalButtonDisabled: { opacity: 0.6 },
 
   // Files viewer styles
   collapsableSection: { marginTop: 12, borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 8, backgroundColor: '#F9F9F9', overflow: 'hidden' },
@@ -2164,7 +2621,7 @@ const styles = StyleSheet.create({
 });
 
 // Componente para visualizar archivos de un incidente
-function IncidentFilesViewer({ incident }: { incident: Incident }) {
+function IncidentFilesViewer({ incident, accessToken }: { incident: Incident; accessToken?: string | null }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const files = Array.isArray(incident.files) ? incident.files : [];
 
@@ -2200,7 +2657,7 @@ function IncidentFilesViewer({ incident }: { incident: Incident }) {
               {imageFiles.map(file => (
                 <IncidentImageViewer
                   key={file.id}
-                  imageUrl={buildIncidentFileUrl(incident.id, file)}
+                  imageUrl={buildIncidentFileUrl(incident.id, file, accessToken)}
                 />
               ))}
             </ThemedView>
@@ -2213,7 +2670,7 @@ function IncidentFilesViewer({ incident }: { incident: Incident }) {
               {audioFiles.map(file => (
                 <IncidentAudioPlayer
                   key={file.id}
-                  sourceUrl={buildIncidentFileUrl(incident.id, file)}
+                  sourceUrl={buildIncidentFileUrl(incident.id, file, accessToken)}
                   label={getFileDisplayName(file)}
                 />
               ))}
@@ -2227,7 +2684,7 @@ function IncidentFilesViewer({ incident }: { incident: Incident }) {
               {videoFiles.map(file => (
                 <IncidentVideoPlayer
                   key={file.id}
-                  sourceUrl={buildIncidentFileUrl(incident.id, file)}
+                  sourceUrl={buildIncidentFileUrl(incident.id, file, accessToken)}
                 />
               ))}
             </ThemedView>
@@ -2242,7 +2699,7 @@ function IncidentFilesViewer({ incident }: { incident: Incident }) {
                   key={file.id}
                   style={styles.documentRow}
                   onPress={() => {
-                    const url = buildIncidentFileUrl(incident.id, file);
+                    const url = buildIncidentFileUrl(incident.id, file, accessToken);
                     if (url) {
                       Linking.openURL(url);
                     } else {
@@ -2266,9 +2723,12 @@ function IncidentFilesViewer({ incident }: { incident: Incident }) {
 }
 
 // Archivos de un aporte (contribución) en formato collapsable
-function ContributionFilesViewer({ incidentId, contribution }: { incidentId: number; contribution: IncidentContribution }) {
+function ContributionFilesViewer({ incidentId, contribution, accessToken }: { incidentId: number; contribution: IncidentContribution; accessToken?: string | null }) {
   const [isExpanded, setIsExpanded] = useState(false);
-  const files = Array.isArray(contribution.files) ? contribution.files : [];
+  const files = (Array.isArray(contribution.files) ? contribution.files : []).filter((f: any) => {
+    const originalName = String(f?.original_name || '').trim().toLowerCase();
+    return originalName !== APORTE_SIGNATURE_FILE_NAME.toLowerCase();
+  });
 
   if (files.length === 0) return null;
 
@@ -2301,7 +2761,7 @@ function ContributionFilesViewer({ incidentId, contribution }: { incidentId: num
               {imageFiles.map(file => (
                 <IncidentImageViewer
                   key={file.id}
-                  imageUrl={buildContributionFileUrl(incidentId, contribution.id, file)}
+                  imageUrl={buildContributionFileUrl(incidentId, contribution.id, file, accessToken)}
                 />
               ))}
             </ThemedView>
@@ -2313,7 +2773,7 @@ function ContributionFilesViewer({ incidentId, contribution }: { incidentId: num
               {audioFiles.map(file => (
                 <IncidentAudioPlayer
                   key={file.id}
-                  sourceUrl={buildContributionFileUrl(incidentId, contribution.id, file)}
+                  sourceUrl={buildContributionFileUrl(incidentId, contribution.id, file, accessToken)}
                   label={getFileDisplayName(file)}
                 />
               ))}
@@ -2326,7 +2786,7 @@ function ContributionFilesViewer({ incidentId, contribution }: { incidentId: num
               {videoFiles.map(file => (
                 <IncidentVideoPlayer
                   key={file.id}
-                  sourceUrl={buildContributionFileUrl(incidentId, contribution.id, file)}
+                  sourceUrl={buildContributionFileUrl(incidentId, contribution.id, file, accessToken)}
                 />
               ))}
             </ThemedView>
@@ -2340,7 +2800,7 @@ function ContributionFilesViewer({ incidentId, contribution }: { incidentId: num
                   key={file.id}
                   style={styles.documentRow}
                   onPress={() => {
-                    const url = buildContributionFileUrl(incidentId, contribution.id, file);
+                    const url = buildContributionFileUrl(incidentId, contribution.id, file, accessToken);
                     if (url) {
                       Linking.openURL(url);
                     } else {

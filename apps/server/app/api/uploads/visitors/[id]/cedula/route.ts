@@ -1,11 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
-import { verifyAccessToken } from '../../../../../../utils/verifyToken';
+import { fetchDynamicFile } from '../../../../../../utils/callDynamicFilesApi';
+import { callDynamicPrisma } from '../../../../../../utils/callDynamicPrisma';
 
 export const runtime = 'nodejs'; // 👈 necesario para usar fs
-
-import { prisma } from "../../../../../../utils/prismaClient";
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
 
@@ -14,44 +11,32 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
     const searchParams = req.nextUrl.searchParams;
     const name = searchParams.get("name");
+    const tokenFromQuery = searchParams.get("token") || undefined;
 
     if (!id || !name) {
         return NextResponse.json({ status: false, message: 'ID o nombre faltante' }, { status: 400 });
     }
 
-    const visitor = await prisma.e_registro_personas.findUnique({ where: { id } });
+    const visitor = await callDynamicPrisma({
+        req,
+        data: { action: "GET", table: "e_registro_personas", operation: "findUnique", where: { id } },
+        token: tokenFromQuery,
+    });
     if (!visitor || !visitor.foto_cedula) {
         return NextResponse.json({ status: false, message: 'Visita no encontrada' }, { status: 404 });
     }
 
-    const filePath = path.join(
-        process.cwd(),
-        'public',
-        'uploads',
-        'visitors',
-        visitor.id.toString(),
-        'cedula',
-        visitor.foto_cedula
-    );
+    const fetched = await fetchDynamicFile({
+        req,
+        type: 'image',
+        url: `visitors/${visitor.id}/cedula/${visitor.foto_cedula}`,
+        download: false,
+    });
 
-    console.log('📂 Buscando archivo en:', filePath);
-
-    if (!fs.existsSync(filePath)) {
-        return NextResponse.json({ status: false, message: 'Foto no encontrada' }, { status: 404 });
-    }
-
-    const file = await fs.promises.readFile(filePath);
-    const ext = path.extname(filePath).toLowerCase();
-
-    let contentType = 'application/octet-stream';
-    if (ext === '.jpg' || ext === '.jpeg') contentType = 'image/jpeg';
-    if (ext === '.png') contentType = 'image/png';
-    if (ext === '.webp') contentType = 'image/webp';
-
-    return new NextResponse(Buffer.from(file), {
+    return new NextResponse(fetched.buffer, {
         headers: {
-            'Content-Type': contentType,
-            'Cache-Control': 'public, max-age=31536000',
+            'Content-Type': fetched.headers.contentType,
+            'Cache-Control': fetched.headers.cacheControl,
         },
     });
 }

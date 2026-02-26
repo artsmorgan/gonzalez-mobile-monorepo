@@ -85,14 +85,16 @@ type VehicleUse = {
   vehiculo_id: number | string;
   bitacora_id?: number | null;
   nombre_conductor: string;
+  codigo_conductor: string;
   fecha: string; // ISO
-  hora_inicio: string; // ISO
-  hora_fin: string; // ISO
-  combustible_inicio: number;
-  combustible_fin: number;
+  inicio: string; // ISO
+  fin: string; // ISO
+  combustible_inicio: string;
+  combustible_fin: string;
   km_inicio: number;
   km_fin: number;
   motivo: string;
+  firma_conductor: string;
   firma_responsable: string;
   bitacora?: any | null; // ignorar por ahora en UI
   synced?: boolean;
@@ -172,9 +174,19 @@ const decodeFirmaHash = (hash?: string | null) => {
   }
 };
 
+/** Normaliza una fecha a YYYY-MM-DD. Acepta entrada en YYYY-MM-DD o DD-MM-YYYY (solo para guardar/envío). */
+const normalizeDateToYMD = (value?: string): string => {
+  const v = String(value || '').trim().split('T')[0];
+  if (!v) return '';
+  const ymdMatch = v.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (ymdMatch) return `${ymdMatch[1]}-${ymdMatch[2].padStart(2, '0')}-${ymdMatch[3].padStart(2, '0')}`;
+  const dmyMatch = v.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
+  if (dmyMatch) return `${dmyMatch[3]}-${dmyMatch[2].padStart(2, '0')}-${dmyMatch[1].padStart(2, '0')}`;
+  return '';
+};
+
 const toIsoFromDateAndTime = (dateStr: string, timeStr: string) => {
-  // dateStr: YYYY-MM-DD, timeStr: HH:mm
-  const d = String(dateStr || '').trim();
+  const d = normalizeDateToYMD(dateStr);
   const t = String(timeStr || '').trim();
   if (!d) return new Date().toISOString();
   const hhmm = t && /^\d{2}:\d{2}$/.test(t) ? t : '00:00';
@@ -205,12 +217,15 @@ const isoToDate = (iso?: string) => {
   return `${y}-${m}-${d}`;
 };
 
+/** Formato solo para visualización: devuelve DD-MM-YYYY. Acepta entrada en YYYY-MM-DD o DD-MM-YYYY. */
 const formatYMDToDMY = (value?: string) => {
   const v = String(value || '').trim();
   if (!v) return '';
   const onlyDate = v.split('T')[0];
-  const ymd = onlyDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (ymd) return `${ymd[3]}-${ymd[2]}-${ymd[1]}`;
+  const ymd = onlyDate.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (ymd) return `${ymd[3].padStart(2, '0')}-${ymd[2].padStart(2, '0')}-${ymd[1]}`;
+  const dmy = onlyDate.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
+  if (dmy) return `${dmy[1].padStart(2, '0')}-${dmy[2].padStart(2, '0')}-${dmy[3]}`;
   return onlyDate;
 };
 
@@ -222,6 +237,8 @@ const isoToTime = (iso?: string) => {
   const m = String(dt.getMinutes()).padStart(2, '0');
   return `${h}:${m}`;
 };
+
+const COMBUSTIBLE_OPTIONS = ['Vacío', 'Un cuarto', 'Medio', 'Tres cuartos', 'Lleno'];
 
 type TipoBitacora = 'Vehículo' | 'Bicicleta' | 'Motocicleta';
 type ReviewStatus = 'Bueno' | 'Malo' | 'No existe';
@@ -546,8 +563,15 @@ const safeParse = <T,>(value: any, fallback: T): T => {
 
 export default function CorporateVehiclesScreen() {
   const navigation = useNavigation<Nav>();
-  const { employee, refreshAccessToken, logout } = useAuth();
+  const { employee, refreshAccessToken, logout, accessToken } = useAuth();
   const { scanQR, QRScannerComponent } = useQRScanner();
+  const appendTokenToUrl = (url: string) => {
+    if (!url) return '';
+    if (!accessToken || accessToken.trim().length === 0) return url;
+    if (/[?&]token=/.test(url)) return url;
+    const sep = url.includes('?') ? '&' : '?';
+    return `${url}${sep}token=${encodeURIComponent(accessToken)}`;
+  };
 
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -594,14 +618,17 @@ export default function CorporateVehiclesScreen() {
   const [expandedBitacoras, setExpandedBitacoras] = useState<Set<string>>(new Set());
 
   const [useNombreConductor, setUseNombreConductor] = useState('');
-  const [useFecha, setUseFecha] = useState(''); // YYYY-MM-DD
-  const [useHoraInicio, setUseHoraInicio] = useState(''); // HH:mm
-  const [useHoraFin, setUseHoraFin] = useState(''); // HH:mm
+  const [useCodigoConductor, setUseCodigoConductor] = useState('');
+  const [useInicioFecha, setUseInicioFecha] = useState(''); // YYYY-MM-DD
+  const [useInicioHora, setUseInicioHora] = useState(''); // HH:mm
+  const [useFinFecha, setUseFinFecha] = useState(''); // YYYY-MM-DD
+  const [useFinHora, setUseFinHora] = useState(''); // HH:mm
   const [useCombInicio, setUseCombInicio] = useState('');
   const [useCombFin, setUseCombFin] = useState('');
   const [useKmInicio, setUseKmInicio] = useState('');
   const [useKmFin, setUseKmFin] = useState('');
   const [useMotivo, setUseMotivo] = useState('');
+  const [useFirmaConductor, setUseFirmaConductor] = useState<string>('');
   const [useFirmaResponsable, setUseFirmaResponsable] = useState<FirmaData | null>(null);
 
   // pickers (fechas/horas) para usos
@@ -609,7 +636,7 @@ export default function CorporateVehiclesScreen() {
   const [useDatePickerValue, setUseDatePickerValue] = useState(new Date());
   const [showUseTimePicker, setShowUseTimePicker] = useState(false);
   const [useTimePickerValue, setUseTimePickerValue] = useState(new Date());
-  const [usePickerKey, setUsePickerKey] = useState<'fecha' | 'hora_inicio' | 'hora_fin' | null>(null);
+  const [usePickerKey, setUsePickerKey] = useState<'inicio_fecha' | 'inicio_hora' | 'fin_fecha' | 'fin_hora' | null>(null);
 
   // submódulo: mantenimiento (modal)
   const [maintenanceModalVisible, setMaintenanceModalVisible] = useState(false);
@@ -643,6 +670,7 @@ export default function CorporateVehiclesScreen() {
   const signatureRef = useRef<any>(null);
   const [signatureModalVisible, setSignatureModalVisible] = useState(false);
   const [signatureKey, setSignatureKey] = useState(0);
+  const [signatureTarget, setSignatureTarget] = useState<'maintenance_mecanico' | 'use_conductor' | null>(null);
 
   const usesVehicle = useMemo(() => {
     if (!usesVehicleKey) return null;
@@ -652,6 +680,12 @@ export default function CorporateVehiclesScreen() {
   // crear/editar
   const [isCreating, setIsCreating] = useState(false);
   const [editing, setEditing] = useState<{ id: number | string; id_local?: string } | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitResponse, setSubmitResponse] = useState<{ type: 'success' | 'error', message: string } | null>(null);
+  const [isSubmittingUse, setIsSubmittingUse] = useState(false);
+  const [submitResponseUse, setSubmitResponseUse] = useState<{ type: 'success' | 'error', message: string } | null>(null);
+  const [isSubmittingMaintenance, setIsSubmittingMaintenance] = useState(false);
+  const [submitResponseMaintenance, setSubmitResponseMaintenance] = useState<{ type: 'success' | 'error', message: string } | null>(null);
 
   // form
   const [placa, setPlaca] = useState('');
@@ -1002,7 +1036,7 @@ export default function CorporateVehiclesScreen() {
 
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (apiUrl && vehiculoId) {
-      return `${apiUrl}/api/corporate-vehicles/${vehiculoId}/get-image/${encodeURIComponent(img.name)}`;
+      return appendTokenToUrl(`${apiUrl}/api/corporate-vehicles/${vehiculoId}/get-image/${encodeURIComponent(img.name)}`);
     }
     return '';
   };
@@ -1017,7 +1051,7 @@ export default function CorporateVehiclesScreen() {
 
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (apiUrl && vehiculoId) {
-      return `${apiUrl}/api/corporate-vehicles/${vehiculoId}/get-maintenance-image/${encodeURIComponent(imageName)}`;
+      return appendTokenToUrl(`${apiUrl}/api/corporate-vehicles/${vehiculoId}/get-maintenance-image/${encodeURIComponent(imageName)}`);
     }
     return '';
   };
@@ -1122,28 +1156,32 @@ export default function CorporateVehiclesScreen() {
 
   const resetUseForm = () => {
     setUseNombreConductor('');
-    setUseFecha('');
-    setUseHoraInicio('');
-    setUseHoraFin('');
+    setUseCodigoConductor('');
+    setUseInicioFecha('');
+    setUseInicioHora('');
+    setUseFinFecha('');
+    setUseFinHora('');
     setUseCombInicio('');
     setUseCombFin('');
     setUseKmInicio('');
     setUseKmFin('');
     setUseMotivo('');
+    setUseFirmaConductor('');
     setUseFirmaResponsable(null);
     setShowUseDatePicker(false);
     setShowUseTimePicker(false);
     setUsePickerKey(null);
   };
 
-  const openUseDatePicker = (current?: string) => {
-    setUsePickerKey('fecha');
-    const base = current && /^\d{4}-\d{2}-\d{2}$/.test(current) ? new Date(`${current}T00:00:00`) : new Date();
+  const openUseDatePicker = (key: 'inicio_fecha' | 'fin_fecha', current?: string) => {
+    setUsePickerKey(key);
+    const ymd = normalizeDateToYMD(current);
+    const base = ymd ? new Date(`${ymd}T00:00:00`) : new Date();
     setUseDatePickerValue(Number.isNaN(base.getTime()) ? new Date() : base);
     setShowUseDatePicker(true);
   };
 
-  const openUseTimePicker = (key: 'hora_inicio' | 'hora_fin', current?: string) => {
+  const openUseTimePicker = (key: 'inicio_hora' | 'fin_hora', current?: string) => {
     setUsePickerKey(key);
     const base = new Date();
     if (current && /^\d{2}:\d{2}$/.test(current)) {
@@ -1162,8 +1200,10 @@ export default function CorporateVehiclesScreen() {
   const onUseDatePicked = (_event: any, selected?: Date) => {
     if (Platform.OS === 'android') setShowUseDatePicker(false);
     const dt = selected;
-    if (!dt) return;
-    setUseFecha(dateToYMD(dt));
+    if (!dt || !usePickerKey) return;
+    const ymd = dateToYMD(dt);
+    if (usePickerKey === 'inicio_fecha') setUseInicioFecha(ymd);
+    if (usePickerKey === 'fin_fecha') setUseFinFecha(ymd);
     setShowUseDatePicker(false);
     setUsePickerKey(null);
   };
@@ -1173,8 +1213,8 @@ export default function CorporateVehiclesScreen() {
     const dt = selected;
     if (!dt || !usePickerKey) return;
     const hhmm = timeToHHmm(dt);
-    if (usePickerKey === 'hora_inicio') setUseHoraInicio(hhmm);
-    if (usePickerKey === 'hora_fin') setUseHoraFin(hhmm);
+    if (usePickerKey === 'inicio_hora') setUseInicioHora(hhmm);
+    if (usePickerKey === 'fin_hora') setUseFinHora(hhmm);
     setShowUseTimePicker(false);
     setUsePickerKey(null);
   };
@@ -1257,23 +1297,72 @@ export default function CorporateVehiclesScreen() {
     setIsUseFormOpen(true);
     setUseEditing(u);
     setUseNombreConductor(String(u.nombre_conductor || ''));
-    setUseFecha(isoToDate(u.fecha));
-    setUseHoraInicio(isoToTime(u.hora_inicio));
-    setUseHoraFin(isoToTime(u.hora_fin));
+    setUseCodigoConductor(String((u as any).codigo_conductor || ''));
+    const inicioIso = String((u as any).inicio || (u as any).hora_inicio || '');
+    const finIso = String((u as any).fin || (u as any).hora_fin || '');
+    setUseInicioFecha(isoToDate(inicioIso));
+    setUseInicioHora(isoToTime(inicioIso));
+    setUseFinFecha(isoToDate(finIso));
+    setUseFinHora(isoToTime(finIso));
     setUseCombInicio(String(u.combustible_inicio ?? ''));
     setUseCombFin(String(u.combustible_fin ?? ''));
     setUseKmInicio(String(u.km_inicio ?? ''));
     setUseKmFin(String(u.km_fin ?? ''));
     setUseMotivo(String(u.motivo || ''));
+    setUseFirmaConductor(String((u as any).firma_conductor || ''));
     setUseFirmaResponsable(decodeFirmaHash(u.firma_responsable) as any);
+  };
+
+  const searchUseConductorByCode = async () => {
+    const codigo = useCodigoConductor.trim();
+    if (!codigo) {
+      Alert.alert('Dato requerido', 'Ingresa el código del conductor.');
+      return;
+    }
+
+    const isConnected = await getConnectionStatus();
+    if (!isConnected) {
+      Alert.alert('Sin conexión', 'La búsqueda de conductor requiere internet.');
+      return;
+    }
+
+    try {
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) throw new Error('Server URL not configured');
+
+      const resp = await authedFetch({
+        url: `${apiUrl}/api/empleados/codigo/${encodeURIComponent(codigo)}`,
+        init: {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json' },
+        },
+        refreshAccessToken,
+        logout,
+      });
+      if (!resp) return;
+
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data?.status || !data?.data) {
+        throw new Error(data?.message || 'No se encontró un empleado con ese código');
+      }
+
+      setUseNombreConductor(String(data.data.nombre_completo || data.data.nombre || ''));
+    } catch (e: any) {
+      Alert.alert('Error', e?.message || 'No se pudo buscar el conductor');
+    }
   };
 
   const validateUseForm = () => {
     if (!usesVehicleKey) return 'No se encontró el vehículo seleccionado';
+    if (!useCodigoConductor.trim()) return 'Código del conductor es requerido';
     if (!useNombreConductor.trim()) return 'Nombre del conductor es requerido';
-    if (!useFecha.trim()) return 'Fecha (YYYY-MM-DD) es requerida';
-    if (!useHoraInicio.trim()) return 'Hora inicio (HH:mm) es requerida';
-    if (!useHoraFin.trim()) return 'Hora fin (HH:mm) es requerida';
+    if (!useInicioFecha.trim()) return 'Fecha de inicio es requerida';
+    if (!useInicioHora.trim()) return 'Hora de inicio es requerida';
+    if (!useFinFecha.trim()) return 'Fecha de fin es requerida';
+    if (!useFinHora.trim()) return 'Hora de fin es requerida';
+    if (!useCombInicio.trim()) return 'Combustible inicio es requerido';
+    if (!useCombFin.trim()) return 'Combustible fin es requerido';
+    if (!useFirmaConductor.trim()) return 'Firma del conductor es requerida';
     if (!useFirmaResponsable) return 'Firma del responsable (QR o Generar) es requerida';
     return null;
   };
@@ -1287,14 +1376,16 @@ export default function CorporateVehiclesScreen() {
 
     return {
       nombre_conductor: useNombreConductor.trim(),
-      fecha: toIsoFromDateAndTime(useFecha, '00:00'),
-      hora_inicio: toIsoFromDateAndTime(useFecha, useHoraInicio),
-      hora_fin: toIsoFromDateAndTime(useFecha, useHoraFin),
-      combustible_inicio: Number(useCombInicio || 0),
-      combustible_fin: Number(useCombFin || 0),
+      codigo_conductor: useCodigoConductor.trim(),
+      fecha: new Date().toISOString(),
+      inicio: toIsoFromDateAndTime(useInicioFecha, useInicioHora),
+      fin: toIsoFromDateAndTime(useFinFecha, useFinHora),
+      combustible_inicio: useCombInicio.trim(),
+      combustible_fin: useCombFin.trim(),
       km_inicio: Number(useKmInicio || 0),
       km_fin: Number(useKmFin || 0),
       motivo: useMotivo.trim(),
+      firma_conductor: getBase64Only(useFirmaConductor),
       firma_responsable: firmaHash,
     };
   };
@@ -1313,23 +1404,29 @@ export default function CorporateVehiclesScreen() {
   const saveUseRecord = async () => {
     const errMsg = validateUseForm();
     if (errMsg) {
-      Alert.alert('Validación', errMsg);
+      setSubmitResponseUse({ type: 'error', message: errMsg });
       return;
     }
 
-    if (!usesVehicleKey) return;
-    const vehicle = records.find((r) => String(r.id || r.id_local) === usesVehicleKey);
-    if (!vehicle) {
-      Alert.alert('Error', 'No se encontró el vehículo seleccionado');
+    if (!usesVehicleKey) {
+      setSubmitResponseUse({ type: 'error', message: 'No se encontró el vehículo seleccionado' });
       return;
     }
 
-    const requestData = buildUseRequestData();
-    const isConnected = await getConnectionStatus();
-    const vehicleIdForAction = String(vehicle.id_local || vehicle.id);
+    setIsSubmittingUse(true);
+    setSubmitResponseUse(null);
 
     try {
-      setIsLoading(true);
+      const vehicle = records.find((r) => String(r.id || r.id_local) === usesVehicleKey);
+      if (!vehicle) {
+        setSubmitResponseUse({ type: 'error', message: 'No se encontró el vehículo seleccionado' });
+        setIsSubmittingUse(false);
+        return;
+      }
+
+      const requestData = buildUseRequestData();
+      const isConnected = await getConnectionStatus();
+      const vehicleIdForAction = String(vehicle.id_local || vehicle.id);
 
       if (!isConnected) {
         const actionsStr = await AsyncStorage.getItem('evaluations_actions');
@@ -1374,17 +1471,20 @@ export default function CorporateVehiclesScreen() {
           await setUsesForVehicleKey(usesVehicleKey, updated);
         }
 
-        setIsUseFormOpen(false);
-        setUseEditing(null);
-        resetUseForm();
-        Alert.alert('Guardado offline', 'El uso se guardó en el dispositivo. Se sincronizará al reconectar.');
+        setSubmitResponseUse({ type: 'success', message: 'El uso se guardó en el dispositivo. Se sincronizará al reconectar.' });
+        setTimeout(() => {
+          setIsUseFormOpen(false);
+          setUseEditing(null);
+          resetUseForm();
+        }, 2000);
         return;
       }
 
       const serverVehicleId = await resolveServerVehicleId(vehicle.id);
       const vehiculoId = serverVehicleId ?? (typeof vehicle.id === 'number' ? vehicle.id : null);
       if (!vehiculoId) {
-        Alert.alert('Sincronización requerida', 'Este vehículo aún no está sincronizado. Conéctate y sincroniza el vehículo primero.');
+        setSubmitResponseUse({ type: 'error', message: 'Este vehículo aún no está sincronizado. Conéctate y sincroniza el vehículo primero.' });
+        setIsSubmittingUse(false);
         return;
       }
 
@@ -1396,11 +1496,12 @@ export default function CorporateVehiclesScreen() {
           logout,
         });
         if (!res.status) throw new Error(res.message || 'No se pudo crear el uso');
+        setSubmitResponseUse({ type: 'success', message: res.message || 'Uso guardado correctamente' });
       } else {
         const useId = String(useEditing.id);
         if (useId.startsWith('local-')) {
-          // si quedó local, al reconectar lo procesará la cola; aquí no lo intentamos actualizar online.
-          Alert.alert('Info', 'Este uso aún no está sincronizado. Se sincronizará automáticamente al reconectar.');
+          setSubmitResponseUse({ type: 'error', message: 'Este uso aún no está sincronizado. Se sincronizará automáticamente al reconectar.' });
+          setIsSubmittingUse(false);
           return;
         }
         const res = await updateCorporateVehicleUse({
@@ -1410,6 +1511,7 @@ export default function CorporateVehiclesScreen() {
           logout,
         });
         if (!res.status) throw new Error(res.message || 'No se pudo actualizar el uso');
+        setSubmitResponseUse({ type: 'success', message: res.message || 'Uso guardado correctamente' });
       }
 
       // refrescar desde servidor
@@ -1420,15 +1522,16 @@ export default function CorporateVehiclesScreen() {
         await setUsesForVehicleKey(usesVehicleKey, serverUsos);
       }
 
-      setIsUseFormOpen(false);
-      setUseEditing(null);
-      resetUseForm();
-      Alert.alert('Éxito', 'Uso guardado correctamente');
+      setTimeout(() => {
+        setIsUseFormOpen(false);
+        setUseEditing(null);
+        resetUseForm();
+      }, 2000);
     } catch (e: any) {
       console.error('Error saving use:', e);
-      Alert.alert('Error', e?.message || 'No se pudo guardar el uso');
+      setSubmitResponseUse({ type: 'error', message: e?.message || 'No se pudo guardar el uso' });
     } finally {
-      setIsLoading(false);
+      setIsSubmittingUse(false);
     }
   };
 
@@ -1702,23 +1805,29 @@ export default function CorporateVehiclesScreen() {
   const saveMaintenanceRecord = async () => {
     const errMsg = validateMaintenanceForm();
     if (errMsg) {
-      Alert.alert('Validación', errMsg);
+      setSubmitResponseMaintenance({ type: 'error', message: errMsg });
       return;
     }
 
-    if (!maintenanceVehicleKey) return;
-    const vehicle = records.find((r) => String(r.id || r.id_local) === maintenanceVehicleKey);
-    if (!vehicle) {
-      Alert.alert('Error', 'No se encontró el vehículo seleccionado');
+    if (!maintenanceVehicleKey) {
+      setSubmitResponseMaintenance({ type: 'error', message: 'No se encontró el vehículo seleccionado' });
       return;
     }
 
-    const requestData = buildMaintenanceRequestData();
-    const isConnected = await getConnectionStatus();
-    const vehicleIdForAction = String(vehicle.id_local || vehicle.id);
+    setIsSubmittingMaintenance(true);
+    setSubmitResponseMaintenance(null);
 
     try {
-      setIsLoading(true);
+      const vehicle = records.find((r) => String(r.id || r.id_local) === maintenanceVehicleKey);
+      if (!vehicle) {
+        setSubmitResponseMaintenance({ type: 'error', message: 'No se encontró el vehículo seleccionado' });
+        setIsSubmittingMaintenance(false);
+        return;
+      }
+
+      const requestData = buildMaintenanceRequestData();
+      const isConnected = await getConnectionStatus();
+      const vehicleIdForAction = String(vehicle.id_local || vehicle.id);
 
       if (!isConnected) {
         const actionsStr = await AsyncStorage.getItem('evaluations_actions');
@@ -1765,21 +1874,25 @@ export default function CorporateVehiclesScreen() {
           await setMaintenancesForVehicleKey(maintenanceVehicleKey, updated);
         }
 
-        setIsMaintenanceFormOpen(false);
-        setMaintenanceEditing(null);
-        resetMaintenanceForm();
-        Alert.alert('Guardado offline', 'El mantenimiento se guardó en el dispositivo. Se sincronizará al reconectar.');
+        setSubmitResponseMaintenance({ type: 'success', message: 'El mantenimiento se guardó en el dispositivo. Se sincronizará al reconectar.' });
+        setTimeout(() => {
+          setIsMaintenanceFormOpen(false);
+          setMaintenanceEditing(null);
+          resetMaintenanceForm();
+        }, 2000);
         return;
       }
 
       const vehicleIdForResolve = vehicle.id || vehicle.id_local;
       if (!vehicleIdForResolve) {
-        Alert.alert('Error', 'No se pudo obtener el ID del vehículo');
+        setSubmitResponseMaintenance({ type: 'error', message: 'No se pudo obtener el ID del vehículo' });
+        setIsSubmittingMaintenance(false);
         return;
       }
       const serverVehicleId = await resolveServerVehicleId(vehicleIdForResolve);
       if (!serverVehicleId) {
-        Alert.alert('Error', 'No se pudo obtener el ID del vehículo en el servidor');
+        setSubmitResponseMaintenance({ type: 'error', message: 'No se pudo obtener el ID del vehículo en el servidor' });
+        setIsSubmittingMaintenance(false);
         return;
       }
 
@@ -1791,13 +1904,15 @@ export default function CorporateVehiclesScreen() {
           logout,
         });
         if (!res.status) throw new Error(res.message || 'No se pudo crear');
+        setSubmitResponseMaintenance({ type: 'success', message: res.message || 'Mantenimiento guardado correctamente' });
       } else {
         const maintenanceId = String(maintenanceEditing.id);
         const serverMaintenanceId = maintenanceId.startsWith('local-')
           ? String(maintenanceEditing.id_local || '')
           : maintenanceId;
         if (!serverMaintenanceId || serverMaintenanceId.startsWith('local-')) {
-          Alert.alert('Error', 'Este mantenimiento aún no está sincronizado');
+          setSubmitResponseMaintenance({ type: 'error', message: 'Este mantenimiento aún no está sincronizado' });
+          setIsSubmittingMaintenance(false);
           return;
         }
         const res = await updateCorporateVehicleMaintenance({
@@ -1807,6 +1922,7 @@ export default function CorporateVehiclesScreen() {
           logout,
         });
         if (!res.status) throw new Error(res.message || 'No se pudo actualizar');
+        setSubmitResponseMaintenance({ type: 'success', message: res.message || 'Mantenimiento guardado correctamente' });
       }
 
       // Refrescar desde servidor
@@ -1823,15 +1939,16 @@ export default function CorporateVehiclesScreen() {
         await setMaintenancesForVehicleKey(maintenanceVehicleKey, serverMaintenances);
       }
 
-      setIsMaintenanceFormOpen(false);
-      setMaintenanceEditing(null);
-      resetMaintenanceForm();
-      Alert.alert('Éxito', 'Mantenimiento guardado correctamente');
+      setTimeout(() => {
+        setIsMaintenanceFormOpen(false);
+        setMaintenanceEditing(null);
+        resetMaintenanceForm();
+      }, 2000);
     } catch (e: any) {
       console.error('Error saving maintenance:', e);
-      Alert.alert('Error', e?.message || 'No se pudo guardar el mantenimiento');
+      setSubmitResponseMaintenance({ type: 'error', message: e?.message || 'No se pudo guardar el mantenimiento' });
     } finally {
-      setIsLoading(false);
+      setIsSubmittingMaintenance(false);
     }
   };
 
@@ -1929,13 +2046,15 @@ export default function CorporateVehiclesScreen() {
     return value.startsWith('data:') ? value : `data:image/png;base64,${value}`;
   };
 
-  const openSignatureModal = () => {
+  const openSignatureModal = (target: 'maintenance_mecanico' | 'use_conductor') => {
+    setSignatureTarget(target);
     setSignatureModalVisible(true);
     setSignatureKey((prev) => prev + 1);
   };
 
   const closeSignatureModal = () => {
     setSignatureModalVisible(false);
+    setSignatureTarget(null);
   };
 
   const clearSignatureInModal = () => {
@@ -1949,8 +2068,13 @@ export default function CorporateVehiclesScreen() {
       return;
     }
     const formatted = signature.startsWith('data:') ? signature : `data:image/png;base64,${signature}`;
-    setMaintenanceFirmaMecanico(formatted);
+    if (signatureTarget === 'maintenance_mecanico') {
+      setMaintenanceFirmaMecanico(formatted);
+    } else if (signatureTarget === 'use_conductor') {
+      setUseFirmaConductor(formatted);
+    }
     setSignatureModalVisible(false);
+    setSignatureTarget(null);
   };
 
   const acceptSignature = () => {
@@ -2251,16 +2375,16 @@ export default function CorporateVehiclesScreen() {
   const saveRecord = async () => {
     const errMsg = validateForm();
     if (errMsg) {
-      Alert.alert('Validación', errMsg);
+      setSubmitResponse({ type: 'error', message: errMsg });
       return;
     }
 
-    const requestData = await buildRequestData();
-    const isConnected = await getConnectionStatus();
+    setIsSubmitting(true);
+    setSubmitResponse(null);
 
     try {
-      setIsLoading(true);
-      setError(null);
+      const requestData = await buildRequestData();
+      const isConnected = await getConnectionStatus();
 
       if (!isConnected) {
         const localId = editing?.id_local || `local-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
@@ -2331,34 +2455,39 @@ export default function CorporateVehiclesScreen() {
         }
 
         await AsyncStorage.setItem('evaluations_cache', JSON.stringify(cache));
-        setIsCreating(false);
-        setEditing(null);
-        resetForm();
-        await fetchRecords();
-        Alert.alert('Guardado offline', 'Se guardó el registro en el dispositivo. Se sincronizará al reconectar.');
+        setSubmitResponse({ type: 'success', message: 'Se guardó el registro en el dispositivo. Se sincronizará al reconectar.' });
+        setTimeout(async () => {
+          setIsCreating(false);
+          setEditing(null);
+          resetForm();
+          await fetchRecords();
+        }, 2000);
         return;
       }
 
       if (!editing) {
         const res = await createCorporateVehicle({ requestData, refreshAccessToken, logout });
         if (!res.status) throw new Error(res.message || 'No se pudo crear');
+        setSubmitResponse({ type: 'success', message: res.message || 'Registro guardado correctamente' });
       } else {
         const idToUpdate = String(editing.id);
         const serverId = idToUpdate.startsWith('local-') ? String(editing.id_local || '') : idToUpdate;
         const res = await updateCorporateVehicle({ id: serverId, requestData, refreshAccessToken, logout });
         if (!res.status) throw new Error(res.message || 'No se pudo actualizar');
+        setSubmitResponse({ type: 'success', message: res.message || 'Registro guardado correctamente' });
       }
 
-      setIsCreating(false);
-      setEditing(null);
-      resetForm();
-      await fetchRecords();
-      Alert.alert('Éxito', 'Registro guardado correctamente');
+      setTimeout(async () => {
+        setIsCreating(false);
+        setEditing(null);
+        resetForm();
+        await fetchRecords();
+      }, 2000);
     } catch (e: any) {
       console.error('Error saving corporate vehicle:', e);
-      Alert.alert('Error', e?.message || 'No se pudo guardar');
+      setSubmitResponse({ type: 'error', message: e?.message || 'No se pudo guardar' });
     } finally {
-      setIsLoading(false);
+      setIsSubmitting(false);
     }
   };
 
@@ -2767,9 +2896,28 @@ export default function CorporateVehiclesScreen() {
                   <Ionicons name="close" size={18} color="#000000" />
                   <ThemedText style={styles.cancelBtnText}>Cancelar</ThemedText>
                 </TouchableOpacity>
-                <TouchableOpacity style={[styles.formActionBtn, styles.saveBtn]} onPress={saveRecord} activeOpacity={0.85}>
-                  <Ionicons name="save-outline" size={18} color="#FFFFFF" />
-                  <ThemedText style={styles.saveBtnText}>Guardar</ThemedText>
+                {submitResponse && (
+                  <ThemedView style={[styles.responseContainer, submitResponse.type === 'success' ? styles.responseSuccess : styles.responseError]}>
+                    <ThemedText style={styles.responseText}>
+                      {submitResponse.type === 'success' ? '✓ ' : '✗ '}
+                      {submitResponse.message}
+                    </ThemedText>
+                  </ThemedView>
+                )}
+                <TouchableOpacity 
+                  style={[styles.formActionBtn, styles.saveBtn, isSubmitting && styles.buttonDisabled]} 
+                  onPress={saveRecord} 
+                  activeOpacity={0.85}
+                  disabled={isSubmitting}
+                >
+                  {isSubmitting ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <>
+                      <Ionicons name="save-outline" size={18} color="#FFFFFF" />
+                      <ThemedText style={styles.saveBtnText}>Guardar</ThemedText>
+                    </>
+                  )}
                 </TouchableOpacity>
               </ThemedView>
             </ThemedView>
@@ -2913,24 +3061,53 @@ export default function CorporateVehiclesScreen() {
                 <ThemedView style={styles.modalFormCard}>
                   <ThemedText style={styles.modalSectionTitle}>{useEditing ? 'Editar uso' : 'Nuevo uso'}</ThemedText>
 
-                  <ThemedText style={styles.label}>Nombre del conductor</ThemedText>
-                  <TextInput style={styles.input} value={useNombreConductor} onChangeText={setUseNombreConductor} placeholder="Nombre" placeholderTextColor="#999" />
+                  <ThemedText style={styles.label}>Código del conductor</ThemedText>
+                  <TextInput
+                    style={styles.input}
+                    value={useCodigoConductor}
+                    onChangeText={setUseCodigoConductor}
+                    placeholder="Código del conductor"
+                    placeholderTextColor="#999"
+                  />
+                  <TouchableOpacity
+                    style={[styles.formActionBtn, styles.saveBtn, { marginBottom: 8 }]}
+                    onPress={searchUseConductorByCode}
+                    activeOpacity={0.85}
+                  >
+                    <Ionicons name="search-outline" size={18} color="#FFFFFF" />
+                    <ThemedText style={styles.saveBtnText}>Buscar conductor</ThemedText>
+                  </TouchableOpacity>
 
-                  <ThemedText style={styles.label}>Fecha</ThemedText>
-                  <TouchableOpacity style={styles.dateButton} onPress={() => openUseDatePicker(useFecha)} activeOpacity={0.85}>
-                    <ThemedText style={styles.dateButtonText}>{useFecha ? formatYMDToDMY(useFecha) : 'Seleccionar fecha'}</ThemedText>
+                  <ThemedText style={styles.label}>Nombre del conductor</ThemedText>
+                  <TextInput
+                    style={styles.input}
+                    value={useNombreConductor}
+                    onChangeText={setUseNombreConductor}
+                    placeholder="Nombre"
+                    placeholderTextColor="#999"
+                  />
+
+                  <ThemedText style={styles.label}>Inicio (fecha)</ThemedText>
+                  <TouchableOpacity style={styles.dateButton} onPress={() => openUseDatePicker('inicio_fecha', useInicioFecha)} activeOpacity={0.85}>
+                    <ThemedText style={styles.dateButtonText}>{useInicioFecha ? formatYMDToDMY(useInicioFecha) : 'Seleccionar fecha'}</ThemedText>
                     <Ionicons name="calendar-outline" size={18} color="#007AFF" />
                   </TouchableOpacity>
 
-                  <ThemedText style={styles.label}>Hora inicio</ThemedText>
-                  <TouchableOpacity style={styles.dateButton} onPress={() => openUseTimePicker('hora_inicio', useHoraInicio)} activeOpacity={0.85}>
-                    <ThemedText style={styles.dateButtonText}>{useHoraInicio || 'Seleccionar hora'}</ThemedText>
+                  <ThemedText style={styles.label}>Inicio (hora)</ThemedText>
+                  <TouchableOpacity style={styles.dateButton} onPress={() => openUseTimePicker('inicio_hora', useInicioHora)} activeOpacity={0.85}>
+                    <ThemedText style={styles.dateButtonText}>{useInicioHora || 'Seleccionar hora'}</ThemedText>
                     <Ionicons name="time-outline" size={18} color="#007AFF" />
                   </TouchableOpacity>
 
-                  <ThemedText style={styles.label}>Hora fin</ThemedText>
-                  <TouchableOpacity style={styles.dateButton} onPress={() => openUseTimePicker('hora_fin', useHoraFin)} activeOpacity={0.85}>
-                    <ThemedText style={styles.dateButtonText}>{useHoraFin || 'Seleccionar hora'}</ThemedText>
+                  <ThemedText style={styles.label}>Fin (fecha)</ThemedText>
+                  <TouchableOpacity style={styles.dateButton} onPress={() => openUseDatePicker('fin_fecha', useFinFecha)} activeOpacity={0.85}>
+                    <ThemedText style={styles.dateButtonText}>{useFinFecha ? formatYMDToDMY(useFinFecha) : 'Seleccionar fecha'}</ThemedText>
+                    <Ionicons name="calendar-outline" size={18} color="#007AFF" />
+                  </TouchableOpacity>
+
+                  <ThemedText style={styles.label}>Fin (hora)</ThemedText>
+                  <TouchableOpacity style={styles.dateButton} onPress={() => openUseTimePicker('fin_hora', useFinHora)} activeOpacity={0.85}>
+                    <ThemedText style={styles.dateButtonText}>{useFinHora || 'Seleccionar hora'}</ThemedText>
                     <Ionicons name="time-outline" size={18} color="#007AFF" />
                   </TouchableOpacity>
 
@@ -2953,10 +3130,24 @@ export default function CorporateVehiclesScreen() {
                   ) : null}
 
                   <ThemedText style={styles.label}>Combustible inicio</ThemedText>
-                  <TextInput style={styles.input} value={useCombInicio} onChangeText={setUseCombInicio} placeholder="0" keyboardType="numeric" placeholderTextColor="#999" />
+                  <ThemedView style={styles.pickerWrapper}>
+                    <Picker selectedValue={useCombInicio} onValueChange={(v) => setUseCombInicio(String(v))} style={styles.picker}>
+                      <Picker.Item label="Seleccione combustible inicio..." value="" />
+                      {COMBUSTIBLE_OPTIONS.map((opt) => (
+                        <Picker.Item key={`comb-i-${opt}`} label={opt} value={opt} />
+                      ))}
+                    </Picker>
+                  </ThemedView>
 
                   <ThemedText style={styles.label}>Combustible fin</ThemedText>
-                  <TextInput style={styles.input} value={useCombFin} onChangeText={setUseCombFin} placeholder="0" keyboardType="numeric" placeholderTextColor="#999" />
+                  <ThemedView style={styles.pickerWrapper}>
+                    <Picker selectedValue={useCombFin} onValueChange={(v) => setUseCombFin(String(v))} style={styles.picker}>
+                      <Picker.Item label="Seleccione combustible fin..." value="" />
+                      {COMBUSTIBLE_OPTIONS.map((opt) => (
+                        <Picker.Item key={`comb-f-${opt}`} label={opt} value={opt} />
+                      ))}
+                    </Picker>
+                  </ThemedView>
 
                   <ThemedText style={styles.label}>KM inicio</ThemedText>
                   <TextInput style={styles.input} value={useKmInicio} onChangeText={setUseKmInicio} placeholder="0" keyboardType="numeric" placeholderTextColor="#999" />
@@ -2973,6 +3164,23 @@ export default function CorporateVehiclesScreen() {
                     placeholderTextColor="#999"
                     multiline
                   />
+
+                  <ThemedText style={styles.sectionTitle}>Firma del conductor</ThemedText>
+                  <ThemedView style={styles.signatureInfo}>
+                    {useFirmaConductor ? (
+                      <Image source={{ uri: formatSignatureForDisplay(useFirmaConductor) }} style={styles.signaturePreview} resizeMode="contain" />
+                    ) : (
+                      <ThemedText style={styles.signatureLine}>Sin firma del conductor</ThemedText>
+                    )}
+                    <TouchableOpacity
+                      style={[styles.signatureButtonPrimary, { marginTop: 8 }]}
+                      onPress={() => openSignatureModal('use_conductor')}
+                      activeOpacity={0.85}
+                    >
+                      <Ionicons name="create-outline" size={18} color="#FFFFFF" />
+                      <ThemedText style={styles.signatureButtonText}>Dibujar firma</ThemedText>
+                    </TouchableOpacity>
+                  </ThemedView>
 
                   <ThemedText style={styles.sectionTitle}>Firma responsable</ThemedText>
                   <ThemedView style={styles.signatureInfo}>
@@ -3049,9 +3257,28 @@ export default function CorporateVehiclesScreen() {
                       <Ionicons name="close" size={18} color="#000000" />
                       <ThemedText style={styles.cancelBtnText}>Cancelar</ThemedText>
                     </TouchableOpacity>
-                    <TouchableOpacity style={[styles.formActionBtn, styles.saveBtn]} onPress={saveUseRecord} activeOpacity={0.85}>
-                      <Ionicons name="save-outline" size={18} color="#FFFFFF" />
-                      <ThemedText style={styles.saveBtnText}>Guardar</ThemedText>
+                    {submitResponseUse && (
+                      <ThemedView style={[styles.responseContainer, submitResponseUse.type === 'success' ? styles.responseSuccess : styles.responseError]}>
+                        <ThemedText style={styles.responseText}>
+                          {submitResponseUse.type === 'success' ? '✓ ' : '✗ '}
+                          {submitResponseUse.message}
+                        </ThemedText>
+                      </ThemedView>
+                    )}
+                    <TouchableOpacity 
+                      style={[styles.formActionBtn, styles.saveBtn, isSubmittingUse && styles.buttonDisabled]} 
+                      onPress={saveUseRecord} 
+                      activeOpacity={0.85}
+                      disabled={isSubmittingUse}
+                    >
+                      {isSubmittingUse ? (
+                        <ActivityIndicator size="small" color="#FFFFFF" />
+                      ) : (
+                        <>
+                          <Ionicons name="save-outline" size={18} color="#FFFFFF" />
+                          <ThemedText style={styles.saveBtnText}>Guardar</ThemedText>
+                        </>
+                      )}
                     </TouchableOpacity>
                   </ThemedView>
                 </ThemedView>
@@ -3071,13 +3298,19 @@ export default function CorporateVehiclesScreen() {
                           {offline ? ' (offline)' : ''}
                         </ThemedText>
                         <ThemedText style={styles.detailText}>
-                          <ThemedText style={styles.cardLabel}>Fecha: </ThemedText>
-                          <ThemedText style={styles.cardValue}>{formatYMDToDMY(isoToDate(u.fecha)) || '—'}</ThemedText>
+                          <ThemedText style={styles.cardLabel}>Código conductor: </ThemedText>
+                          <ThemedText style={styles.cardValue}>{(u as any).codigo_conductor || '—'}</ThemedText>
                         </ThemedText>
                         <ThemedText style={styles.detailText}>
-                          <ThemedText style={styles.cardLabel}>Horario: </ThemedText>
+                          <ThemedText style={styles.cardLabel}>Inicio: </ThemedText>
                           <ThemedText style={styles.cardValue}>
-                            {isoToTime(u.hora_inicio) || '—'} - {isoToTime(u.hora_fin) || '—'}
+                            {`${formatYMDToDMY(isoToDate((u as any).inicio || (u as any).hora_inicio))} ${isoToTime((u as any).inicio || (u as any).hora_inicio)}`.trim() || '—'}
+                          </ThemedText>
+                        </ThemedText>
+                        <ThemedText style={styles.detailText}>
+                          <ThemedText style={styles.cardLabel}>Fin: </ThemedText>
+                          <ThemedText style={styles.cardValue}>
+                            {`${formatYMDToDMY(isoToDate((u as any).fin || (u as any).hora_fin))} ${isoToTime((u as any).fin || (u as any).hora_fin)}`.trim() || '—'}
                           </ThemedText>
                         </ThemedText>
 
@@ -3420,7 +3653,7 @@ export default function CorporateVehiclesScreen() {
                   {!maintenanceFirmaMecanico ? (
                     <TouchableOpacity
                       style={styles.signatureButtonPrimary}
-                      onPress={openSignatureModal}
+                      onPress={() => openSignatureModal('maintenance_mecanico')}
                       activeOpacity={0.85}
                     >
                       <Ionicons name="create-outline" size={18} color="#FFFFFF" />
@@ -3505,9 +3738,28 @@ export default function CorporateVehiclesScreen() {
                       <Ionicons name="close" size={18} color="#000000" />
                       <ThemedText style={styles.cancelBtnText}>Cancelar</ThemedText>
                     </TouchableOpacity>
-                    <TouchableOpacity style={[styles.formActionBtn, styles.saveBtn]} onPress={saveMaintenanceRecord} activeOpacity={0.85}>
-                      <Ionicons name="save-outline" size={18} color="#FFFFFF" />
-                      <ThemedText style={styles.saveBtnText}>Guardar</ThemedText>
+                    {submitResponseMaintenance && (
+                      <ThemedView style={[styles.responseContainer, submitResponseMaintenance.type === 'success' ? styles.responseSuccess : styles.responseError]}>
+                        <ThemedText style={styles.responseText}>
+                          {submitResponseMaintenance.type === 'success' ? '✓ ' : '✗ '}
+                          {submitResponseMaintenance.message}
+                        </ThemedText>
+                      </ThemedView>
+                    )}
+                    <TouchableOpacity 
+                      style={[styles.formActionBtn, styles.saveBtn, isSubmittingMaintenance && styles.buttonDisabled]} 
+                      onPress={saveMaintenanceRecord} 
+                      activeOpacity={0.85}
+                      disabled={isSubmittingMaintenance}
+                    >
+                      {isSubmittingMaintenance ? (
+                        <ActivityIndicator size="small" color="#FFFFFF" />
+                      ) : (
+                        <>
+                          <Ionicons name="save-outline" size={18} color="#FFFFFF" />
+                          <ThemedText style={styles.saveBtnText}>Guardar</ThemedText>
+                        </>
+                      )}
                     </TouchableOpacity>
                   </ThemedView>
                 </ThemedView>
@@ -3818,6 +4070,28 @@ const styles = StyleSheet.create({
   cancelBtnText: { color: '#000', fontWeight: '800' },
   saveBtn: { backgroundColor: '#007AFF' },
   saveBtnText: { color: '#fff', fontWeight: '800' },
+  buttonDisabled: {
+    opacity: 0.6,
+  },
+  responseContainer: {
+    padding: 12,
+    borderRadius: 6,
+    marginBottom: 12,
+  },
+  responseSuccess: {
+    backgroundColor: '#D4EDDA',
+    borderWidth: 1,
+    borderColor: '#C3E6CB',
+  },
+  responseError: {
+    backgroundColor: '#F8D7DA',
+    borderWidth: 1,
+    borderColor: '#F5C6CB',
+  },
+  responseText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
 
   listContainer: {},
   card: { backgroundColor: '#FFFFFF', borderRadius: 8, padding: 16, marginBottom: 12, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 4, elevation: 2 },

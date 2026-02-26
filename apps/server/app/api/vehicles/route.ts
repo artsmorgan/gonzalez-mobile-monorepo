@@ -1,18 +1,14 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../utils/verifyToken";
+import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { toZonedTime } from "date-fns-tz";
-import { prisma } from "../../../utils/prismaClient";
-import path from "path";
-import fs from "fs";
-import { v4 as uuidv4 } from "uuid";
 import { createVehicleImage } from "../../../utils/createVehicleImage";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
-import { getUserMarca } from "../../../utils/getUserMarca";
+import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 
 export async function GET(req: NextRequest) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
 
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
         const searchParams = req.nextUrl.searchParams;
@@ -22,7 +18,10 @@ export async function GET(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
         }
 
-        const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(marca) } });
+        const marcaDia = await callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: parseInt(marca) } }
+        });
         if (!marcaDia) {
             return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
         }
@@ -34,7 +33,16 @@ export async function GET(req: NextRequest) {
             );
         }
 
-        const lastMarca = await getUserMarca(marcaDia.empleadoFijo_id);
+        const lastMarca = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_marca_dia",
+                operation: "findFirst",
+                where: { empleadoFijo_id: marcaDia.empleadoFijo_id },
+                orderBy: { id: "desc" }
+            }
+        });
         if (!lastMarca) {
             return NextResponse.json({ status: false, message: "No se encontró la última marca" }, { status: 200 });
         }
@@ -43,12 +51,18 @@ export async function GET(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Hay una nueva marca más reciente" }, { status: 200 });
         }
 
-        const vehiculos = await prisma.e_registro_vehiculos.findMany({ where: { corpo_id: marcaDia.corpo_id } });
+        const vehiculos = await callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "e_registro_vehiculos", operation: "findMany", where: { corpo_id: marcaDia.corpo_id } }
+        });
 
         const vehiculos_return: any[] = [];
         for (const v of vehiculos) {
 
-            const responsable = await prisma.c_empleado.findUnique({ where: { id: v.responsable_id } });
+            const responsable = await callDynamicPrisma({
+                req,
+                data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: v.responsable_id } }
+            });
             if (!responsable) {
                 return NextResponse.json({ status: false, message: "Responsable no encontrado" }, { status: 200 });
             }
@@ -59,6 +73,8 @@ export async function GET(req: NextRequest) {
                 placa: v.placa,
                 nombre_propietario: v.nombre,
                 cedula_propietario: v.cedula,
+                departamento_visita: v.departamento_visita || "",
+                persona_visita: v.persona_visita || "",
                 hora_entrada: v.hora_entrada,
                 hora_salida: v.hora_salida,
                 razon_visita: v.razon_visita,
@@ -81,17 +97,32 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
 
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
-        const { marca_id, tipo, placa, nombre, cedula, hora_entrada, hora_salida, razon_visita, file } = await req.json();
+        const {
+            marca_id,
+            tipo,
+            placa,
+            nombre,
+            cedula,
+            departamento_visita,
+            persona_visita,
+            hora_entrada,
+            hora_salida,
+            razon_visita,
+            file
+        } = await req.json();
 
         if (!marca_id || !tipo || !placa || !nombre || !cedula || !hora_entrada || !razon_visita) {
             return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 200 });
         }
 
-        const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(marca_id) } });
+        const marcaDia = await callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: parseInt(marca_id) } }
+        });
         if (!marcaDia) {
             return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
         }
@@ -99,61 +130,83 @@ export async function POST(req: NextRequest) {
         const createdAt = toZonedTime(new Date(), "America/Costa_Rica");
         const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
 
-        const new_vehicle = await prisma.e_registro_vehiculos.create({
+        const new_vehicle = await callDynamicPrisma({
+            req,
             data: {
-                cliente_id: marcaDia.cliente_id,
-                corpo_id: marcaDia.corpo_id,
-                puesto_id: marcaDia.puesto_id,
-                responsable_id: createdBy,
-                created_at: createdAt,
-                updated_at: createdAt,
-                tipo: tipo,
-                placa: placa,
-                nombre: nombre,
-                cedula: cedula,
-                hora_entrada: new Date(hora_entrada),
-                hora_salida: hora_salida ? new Date(hora_salida) : null,
-                razon_visita: razon_visita,
+                action: "POST",
+                table: "e_registro_vehiculos",
+                data: {
+                    cliente_id: marcaDia.cliente_id,
+                    corpo_id: marcaDia.corpo_id,
+                    puesto_id: marcaDia.puesto_id,
+                    responsable_id: createdBy,
+                    created_at: createdAt.toISOString(),
+                    updated_at: createdAt.toISOString(),
+                    tipo: tipo,
+                    placa: placa,
+                    nombre: nombre,
+                    cedula: cedula,
+                    departamento_visita: departamento_visita ? String(departamento_visita) : null,
+                    persona_visita: persona_visita ? String(persona_visita) : null,
+                    hora_entrada: new Date(hora_entrada).toISOString(),
+                    hora_salida: hora_salida ? new Date(hora_salida).toISOString() : null,
+                    razon_visita: razon_visita,
+                }
             }
         });
 
         // Registrar cambio de creación
-        await prisma.c_cambios_apps_modules.create({
+        await callDynamicPrisma({
+            req,
             data: {
-                nombre_tabla: "e_registro_vehiculos",
-                registro_id: new_vehicle.id,
-                cambios: JSON.stringify([{
-                    prop: "__created__",
-                    before: null,
-                    after: {
-                        id: new_vehicle.id,
-                        tipo: new_vehicle.tipo,
-                        placa: new_vehicle.placa,
-                        nombre: new_vehicle.nombre,
-                        cedula: new_vehicle.cedula,
-                        hora_entrada: new_vehicle.hora_entrada.toISOString(),
-                        hora_salida: new_vehicle.hora_salida ? new_vehicle.hora_salida.toISOString() : null,
-                        razon_visita: new_vehicle.razon_visita,
-                    },
-                }]),
-                created_at: createdAt,
-                created_by: createdBy,
+                action: "POST",
+                table: "c_cambios_apps_modules",
+                data: {
+                    nombre_tabla: "e_registro_vehiculos",
+                    registro_id: new_vehicle.id,
+                    cambios: JSON.stringify([{
+                        prop: "__created__",
+                        before: null,
+                        after: {
+                            id: new_vehicle.id,
+                            tipo: new_vehicle.tipo,
+                            placa: new_vehicle.placa,
+                            nombre: new_vehicle.nombre,
+                            cedula: new_vehicle.cedula,
+                            departamento_visita: new_vehicle.departamento_visita || null,
+                            persona_visita: new_vehicle.persona_visita || null,
+                            hora_entrada: new_vehicle.hora_entrada,
+                            hora_salida: new_vehicle.hora_salida ? new_vehicle.hora_salida : null,
+                            razon_visita: new_vehicle.razon_visita,
+                        },
+                    }]),
+                    created_at: createdAt.toISOString(),
+                    created_by: createdBy,
+                },
             },
         });
 
         // Guardar imagen si existe
         if (new_vehicle) {
             if (file) {
-                const result = await createVehicleImage(new_vehicle.id, file);
-                console.log("result", result);
+                const result = await createVehicleImage(req, new_vehicle.id, file);
+                if (!result) {
+                    return NextResponse.json(
+                        { status: false, message: "El vehículo se guardó pero no se pudo subir la imagen. Verifique el formato o el tamaño." },
+                        { status: 200 }
+                    );
+                }
             }
-            const empleado = await prisma.c_empleado.findUnique({ where: { id: payload.id } });
+            const empleado = await callDynamicPrisma({
+                req,
+                data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: payload.id } }
+            });
             if (empleado) {
-                const entrada = new_vehicle.hora_entrada.toISOString();
+                const entrada = new_vehicle.hora_entrada;
                 const fecha_entrada = entrada.split("T")[0];
                 const hora_entrada = entrada.split("T")[1].split(".")[0];
                 const desc = `El empleado ${empleado.nombre} ${empleado.primer_apellido} ha registrado la visita de un vehículo de tipo ${tipo} con la placa ${placa} el día ${fecha_entrada} a las ${hora_entrada}. Razón de la visita: ${razon_visita}`;
-                await sendNotificationByRole(marcaDia.corpo_id, [marcaDia.plaza_id], "Vehículo registrado", desc, ["ADMINISTRATIVO", "SUPERVISOR"]);
+                await sendNotificationByRole(req, marcaDia.corpo_id, [marcaDia.plaza_id], "Vehículo registrado", desc, ["ADMINISTRATIVO", "SUPERVISOR"]);
             }
         }
 

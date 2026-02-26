@@ -1,13 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../../../../utils/verifyToken";
 import { toZonedTime } from "date-fns-tz";
-
-import { prisma } from "../../../../../../utils/prismaClient";
+import { callDynamicPrisma } from "../../../../../../utils/callDynamicPrisma";
 import { sendNotificationByPlaza } from "../../../../../../utils/sendNotification";
+import { verifyAccessTokenByApi } from "../../../../../../utils/verifyAccessTokenByApi";
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string, "id-nota": string }> }) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
 
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
@@ -16,10 +15,26 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         const id = parseInt(resolvedParams.id);
         const id_nota = parseInt(resolvedParams["id-nota"]);
 
-        const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id } });
+        const puesto = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "e_estructura_puesto",
+                operation: "findUnique",
+                where: { id }
+            }
+        });
         if (!puesto) return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
 
-        const nota = await prisma.c_puesto_notas.findUnique({ where: { id: id_nota } });
+        const nota = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_puesto_notas",
+                operation: "findUnique",
+                where: { id: id_nota }
+            }
+        });
         if (!nota) return NextResponse.json({ status: false, message: "Nota no encontrada" }, { status: 200 });
 
         if (nota.puesto_id !== id) return NextResponse.json({ status: false, message: "Nota no pertenece al puesto" }, { status: 200 });
@@ -33,7 +48,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string, "id-nota": string }> }) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
 
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
@@ -43,16 +58,48 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
         const { marca_id, titulo, description, categoria_id, relevancia, empleado_id } = await req.json();
 
-        const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id } });
+        const puesto = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "e_estructura_puesto",
+                operation: "findUnique",
+                where: { id }
+            }
+        });
         if (!puesto) return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
 
-        const empleado = await prisma.c_empleado.findUnique({ where: { id: empleado_id } });
+        const empleado = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_empleado",
+                operation: "findUnique",
+                where: { id: empleado_id }
+            }
+        });
         if (!empleado) return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 200 });
 
-        const categoriaData = await prisma.n_novedades_categoria.findUnique({ where: { id: categoria_id } });
+        const categoriaData = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "n_novedades_categoria",
+                operation: "findUnique",
+                where: { id: categoria_id }
+            }
+        });
         if (!categoriaData) return NextResponse.json({ status: false, message: "Categoría no encontrada" }, { status: 200 });
 
-        const nota = await prisma.c_puesto_notas.findUnique({ where: { id: id_nota } });
+        const nota = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_puesto_notas",
+                operation: "findUnique",
+                where: { id: id_nota }
+            }
+        });
         if (!nota) return NextResponse.json({ status: false, message: "Nota no encontrada" }, { status: 200 });
 
         const previous_titulo = nota.titulo;
@@ -66,16 +113,40 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         // Si relevancia no viene o es null, usar "Baja" por defecto
         const relevanciaValue = relevancia || 'Baja';
 
-        const updatedNota = await prisma.c_puesto_notas.update({ where: { id: id_nota }, data: { titulo, description, categoria_id: categoria_id, relevancia: relevanciaValue, puesto_id: puesto.id, updated_at } });
+        const updatedNota = await callDynamicPrisma({
+            req,
+            data: {
+                action: "UPDATE",
+                table: "c_puesto_notas",
+                where: { id: id_nota },
+                data: { titulo, description, categoria_id: categoria_id, relevancia: relevanciaValue, puesto_id: puesto.id, updated_at: updated_at.toISOString() }
+            }
+        });
 
         if (updatedNota) {
-            const all_plazas_puesto = await prisma.e_estructura_plazas.findMany({ where: { puesto_id: puesto.id } });
+            const all_plazas_puesto = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "e_estructura_plazas",
+                    operation: "findMany",
+                    where: { puesto_id: puesto.id }
+                }
+            });
             if (all_plazas_puesto.length > 0) {
-                await sendNotificationByPlaza(marca_id, "Bitácora actualizada", `${empleado.nombre} ${empleado.primer_apellido} ha actualizado la nota ${previous_titulo} de tipo ${previous_categoria}`, all_plazas_puesto.map(plaza => plaza.id));
+                await sendNotificationByPlaza(req, marca_id, "Bitácora actualizada", `${empleado.nombre} ${empleado.primer_apellido} ha actualizado la nota ${previous_titulo} de tipo ${previous_categoria}`, all_plazas_puesto.map((plaza: { id: number }) => plaza.id));
             }
         }
 
-        await prisma.c_puesto_notas_bitacora_cambios.create({ data: { nota_id: id_nota, titulo, description, relevancia: relevanciaValue, created_at: updated_at, empleado_id: empleado.id, categoria: categoriaData.nombre } });
+        await callDynamicPrisma({
+            req,
+            data: {
+                action: "POST",
+                table: "c_puesto_notas_bitacora_cambios",
+                data: { nota_id: id_nota, titulo, description, relevancia: relevanciaValue, created_at: updated_at.toISOString(), empleado_id: empleado.id, categoria: categoriaData.nombre },
+                returning: false
+            }
+        });
 
         // Registro de cambios (nueva modalidad)
         const cambiosArr: Array<{ prop: string; before: any; after: any }> = [];
@@ -85,13 +156,19 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         if ((nota.relevancia ?? null) !== (relevanciaValue ?? null)) cambiosArr.push({ prop: "relevancia", before: nota.relevancia ?? null, after: relevanciaValue ?? null });
 
         if (cambiosArr.length > 0) {
-            await prisma.c_cambios_apps_modules.create({
+            await callDynamicPrisma({
+                req,
                 data: {
-                    nombre_tabla: "c_puesto_notas",
-                    registro_id: id_nota,
-                    cambios: JSON.stringify(cambiosArr),
-                    created_at: updated_at,
-                    created_by: empleado.id,
+                    action: "POST",
+                    table: "c_cambios_apps_modules",
+                    data: {
+                        nombre_tabla: "c_puesto_notas",
+                        registro_id: id_nota,
+                        cambios: JSON.stringify(cambiosArr),
+                        created_at: updated_at.toISOString(),
+                        created_by: empleado.id,
+                    },
+                    returning: false
                 },
             });
         }
@@ -106,7 +183,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
 export async function DELETE(req: NextRequest, context: { params: Promise<{ id: string, "id-nota": string }> }) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
 
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
@@ -114,15 +191,39 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
         const id = parseInt(resolvedParams.id);
         const id_nota = parseInt(resolvedParams["id-nota"]);
 
-        const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id } });
+        const puesto = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "e_estructura_puesto",
+                operation: "findUnique",
+                where: { id }
+            }
+        });
         if (!puesto) return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
 
-        const nota = await prisma.c_puesto_notas.findUnique({ where: { id: id_nota } });
+        const nota = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_puesto_notas",
+                operation: "findUnique",
+                where: { id: id_nota }
+            }
+        });
         if (!nota) return NextResponse.json({ status: false, message: "Nota no encontrada" }, { status: 200 });
 
         if (nota.puesto_id !== puesto.id) return NextResponse.json({ status: false, message: "Nota no pertenece al puesto" }, { status: 200 });
 
-        await prisma.c_puesto_notas.delete({ where: { id: id_nota } });
+        await callDynamicPrisma({
+            req,
+            data: {
+                action: "DELETE",
+                table: "c_puesto_notas",
+                where: { id: id_nota },
+                returning: false
+            }
+        });
 
         // Registro de cambios (nueva modalidad) - delete (solo datos escritos)
         const beforeLimited = {
@@ -134,13 +235,19 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
             puesto_id: nota.puesto_id,
         };
         const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
-        await prisma.c_cambios_apps_modules.create({
+        await callDynamicPrisma({
+            req,
             data: {
-                nombre_tabla: "c_puesto_notas",
-                registro_id: id_nota,
-                cambios: JSON.stringify([{ prop: "__deleted__", before: beforeLimited, after: null }]),
-                created_at: toZonedTime(new Date(), "America/Costa_Rica"),
-                created_by: createdBy,
+                action: "POST",
+                table: "c_cambios_apps_modules",
+                data: {
+                    nombre_tabla: "c_puesto_notas",
+                    registro_id: id_nota,
+                    cambios: JSON.stringify([{ prop: "__deleted__", before: beforeLimited, after: null }]),
+                    created_at: toZonedTime(new Date(), "America/Costa_Rica").toISOString(),
+                    created_by: createdBy,
+                },
+                returning: false
             },
         });
         return NextResponse.json({ status: true, message: "Nota eliminada con éxito" }, { status: 200 });

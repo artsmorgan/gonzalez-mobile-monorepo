@@ -146,6 +146,8 @@ export default function NotesScreen() {
 
   // Creating state
   const [isCreating, setIsCreating] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitResponse, setSubmitResponse] = useState<{ type: 'success' | 'error', message: string } | null>(null);
   const [newNote, setNewNote] = useState<EditingNote>({
     id: null,
     id_local: '',
@@ -554,6 +556,8 @@ export default function NotesScreen() {
         {
           text: 'Crear',
           onPress: async () => {
+            setIsSubmitting(true);
+            setSubmitResponse(null);
             try {
               // Determine puestos array based on role
               const isSupervisor = currentMarcaData?.roleDivision?.role?.nombre === 'SUPERVISOR';
@@ -596,13 +600,13 @@ export default function NotesScreen() {
                 });
 
                 if (data.status) {
-                  Alert.alert('Éxito', data.message || 'Nota creada correctamente');
+                  setSubmitResponse({ type: 'success', message: data.message || 'Nota creada correctamente' });
                   setIsCreating(false);
                   setNewNote({ id: null, id_local: '', titulo: '', description: '', division: null, categoria_id: null, relevancia: 'Baja' });
                   setSelectedPuestos([]);
                   fetchNotes();
                 } else {
-                  Alert.alert('Error', data.message || 'Error al crear la nota');
+                  setSubmitResponse({ type: 'error', message: data.message || 'Error al crear la nota' });
                 }
               } else {
                 // Sin internet: modo offline
@@ -640,7 +644,7 @@ export default function NotesScreen() {
                 cache.notas.push(newNoteCache);
                 await AsyncStorage.setItem('notes_cache', JSON.stringify(cache));
 
-                Alert.alert('Modo Offline', 'Nota creada localmente. Se sincronizará cuando haya conexión.');
+                setSubmitResponse({ type: 'success', message: 'Nota creada localmente. Se sincronizará cuando haya conexión.' });
                 setIsCreating(false);
                 setNewNote({ id: null, id_local: '', titulo: '', description: '', division: null, categoria_id: null, relevancia: 'Baja' });
                 setSelectedPuestos([]);
@@ -648,7 +652,9 @@ export default function NotesScreen() {
               }
             } catch (err) {
               console.error('Error creating note:', err);
-              Alert.alert('Error', 'No se pudo crear la nota');
+              setSubmitResponse({ type: 'error', message: 'No se pudo crear la nota' });
+            } finally {
+              setIsSubmitting(false);
             }
           },
         },
@@ -677,6 +683,8 @@ export default function NotesScreen() {
         {
           text: 'Confirmar',
           onPress: async () => {
+            setIsSubmitting(true);
+            setSubmitResponse(null);
             try {
               const requestBody = {
                 empleado_id: employee?.id,
@@ -702,11 +710,11 @@ export default function NotesScreen() {
                 });
 
                 if (data.status) {
-                  Alert.alert('Éxito', data.message || 'Nota actualizada correctamente');
+                  setSubmitResponse({ type: 'success', message: data.message || 'Nota actualizada correctamente' });
                   setEditingNote(null);
                   fetchNotes();
                 } else {
-                  Alert.alert('Error', data.message || 'Error al actualizar la nota');
+                  setSubmitResponse({ type: 'error', message: data.message || 'Error al actualizar la nota' });
                 }
               } else {
                 // Sin internet: modo offline
@@ -753,13 +761,15 @@ export default function NotesScreen() {
                   await AsyncStorage.setItem('notes_cache', JSON.stringify(cache));
                 }
 
-                Alert.alert('Modo Offline', 'Nota actualizada localmente. Se sincronizará cuando haya conexión.');
+                setSubmitResponse({ type: 'success', message: 'Nota actualizada localmente. Se sincronizará cuando haya conexión.' });
                 setEditingNote(null);
                 fetchNotes();
               }
             } catch (err) {
               console.error('Error updating note:', err);
-              Alert.alert('Error', 'No se pudo actualizar la nota');
+              setSubmitResponse({ type: 'error', message: 'No se pudo actualizar la nota' });
+            } finally {
+              setIsSubmitting(false);
             }
           },
         },
@@ -1162,11 +1172,27 @@ export default function NotesScreen() {
               </ThemedView>
             </ThemedView>
 
+            {submitResponse && (
+              <ThemedView style={[styles.responseContainer, submitResponse.type === 'success' ? styles.responseSuccess : styles.responseError]}>
+                <ThemedText style={styles.responseText}>
+                  {submitResponse.type === 'success' ? '✓ ' : '✗ '}
+                  {submitResponse.message}
+                </ThemedText>
+              </ThemedView>
+            )}
             <ThemedView style={styles.buttonRow}>
-              <TouchableOpacity style={styles.confirmButton} onPress={() => updateNote(note.id)}>
-                <ThemedText style={styles.confirmButtonText}>{getActionIcon('confirm')}</ThemedText>
+              <TouchableOpacity 
+                style={[styles.confirmButton, isSubmitting && styles.buttonDisabled]} 
+                onPress={() => updateNote(note.id)}
+                disabled={isSubmitting}
+              >
+                {isSubmitting ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <ThemedText style={styles.confirmButtonText}>{getActionIcon('confirm')}</ThemedText>
+                )}
               </TouchableOpacity>
-              <TouchableOpacity style={styles.cancelButton} onPress={cancelEditing}>
+              <TouchableOpacity style={styles.cancelButton} onPress={cancelEditing} disabled={isSubmitting}>
                 <ThemedText style={styles.cancelButtonText}>{getActionIcon('cancel')}</ThemedText>
               </TouchableOpacity>
             </ThemedView>
@@ -1344,11 +1370,27 @@ export default function NotesScreen() {
             </ThemedView>
           )}
 
+          {submitResponse && (
+            <ThemedView style={[styles.responseContainer, submitResponse.type === 'success' ? styles.responseSuccess : styles.responseError]}>
+              <ThemedText style={styles.responseText}>
+                {submitResponse.type === 'success' ? '✓ ' : '✗ '}
+                {submitResponse.message}
+              </ThemedText>
+            </ThemedView>
+          )}
           <ThemedView style={styles.buttonRow}>
-            <TouchableOpacity style={styles.confirmButton} onPress={createNote}>
-              <ThemedText style={styles.confirmButtonText}>{getActionIcon('confirm')}</ThemedText>
+            <TouchableOpacity 
+              style={[styles.confirmButton, isSubmitting && styles.buttonDisabled]} 
+              onPress={createNote}
+              disabled={isSubmitting}
+            >
+              {isSubmitting ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <ThemedText style={styles.confirmButtonText}>{getActionIcon('confirm')}</ThemedText>
+              )}
             </TouchableOpacity>
-            <TouchableOpacity style={styles.cancelButton} onPress={cancelCreating}>
+            <TouchableOpacity style={styles.cancelButton} onPress={cancelCreating} disabled={isSubmitting}>
               <ThemedText style={styles.cancelButtonText}>{getActionIcon('cancel')}</ThemedText>
             </TouchableOpacity>
           </ThemedView>
@@ -2118,6 +2160,28 @@ const styles = StyleSheet.create({
   },
   cancelButtonText: {
     color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  buttonDisabled: {
+    opacity: 0.6,
+  },
+  responseContainer: {
+    padding: 12,
+    borderRadius: 6,
+    marginBottom: 12,
+  },
+  responseSuccess: {
+    backgroundColor: '#D4EDDA',
+    borderWidth: 1,
+    borderColor: '#C3E6CB',
+  },
+  responseError: {
+    backgroundColor: '#F8D7DA',
+    borderWidth: 1,
+    borderColor: '#F5C6CB',
+  },
+  responseText: {
     fontSize: 14,
     fontWeight: '600',
   },

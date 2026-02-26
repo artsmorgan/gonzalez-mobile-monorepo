@@ -1,12 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { actions } from "../../../public/actions";
-import { verifyAccessToken } from "../../../utils/verifyToken";
-
-import { prisma } from "../../../utils/prismaClient";
+import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 
 export async function GET(request: NextRequest) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(request);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(request);
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         const { searchParams } = new URL(request.url);
@@ -16,64 +15,54 @@ export async function GET(request: NextRequest) {
         if (!id) {
             return NextResponse.json({ message: "Usuario no especificado" }, { status: 404 });
         }
-        const empleado = await prisma.c_empleado.findFirst({
-            where: { id: parseInt(id) }
+        const empleado = await callDynamicPrisma({
+            req: request,
+            data: { action: "GET", table: "c_empleado", operation: "findFirst", where: { id: parseInt(id) } }
         });
-
         if (!empleado) {
-            return NextResponse.json(
-                { status: false, message: "Empleado no encontrado" },
-                { status: 401 }
-            );
+            return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 401 });
         }
 
-        const empleado_plaza = await prisma.c_empleado_plaza.findMany({
-            where: {
-                empleado_id: empleado.id
-            }
+        const empleado_plaza = await callDynamicPrisma({
+            req: request,
+            data: { action: "GET", table: "c_empleado_plaza", operation: "findMany", where: { empleado_id: empleado.id } }
         });
-
         const roles: { role: { name: string, id: number }, division: { id: number, name: string } }[] = [];
         for (const item of empleado_plaza) {
-
             if (!item.plaza_id || !item.division_id) {
                 continue;
             }
 
-            const division = await prisma.n_division.findFirst({
-                where: {
-                    id: item.division_id
-                }
+            const division = await callDynamicPrisma({
+                req: request,
+                data: { action: "GET", table: "n_division", operation: "findFirst", where: { id: item.division_id } }
             });
 
             if (!division) {
                 continue;
             }
 
-            const plaza = await prisma.e_estructura_plazas.findFirst({
-                where: {
-                    id: item.plaza_id
-                }
+            const plaza = await callDynamicPrisma({
+                req: request,
+                data: { action: "GET", table: "e_estructura_plazas", operation: "findFirst", where: { id: item.plaza_id } }
             });
 
             if (!plaza || !plaza.categoriaSalarial_id) {
                 continue;
             }
 
-            const categoria_salarial = await prisma.pg_categoria_salarial.findFirst({
-                where: {
-                    id: plaza.categoriaSalarial_id
-                }
+            const categoria_salarial = await callDynamicPrisma({
+                req: request,
+                data: { action: "GET", table: "pg_categoria_salarial", operation: "findFirst", where: { id: plaza.categoriaSalarial_id } }
             });
 
             if (!categoria_salarial || !categoria_salarial.categoriaEmpleado_id) {
                 continue;
             }
 
-            const categoria_empleado = await prisma.pg_categoria_empleado.findFirst({
-                where: {
-                    id: categoria_salarial.categoriaEmpleado_id
-                }
+            const categoria_empleado = await callDynamicPrisma({
+                req: request,
+                data: { action: "GET", table: "pg_categoria_empleado", operation: "findFirst", where: { id: categoria_salarial.categoriaEmpleado_id } }
             });
 
             if (!categoria_empleado) {
@@ -143,17 +132,6 @@ export async function GET(request: NextRequest) {
             })) ?? []
         }));
 
-        for (const role of roles) {
-            for (const action of actionsForUserWithValidate) {
-                const roleModules = await prisma.roles_security_modules.findFirst({ where: { role_name: role.role.name, module_name: action.nombre } });
-                if (roleModules && roleModules.actions != null && roleModules.actions != "") {
-                    action.actions.forEach(a => {
-                        if (a.validate) return;
-                        a.validate = JSON.parse(roleModules.actions).includes(a.nombre) ? true : false;
-                    });
-                }
-            }
-        }
 
         return NextResponse.json(actionsForUserWithValidate, { status: 200 });
     } catch (error: unknown) {

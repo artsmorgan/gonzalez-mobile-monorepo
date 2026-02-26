@@ -10,8 +10,6 @@ export type MovimientoLlaveItem = {
   nombre_persona_entrega: string;
   departamento: string;
   telefono: string;
-  entrega: string;
-  recibe: string;
   fecha: string; // ISO / yyyy-mm-dd
   hora: string; // ISO / hh:mm:ss
   firma_entrega: string;

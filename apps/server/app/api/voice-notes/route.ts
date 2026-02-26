@@ -1,17 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../utils/verifyToken";
+import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { toZonedTime, format } from "date-fns-tz";
-import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs';
 import path from 'path';
+import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
 import { sendNotificationByRole, sendNotificationByPlaza } from "../../../utils/sendNotification";
 
-import { prisma } from "../../../utils/prismaClient";
 import { getUserMarca } from "../../../utils/getUserMarca";
 
 export async function GET(req: NextRequest) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         const marcaId = req.nextUrl.searchParams.get("m");
@@ -19,7 +19,10 @@ export async function GET(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
         }
 
-        const marca = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(marcaId) } });
+        const marca = await callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: parseInt(marcaId) } }
+        });
         if (!marca) {
             return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
         }
@@ -31,7 +34,7 @@ export async function GET(req: NextRequest) {
             );
         }
 
-        const lastMarca = await getUserMarca(marca.empleadoFijo_id);
+        const lastMarca = await getUserMarca(req, marca.empleadoFijo_id);
         if (!lastMarca) {
             return NextResponse.json({ status: false, message: "No se encontró la última marca" }, { status: 200 });
         }
@@ -41,40 +44,56 @@ export async function GET(req: NextRequest) {
         }
 
 
-        const corpo = await prisma.e_estructura_sucursal.findUnique({ where: { id: marca.corpo_id } });
+        const corpo = await callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "e_estructura_sucursal", operation: "findUnique", where: { id: marca.corpo_id } }
+        });
         if (!corpo) {
             return NextResponse.json({ status: false, message: "Corpo no encontrado" }, { status: 200 });
         }
 
-        const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: marca.puesto_id } });
+        const puesto = await callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "e_estructura_puesto", operation: "findUnique", where: { id: marca.puesto_id } }
+        });
         if (!puesto) {
             return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
         }
 
-        const voiceNotes = await prisma.c_notas_voz.findMany({
-            where: {
+        const voiceNotes = await callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "c_notas_voz", operation: "findMany", where: {
                 OR: [
                     { corpo_id: corpo.id, puesto_id: puesto.id },
                     { corpo_id: marca.corpo_id, puesto_id: null }
                 ]
-            }
+            } }
         });
 
         const voiceNotes_return: { id: number, empresa: { id: number, nombre: string }, cliente: { id: number, nombre: string }, corpo: { id: number, nombre: string }, puesto: { id: number, nombre: string } | null, titulo: string, descripcion: string, transcripcion: string, firma_responsable: string, nombre_firma: string, nombre_creator: string, id_local: string, file_base64: string, created_by: number, created_at: string }[] = [];
         for (const voiceNote of voiceNotes) {
 
-            const empresa = await prisma.e_estructura_empresa.findUnique({ where: { id: voiceNote.empresa_id } });
+            const empresa = await callDynamicPrisma({
+                req,
+                data: { action: "GET", table: "e_estructura_empresa", operation: "findUnique", where: { id: voiceNote.empresa_id } }
+            });
             if (!empresa) {
                 continue;
             }
 
-            const cliente = await prisma.e_estructura_cliente.findUnique({ where: { id: voiceNote.cliente_id } });
+            const cliente = await callDynamicPrisma({
+                req,
+                data: { action: "GET", table: "e_estructura_cliente", operation: "findUnique", where: { id: voiceNote.cliente_id } }
+            });
             if (!cliente) {
                 continue;
             }
 
             let nombre_creator = "-";
-            const creator = await prisma.c_empleado.findUnique({ where: { id: voiceNote.created_by } });
+            const creator = await callDynamicPrisma({
+                req,
+                data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: voiceNote.created_by } }
+            });
             if (creator) {
                 nombre_creator = creator.nombre + " " + creator.primer_apellido + " " + creator.segundo_apellido;
                 if (creator.cedula) {
@@ -85,7 +104,10 @@ export async function GET(req: NextRequest) {
             let nombre_firma = "No disponible";
             if (voiceNote.firma_responsable) {
                 const id_firma = atob(voiceNote.firma_responsable).split(":")[1];
-                const firma = await prisma.c_empleado.findUnique({ where: { id: parseInt(id_firma) } });
+                const firma = await callDynamicPrisma({
+                    req,
+                    data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: parseInt(id_firma) } }
+                });
                 if (firma) {
                     nombre_firma = firma.nombre + " " + firma.primer_apellido + " " + firma.segundo_apellido;
                     if (firma.cedula) {
@@ -135,7 +157,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         const { marca_id, setPuesto, titulo, descripcion, firma_responsable, file_base64, created_at } = await req.json();
@@ -144,35 +166,51 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 200 });
         }
 
-        const marca = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(marca_id) } });
+        const marca = await callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: parseInt(marca_id) } }
+        });
         if (!marca) {
             return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
         }
 
-        const empresa = await prisma.e_estructura_empresa.findUnique({ where: { id: marca.empresa_id } });
+        const empresa = await callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "e_estructura_empresa", operation: "findUnique", where: { id: marca.empresa_id } }
+        });
         if (!empresa) {
             return NextResponse.json({ status: false, message: "Empresa no encontrada" }, { status: 200 });
         }
 
-        const cliente = await prisma.e_estructura_cliente.findUnique({ where: { id: marca.cliente_id } });
+        const cliente = await callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "e_estructura_cliente", operation: "findUnique", where: { id: marca.cliente_id } }
+        });
         if (!cliente) {
             return NextResponse.json({ status: false, message: "Cliente no encontrada" }, { status: 200 });
         }
 
-        const corpo = await prisma.e_estructura_sucursal.findUnique({ where: { id: marca.corpo_id } });
+        const corpo = await callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "e_estructura_sucursal", operation: "findUnique", where: { id: marca.corpo_id } }
+        });
         if (!corpo) {
             return NextResponse.json({ status: false, message: "Corpo no encontrada" }, { status: 200 });
         }
 
         if (setPuesto) {
-            const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: marca.puesto_id } });
+            const puesto = await callDynamicPrisma({
+                req,
+                data: { action: "GET", table: "e_estructura_puesto", operation: "findUnique", where: { id: marca.puesto_id } }
+            });
             if (!puesto) {
                 return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
             }
         }
 
-        const newVoiceNote = await prisma.c_notas_voz.create({
-            data: {
+        const newVoiceNote = await callDynamicPrisma({
+            req,
+            data: { action: "POST", table: "c_notas_voz", operation: "create", data: {
                 empresa_id: empresa.id,
                 cliente_id: cliente.id,
                 corpo_id: corpo.id,
@@ -184,43 +222,46 @@ export async function POST(req: NextRequest) {
                 firma_responsable,
                 created_by: payload.id,
                 created_at: new Date(created_at)
-            }
+            } }
         });
 
         if (newVoiceNote) {
             if (!/^[A-Za-z0-9+/=]+$/.test(file_base64)) {
                 return NextResponse.json({ status: false, message: "Formato de archivo inválido" }, { status: 400 });
             }
-
-            const extension = file_base64.startsWith('UklGR') ? 'wav' : 'm4a'; // detección básica
-            const path_file = `${uuidv4()}.${extension}`;
-
-            const dir = path.join(process.cwd(), 'public', 'uploads', 'voice-notes', `${newVoiceNote.id}`);
-            if (!fs.existsSync(dir)) {
-                fs.mkdirSync(dir, { recursive: true });
+            const extension = file_base64.startsWith('UklGR') ? 'wav' : 'm4a';
+            const uploadResp = await uploadDynamicFiles({
+                req,
+                folderPath: `voice-notes/${newVoiceNote.id}`,
+                files: [{ type: "audio", extension, file_base64 }],
+            });
+            const uploaded = Array.isArray(uploadResp?.files) ? uploadResp.files : [];
+            const path_file = uploaded[0]?.name || "";
+            if (path_file) {
+                await callDynamicPrisma({
+                    req,
+                    data: { action: "UPDATE", table: "c_notas_voz", operation: "update", where: { id: newVoiceNote.id }, data: { path: path_file } }
+                });
             }
 
-            // Convierte el base64 en buffer binario
-            const buffer = Buffer.from(file_base64, 'base64');
-
-            // Guarda el archivo
-            const filePath = path.join(dir, path_file);
-            fs.writeFileSync(filePath, buffer);
-
-            await prisma.c_notas_voz.update({ where: { id: newVoiceNote.id }, data: { path: path_file } });
-
-            const empleado = await prisma.c_empleado.findUnique({ where: { id: payload.id } });
+            const empleado = await callDynamicPrisma({
+                req,
+                data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: payload.id } }
+            });
             if (empleado) {
                 const datetime = new Date(created_at);
                 const fecha = datetime.toISOString().split("T")[0];
                 const hora = datetime.toISOString().split("T")[1].split(".")[0];
                 const desc = `El usuario ${empleado.nombre} ${empleado.primer_apellido} ha creado una nueva nota de voz llamada ${titulo} el día ${fecha} a las ${hora}`;
                 if (!setPuesto) {
-                    await sendNotificationByRole(marca.corpo_id, [marca.plaza_id], "Nota de voz creada", desc, ["ADMINISTRATIVO", "SUPERVISOR", "OPERATIVO"]);
+                    await sendNotificationByRole(req, marca.corpo_id, [marca.plaza_id], "Nota de voz creada", desc, ["ADMINISTRATIVO", "SUPERVISOR", "OPERATIVO"]);
                 } else {
-                    const plaza = await prisma.e_estructura_plazas.findMany({ where: { puesto_id: marca.puesto_id } });
+                    const plaza = await callDynamicPrisma({
+                        req,
+                        data: { action: "GET", table: "e_estructura_plazas", operation: "findMany", where: { puesto_id: marca.puesto_id } }
+                    });
                     if (plaza.length > 0) {
-                        await sendNotificationByPlaza(marca.id, "Nota de voz creada", desc, plaza.map(p => p.id));
+                        await sendNotificationByPlaza(req, marca.id, "Nota de voz creada", desc, plaza.map((p: any) => p.id));
                     }
                 }
             }

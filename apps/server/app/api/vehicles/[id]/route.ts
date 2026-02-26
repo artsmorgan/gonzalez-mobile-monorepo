@@ -1,15 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../../utils/verifyToken";
+import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
 import { toZonedTime } from "date-fns-tz";
 import path from "path";
 import fs from "fs";
-import { v4 as uuidv4 } from "uuid";
-import { prisma } from "../../../../utils/prismaClient";
 import { createVehicleImage } from "../../../../utils/createVehicleImage";
+import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
 
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
@@ -20,14 +19,32 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
         }
 
-        const { marca_id, tipo, placa, nombre, cedula, hora_entrada, hora_salida, razon_visita, file } = await req.json();
+        const {
+            marca_id,
+            tipo,
+            placa,
+            nombre,
+            cedula,
+            departamento_visita,
+            persona_visita,
+            hora_entrada,
+            hora_salida,
+            razon_visita,
+            file
+        } = await req.json();
 
-        const vehicle = await prisma.e_registro_vehiculos.findUnique({ where: { id } });
+        const vehicle = await callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "e_registro_vehiculos", operation: "findUnique", where: { id } }
+        });
         if (!vehicle) {
             return NextResponse.json({ status: false, message: "Vehículo no encontrado" }, { status: 200 });
         }
 
-        const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(marca_id) } });
+        const marcaDia = await callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: parseInt(marca_id) } }
+        });
         if (!marcaDia) {
             return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
         }
@@ -35,14 +52,19 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         // Guardar imagen si existe primero, para obtener el file_name actualizado
         let updatedFileName = vehicle.file_name;
         if (vehicle && file) {
-            const result = await createVehicleImage(vehicle.id, file);
-            console.log("result", result);
-            if (result) {
-                // Obtener el vehículo actualizado para incluir el nuevo file_name
-                const updatedVehicle = await prisma.e_registro_vehiculos.findUnique({ where: { id } });
-                if (updatedVehicle) {
-                    updatedFileName = updatedVehicle.file_name;
-                }
+            const result = await createVehicleImage(req, vehicle.id, file);
+            if (!result) {
+                return NextResponse.json(
+                    { status: false, message: "No se pudo subir la imagen. Verifique el formato o el tamaño." },
+                    { status: 200 }
+                );
+            }
+            const updatedVehicle = await callDynamicPrisma({
+                req,
+                data: { action: "GET", table: "e_registro_vehiculos", operation: "findUnique", where: { id } }
+            });
+            if (updatedVehicle) {
+                updatedFileName = updatedVehicle.file_name;
             }
         }
 
@@ -52,10 +74,12 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             placa: placa,
             nombre: nombre,
             cedula: cedula,
-            hora_entrada: new Date(hora_entrada),
-            hora_salida: hora_salida ? new Date(hora_salida) : null,
+            departamento_visita: departamento_visita ? String(departamento_visita) : null,
+            persona_visita: persona_visita ? String(persona_visita) : null,
+            hora_entrada: new Date(hora_entrada).toISOString(),
+            hora_salida: hora_salida ? new Date(hora_salida).toISOString() : null,
             razon_visita: razon_visita,
-            updated_at: toZonedTime(new Date(), "America/Costa_Rica"),
+            updated_at: toZonedTime(new Date(), "America/Costa_Rica").toISOString(),
             file_name: updatedFileName // Preservar el file_name actualizado si existe
         };
 
@@ -85,20 +109,31 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             }
         }
 
-        await prisma.e_registro_vehiculos.update({
-            where: { id },
-            data: updateData
+        await callDynamicPrisma({
+            req,
+            data: {
+                action: "UPDATE",
+                table: "e_registro_vehiculos",
+                where: { id },
+                data: updateData,
+                returning: false
+            }
         });
 
         if (cambiosArr.length > 0) {
             const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
-            await prisma.c_cambios_apps_modules.create({
+            await callDynamicPrisma({
+                req,
                 data: {
-                    nombre_tabla: "e_registro_vehiculos",
-                    registro_id: id,
-                    cambios: JSON.stringify(cambiosArr),
-                    created_at: toZonedTime(new Date(), "America/Costa_Rica"),
-                    created_by: createdBy,
+                    action: "POST",
+                    table: "c_cambios_apps_modules",
+                    data: {
+                        nombre_tabla: "e_registro_vehiculos",
+                        registro_id: id,
+                        cambios: JSON.stringify(cambiosArr),
+                        created_at: toZonedTime(new Date(), "America/Costa_Rica").toISOString(),
+                        created_by: createdBy,
+                    },
                 },
             });
         }
@@ -114,7 +149,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
 export async function DELETE(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
 
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
@@ -125,7 +160,10 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
             return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
         }
 
-        const vehicle = await prisma.e_registro_vehiculos.findUnique({ where: { id } });
+        const vehicle = await callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "e_registro_vehiculos", operation: "findUnique", where: { id } }
+        });
         if (!vehicle) {
             return NextResponse.json({ status: false, message: "Vehículo no encontrado" }, { status: 200 });
         }
@@ -133,27 +171,35 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
         const id_vehicle = vehicle.id;
         const file_name = vehicle.file_name;
 
-        await prisma.e_registro_vehiculos.delete({ where: { id } });
+        await callDynamicPrisma({
+            req,
+            data: { action: "DELETE", table: "e_registro_vehiculos", where: { id }, returning: false }
+        });
 
         // Registrar cambio de eliminación
         const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
-        await prisma.c_cambios_apps_modules.create({
+        await callDynamicPrisma({
+            req,
             data: {
-                nombre_tabla: "e_registro_vehiculos",
-                registro_id: id,
-                cambios: JSON.stringify([{
-                    prop: "__deleted__",
-                    before: {
-                        id: vehicle.id,
-                        placa: vehicle.placa,
-                        tipo: vehicle.tipo,
-                        nombre: vehicle.nombre,
-                        cedula: vehicle.cedula,
-                    },
-                    after: null,
-                }]),
-                created_at: toZonedTime(new Date(), "America/Costa_Rica"),
-                created_by: createdBy,
+                action: "POST",
+                table: "c_cambios_apps_modules",
+                data: {
+                    nombre_tabla: "e_registro_vehiculos",
+                    registro_id: id,
+                    cambios: JSON.stringify([{
+                        prop: "__deleted__",
+                        before: {
+                            id: vehicle.id,
+                            placa: vehicle.placa,
+                            tipo: vehicle.tipo,
+                            nombre: vehicle.nombre,
+                            cedula: vehicle.cedula,
+                        },
+                        after: null,
+                    }]),
+                    created_at: toZonedTime(new Date(), "America/Costa_Rica").toISOString(),
+                    created_by: createdBy,
+                },
             },
         });
 

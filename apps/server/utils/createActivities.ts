@@ -1,154 +1,187 @@
-import { PrismaClient } from "@prisma/client";
+import { NextRequest } from "next/server";
 import { toZonedTime } from "date-fns-tz";
+import { callDynamicPrisma } from "./callDynamicPrisma";
 
-const prisma = new PrismaClient();
-
-export async function getActivities(id: number) {
+export async function getActivities(req: NextRequest, id: number) {
     try {
-        const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id } });
+        const marcaDia = await callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id } }
+        });
         if (!marcaDia) {
             return { status: false, message: "Marca no encontrada" };
         }
 
-        const actividades_puesto_plaza = await prisma.e_actividad_puesto_plaza.findMany({
-            where: {
-                OR: [
-                    { plaza_id: marcaDia.plaza_id },
-                    { plaza_id: null, puesto_id: marcaDia.puesto_id }
-                ]
-            }
+        const fechaMarca = marcaDia.fecha instanceof Date ? marcaDia.fecha : new Date(marcaDia.fecha);
+        const now = toZonedTime(new Date(), "America/Costa_Rica");
+
+        const horaInicioMarca = marcaDia.hora_inicio instanceof Date
+            ? marcaDia.hora_inicio
+            : new Date(marcaDia.hora_inicio);
+        const shiftStart = new Date(fechaMarca);
+        shiftStart.setHours(
+            horaInicioMarca.getHours(),
+            horaInicioMarca.getMinutes(),
+            horaInicioMarca.getSeconds(),
+            horaInicioMarca.getMilliseconds()
+        );
+
+        const actividadesPuesto = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "e_actividades_puesto",
+                operation: "findMany",
+                where: { puesto_id: marcaDia.puesto_id },
+            },
         });
 
-        const actividades_bd = await prisma.e_actividad_corpo.findMany({
-            where: {
-                id: { in: actividades_puesto_plaza.map((item) => item.actividadCorpo_id) }
-            }
-        });
+        const actividadIds = Array.from(
+            new Set((Array.isArray(actividadesPuesto) ? actividadesPuesto : []).map((item: any) => Number(item.actividad_id)).filter(Boolean))
+        );
+        if (actividadIds.length === 0) return { status: true, actividades: [] };
 
-        const actividades = [];
-        for (const actividad of actividades_bd) {
+        const actividadesBd = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "e_actividades",
+                operation: "findMany",
+                where: { id: { in: actividadIds } },
+            },
+        });
+        const actividadById = new Map<number, any>((Array.isArray(actividadesBd) ? actividadesBd : []).map((a: any) => [Number(a.id), a]));
+
+        const actividades: any[] = [];
+        for (const actividadPuesto of Array.isArray(actividadesPuesto) ? actividadesPuesto : []) {
+            const actividad = actividadById.get(Number(actividadPuesto.actividad_id));
+            if (!actividad) continue;
             let is_today = false;
 
-            is_today = validateDates(actividad.fecha_inicio, marcaDia.fecha, actividad.frecuencia);
+            const fechaInicio = actividad.fecha_inicio instanceof Date
+                ? actividad.fecha_inicio
+                : new Date(actividad.fecha_inicio);
+
+            is_today = validateDates(fechaInicio, fechaMarca, actividad.frecuencia);
 
             let pendiente = false;
-            let id_no_marcado = null;
+            let registro: any = null;
 
-            if (!is_today) {
-                const actividad_marcada = await prisma.e_actividad_corpo_plaza.findFirst({ where: { actividadCorpo_id: actividad.id, marcada: false } });
-                if (actividad_marcada) {
-                    pendiente = true;
-                    id_no_marcado = actividad_marcada.id;
-                }
-            }
-
-            if (is_today || pendiente) {
-                const fecha_inicio = new Date(marcaDia.fecha);
-                if (marcaDia.hora_inicio) {
-                    fecha_inicio.setHours(marcaDia.hora_inicio.getHours(), marcaDia.hora_inicio.getMinutes(), marcaDia.hora_inicio.getSeconds(), marcaDia.hora_inicio.getMilliseconds());
-                }
-                else {
-                    fecha_inicio.setHours(0, 0, 0, 0);
-                }
-                const fecha_fin = toZonedTime(new Date(), "America/Costa_Rica");
-
-                // Si es pendiente, debo obtener la actividad cuyo dato "marcada" sea false, y si no, la obtengo según el dato created_at
-
-                let marcada = null;
-                if (pendiente) {
-                    marcada = await prisma.e_actividad_corpo_plaza.findFirst({ where: { id: id_no_marcado as number } });
-                }
-                else {
-                    marcada = await prisma.e_actividad_corpo_plaza.findFirst({ where: { actividadCorpo_id: actividad.id, plaza_id: marcaDia.plaza_id, created_at: { gte: fecha_inicio, lte: fecha_fin } } });
-                    if (!marcada) {
-                        marcada = await prisma.e_actividad_corpo_plaza.create({
+            if (is_today) {
+                registro = await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "GET",
+                        table: "e_actividades_puesto_plaza",
+                        operation: "findFirst",
+                        where: {
+                            actividad_puesto_id: actividadPuesto.id,
+                            plaza_id: marcaDia.plaza_id,
+                            created_at: { gte: shiftStart.toISOString(), lte: now.toISOString() },
+                        },
+                        orderBy: { id: "desc" },
+                    }
+                });
+                if (!registro) {
+                    registro = await callDynamicPrisma({
+                        req,
+                        data: {
+                            action: "POST",
+                            table: "e_actividades_puesto_plaza",
                             data: {
-                                actividadCorpo_id: actividad.id,
+                                actividad_puesto_id: actividadPuesto.id,
                                 plaza_id: marcaDia.plaza_id,
                                 bitacora: "-",
+                                articles: null,
                                 marcada: false,
-                                created_at: fecha_fin,
-                                updated_at: fecha_fin
-                            }
-                        });
-                    }
-                }
-
-                if (marcada) {
-                    const es_revision_equipo = actividad.es_revision_equipo;
-
-                    const inventario = [];
-                    if (es_revision_equipo) {
-                        const equipo_items = JSON.parse(actividad.reglas);
-                        for (const item of equipo_items) {
-                            const articulo = await prisma.n_articulo_corpo_puesto.findFirst({ where: { id: item.id } });
-                            if (articulo) {
-                                const item_add: { id: number, nombre: string, reglas: { nombre: string, valor: string }[], revision_equipo: { id: number, marcada: boolean, imagen_adjunta: string | null, es_correcto: boolean, motivo_incorrecto: string } | null } = {
-                                    id: articulo.id,
-                                    nombre: articulo.nombre,
-                                    reglas: [],
-                                    revision_equipo: null
-                                }
-                                for (const regla of item.reglas as { nombre: string, valor: string }[]) {
-                                    item_add.reglas.push({ nombre: regla.nombre, valor: regla.valor });
-                                }
-
-                                let revision_equipo: { id: number, marcada: boolean, es_correcto: boolean, motivo_incorrecto: string, imagen_adjunta: string | null } | null = null;
-                                let corpo_revision_equipo = await prisma.e_actividad_corpo_revision_equipo.findFirst({ where: { actividadCorpoPlaza_id: marcada.id, articulo_id: articulo.id } });
-                                if (!corpo_revision_equipo) {
-                                    corpo_revision_equipo = await prisma.e_actividad_corpo_revision_equipo.create({
-                                        data: {
-                                            actividadCorpoPlaza_id: marcada.id,
-                                            articulo_id: articulo.id,
-                                            es_correcto: false,
-                                            motivo_incorrecto: "",
-                                            marcada: false,
-                                            created_at: fecha_fin,
-                                            updated_at: fecha_fin
-                                        }
-                                    });
-                                }
-
-                                revision_equipo = {
-                                    id: corpo_revision_equipo.id,
-                                    marcada: corpo_revision_equipo.marcada,
-                                    es_correcto: corpo_revision_equipo.es_correcto,
-                                    motivo_incorrecto: corpo_revision_equipo.motivo_incorrecto,
-                                    imagen_adjunta: corpo_revision_equipo.file_name || null
-                                };
-                                item_add.revision_equipo = revision_equipo;
-                                inventario.push(item_add);
-                            }
-                        }
-                    }
-
-                    let frecuencia = "";
-                    try {
-                        const frecuencia_json = JSON.parse(actividad.frecuencia);
-                        frecuencia = frecuencia_json.title || "";
-                    } catch (error: unknown) {
-                        const errorMessage = error instanceof Error ? error.message : "Error desconocido";
-                        console.log(errorMessage);
-                    }
-
-                    actividades.push({
-                        id: marcada.id,
-                        nombre_actividad: actividad.nombre_actividad,
-                        descripcion_actividad: actividad.descripcion_actividad,
-                        frecuencia: frecuencia,
-                        is_revision_equipo: es_revision_equipo,
-                        is_marcada: marcada.marcada,
-                        is_pendiente: pendiente,
-                        inventario: inventario,
-                        imagen_adjunta: marcada.file_name || null
+                                created_at: now.toISOString(),
+                                updated_at: now.toISOString(),
+                            },
+                        },
                     });
-
-                    console.log("Actividad encontrada:", actividad);
+                }
+            } else {
+                registro = await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "GET",
+                        table: "e_actividades_puesto_plaza",
+                        operation: "findFirst",
+                        where: { actividad_puesto_id: actividadPuesto.id, plaza_id: marcaDia.plaza_id, marcada: false },
+                        orderBy: { id: "asc" },
+                    }
+                });
+                if (registro) {
+                    pendiente = true;
                 }
             }
+
+            if (!registro) continue;
+
+            const es_revision_equipo = Boolean(actividad.es_revision_equipo);
+            let articlesParsed: any[] = [];
+            if (es_revision_equipo) {
+                try {
+                    articlesParsed = registro.articles ? JSON.parse(registro.articles) : [];
+                } catch {
+                    articlesParsed = [];
+                }
+                if (!Array.isArray(articlesParsed) || articlesParsed.length === 0) {
+                    articlesParsed = await buildArticlesFromPuesto(req, marcaDia.puesto_id);
+                    await callDynamicPrisma({
+                        req,
+                        data: {
+                            action: "UPDATE",
+                            table: "e_actividades_puesto_plaza",
+                            where: { id: registro.id },
+                            data: { articles: JSON.stringify(articlesParsed), updated_at: now.toISOString() },
+                            returning: false,
+                        },
+                    });
+                }
+            }
+
+            const inventario = es_revision_equipo
+                ? (Array.isArray(articlesParsed) ? articlesParsed : []).map((item: any) => ({
+                    id: Number(item.id),
+                    nombre: String(item.nombre || "Artículo"),
+                    cantidad_requerida: Number(item.cantidad_requerida || 0),
+                    cantidad_real: Number(item.cantidad_real || 0),
+                    estado: String(item.estado || "Bueno"),
+                    observaciones: String(item.observaciones || ""),
+                    reglas: [],
+                    revision_equipo: {
+                        id: Number(registro.id),
+                        marcada: Boolean(item.marcada),
+                        es_correcto: String(item.estado || "Bueno") === "Bueno",
+                        motivo_incorrecto: String(item.observaciones || ""),
+                        imagen_adjunta: item.file_name || null,
+                    },
+                }))
+                : [];
+
+            let frecuencia = "";
+            try {
+                const frecuencia_json = JSON.parse(actividad.frecuencia);
+                frecuencia = frecuencia_json.title || "";
+            } catch (error: unknown) {
+                const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+                console.log(errorMessage);
+            }
+
+            actividades.push({
+                id: registro.id,
+                nombre_actividad: actividad.nombre_actividad,
+                descripcion_actividad: actividad.descripcion_actividad,
+                frecuencia,
+                is_revision_equipo: es_revision_equipo,
+                is_marcada: Boolean(registro.marcada),
+                is_pendiente: pendiente,
+                inventario,
+                imagen_adjunta: registro.file_name || null
+            });
         }
 
-        console.log("Resultados de actividades:", actividades);
 
         return { status: true, actividades };
     }
@@ -157,6 +190,149 @@ export async function getActivities(id: number) {
         console.log(errorMessage);
         return { status: false, message: errorMessage };
     }
+}
+
+async function buildArticlesFromPuesto(req: NextRequest, puestoId: number) {
+    const articulos_return: any[] = [];
+
+    const puesto = await callDynamicPrisma({
+        req,
+        data: { action: "GET", table: "e_estructura_puesto", operation: "findUnique", where: { id: puestoId } },
+    });
+    if (!puesto) return articulos_return;
+
+    if (puesto.comboArticulosCP_id) {
+        const combo = await callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "e_estructura_combo_articulo_cp", operation: "findUnique", where: { id: puesto.comboArticulosCP_id } },
+        });
+        if (combo?.id) {
+            const comboItems = await callDynamicPrisma({
+                req,
+                data: { action: "GET", table: "e_estructura_articulo_corpo_puesto_plan", operation: "findMany", where: { combo_id: combo.id } },
+            });
+            for (const item of Array.isArray(comboItems) ? comboItems : []) {
+                let art_bd = null;
+                if (item.articuloCP_id) {
+                    art_bd = await callDynamicPrisma({
+                        req,
+                        data: { action: "GET", table: "n_articulo_corpo_puesto", operation: "findUnique", where: { id: item.articuloCP_id } },
+                    });
+                }
+                articulos_return.push({
+                    id: item.id,
+                    nombre: art_bd ? art_bd.nombre : "Artículo inidentificable",
+                    tipo: "Plan",
+                    marca: "",
+                    serie: "",
+                    cantidad_requerida: Number(item.cantidad) || 0,
+                    cantidad_real: Number(item.cantidad) || 0,
+                    estado: "Bueno",
+                    observaciones: "",
+                    marcada: false,
+                    file_name: null,
+                });
+            }
+        }
+    }
+
+    const planItems = await callDynamicPrisma({
+        req,
+        data: {
+            action: "GET",
+            table: "e_estructura_articulo_corpo_puesto_plan",
+            operation: "findMany",
+            where: { puesto_id: puestoId, id: { notIn: articulos_return.map((a: any) => a.id) } },
+        },
+    });
+    for (const item of Array.isArray(planItems) ? planItems : []) {
+        let art_bd = null;
+        if (item.articuloCP_id) {
+            art_bd = await callDynamicPrisma({
+                req,
+                data: { action: "GET", table: "n_articulo_corpo_puesto", operation: "findUnique", where: { id: item.articuloCP_id } },
+            });
+        }
+        articulos_return.push({
+            id: item.id,
+            nombre: art_bd ? art_bd.nombre : "Artículo inidentificable",
+            tipo: "Plan",
+            marca: "",
+            serie: "",
+            cantidad_requerida: Number(item.cantidad) || 0,
+            cantidad_real: Number(item.cantidad) || 0,
+            estado: "Bueno",
+            observaciones: "",
+            marcada: false,
+            file_name: null,
+        });
+    }
+
+    const assignedItems = await callDynamicPrisma({
+        req,
+        data: {
+            action: "GET",
+            table: "e_estructura_articulo_corpo_puesto_entrega",
+            operation: "findMany",
+            where: { puesto_id: puestoId },
+        },
+    });
+    for (const item of Array.isArray(assignedItems) ? assignedItems : []) {
+        let art_bd = null;
+        if (item.nomencladorArticuloCP_id) {
+            art_bd = await callDynamicPrisma({
+                req,
+                data: { action: "GET", table: "n_articulo_corpo_puesto", operation: "findUnique", where: { id: item.nomencladorArticuloCP_id } },
+            });
+        }
+        articulos_return.push({
+            id: item.id,
+            nombre: art_bd ? art_bd.nombre : "Artículo inidentificable",
+            tipo: "Asignado",
+            marca: item.marca || "",
+            serie: item.serie || "",
+            cantidad_requerida: 1,
+            cantidad_real: 1,
+            estado: "Bueno",
+            observaciones: "",
+            marcada: false,
+            file_name: null,
+        });
+    }
+
+    const planIds = articulos_return.filter((a: any) => a.tipo === "Plan").map((a: any) => a.id);
+    const asignadoIds = articulos_return.filter((a: any) => a.tipo === "Asignado").map((a: any) => a.id);
+    if (planIds.length > 0 || asignadoIds.length > 0) {
+        const or: any[] = [];
+        if (planIds.length) or.push({ articulo_plan_id: { in: planIds } });
+        if (asignadoIds.length) or.push({ articulo_asignado_id: { in: asignadoIds } });
+        const mantenimientos = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_articulo_mantenimiento",
+                operation: "findMany",
+                where: { OR: or },
+                orderBy: { id: "desc" },
+                select: { articulo_plan_id: true, articulo_asignado_id: true, estado: true, cantidad_real: true },
+            },
+        });
+        const byPlan = new Map<number, any>();
+        const byAsig = new Map<number, any>();
+        for (const m of Array.isArray(mantenimientos) ? mantenimientos : []) {
+            if (m.articulo_plan_id && !byPlan.has(m.articulo_plan_id)) byPlan.set(m.articulo_plan_id, m);
+            if (m.articulo_asignado_id && !byAsig.has(m.articulo_asignado_id)) byAsig.set(m.articulo_asignado_id, m);
+        }
+        for (const item of articulos_return) {
+            const ultimo = item.tipo === "Plan" ? byPlan.get(item.id) : byAsig.get(item.id);
+            if (ultimo) {
+                if (ultimo.estado === "Bueno" || ultimo.estado === "Malo" || ultimo.estado === "No está") item.estado = ultimo.estado;
+                if (typeof ultimo.cantidad_real === "number") item.cantidad_real = Math.max(0, ultimo.cantidad_real);
+            }
+        }
+    }
+
+    return articulos_return;
 }
 
 

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../../../../../../utils/verifyToken";
-import { prisma } from "../../../../../../../../utils/prismaClient";
+import { verifyAccessTokenByApi } from "../../../../../../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../../../../../../utils/callDynamicPrisma";
 import fs from "fs";
 import path from "path";
 
@@ -11,7 +11,7 @@ export async function DELETE(
   context: { params: Promise<{ id: string; contributionId: string; fileId: string }> }
 ) {
   try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
     if (!valid) return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
 
     const { id, contributionId, fileId } = await context.params;
@@ -22,12 +22,21 @@ export async function DELETE(
       return NextResponse.json({ status: false, message: "IDs no especificados" }, { status: 200 });
     }
 
-    const file = await prisma.c_archivos_aporte_incidente.findFirst({
-      where: { id: archivoId, contribucion_id: aporteId },
+    const file = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "c_archivos_aporte_incidente",
+        operation: "findFirst",
+        where: { id: archivoId, contribucion_id: aporteId }
+      }
     });
     if (!file) return NextResponse.json({ status: false, message: "Archivo no encontrado" }, { status: 200 });
 
-    await prisma.c_archivos_aporte_incidente.delete({ where: { id: archivoId } });
+    await callDynamicPrisma({
+      req,
+      data: { action: "DELETE", table: "c_archivos_aporte_incidente", where: { id: archivoId } }
+    });
 
     const filePath = path.join(
       process.cwd(),

@@ -1,11 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../../../utils/verifyToken";
-import { prisma } from "../../../../../utils/prismaClient";
-import fs from "fs";
-import path from "path";
-import { v4 as uuidv4 } from "uuid";
+import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { findContributionIncidents } from "../../../../../utils/findContributionIncidents";
 import { sendNotificationByRole } from "../../../../../utils/sendNotification";
+import { uploadDynamicFiles } from "../../../../../utils/callDynamicFilesApi";
 
 export const runtime = "nodejs";
 
@@ -30,26 +28,22 @@ function safeParseJson<T>(value: any, fallback: T): T {
   }
 }
 
-function normalizeBase64(b64: string): string {
-  if (!b64) return "";
-  const idx = b64.indexOf("base64,");
-  if (idx !== -1) return b64.slice(idx + "base64,".length);
-  return b64;
-}
-
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
     if (!valid) return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
 
     const { id } = await context.params;
     const incidentId = parseInt(id, 10);
     if (!incidentId) return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
 
-    const incident = await prisma.c_incidente.findUnique({ where: { id: incidentId } });
+    const incident = await callDynamicPrisma({
+      req,
+      data: { action: "GET", table: "c_incidente", operation: "findUnique", where: { id: incidentId } }
+    });
     if (!incident) return NextResponse.json({ status: false, message: "Incidente no encontrado" }, { status: 200 });
 
-    const mapped = await findContributionIncidents(incidentId);
+    const mapped = await findContributionIncidents(req, incidentId);
 
     return NextResponse.json({ status: true, contributions: mapped }, { status: 200 });
   } catch (error: unknown) {
@@ -61,18 +55,21 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
 export async function POST(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
     if (!valid) return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
 
     const { id } = await context.params;
     const incidentId = parseInt(id, 10);
     if (!incidentId) return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
 
-    const incident = await prisma.c_incidente.findUnique({ where: { id: incidentId } });
+    const incident = await callDynamicPrisma({
+      req,
+      data: { action: "GET", table: "c_incidente", operation: "findUnique", where: { id: incidentId } }
+    });
     if (!incident) return NextResponse.json({ status: false, message: "Incidente no encontrado" }, { status: 200 });
 
     const body = await req.json();
-    const { aporte, rol_aporte, archivos } = body ?? {};
+    const { aporte, rol_aporte, archivos, nombre_aporte, firma_aporte_tercero } = body ?? {};
 
     const empleadoId = parseInt(String((payload as any)?.id ?? (payload as any)?.empleado_id ?? "0"), 10);
     if (!empleadoId) return NextResponse.json({ status: false, message: "Empleado no identificado" }, { status: 200 });
@@ -91,45 +88,51 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
       filesParsed = safeParseJson<ContributionFileInput[]>(archivos, []);
     }
 
-    const created = await prisma.c_contribucion_incidente.create({
+    const created = await callDynamicPrisma({
+      req,
       data: {
-        incidente_id: incidentId,
-        empleado_id: empleadoId,
-        aporte: String(aporte),
-        rol_aporte: roleStr,
-        created_at: new Date(),
-      },
+        action: "POST",
+        table: "c_contribucion_incidente",
+        data: {
+          incidente_id: incidentId,
+          empleado_id: empleadoId,
+          aporte: String(aporte),
+          rol_aporte: roleStr,
+          nombre_aporte: typeof nombre_aporte === "string" && nombre_aporte.trim().length > 0 ? nombre_aporte.trim() : null,
+          firma_aporte_tercero: typeof firma_aporte_tercero === "string" && firma_aporte_tercero.trim().length > 0 ? firma_aporte_tercero.trim() : null,
+          created_at: new Date().toISOString(),
+        }
+      }
     });
 
     if (filesParsed.length > 0) {
-      const dir = path.join(process.cwd(), "public", "uploads", "incidents", `${incidentId}`, "aportes", `${created.id}`);
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      const uploadResp = await uploadDynamicFiles({
+        req,
+        folderPath: `incidents/${incidentId}/aportes/${created.id}`,
+        files: filesParsed
+          .filter((f) => f?.file_base64 && f?.extension && f?.type)
+          .map((f) => ({
+            type: f.type,
+            extension: f.extension,
+            original_name: f.original_name,
+            file_base64: f.file_base64,
+          })),
+      });
 
-      for (const f of filesParsed) {
-        if (!f?.file_base64 || !f?.extension || !f?.type) continue;
-        let buffer: Buffer;
-        try {
-          buffer = Buffer.from(normalizeBase64(String(f.file_base64)), "base64");
-        } catch {
-          continue;
-        }
-
-        const ext = String(f.extension).replace(".", "").trim() || "dat";
-        const fileName = `${uuidv4()}.${ext}`;
-        fs.writeFileSync(path.join(dir, fileName), buffer);
-
-        const originalName =
-          (typeof f.original_name === "string" && f.original_name.trim().length > 0)
-            ? f.original_name.trim()
-            : fileName;
-
-        await prisma.c_archivos_aporte_incidente.create({
+      const uploadedFiles = Array.isArray(uploadResp?.files) ? uploadResp.files : [];
+      for (const uploaded of uploadedFiles) {
+        await callDynamicPrisma({
+          req,
           data: {
-            name: fileName,
-            original_name: originalName,
-            type: String(f.type),
-            extension: ext,
-            contribucion_id: created.id,
+            action: "POST",
+            table: "c_archivos_aporte_incidente",
+            data: {
+              name: uploaded.name,
+              original_name: uploaded.original_name || uploaded.name,
+              type: uploaded.type,
+              extension: uploaded.extension,
+              contribucion_id: created.id,
+            },
           },
         });
       }
@@ -138,27 +141,42 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
     if (created) {
       let empleadoNombre = "Desconocido";
       let sucursalNombre = "Desconocida";
-      let incident = await prisma.c_incidente.findUnique({ where: { id: incidentId } });
-      if (incident) {
+      const incidentData = await callDynamicPrisma({
+        req,
+        data: { action: "GET", table: "c_incidente", operation: "findUnique", where: { id: incidentId } }
+      });
+      if (incidentData) {
         let clasificacionNombre = "Desconocida";
-        let emp = await prisma.c_empleado.findUnique({ where: { id: empleadoId } });
+        const emp = await callDynamicPrisma({
+          req,
+          data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: empleadoId } }
+        });
         if (emp) {
           empleadoNombre = emp.nombre + " " + emp.primer_apellido + " " + emp.segundo_apellido;
         }
-        if (incident.clasificacion) {
-          const clasificacion = await prisma.n_clasificacion_incidente.findUnique({ where: { id: incident.clasificacion } });
+        if (incidentData.clasificacion) {
+          const clasificacion = await callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "n_clasificacion_incidente", operation: "findUnique", where: { id: incidentData.clasificacion } }
+          });
           if (clasificacion) {
             clasificacionNombre = clasificacion.nombre;
           }
         }
-        if (incident.corpo_id) {
-          const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: incident.corpo_id } });
+        if (incidentData.corpo_id) {
+          const sucursal = await callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "e_estructura_sucursal", operation: "findUnique", where: { id: incidentData.corpo_id } }
+          });
           if (sucursal) {
             sucursalNombre = sucursal.nombre;
           }
         }
-        let descriptionNotificacion = "El empleado " + empleadoNombre + " ha registrado un aporte al incidente de tipo " + clasificacionNombre + " en la sucursal " + sucursalNombre + " ocurrido el día " + incident.fecha_incidente.toISOString().split("T")[0];
-        sendNotificationByRole(incident.corpo_id, [empleadoId], "Aporte registrado", descriptionNotificacion, ["ADMINISTRATIVO", "SUPERVISOR"]);
+        const fechaIncidente = incidentData.fecha_incidente instanceof Date
+          ? incidentData.fecha_incidente.toISOString()
+          : incidentData.fecha_incidente;
+        let descriptionNotificacion = "El empleado " + empleadoNombre + " ha registrado un aporte al incidente de tipo " + clasificacionNombre + " en la sucursal " + sucursalNombre + " ocurrido el día " + fechaIncidente.split("T")[0];
+        await sendNotificationByRole(req, incidentData.corpo_id, [empleadoId], "Aporte registrado", descriptionNotificacion, ["ADMINISTRATIVO", "SUPERVISOR"]);
       }
     }
 

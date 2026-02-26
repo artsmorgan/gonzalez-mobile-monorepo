@@ -62,6 +62,7 @@ type AgendaMinutaRecord = {
   autor: string;
   participantes: string;
   acuerdos: string;
+  temas_a_tratar?: string;
   observaciones: string;
   firma_responsable: string;
   created_at: string;
@@ -73,6 +74,7 @@ type AgendaMinutaRecord = {
 
 type ParticipanteItem = { id_local: string; nombre: string; cedula: string; firma: string | null };
 type AcuerdoItem = { id_local: string; texto: string };
+type TemaItem = { id_local: string; tema: string };
 
 type AcuerdosPayload = {
   items: AcuerdoItem[];
@@ -124,6 +126,20 @@ const formatAcuerdosForDisplay = (acuerdosJson: string): string => {
   } catch (e) {
     console.error('Error formatting acuerdos for display:', e);
     return 'Error al formatear acuerdos.';
+  }
+};
+
+const formatTemasForDisplay = (temasJson: string): string => {
+  try {
+    const temas: string[] = JSON.parse(temasJson || '[]');
+    if (!Array.isArray(temas) || temas.length === 0) return 'No hay temas.';
+    return temas.map((t, idx) => {
+      const tema = String(t || '').trim() || '-';
+      return `${idx + 1}. ${tema}`;
+    }).join('\n');
+  } catch (e) {
+    console.error('Error formatting temas for display:', e);
+    return 'Error al formatear temas.';
   }
 };
 
@@ -226,6 +242,8 @@ export default function PhysicalMinuteAgendaScreen() {
   // create/edit mode
   const [isCreating, setIsCreating] = useState(false);
   const [editingRecord, setEditingRecord] = useState<AgendaMinutaRecord | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitResponse, setSubmitResponse] = useState<{ type: 'success' | 'error', message: string } | null>(null);
 
   // form
   const [numero, setNumero] = useState('');
@@ -241,6 +259,7 @@ export default function PhysicalMinuteAgendaScreen() {
 
   const [participantes, setParticipantes] = useState<ParticipanteItem[]>([]);
   const [acuerdos, setAcuerdos] = useState<AcuerdoItem[]>([]);
+  const [temasATratar, setTemasATratar] = useState<TemaItem[]>([]);
 
   // participantes signature modal
   const [isSignatureModalVisible, setIsSignatureModalVisible] = useState(false);
@@ -257,6 +276,7 @@ export default function PhysicalMinuteAgendaScreen() {
   // UI collapsables in list items
   const [expandedParticipantesById, setExpandedParticipantesById] = useState<Record<string, boolean>>({});
   const [expandedAcuerdosById, setExpandedAcuerdosById] = useState<Record<string, boolean>>({});
+  const [expandedTemasById, setExpandedTemasById] = useState<Record<string, boolean>>({});
   const [expandedFirmaById, setExpandedFirmaById] = useState<Record<string, boolean>>({});
 
   // Modal: ver cambios (auditoría)
@@ -564,6 +584,9 @@ export default function PhysicalMinuteAgendaScreen() {
       if (prop === 'acuerdos') {
         return formatAcuerdosForDisplay(JSON.stringify(value));
       }
+      if (prop === 'temas_a_tratar') {
+        return formatTemasForDisplay(JSON.stringify(value));
+      }
       return JSON.stringify(value, null, 2);
     }
     if (typeof value === 'string') {
@@ -576,6 +599,9 @@ export default function PhysicalMinuteAgendaScreen() {
           }
           if (prop === 'acuerdos') {
             return formatAcuerdosForDisplay(value);
+          }
+          if (prop === 'temas_a_tratar') {
+            return formatTemasForDisplay(value);
           }
           return JSON.stringify(parsed, null, 2);
         } catch {
@@ -635,6 +661,7 @@ export default function PhysicalMinuteAgendaScreen() {
     setObservaciones('');
     setParticipantes([]);
     setAcuerdos([]);
+    setTemasATratar([]);
     setFirmaResponsable('');
   };
 
@@ -680,6 +707,7 @@ export default function PhysicalMinuteAgendaScreen() {
 
     const parsedParticipantes = safeJsonParse<ParticipanteItem[]>(r.participantes, []);
     const parsedAcuerdos = parseAcuerdosPayload(r.acuerdos).items;
+    const parsedTemas = safeJsonParse<string[]>((r as any).temas_a_tratar, []);
     setParticipantes(
       parsedParticipantes.map((p) => ({
         id_local: p.id_local || generateRandomId(),
@@ -692,6 +720,12 @@ export default function PhysicalMinuteAgendaScreen() {
       (parsedAcuerdos || []).map((a) => ({
         id_local: a.id_local || generateRandomId(),
         texto: a.texto || '',
+      }))
+    );
+    setTemasATratar(
+      (parsedTemas || []).map((tema: string) => ({
+        id_local: generateRandomId(),
+        tema: tema || '',
       }))
     );
     setFirmaResponsable(r.firma_responsable || '');
@@ -805,6 +839,18 @@ export default function PhysicalMinuteAgendaScreen() {
 
   const updateAcuerdo = (id_local: string, patch: Partial<AcuerdoItem>) => {
     setAcuerdos((prev) => prev.map((a) => (a.id_local === id_local ? { ...a, ...patch } : a)));
+  };
+
+  const addTema = () => {
+    setTemasATratar((prev) => [...prev, { id_local: generateRandomId(), tema: '' }]);
+  };
+
+  const removeTema = (id_local: string) => {
+    setTemasATratar((prev) => prev.filter((t) => t.id_local !== id_local));
+  };
+
+  const updateTema = (id_local: string, patch: Partial<TemaItem>) => {
+    setTemasATratar((prev) => prev.map((t) => (t.id_local === id_local ? { ...t, ...patch } : t)));
   };
 
   const fetchRecords = useCallback(async () => {
@@ -987,6 +1033,8 @@ export default function PhysicalMinuteAgendaScreen() {
       },
     };
 
+    const temasArray = temasATratar.map((t) => t.tema.trim()).filter((t) => t.length > 0);
+
     return {
       cliente_id: selectedClienteId,
       corpo_id: selectedSucursalId,
@@ -999,124 +1047,132 @@ export default function PhysicalMinuteAgendaScreen() {
       autor: autor.trim(),
       participantes: JSON.stringify(participantes),
       acuerdos: JSON.stringify(acuerdosPayload),
+      temas_a_tratar: JSON.stringify(temasArray),
       observaciones: observaciones.trim() || ' ',
       firma_responsable: firmaResponsable,
     };
   };
 
   const saveHandler = async () => {
-    Alert.alert('Confirmar', editingRecord ? '¿Actualizar agenda minuta?' : '¿Guardar agenda minuta?', [
-      { text: 'Cancelar', style: 'cancel' },
-      {
-        text: 'Confirmar',
-        onPress: async () => {
-          try {
-            const payload = buildRequestPayload();
-            const isConnected = await getConnectionStatus();
+    setIsSubmitting(true);
+    setSubmitResponse(null);
 
-            if (editingRecord && editingRecord.id) {
-              if (isConnected) {
-                const res = await updateAgendaMinuta({
-                  id: editingRecord.id,
-                  requestData: payload,
-                  refreshAccessToken,
-                  logout,
-                });
-                if (res.status) {
-                  Alert.alert('Éxito', 'Agenda minuta actualizada correctamente');
-                  cancelCreateOrEdit();
-                  fetchRecords();
-                  return;
-                }
+    try {
+      const payload = buildRequestPayload();
+      const isConnected = await getConnectionStatus();
 
-                // fallback offline on 503
-                const msg = String(res.message || '');
-                if (msg.includes('503')) {
-                  // queue offline update
-                } else {
-                  Alert.alert('Error', res.message || 'No se pudo actualizar');
-                  return;
-                }
-              }
-
-              const localId = String(editingRecord.id_local || generateRandomId());
-              const actionsStr = await AsyncStorage.getItem('evaluations_actions');
-              const actions = actionsStr ? JSON.parse(actionsStr) : [];
-              actions.push({ id: localId, action: 'update', type: 'agenda_minuta', payload, synced: false, remote_id: editingRecord.id });
-              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
-
-              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-              const cache = cacheStr ? JSON.parse(cacheStr) : [];
-              const updatedCache = cache.map((it: any) => {
-                if ((it.id === editingRecord.id || it.id_local === localId) && it.type === 'agenda_minuta') {
-                  return {
-                    ...it,
-                    ...payload,
-                    id_local: localId,
-                    synced: false,
-                    type: 'agenda_minuta',
-                  };
-                }
-                return it;
-              });
-              await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-              Alert.alert('Modo Offline', 'Actualizado offline. Se sincronizará cuando haya conexión.');
+      if (editingRecord && editingRecord.id) {
+        if (isConnected) {
+          const res = await updateAgendaMinuta({
+            id: editingRecord.id,
+            requestData: payload,
+            refreshAccessToken,
+            logout,
+          });
+          if (res.status) {
+            setSubmitResponse({ type: 'success', message: res.message || 'Agenda minuta actualizada correctamente' });
+            setTimeout(() => {
               cancelCreateOrEdit();
               fetchRecords();
-              return;
-            }
+            }, 2000);
+            return;
+          }
 
-            // create
-            if (isConnected) {
-              const res = await createAgendaMinuta({ requestData: payload, refreshAccessToken, logout });
-              if (res.status) {
-                Alert.alert('Éxito', 'Agenda minuta guardada correctamente');
-                cancelCreateOrEdit();
-                fetchRecords();
-              } else {
-                Alert.alert('Error', res.message || 'No se pudo guardar');
-              }
-              return;
-            }
+          // fallback offline on 503
+          const msg = String(res.message || '');
+          if (msg.includes('503')) {
+            // queue offline update
+          } else {
+            setSubmitResponse({ type: 'error', message: res.message || 'No se pudo actualizar' });
+            setIsSubmitting(false);
+            return;
+          }
+        }
 
-            const localId = generateRandomId();
-            const actionsStr = await AsyncStorage.getItem('evaluations_actions');
-            const actions = actionsStr ? JSON.parse(actionsStr) : [];
-            actions.push({ id: localId, action: 'create', type: 'agenda_minuta', payload, synced: false });
-            await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+        const localId = String(editingRecord.id_local || generateRandomId());
+        const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+        const actions = actionsStr ? JSON.parse(actionsStr) : [];
+        actions.push({ id: localId, action: 'update', type: 'agenda_minuta', payload, synced: false, remote_id: editingRecord.id });
+        await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
 
-            const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-            const cache = cacheStr ? JSON.parse(cacheStr) : [];
-            const newCacheRecord: AgendaMinutaRecord = {
-              id: '',
+        const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+        const cache = cacheStr ? JSON.parse(cacheStr) : [];
+        const updatedCache = cache.map((it: any) => {
+          if ((it.id === editingRecord.id || it.id_local === localId) && it.type === 'agenda_minuta') {
+            return {
+              ...it,
+              ...payload,
               id_local: localId,
-              cliente_id: payload.cliente_id,
-              corpo_id: payload.corpo_id,
-              puesto_id: payload.puesto_id,
-              numero: payload.numero,
-              titulo: payload.titulo,
-              fecha: payload.fecha,
-              hora_inicio: payload.hora_inicio,
-              hora_fin: payload.hora_fin,
-              autor: payload.autor,
-              participantes: payload.participantes,
-              acuerdos: payload.acuerdos,
-              observaciones: payload.observaciones,
-              firma_responsable: payload.firma_responsable,
-              created_at: new Date().toISOString(),
               synced: false,
+              type: 'agenda_minuta',
             };
-            cache.push({ ...newCacheRecord, type: 'agenda_minuta' });
-            await AsyncStorage.setItem('evaluations_cache', JSON.stringify(cache));
-            Alert.alert('Modo Offline', 'Agenda minuta registrada localmente. Se sincronizará cuando haya conexión.');
+          }
+          return it;
+        });
+        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+        setSubmitResponse({ type: 'success', message: 'Actualizado offline. Se sincronizará cuando haya conexión.' });
+        setTimeout(() => {
+          cancelCreateOrEdit();
+          fetchRecords();
+        }, 2000);
+        return;
+      }
+
+      // create
+      if (isConnected) {
+        const res = await createAgendaMinuta({ requestData: payload, refreshAccessToken, logout });
+        if (res.status) {
+          setSubmitResponse({ type: 'success', message: res.message || 'Agenda minuta guardada correctamente' });
+          setTimeout(() => {
             cancelCreateOrEdit();
             fetchRecords();
-          } catch (e: any) {
-            Alert.alert('Error', e?.message || 'No se pudo guardar');
-          }
-        },
-      },
-    ]);
+          }, 2000);
+        } else {
+          setSubmitResponse({ type: 'error', message: res.message || 'No se pudo guardar' });
+        }
+        return;
+      }
+
+      const localId = generateRandomId();
+      const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+      const actions = actionsStr ? JSON.parse(actionsStr) : [];
+      actions.push({ id: localId, action: 'create', type: 'agenda_minuta', payload, synced: false });
+      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+
+      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+      const cache = cacheStr ? JSON.parse(cacheStr) : [];
+      const newCacheRecord: AgendaMinutaRecord = {
+        id: '',
+        id_local: localId,
+        cliente_id: payload.cliente_id,
+        corpo_id: payload.corpo_id,
+        puesto_id: payload.puesto_id,
+        numero: payload.numero,
+        titulo: payload.titulo,
+        fecha: payload.fecha,
+        hora_inicio: payload.hora_inicio,
+        hora_fin: payload.hora_fin,
+        autor: payload.autor,
+        participantes: payload.participantes,
+        acuerdos: payload.acuerdos,
+        temas_a_tratar: payload.temas_a_tratar,
+        observaciones: payload.observaciones,
+        firma_responsable: payload.firma_responsable,
+        created_at: new Date().toISOString(),
+        synced: false,
+      };
+      cache.push({ ...newCacheRecord, type: 'agenda_minuta' });
+      await AsyncStorage.setItem('evaluations_cache', JSON.stringify(cache));
+      setSubmitResponse({ type: 'success', message: 'Agenda minuta registrada localmente. Se sincronizará cuando haya conexión.' });
+      setTimeout(() => {
+        cancelCreateOrEdit();
+        fetchRecords();
+      }, 2000);
+    } catch (e: any) {
+      setSubmitResponse({ type: 'error', message: e?.message || 'No se pudo guardar' });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const deleteHandler = async (r: AgendaMinutaRecord) => {
@@ -1189,9 +1245,11 @@ export default function PhysicalMinuteAgendaScreen() {
           const itemKey = String(r.id || r.id_local || '');
           const participantesArr = safeJsonParse<any[]>(r.participantes, []);
           const { items: acuerdosArr, meta: acuerdosMeta } = parseAcuerdosPayload(r.acuerdos);
+          const temasArr = safeJsonParse<string[]>((r as any).temas_a_tratar, []);
           const fechaTxt = formatDateDMY(r.fecha, '—');
           const isParticipantesOpen = !!expandedParticipantesById[itemKey];
           const isAcuerdosOpen = !!expandedAcuerdosById[itemKey];
+          const isTemasOpen = !!expandedTemasById[itemKey];
           const isFirmaOpen = !!expandedFirmaById[itemKey];
 
           return (
@@ -1256,6 +1314,28 @@ export default function PhysicalMinuteAgendaScreen() {
                       acuerdosArr.map((a: any, idx: number) => (
                         <ThemedText key={String(a?.id_local || idx)} style={styles.detailLine}>
                           - {String(a?.texto || '').trim() || '—'}
+                        </ThemedText>
+                      ))
+                    )}
+                  </ThemedView>
+                )}
+
+                <TouchableOpacity
+                  style={styles.collapseButton}
+                  onPress={() => setExpandedTemasById((prev) => ({ ...prev, [itemKey]: !prev[itemKey] }))}
+                  activeOpacity={0.8}
+                >
+                  <ThemedText style={styles.collapseButtonText}>Temas a tratar ({temasArr.length})</ThemedText>
+                  <Ionicons name={isTemasOpen ? 'chevron-up' : 'chevron-down'} size={18} color="#007AFF" />
+                </TouchableOpacity>
+                {isTemasOpen && (
+                  <ThemedView style={styles.collapsableContent}>
+                    {temasArr.length === 0 ? (
+                      <ThemedText style={styles.detailLine}>—</ThemedText>
+                    ) : (
+                      temasArr.map((tema: string, idx: number) => (
+                        <ThemedText key={idx} style={styles.detailLine}>
+                          - {String(tema || '').trim() || '—'}
                         </ThemedText>
                       ))
                     )}
@@ -1563,6 +1643,40 @@ export default function PhysicalMinuteAgendaScreen() {
             <TouchableOpacity style={styles.addButton} onPress={addAcuerdo} activeOpacity={0.85}>
               <Ionicons name="add-circle" size={20} color="#4CAF50" />
               <ThemedText style={styles.addButtonText}>Agregar acuerdo</ThemedText>
+            </TouchableOpacity>
+
+            <ThemedText style={styles.formSectionTitle}>Temas a tratar</ThemedText>
+            {temasATratar.length === 0 ? <ThemedText style={styles.emptyTextSmall}>—</ThemedText> : null}
+            {temasATratar.map((t, idx) => {
+              const title = `Tema ${idx + 1}`;
+              return (
+                <ThemedView key={t.id_local} style={styles.expandItem}>
+                  <ThemedView style={styles.expandHeader}>
+                    <ThemedView style={styles.expandHeaderContent}>
+                      <ThemedText style={styles.expandHeaderText}>{title}</ThemedText>
+                    </ThemedView>
+                    <ThemedView style={styles.expandHeaderActions}>
+                      <TouchableOpacity onPress={() => removeTema(t.id_local)} style={styles.removeExpandButton} activeOpacity={0.85}>
+                        <Ionicons name="trash" size={20} color="#FF3B30" />
+                      </TouchableOpacity>
+                    </ThemedView>
+                  </ThemedView>
+                  <ThemedView style={styles.expandContent}>
+                    <ThemedText style={styles.label}>Tema</ThemedText>
+                    <TextInput
+                      style={[styles.input, styles.textArea]}
+                      value={t.tema}
+                      onChangeText={(text) => updateTema(t.id_local, { tema: text })}
+                      placeholder="Escriba el tema"
+                      multiline
+                    />
+                  </ThemedView>
+                </ThemedView>
+              );
+            })}
+            <TouchableOpacity style={styles.addButton} onPress={addTema} activeOpacity={0.85}>
+              <Ionicons name="add-circle" size={20} color="#4CAF50" />
+              <ThemedText style={styles.addButtonText}>Agregar tema</ThemedText>
             </TouchableOpacity>
 
             <ThemedText style={styles.formSectionTitle}>Firma responsable *</ThemedText>
@@ -2131,6 +2245,28 @@ const styles = StyleSheet.create({
   saveButton: { backgroundColor: '#007AFF' },
   cancelButton: { backgroundColor: '#8E8E93' },
   buttonText: { color: '#FFFFFF', fontSize: 14, fontWeight: '800' },
+  buttonDisabled: {
+    opacity: 0.6,
+  },
+  responseContainer: {
+    padding: 12,
+    borderRadius: 6,
+    marginBottom: 12,
+  },
+  responseSuccess: {
+    backgroundColor: '#D4EDDA',
+    borderWidth: 1,
+    borderColor: '#C3E6CB',
+  },
+  responseError: {
+    backgroundColor: '#F8D7DA',
+    borderWidth: 1,
+    borderColor: '#F5C6CB',
+  },
+  responseText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
   overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 },
   floatModalCardMovimientos: { backgroundColor: '#FFFFFF', borderRadius: 12, width: '100%', maxWidth: 500, maxHeight: '80%', borderWidth: 1, borderColor: '#E0E0E0', overflow: 'hidden' },
   floatModalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#E0E0E0' },

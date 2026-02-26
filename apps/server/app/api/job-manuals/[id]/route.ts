@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../../utils/verifyToken";
-import { prisma } from "../../../../utils/prismaClient";
+import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import fs from "fs";
 import path from "path";
-import { v4 as uuidv4 } from "uuid";
+import { uploadDynamicFiles } from "../../../../utils/callDynamicFilesApi";
 
 type ManualFileInput = {
     type: string;
@@ -16,7 +16,7 @@ export async function PUT(
     context: { params: Promise<{ id: string }> }
 ) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
         if (!valid) {
             return NextResponse.json(
                 { status: false, expired: expired, message: message },
@@ -34,8 +34,14 @@ export async function PUT(
             );
         }
 
-        const manual = await prisma.e_manual_puesto.findUnique({
-            where: { id }
+        const manual = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "e_manual_puesto",
+                operation: "findUnique",
+                where: { id },
+            },
         });
         if (!manual) {
             return NextResponse.json(
@@ -43,6 +49,7 @@ export async function PUT(
                 { status: 200 }
             );
         }
+        const manualObj = manual as any;
 
         const {
             title,
@@ -52,19 +59,32 @@ export async function PUT(
             newFiles
         } = await req.json();
 
-        await prisma.e_manual_puesto.update({
-            where: { id },
+        await callDynamicPrisma({
+            req,
             data: {
-                title: title ?? manual.title,
-                description: description ?? manual.description,
-                firma: firma_responsable ?? manual.firma
+                action: "UPDATE",
+                table: "e_manual_puesto",
+                operation: "update",
+                where: { id },
+                data: {
+                    title: title ?? manualObj.title,
+                    description: description ?? manualObj.description,
+                    firma: firma_responsable ?? manualObj.firma
+                }
             }
         });
 
         if (Array.isArray(filesToDelete) && filesToDelete.length > 0) {
-            const files = await prisma.e_archivos_manual_puesto.findMany({
-                where: { id: { in: filesToDelete }, manual_puesto_id: id }
+            const files = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "e_archivos_manual_puesto",
+                    operation: "findMany",
+                    where: { id: { in: filesToDelete }, manual_puesto_id: id },
+                },
             });
+            const filesArray = Array.isArray(files) ? files : [];
 
             const dir = path.join(
                 process.cwd(),
@@ -74,15 +94,22 @@ export async function PUT(
                 `${id}`
             );
 
-            for (const file of files) {
-                const filePath = path.join(dir, file.name);
+            for (const file of filesArray) {
+                const fileObj = file as any;
+                const filePath = path.join(dir, fileObj.name);
                 if (fs.existsSync(filePath)) {
                     fs.unlinkSync(filePath);
                 }
             }
 
-            await prisma.e_archivos_manual_puesto.deleteMany({
-                where: { id: { in: filesToDelete }, manual_puesto_id: id }
+            await callDynamicPrisma({
+                req,
+                data: {
+                    action: "DELETE",
+                    table: "e_archivos_manual_puesto",
+                    operation: "deleteMany",
+                    where: { id: { in: filesToDelete }, manual_puesto_id: id },
+                },
             });
         }
 
@@ -102,41 +129,32 @@ export async function PUT(
             }
 
             if (filesParsed.length > 0) {
-                const dir = path.join(
-                    process.cwd(),
-                    "public",
-                    "uploads",
-                    "job-manuals",
-                    `${id}`
-                );
-                if (!fs.existsSync(dir)) {
-                    fs.mkdirSync(dir, { recursive: true });
-                }
+                const uploadResp = await uploadDynamicFiles({
+                    req,
+                    folderPath: `job-manuals/${id}`,
+                    files: filesParsed.map((file) => ({
+                        type: file.type,
+                        extension: file.extension,
+                        file_base64: file.file_base64,
+                    })),
+                    shouldVerifyAccessToken: true,
+                });
 
-                for (const file of filesParsed) {
-                    if (!file.file_base64 || !file.extension || !file.type) {
-                        continue;
-                    }
-
-                    if (!/^[A-Za-z0-9+/=]+$/.test(file.file_base64)) {
-                        console.warn(
-                            "Formato de archivo inválido, se omite uno de los archivos"
-                        );
-                        continue;
-                    }
-
-                    const fileName = `${uuidv4()}.${file.extension}`;
-                    const buffer = Buffer.from(file.file_base64, "base64");
-                    const filePath = path.join(dir, fileName);
-                    fs.writeFileSync(filePath, buffer);
-
-                    await prisma.e_archivos_manual_puesto.create({
+                const uploadedFiles = Array.isArray(uploadResp?.files) ? uploadResp.files : [];
+                for (const uploaded of uploadedFiles) {
+                    await callDynamicPrisma({
+                        req,
                         data: {
-                            name: fileName,
-                            type: file.type,
-                            original_name: fileName,
-                            extension: file.extension,
-                            manual_puesto_id: id
+                            action: "POST",
+                            table: "e_archivos_manual_puesto",
+                            operation: "create",
+                            data: {
+                                name: uploaded.name,
+                                type: uploaded.type,
+                                original_name: uploaded.original_name || uploaded.name,
+                                extension: uploaded.extension,
+                                manual_puesto_id: id
+                            }
                         }
                     });
                 }
@@ -163,7 +181,7 @@ export async function DELETE(
     context: { params: Promise<{ id: string }> }
 ) {
     try {
-        const { valid, expired, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
         if (!valid) {
             return NextResponse.json(
                 { status: false, expired: expired, message: message },
@@ -181,8 +199,14 @@ export async function DELETE(
             );
         }
 
-        const manual = await prisma.e_manual_puesto.findUnique({
-            where: { id }
+        const manual = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "e_manual_puesto",
+                operation: "findUnique",
+                where: { id },
+            },
         });
         if (!manual) {
             return NextResponse.json(
@@ -191,34 +215,59 @@ export async function DELETE(
             );
         }
 
+        const manualObj = manual as any;
         // Solo el creador puede eliminar
-        const requesterId = String(payload.id ?? "");
-        if (String(manual.created_by ?? "") !== requesterId) {
+        const requesterId = String(payload?.id ?? "");
+        if (String(manualObj.created_by ?? "") !== requesterId) {
             return NextResponse.json(
                 { status: false, message: "No tienes permiso para eliminar este manual" },
                 { status: 403 }
             );
         }
 
-        // Borrar archivos físicos y registros relacionados en una transacción
-        await prisma.$transaction(async (tx) => {
-            // Eliminar relaciones de firmas/visualizaciones
-            await (tx as any).e_empleado_visualizacion_manual_puesto.deleteMany({
-                where: { manual_puesto_id: id }
-            });
+        // Borrar archivos físicos y registros relacionados
+        // Eliminar relaciones de firmas/visualizaciones
+        await callDynamicPrisma({
+            req,
+            data: {
+                action: "DELETE",
+                table: "e_empleado_visualizacion_manual_puesto",
+                operation: "deleteMany",
+                where: { manual_puesto_id: id },
+            },
+        });
 
-            // Eliminar archivos de BD
-            await (tx as any).e_archivos_manual_puesto.deleteMany({
-                where: { manual_puesto_id: id }
-            });
+        // Eliminar archivos de BD
+        await callDynamicPrisma({
+            req,
+            data: {
+                action: "DELETE",
+                table: "e_archivos_manual_puesto",
+                operation: "deleteMany",
+                where: { manual_puesto_id: id },
+            },
+        });
 
-            // Eliminar relaciones de puestos
-            await (tx as any).e_puestos_manual_puesto.deleteMany({
-                where: { manual_puesto_id: id }
-            });
+        // Eliminar relaciones de puestos
+        await callDynamicPrisma({
+            req,
+            data: {
+                action: "DELETE",
+                table: "e_puestos_manual_puesto",
+                operation: "deleteMany",
+                where: { manual_puesto_id: id },
+            },
+        });
 
-            // Finalmente eliminar el manual
-            await tx.e_manual_puesto.delete({ where: { id } });
+        // Finalmente eliminar el manual
+        await callDynamicPrisma({
+            req,
+            data: {
+                action: "DELETE",
+                table: "e_manual_puesto",
+                operation: "delete",
+                where: { id },
+            },
         });
 
         // Eliminar archivos del filesystem

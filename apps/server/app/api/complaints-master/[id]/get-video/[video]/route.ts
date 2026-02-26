@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import fs from "fs";
-import path from "path";
+import { fetchDynamicFile } from "../../../../../../utils/callDynamicFilesApi";
 
 export const runtime = "nodejs";
 
@@ -13,18 +12,17 @@ export async function GET(
     const complaintId = parseInt(id, 10);
     if (!complaintId) return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
 
-    const dir = path.join(process.cwd(), "public", "uploads", "complaints-master", `${complaintId}`);
-    const filePath = path.join(dir, video);
-    if (!fs.existsSync(filePath)) {
-      return NextResponse.json({ status: false, message: "Archivo no encontrado" }, { status: 404 });
-    }
+    const fetched = await fetchDynamicFile({
+      req,
+      type: "video",
+      url: `complaints-master/${complaintId}/${video}`,
+      download: false,
+    });
 
-    const fileBuffer = fs.readFileSync(filePath);
-    return new NextResponse(fileBuffer, {
-      status: 200,
+    return new NextResponse(fetched.buffer, {
       headers: {
-        "Content-Type": "video/*",
-        "Cache-Control": "public, max-age=31536000, immutable",
+        "Content-Type": fetched.headers.contentType,
+        "Cache-Control": fetched.headers.cacheControl,
       },
     });
   } catch (error: unknown) {

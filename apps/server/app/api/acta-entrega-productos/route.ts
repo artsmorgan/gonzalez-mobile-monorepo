@@ -1,22 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyAccessToken } from '../../../utils/verifyToken';
-import { prisma } from '../../../utils/prismaClient';
+import { verifyAccessTokenByApi } from '../../../utils/verifyAccessTokenByApi';
+import { callDynamicPrisma } from '../../../utils/callDynamicPrisma';
 import { toZonedTime } from 'date-fns-tz';
-import fs from 'fs';
-import path from 'path';
-import { v4 as uuidv4 } from 'uuid';
 import { sendNotificationByRole } from '../../../utils/sendNotification';
+import { uploadDynamicFiles } from '../../../utils/callDynamicFilesApi';
 
 export const runtime = 'nodejs';
 
 type ActaImageInput = {
   file_base64: string;
-  extension?: string; // jpg | png | etc
+  extension?: string;
+  original_name?: string;
 };
 
 export async function GET(req: NextRequest) {
   try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
     if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
     const empresaIdStr = req.nextUrl.searchParams.get("empresa_id");
@@ -39,11 +38,18 @@ export async function GET(req: NextRequest) {
     } else if (empresaIdStr) {
       // Si hay empresa pero no cliente, buscar todos los clientes de la empresa
       const empresaId = parseInt(empresaIdStr);
-      const clientes = await prisma.e_estructura_cliente.findMany({
-        where: { empresa_id: empresaId },
-        select: { id: true },
+      const clientes = await callDynamicPrisma({
+        req,
+        data: {
+          action: "GET",
+          table: "e_estructura_cliente",
+          operation: "findMany",
+          where: { empresa_id: empresaId },
+          select: { id: true },
+        },
       });
-      const clienteIds = clientes.map((c) => c.id);
+      const clientesArray = Array.isArray(clientes) ? clientes : [];
+      const clienteIds = clientesArray.map((c: any) => c.id);
       if (clienteIds.length > 0) {
         where.cliente_id = { in: clienteIds };
       } else {
@@ -53,22 +59,31 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ status: false, message: "Debe especificar filtros jerárquicos" }, { status: 400 });
     }
 
-    const records = await prisma.c_acta_entre_producto.findMany({
-      where,
-      orderBy: {
-        fecha: 'desc'
-      },
-      include: {
-        c_imagenes_acta_entrega_producto: true,
+    const records = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "c_acta_entre_producto",
+        operation: "findMany",
+        where,
+        orderBy: {
+          fecha: 'desc'
+        },
+        include: {
+          c_imagenes_acta_entrega_producto: true,
+        },
       },
     });
 
-    const recordsWithIdLocal = records.map(record => ({
+    const recordsArray = Array.isArray(records) ? records : [];
+    const baseUrl = req.nextUrl.origin;
+    const recordsWithIdLocal = recordsArray.map((record: any) => ({
       ...record,
       id_local: "",
       images: (record.c_imagenes_acta_entrega_producto || []).map((img: any) => ({
         id: img.id,
         name: img.name,
+        url: baseUrl ? `${baseUrl}/api/acta-entrega-productos/${record.id}/get-image/${img.name}` : "",
       })),
     }));
 
@@ -99,16 +114,9 @@ function safeParseJson<T>(value: any, fallback: T): T {
   }
 }
 
-function normalizeBase64(b64: string): string {
-  if (!b64) return '';
-  const idx = b64.indexOf('base64,');
-  if (idx !== -1) return b64.slice(idx + 'base64,'.length);
-  return b64;
-}
-
 export async function POST(req: NextRequest) {
   try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
     if (!valid) return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
 
     const {
@@ -136,7 +144,15 @@ export async function POST(req: NextRequest) {
 
     if (!marca_id) return NextResponse.json({ status: false, message: 'Marca no especificada' }, { status: 400 });
 
-    const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(String(marca_id), 10) } });
+    const marcaDia = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "c_marca_dia",
+        operation: "findUnique",
+        where: { id: parseInt(String(marca_id), 10) },
+      },
+    });
     if (!marcaDia) return NextResponse.json({ status: false, message: 'Marca no encontrada' }, { status: 404 });
 
     // Validaciones mínimas (campos NOT NULL en prisma)
@@ -167,92 +183,134 @@ export async function POST(req: NextRequest) {
     }
 
     const createdAt = toZonedTime(new Date(), 'America/Costa_Rica');
-    const createdByNum = payload.id ? parseInt(String(payload.id), 10) : 0;
+    const createdByNum = payload?.id ? parseInt(String(payload.id), 10) : 0;
+    const fechaEntregaDate = new Date(String(fecha_entrega));
+    const fechaRecibeDate = new Date(String(fecha_recibe));
 
-    const newRecord = await prisma.c_acta_entre_producto.create({
+    const newRecord = await callDynamicPrisma({
+      req,
       data: {
-        empresa_id: Number(empresa_id),
-        cliente_id: Number(cliente_id),
-        division_id: Number(division_id),
-        contrato_id: Number(contrato_id),
-        corpo_id: Number(corpo_id),
-        fecha: createdAt,
-        tipo_entrega: String(tipo_entrega),
-        mensual: String(mensual),
-        division: "",
-        detalle: String(detalle),
-        observaciones: String(observaciones),
-        nombre_entrega: String(nombre_entrega),
-        cedula_entrega: String(cedula_entrega),
-        fecha_entrega: new Date(String(fecha_entrega)),
-        firma_entrega: String(firma_entrega),
-        nombre_recibe: String(nombre_recibe),
-        cedula_recibe: String(cedula_recibe),
-        fecha_recibe: new Date(String(fecha_recibe)),
-        firma_recibe: String(firma_recibe),
-        firma_responsable: String(firma_responsable),
+        action: "POST",
+        table: "c_acta_entre_producto",
+        operation: "create",
+        data: {
+          empresa_id: Number(empresa_id),
+          cliente_id: Number(cliente_id),
+          division_id: Number(division_id),
+          contrato_id: Number(contrato_id),
+          corpo_id: Number(corpo_id),
+          fecha: createdAt.toISOString(),
+          tipo_entrega: String(tipo_entrega),
+          mensual: String(mensual),
+          division: "",
+          detalle: String(detalle),
+          observaciones: String(observaciones),
+          nombre_entrega: String(nombre_entrega),
+          cedula_entrega: String(cedula_entrega),
+          fecha_entrega: fechaEntregaDate.toISOString(),
+          firma_entrega: String(firma_entrega),
+          nombre_recibe: String(nombre_recibe),
+          cedula_recibe: String(cedula_recibe),
+          fecha_recibe: fechaRecibeDate.toISOString(),
+          firma_recibe: String(firma_recibe),
+          firma_responsable: String(firma_responsable),
+        },
+        include: { c_imagenes_acta_entrega_producto: true },
       },
-      include: { c_imagenes_acta_entrega_producto: true },
     });
+    const newRecordObj = newRecord as any;
 
     // Registrar cambio de creación
-    await prisma.c_cambios_apps_modules.create({
+    await callDynamicPrisma({
+      req,
       data: {
-        nombre_tabla: "c_acta_entre_producto",
-        registro_id: newRecord.id,
-        cambios: JSON.stringify([{
-          prop: "__created__",
-          before: null,
-          after: {
-            id: newRecord.id,
-            empresa_id: newRecord.empresa_id,
-            cliente_id: newRecord.cliente_id,
-            division_id: newRecord.division_id,
-            contrato_id: newRecord.contrato_id,
-            corpo_id: newRecord.corpo_id,
-            fecha: newRecord.fecha.toISOString(),
-            tipo_entrega: newRecord.tipo_entrega,
-            mensual: newRecord.mensual,
-            detalle: newRecord.detalle,
-            observaciones: newRecord.observaciones,
-            nombre_entrega: newRecord.nombre_entrega,
-            cedula_entrega: newRecord.cedula_entrega,
-            fecha_entrega: newRecord.fecha_entrega.toISOString(),
-            nombre_recibe: newRecord.nombre_recibe,
-            cedula_recibe: newRecord.cedula_recibe,
-            fecha_recibe: newRecord.fecha_recibe.toISOString(),
-          },
-        }]),
-        created_at: createdAt,
-        created_by: createdByNum,
+        action: "POST",
+        table: "c_cambios_apps_modules",
+        operation: "create",
+        data: {
+          nombre_tabla: "c_acta_entre_producto",
+          registro_id: newRecordObj.id,
+          cambios: JSON.stringify([{
+            prop: "__created__",
+            before: null,
+            after: {
+              id: newRecordObj.id,
+              empresa_id: newRecordObj.empresa_id,
+              cliente_id: newRecordObj.cliente_id,
+              division_id: newRecordObj.division_id,
+              contrato_id: newRecordObj.contrato_id,
+              corpo_id: newRecordObj.corpo_id,
+              fecha: createdAt.toISOString(),
+              tipo_entrega: newRecordObj.tipo_entrega,
+              mensual: newRecordObj.mensual,
+              detalle: newRecordObj.detalle,
+              observaciones: newRecordObj.observaciones,
+              nombre_entrega: newRecordObj.nombre_entrega,
+              cedula_entrega: newRecordObj.cedula_entrega,
+              fecha_entrega: fechaEntregaDate.toISOString(),
+              nombre_recibe: newRecordObj.nombre_recibe,
+              cedula_recibe: newRecordObj.cedula_recibe,
+              fecha_recibe: fechaRecibeDate.toISOString(),
+            },
+          }]),
+          created_at: createdAt.toISOString(),
+          created_by: createdByNum,
+        },
       },
     });
 
-    if (newRecord) {
+    if (newRecordObj) {
       let empNombre = "Desconocido";
       let sucursalNombre = "Desconocida";
       let clienteNombre = "Desconocido";
-      let fechaRegistro = newRecord.fecha.toISOString().split("T")[0];
-      if (payload.id) {
-        const empleado = await prisma.c_empleado.findUnique({ where: { id: parseInt(String(payload.id), 10) } });
+      let fechaRegistro = createdAt.toISOString().split("T")[0];
+      if (payload?.id) {
+        const empleado = await callDynamicPrisma({
+          req,
+          data: {
+            action: "GET",
+            table: "c_empleado",
+            operation: "findUnique",
+            where: { id: parseInt(String(payload.id), 10) },
+          },
+        });
         if (empleado) {
-          empNombre = empleado.nombre + " " + empleado.primer_apellido + " " + empleado.segundo_apellido;
+          const empleadoObj = empleado as any;
+          empNombre = empleadoObj.nombre + " " + empleadoObj.primer_apellido + " " + empleadoObj.segundo_apellido;
         }
       }
-      if (newRecord.corpo_id) {
-        const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: newRecord.corpo_id } });
+      if (newRecordObj.corpo_id) {
+        const sucursal = await callDynamicPrisma({
+          req,
+          data: {
+            action: "GET",
+            table: "e_estructura_sucursal",
+            operation: "findUnique",
+            where: { id: newRecordObj.corpo_id },
+          },
+        });
         if (sucursal) {
-          sucursalNombre = sucursal.nombre + " (" + sucursal.nro_sucursal + ")";
+          const sucursalObj = sucursal as any;
+          sucursalNombre = sucursalObj.nombre + " (" + sucursalObj.nro_sucursal + ")";
         }
       }
-      if (newRecord.cliente_id) {
-        const cliente = await prisma.e_estructura_cliente.findUnique({ where: { id: newRecord.cliente_id } });
+      if (newRecordObj.cliente_id) {
+        const cliente = await callDynamicPrisma({
+          req,
+          data: {
+            action: "GET",
+            table: "e_estructura_cliente",
+            operation: "findUnique",
+            where: { id: newRecordObj.cliente_id },
+          },
+        });
         if (cliente) {
-          clienteNombre = cliente.nombre;
+          const clienteObj = cliente as any;
+          clienteNombre = clienteObj.nombre;
         }
       }
       const descriptionNotificacion = "El empleado " + empNombre + " ha creado un registro de acta de entrega de productos para el cliente " + clienteNombre + " en la sucursal " + sucursalNombre + " el día " + fechaRegistro;
-      sendNotificationByRole(newRecord.corpo_id, [parseInt(String(payload.id), 10)], "Acta de entrega de productos creada", descriptionNotificacion, ["ADMINISTRATIVO", "SUPERVISOR"]);
+      await sendNotificationByRole(req, newRecordObj.corpo_id, [createdByNum], "Acta de entrega de productos creada", descriptionNotificacion, ["ADMINISTRATIVO", "SUPERVISOR"]);
     }
 
     // Guardar imágenes (si vienen)
@@ -260,43 +318,59 @@ export async function POST(req: NextRequest) {
     if (imagenes) imagesParsed = safeParseJson<ActaImageInput[]>(imagenes, []);
 
     if (imagesParsed.length > 0) {
-      const dir = path.join(process.cwd(), 'public', 'uploads', 'acta-entrega-productos', `${newRecord.id}`);
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      const uploadResp = await uploadDynamicFiles({
+        req,
+        folderPath: `acta-entrega-productos/${newRecordObj.id}`,
+        files: imagesParsed
+          .filter((img) => img?.file_base64)
+          .map((img) => ({
+            type: "image",
+            extension: String(img.extension || "jpg").replace(".", "").trim() || "jpg",
+            original_name: img.original_name,
+            file_base64: img.file_base64,
+          })),
+      });
 
-      for (const img of imagesParsed) {
-        if (!img?.file_base64) continue;
-        let buffer: Buffer;
-        try {
-          buffer = Buffer.from(normalizeBase64(String(img.file_base64)), 'base64');
-        } catch {
-          continue;
-        }
-        const ext = String(img.extension || 'jpg').replace('.', '').trim() || 'jpg';
-        const fileName = `${uuidv4()}.${ext}`;
-        fs.writeFileSync(path.join(dir, fileName), buffer);
-        await prisma.c_imagenes_acta_entrega_producto.create({
-          data: { name: fileName, acta_id: newRecord.id },
+      const uploadedFiles = Array.isArray(uploadResp?.files) ? uploadResp.files : [];
+      for (const uploaded of uploadedFiles) {
+        await callDynamicPrisma({
+          req,
+          data: {
+            action: "POST",
+            table: "c_imagenes_acta_entrega_producto",
+            operation: "create",
+            data: { name: uploaded.name, acta_id: newRecordObj.id },
+          },
         });
       }
     }
 
-    const fullRecord = await prisma.c_acta_entre_producto.findUnique({
-      where: { id: newRecord.id },
-      include: { c_imagenes_acta_entrega_producto: true },
+    const fullRecord = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "c_acta_entre_producto",
+        operation: "findUnique",
+        where: { id: newRecordObj.id },
+        include: { c_imagenes_acta_entrega_producto: true },
+      },
     });
 
+    const fullRecordObj = fullRecord as any;
+    const baseUrl = req.nextUrl.origin;
     return NextResponse.json(
       {
         status: true,
         message: 'Acta creada correctamente',
         data: {
-          ...(fullRecord ?? newRecord),
+          ...(fullRecordObj ?? newRecordObj),
           id_local: '',
-          images: ((fullRecord as any)?.c_imagenes_acta_entrega_producto || []).map((f: any) => ({
+          images: ((fullRecordObj?.c_imagenes_acta_entrega_producto || []) as any[]).map((f: any) => ({
             id: f.id,
             name: f.name,
+            url: baseUrl ? `${baseUrl}/api/acta-entrega-productos/${fullRecordObj?.id}/get-image/${f.name}` : '',
           })),
-          created_by: payload.id?.toString() || '',
+          created_by: payload?.id?.toString() || '',
         },
       },
       { status: 200 }

@@ -16,6 +16,8 @@ import { Ionicons } from '@expo/vector-icons';
 import saveLunchTime from '../hooks/saveLunchTime';
 import { toZonedTime } from 'date-fns-tz';
 import * as Network from 'expo-network';
+import * as Location from 'expo-location';
+import { jwtDecode } from 'jwt-decode';
 import getHoraAccion from '../hooks/getHoraAccion';
 import { eventBus } from '@/hooks/eventBus';
 import updateServerTime, { setDisconnectedTime } from '@/hooks/updateServerTime';
@@ -68,6 +70,9 @@ export default function LunchTimeScreen() {
   // Time picker state for pauses (one at a time)
   const [activeInactivityPicker, setActiveInactivityPicker] = useState<null | { index: number; type: 'start' | 'end' }>(null);
   const [inactivityPickerValue, setInactivityPickerValue] = useState(new Date());
+  const [firmaEmpleado, setFirmaEmpleado] = useState('');
+  const [isGeneratingFirmaEmpleado, setIsGeneratingFirmaEmpleado] = useState(false);
+  const [location, setLocation] = useState<Location.LocationObject | null>(null);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const navigation = useNavigation<LunchTimeScreenNavigationProp>();
@@ -80,6 +85,7 @@ export default function LunchTimeScreen() {
   const endTimeModeRef = useRef(endTimeMode);
   const inactivitiesRef = useRef(inactivities);
   const currentInactivityStartRef = useRef(currentInactivityStart);
+  const firmaEmpleadoRef = useRef(firmaEmpleado);
 
   useFocusEffect(
     useCallback(() => {
@@ -117,6 +123,10 @@ export default function LunchTimeScreen() {
   useEffect(() => {
     currentInactivityStartRef.current = currentInactivityStart;
   }, [currentInactivityStart]);
+
+  useEffect(() => {
+    firmaEmpleadoRef.current = firmaEmpleado;
+  }, [firmaEmpleado]);
 
   // Redirect to login if not authenticated
   useEffect(() => {
@@ -199,6 +209,7 @@ export default function LunchTimeScreen() {
       startTime: startTimeRef.current,
       inactivities: inactivitiesRef.current,
       currentInactivityStart: currentInactivityStartRef.current,
+      firma_empleado: firmaEmpleadoRef.current,
     }
 
     await AsyncStorage.setItem('temp_state', JSON.stringify(current_state));
@@ -225,6 +236,7 @@ export default function LunchTimeScreen() {
             endTime: new Date(inactivity.endTime)
           })));
         }
+        setFirmaEmpleado(temp_state_obj.firma_empleado || '');
 
         console.log('temp_state_obj', temp_state_obj);
 
@@ -264,6 +276,7 @@ export default function LunchTimeScreen() {
   const handleTimerComplete = async () => {
     setIsTimerActive(false);
     console.log('endTimeMode', endTimeModeRef.current);
+    await AsyncStorage.setItem('alert_lunch_time', 'false');
     let endTimeUse = null;
     if (endTimeModeRef.current == 'current') {
       const horaAccion = await getUpdatedHoraAccion();
@@ -278,7 +291,8 @@ export default function LunchTimeScreen() {
       inicio: startTimeRef.current,
       fin: endTimeUse,
       pausas: JSON.stringify(inactivitiesRef.current),
-      es_manual: false
+      es_manual: false,
+      firma_empleado: firmaEmpleadoRef.current || '',
     };
 
     console.log('requestData', requestData);
@@ -445,8 +459,58 @@ export default function LunchTimeScreen() {
     }
   };
 
+  const requestLocation = async () => {
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') return null;
+      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      setLocation(loc);
+      return loc;
+    } catch {
+      return null;
+    }
+  };
+
+  const generateFirmaEmpleado = async (): Promise<string | null> => {
+    if (isGeneratingFirmaEmpleado) return null;
+    setIsGeneratingFirmaEmpleado(true);
+    try {
+      const loc = location ?? (await requestLocation());
+      if (!loc || !employee) {
+        return null;
+      }
+      const token = await AsyncStorage.getItem('access_token');
+      if (!token) return null;
+      const decodedToken: any = jwtDecode(token);
+      const sessionId = decodedToken.sessionId;
+      if (!sessionId) return null;
+      const horaAccion = await getHoraAccion();
+      const hash = btoa(`${sessionId}:${employee.id}:${loc.coords.latitude}:${loc.coords.longitude}:${horaAccion}`);
+      setFirmaEmpleado(hash);
+      return hash;
+    } catch {
+      return null;
+    } finally {
+      setIsGeneratingFirmaEmpleado(false);
+    }
+  };
+
   const handleStart = async () => {
     if (timerConfig && timeRemaining > 0) {
+      // Consideramos “inicio desde el principio” cuando aún no hay startTime
+      // o cuando el tiempo restante es el total configurado.
+      const isFreshStart =
+        !startTimeRef.current ||
+        (timerConfig && timeRemaining === timerConfig.minutos * 60);
+
+      if (isFreshStart) {
+        const generatedFirma = await generateFirmaEmpleado();
+        if (!generatedFirma) {
+          Alert.alert('Error', 'No se pudo generar la firma digital. Se reiniciará el contador.');
+          await handleReset();
+          return;
+        }
+      }
       const horaAccion = await getUpdatedHoraAccion();
       if (startTimeRef.current == null) {
         setStartTime(new Date(horaAccion));
@@ -483,6 +547,7 @@ export default function LunchTimeScreen() {
     setInactivities([]);
     setCurrentInactivityStart(null);
     setInactivityReason('');
+    setFirmaEmpleado('');
     if (timerConfig) {
       setTimeRemaining(timerConfig.minutos * 60);
     }
@@ -848,12 +913,22 @@ export default function LunchTimeScreen() {
         {
           text: 'Confirmar',
           onPress: async () => {
+            let firmaToUse = firmaEmpleadoRef.current || '';
+            if (!firmaToUse) {
+              const generatedFirma = await generateFirmaEmpleado();
+              if (!generatedFirma) {
+                Alert.alert('Error', 'No se pudo generar la firma digital para el registro manual.');
+                return;
+              }
+              firmaToUse = generatedFirma;
+            }
             const requestData = {
               empleadoId: employee?.id,
               inicio: startTime,
               fin: endTime,
               pausas: JSON.stringify(inactivitiesWithToday),
-              es_manual: true
+              es_manual: true,
+              firma_empleado: firmaToUse
             };
 
             try {

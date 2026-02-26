@@ -1,16 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyAccessToken } from '../../../../utils/verifyToken';
-import { prisma } from '../../../../utils/prismaClient';
+import { verifyAccessTokenByApi } from '../../../../utils/verifyAccessTokenByApi';
+import { callDynamicPrisma } from '../../../../utils/callDynamicPrisma';
 import { toZonedTime } from 'date-fns-tz';
 import fs from 'fs';
 import path from 'path';
-import { v4 as uuidv4 } from 'uuid';
+import { uploadDynamicFiles } from '../../../../utils/callDynamicFilesApi';
 
 export const runtime = 'nodejs';
 
 type ActaImageInput = {
   file_base64: string;
   extension?: string;
+  original_name?: string;
 };
 
 function safeParseJson<T>(value: any, fallback: T): T {
@@ -27,16 +28,9 @@ function safeParseJson<T>(value: any, fallback: T): T {
   }
 }
 
-function normalizeBase64(b64: string): string {
-  if (!b64) return '';
-  const idx = b64.indexOf('base64,');
-  if (idx !== -1) return b64.slice(idx + 'base64,'.length);
-  return b64;
-}
-
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
     if (!valid) return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
 
     const resolvedParams = await context.params;
@@ -65,36 +59,37 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       imagenes,
     } = await req.json();
 
-    const existing = await prisma.c_acta_entre_producto.findUnique({ where: { id: actaId } });
-    if (!existing) return NextResponse.json({ status: false, message: 'Registro no encontrado' }, { status: 404 });
-
-    const updateData: any = {
-      empresa_id: empresa_id !== undefined ? Number(empresa_id) : undefined,
-      cliente_id: cliente_id !== undefined ? Number(cliente_id) : undefined,
-      division_id: division_id !== undefined ? Number(division_id) : undefined,
-      contrato_id: contrato_id !== undefined ? Number(contrato_id) : undefined,
-      corpo_id: corpo_id !== undefined ? Number(corpo_id) : undefined,
-      tipo_entrega: tipo_entrega !== undefined ? String(tipo_entrega ?? '') : undefined,
-      mensual: mensual !== undefined ? String(mensual ?? '') : undefined,
-      detalle: detalle !== undefined ? String(detalle ?? '') : undefined,
-      observaciones: observaciones !== undefined ? String(observaciones ?? '') : undefined,
-      nombre_entrega: nombre_entrega !== undefined ? String(nombre_entrega ?? '') : undefined,
-      cedula_entrega: cedula_entrega !== undefined ? String(cedula_entrega ?? '') : undefined,
-      fecha_entrega: fecha_entrega !== undefined ? new Date(String(fecha_entrega)) : undefined,
-      firma_entrega: firma_entrega !== undefined ? String(firma_entrega ?? '') : undefined,
-      nombre_recibe: nombre_recibe !== undefined ? String(nombre_recibe ?? '') : undefined,
-      cedula_recibe: cedula_recibe !== undefined ? String(cedula_recibe ?? '') : undefined,
-      fecha_recibe: fecha_recibe !== undefined ? new Date(String(fecha_recibe)) : undefined,
-      firma_recibe: firma_recibe !== undefined ? String(firma_recibe ?? '') : undefined,
-      firma_responsable: firma_responsable !== undefined ? String(firma_responsable ?? '') : undefined,
-    };
-
-    // Eliminar campos undefined
-    Object.keys(updateData).forEach(key => {
-      if (updateData[key] === undefined) {
-        delete updateData[key];
-      }
+    const existing = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "c_acta_entre_producto",
+        operation: "findUnique",
+        where: { id: actaId },
+      },
     });
+    if (!existing) return NextResponse.json({ status: false, message: 'Registro no encontrado' }, { status: 404 });
+    const existingObj = existing as any;
+
+    const updateData: any = {};
+    if (empresa_id !== undefined) updateData.empresa_id = Number(empresa_id);
+    if (cliente_id !== undefined) updateData.cliente_id = Number(cliente_id);
+    if (division_id !== undefined) updateData.division_id = Number(division_id);
+    if (contrato_id !== undefined) updateData.contrato_id = Number(contrato_id);
+    if (corpo_id !== undefined) updateData.corpo_id = Number(corpo_id);
+    if (tipo_entrega !== undefined) updateData.tipo_entrega = String(tipo_entrega ?? '');
+    if (mensual !== undefined) updateData.mensual = String(mensual ?? '');
+    if (detalle !== undefined) updateData.detalle = String(detalle ?? '');
+    if (observaciones !== undefined) updateData.observaciones = String(observaciones ?? '');
+    if (nombre_entrega !== undefined) updateData.nombre_entrega = String(nombre_entrega ?? '');
+    if (cedula_entrega !== undefined) updateData.cedula_entrega = String(cedula_entrega ?? '');
+    if (fecha_entrega !== undefined) updateData.fecha_entrega = new Date(String(fecha_entrega)).toISOString();
+    if (firma_entrega !== undefined) updateData.firma_entrega = String(firma_entrega ?? '');
+    if (nombre_recibe !== undefined) updateData.nombre_recibe = String(nombre_recibe ?? '');
+    if (cedula_recibe !== undefined) updateData.cedula_recibe = String(cedula_recibe ?? '');
+    if (fecha_recibe !== undefined) updateData.fecha_recibe = new Date(String(fecha_recibe)).toISOString();
+    if (firma_recibe !== undefined) updateData.firma_recibe = String(firma_recibe ?? '');
+    if (firma_responsable !== undefined) updateData.firma_responsable = String(firma_responsable ?? '');
 
     // Registrar cambios (solo campos actualizados, excluyendo firmas)
     const eq = (a: any, b: any) => {
@@ -110,32 +105,47 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     for (const [k, v] of Object.entries(updateData)) {
       if (k.startsWith("firma_")) continue; // Excluir firmas
 
-      const before = (existing as any)[k];
+      const before = existingObj[k];
       const after = v;
       if (!eq(before, after)) {
+        const beforeValue = before instanceof Date ? before.toISOString() : (typeof before === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(before) ? before : before);
+        const afterValue = after instanceof Date ? after.toISOString() : (typeof after === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(after) ? after : after);
         cambiosArr.push({
           prop: k,
-          before: before instanceof Date ? before.toISOString() : before,
-          after: after instanceof Date ? after.toISOString() : after,
+          before: beforeValue,
+          after: afterValue,
         });
       }
     }
 
-    const updated = await prisma.c_acta_entre_producto.update({
-      where: { id: actaId },
-      data: updateData,
-      include: { c_imagenes_acta_entrega_producto: true },
+    const updated = await callDynamicPrisma({
+      req,
+      data: {
+        action: "UPDATE",
+        table: "c_acta_entre_producto",
+        operation: "update",
+        where: { id: actaId },
+        data: updateData,
+        include: { c_imagenes_acta_entrega_producto: true },
+      },
     });
+    const updatedObj = updated as any;
 
     if (cambiosArr.length > 0) {
       const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
-      await prisma.c_cambios_apps_modules.create({
+      await callDynamicPrisma({
+        req,
         data: {
-          nombre_tabla: "c_acta_entre_producto",
-          registro_id: actaId,
-          cambios: JSON.stringify(cambiosArr),
-          created_at: toZonedTime(new Date(), "America/Costa_Rica"),
-          created_by: createdBy,
+          action: "POST",
+          table: "c_cambios_apps_modules",
+          operation: "create",
+          data: {
+            nombre_tabla: "c_acta_entre_producto",
+            registro_id: actaId,
+            cambios: JSON.stringify(cambiosArr),
+            created_at: toZonedTime(new Date(), "America/Costa_Rica").toISOString(),
+            created_by: createdBy,
+          },
         },
       });
     }
@@ -145,9 +155,17 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     if (imagenes !== undefined) imagesParsed = safeParseJson<ActaImageInput[]>(imagenes, []);
 
     if (imagenes !== undefined) {
-      const dir = path.join(process.cwd(), 'public', 'uploads', 'acta-entrega-productos', `${updated.id}`);
+      await callDynamicPrisma({
+        req,
+        data: {
+          action: "DELETE",
+          table: "c_imagenes_acta_entrega_producto",
+          operation: "deleteMany",
+          where: { acta_id: updatedObj.id },
+        },
+      });
 
-      await prisma.c_imagenes_acta_entrega_producto.deleteMany({ where: { acta_id: updated.id } });
+      const dir = path.join(process.cwd(), 'public', 'uploads', 'acta-entrega-productos', `${updatedObj.id}`);
       if (fs.existsSync(dir)) {
         try {
           fs.rmSync(dir, { recursive: true, force: true });
@@ -157,31 +175,47 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       }
 
       if (imagesParsed.length > 0) {
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        const uploadResp = await uploadDynamicFiles({
+          req,
+          folderPath: `acta-entrega-productos/${updatedObj.id}`,
+          files: imagesParsed
+            .filter((img) => img?.file_base64)
+            .map((img) => ({
+              type: "image",
+              extension: String(img.extension || "jpg").replace(".", "").trim() || "jpg",
+              original_name: img.original_name,
+              file_base64: img.file_base64,
+            })),
+        });
 
-        for (const img of imagesParsed) {
-          if (!img?.file_base64) continue;
-          let buffer: Buffer;
-          try {
-            buffer = Buffer.from(normalizeBase64(String(img.file_base64)), 'base64');
-          } catch {
-            continue;
-          }
-          const ext = String(img.extension || 'jpg').replace('.', '').trim() || 'jpg';
-          const fileName = `${uuidv4()}.${ext}`;
-          fs.writeFileSync(path.join(dir, fileName), buffer);
-          await prisma.c_imagenes_acta_entrega_producto.create({
-            data: { name: fileName, acta_id: updated.id },
+        const uploadedFiles = Array.isArray(uploadResp?.files) ? uploadResp.files : [];
+        for (const uploaded of uploadedFiles) {
+          await callDynamicPrisma({
+            req,
+            data: {
+              action: "POST",
+              table: "c_imagenes_acta_entrega_producto",
+              operation: "create",
+              data: { name: uploaded.name, acta_id: updatedObj.id },
+            },
           });
         }
       }
     }
 
-    const fullRecord = await prisma.c_acta_entre_producto.findUnique({
-      where: { id: updated.id },
-      include: { c_imagenes_acta_entrega_producto: true },
+    const fullRecord = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "c_acta_entre_producto",
+        operation: "findUnique",
+        where: { id: updatedObj.id },
+        include: { c_imagenes_acta_entrega_producto: true },
+      },
     });
 
+    const baseUrl = req.nextUrl.origin;
+    const fullRecordObj = fullRecord as any;
     return NextResponse.json(
       {
         status: true,
@@ -189,9 +223,10 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         data: {
           ...(fullRecord ?? updated),
           id_local: '',
-          images: ((fullRecord as any)?.c_imagenes_acta_entrega_producto || []).map((f: any) => ({
+          images: ((fullRecordObj?.c_imagenes_acta_entrega_producto || []) as any[]).map((f: any) => ({
             id: f.id,
             name: f.name,
+            url: baseUrl ? `${baseUrl}/api/acta-entrega-productos/${fullRecordObj?.id}/get-image/${f.name}` : '',
           })),
         },
       },
@@ -206,52 +241,78 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
 export async function DELETE(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
+    const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
     if (!valid) return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
 
     const resolvedParams = await context.params;
     const actaId = parseInt(resolvedParams.id, 10);
     if (!actaId) return NextResponse.json({ status: false, message: 'ID no especificado' }, { status: 400 });
 
-    const existing = await prisma.c_acta_entre_producto.findUnique({ where: { id: actaId } });
+    const existing = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "c_acta_entre_producto",
+        operation: "findUnique",
+        where: { id: actaId },
+      },
+    });
     if (!existing) return NextResponse.json({ status: false, message: 'Registro no encontrado' }, { status: 404 });
 
+    const existingObj = existing as any;
     // Registrar cambio de eliminación antes de eliminar
     const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
     const createdAt = toZonedTime(new Date(), "America/Costa_Rica");
-    await prisma.c_cambios_apps_modules.create({
+    const fechaValue = existingObj.fecha instanceof Date ? existingObj.fecha.toISOString() : (typeof existingObj.fecha === 'string' ? existingObj.fecha : null);
+    const fechaEntregaValue = existingObj.fecha_entrega instanceof Date ? existingObj.fecha_entrega.toISOString() : (typeof existingObj.fecha_entrega === 'string' ? existingObj.fecha_entrega : null);
+    const fechaRecibeValue = existingObj.fecha_recibe instanceof Date ? existingObj.fecha_recibe.toISOString() : (typeof existingObj.fecha_recibe === 'string' ? existingObj.fecha_recibe : null);
+    await callDynamicPrisma({
+      req,
       data: {
-        nombre_tabla: "c_acta_entre_producto",
-        registro_id: actaId,
-        cambios: JSON.stringify([{
-          prop: "__deleted__",
-          before: {
-            id: existing.id,
-            empresa_id: existing.empresa_id,
-            cliente_id: existing.cliente_id,
-            division_id: existing.division_id,
-            contrato_id: existing.contrato_id,
-            corpo_id: existing.corpo_id,
-            fecha: existing.fecha.toISOString(),
-            tipo_entrega: existing.tipo_entrega,
-            mensual: existing.mensual,
-            detalle: existing.detalle,
-            observaciones: existing.observaciones,
-            nombre_entrega: existing.nombre_entrega,
-            cedula_entrega: existing.cedula_entrega,
-            fecha_entrega: existing.fecha_entrega.toISOString(),
-            nombre_recibe: existing.nombre_recibe,
-            cedula_recibe: existing.cedula_recibe,
-            fecha_recibe: existing.fecha_recibe.toISOString(),
-          },
-          after: null,
-        }]),
-        created_at: createdAt,
-        created_by: createdBy,
+        action: "POST",
+        table: "c_cambios_apps_modules",
+        operation: "create",
+        data: {
+          nombre_tabla: "c_acta_entre_producto",
+          registro_id: actaId,
+          cambios: JSON.stringify([{
+            prop: "__deleted__",
+            before: {
+              id: existingObj.id,
+              empresa_id: existingObj.empresa_id,
+              cliente_id: existingObj.cliente_id,
+              division_id: existingObj.division_id,
+              contrato_id: existingObj.contrato_id,
+              corpo_id: existingObj.corpo_id,
+              fecha: fechaValue,
+              tipo_entrega: existingObj.tipo_entrega,
+              mensual: existingObj.mensual,
+              detalle: existingObj.detalle,
+              observaciones: existingObj.observaciones,
+              nombre_entrega: existingObj.nombre_entrega,
+              cedula_entrega: existingObj.cedula_entrega,
+              fecha_entrega: fechaEntregaValue,
+              nombre_recibe: existingObj.nombre_recibe,
+              cedula_recibe: existingObj.cedula_recibe,
+              fecha_recibe: fechaRecibeValue,
+            },
+            after: null,
+          }]),
+          created_at: createdAt.toISOString(),
+          created_by: createdBy,
+        },
       },
     });
 
-    await prisma.c_acta_entre_producto.delete({ where: { id: actaId } });
+    await callDynamicPrisma({
+      req,
+      data: {
+        action: "DELETE",
+        table: "c_acta_entre_producto",
+        operation: "delete",
+        where: { id: actaId },
+      },
+    });
 
     const dir = path.join(process.cwd(), 'public', 'uploads', 'acta-entrega-productos', `${actaId}`);
     if (fs.existsSync(dir)) {

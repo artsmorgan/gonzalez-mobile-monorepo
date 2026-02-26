@@ -7,13 +7,14 @@ import EmployeeProfile from '../components/EmployeeProfile';
 import { useAuth } from '../contexts/AuthContext';
 import { useQRScanner } from '../hooks/useQRScanner';
 import React, { useCallback, useState, useEffect } from 'react';
-import { ActivityIndicator, StyleSheet, TouchableOpacity, Alert, View, Image, ScrollView } from 'react-native';
+import { ActivityIndicator, StyleSheet, TouchableOpacity, Alert, View, Image, ScrollView, Modal, Dimensions } from 'react-native';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../App';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getPendingSyncActions, removePendingAction, PendingSyncActions } from '../hooks/getPendingSyncActions';
 
 type HomeScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Home'>;
 
@@ -29,6 +30,11 @@ export default function HomeScreen() {
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const navigation = useNavigation<HomeScreenNavigationProp>();
   const { scanQR, QRScannerComponent } = useQRScanner();
+  const [isSyncModalVisible, setIsSyncModalVisible] = useState(false);
+  const [pendingActions, setPendingActions] = useState<PendingSyncActions>({});
+  const [expandedSections, setExpandedSections] = useState<{ [key: string]: boolean }>({});
+  const [expandedActions, setExpandedActions] = useState<{ [key: string]: string | null }>({});
+  const [isLoadingActions, setIsLoadingActions] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -201,6 +207,103 @@ export default function HomeScreen() {
     }
   };
 
+  const handleOpenSyncModal = async () => {
+    setIsSyncModalVisible(true);
+    await loadPendingActions();
+  };
+
+  const handleCloseSyncModal = () => {
+    setIsSyncModalVisible(false);
+    setPendingActions({});
+    setExpandedSections({});
+    setExpandedActions({});
+  };
+
+  const loadPendingActions = async () => {
+    setIsLoadingActions(true);
+    try {
+      const actions = await getPendingSyncActions();
+      setPendingActions(actions);
+    } catch (error) {
+      console.error('Error loading pending actions:', error);
+      Alert.alert('Error', 'No se pudieron cargar las acciones pendientes');
+    } finally {
+      setIsLoadingActions(false);
+    }
+  };
+
+  const handleDeleteAction = async (storageKey: string, actionId: string) => {
+    Alert.alert(
+      'Eliminar acción',
+      '¿Estás seguro de que deseas eliminar esta acción pendiente?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Eliminar',
+          style: 'destructive',
+          onPress: async () => {
+            const success = await removePendingAction(storageKey, actionId);
+            if (success) {
+              await loadPendingActions();
+              Alert.alert('Éxito', 'Acción eliminada correctamente');
+            } else {
+              Alert.alert('Error', 'No se pudo eliminar la acción');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const toggleSection = (storageKey: string) => {
+    setExpandedSections((prev) => ({
+      ...prev,
+      [storageKey]: !prev[storageKey],
+    }));
+  };
+
+  const toggleAction = (storageKey: string, actionId: string) => {
+    setExpandedActions((prev) => ({
+      ...prev,
+      [storageKey]: prev[storageKey] === actionId ? null : actionId,
+    }));
+  };
+
+  const getStorageKeyLabel = (key: string): string => {
+    const labels: { [key: string]: string } = {
+      'job_manuals_actions': 'Manuales de Trabajo',
+      'visitors_actions': 'Visitantes',
+      'vehicles_actions': 'Vehículos',
+      'bitacora_vehiculo_detenido_actions': 'Bitácora Vehículo Detenido',
+      'llaves_actions': 'Llaves',
+      'movimientos_llaves_actions': 'Movimientos de Llaves',
+      'llaveros_actions': 'Llaveros',
+      'movimientos_llaveros_actions': 'Movimientos de Llaveros',
+      'movimientos_activos_mantenimiento_actions': 'Movimientos Activos Mantenimiento',
+      'articulo_mantenimiento_actions': 'Artículo Mantenimiento',
+      'movimientos_articulos_mantenimiento_actions': 'Movimientos Artículos Mantenimiento',
+      'activo_mantenimiento_actions': 'Activo Mantenimiento',
+      'documentos_entregados_actions': 'Documentos Entregados',
+      'apreciacion_vulnerabilidad_actions': 'Apreciación Vulnerabilidad',
+      'notifications_actions': 'Notificaciones',
+      'lunchtime_actions': 'Tiempo de Almuerzo',
+      'notes_actions': 'Notas',
+      'activities_actions': 'Actividades',
+      'evaluations_actions': 'Evaluaciones',
+    };
+    return labels[key] || key.replace('_actions', '').replace(/_/g, ' ');
+  };
+
+  const formatActionData = (action: any): string => {
+    try {
+      const keys = Object.keys(action).filter((k) => k !== 'id' && k !== 'type' && k !== 'action');
+      if (keys.length === 0) return JSON.stringify(action, null, 2);
+      return keys.map((k) => `${k}: ${JSON.stringify(action[k])}`).join('\n');
+    } catch {
+      return JSON.stringify(action, null, 2);
+    }
+  };
+
   const monthNames = [
     "enero", "febrero", "marzo", "abril", "mayo", "junio",
     "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"
@@ -290,9 +393,119 @@ export default function HomeScreen() {
                 <ThemedText style={styles.buttonText}>Escanear Firma</ThemedText>
               </TouchableOpacity>
             </View>
+
+            <View style={styles.buttonsRow}>
+              <TouchableOpacity
+                style={[styles.quickAccessButton, { backgroundColor: '#FF9500' }]}
+                onPress={handleOpenSyncModal}
+              >
+                <Ionicons name="sync" size={30} color="#fff" />
+                <ThemedText style={styles.buttonText}>Sincronización Pendiente</ThemedText>
+              </TouchableOpacity>
+            </View>
           </ThemedView>
         </ThemedView>
       </ScrollView>
+
+      {/* Modal: Acciones pendientes de sincronización */}
+      <Modal
+        visible={isSyncModalVisible}
+        animationType="fade"
+        transparent
+        presentationStyle="overFullScreen"
+        onRequestClose={handleCloseSyncModal}
+      >
+        <View style={styles.overlay}>
+          <ThemedView style={styles.floatModalCardMovimientos}>
+            <ThemedView style={styles.floatModalHeader}>
+              <ThemedText style={styles.modalTitle}>Sincronizaciones pendientes	</ThemedText>
+              <TouchableOpacity onPress={handleCloseSyncModal}>
+                <Ionicons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+            </ThemedView>
+
+            <ScrollView style={{ maxHeight: Dimensions.get('window').height * 0.75 }} contentContainerStyle={{ padding: 16 }}>
+              {isLoadingActions ? (
+                <ThemedView style={styles.emptyContainer}>
+                  <ActivityIndicator size="large" color="#007AFF" />
+                  <ThemedText style={styles.emptyText}>Cargando sincronizaciones...</ThemedText>
+                </ThemedView>
+              ) : Object.keys(pendingActions).length === 0 ? (
+                <ThemedView style={styles.emptyContainer}>
+                  <ThemedText style={styles.emptyText}>No hay sincronizaciones pendientes</ThemedText>
+                </ThemedView>
+              ) : (
+                Object.entries(pendingActions).map(([storageKey, actions]) => {
+                  const isSectionExpanded = expandedSections[storageKey] || false;
+                  const totalActions = actions.length;
+
+                  return (
+                    <ThemedView key={storageKey} style={styles.sectionContainer}>
+                      <TouchableOpacity
+                        style={styles.sectionHeader}
+                        onPress={() => toggleSection(storageKey)}
+                        activeOpacity={0.8}
+                      >
+                        <ThemedText style={styles.sectionTitleModal}>
+                          {getStorageKeyLabel(storageKey)} ({totalActions})
+                        </ThemedText>
+                        <Ionicons
+                          name={isSectionExpanded ? "chevron-up" : "chevron-down"}
+                          size={18}
+                          color="#007AFF"
+                        />
+                      </TouchableOpacity>
+
+                      {isSectionExpanded && (
+                        <ThemedView style={styles.actionsContainer}>
+                          {actions.map((action, index) => {
+                            const actionKey = `${storageKey}-${action.id}`;
+                            const isActionExpanded = expandedActions[storageKey] === action.id;
+
+                            return (
+                              <ThemedView key={actionKey} style={styles.actionItem}>
+                                <TouchableOpacity
+                                  style={styles.actionHeader}
+                                  onPress={() => toggleAction(storageKey, action.id)}
+                                  activeOpacity={0.8}
+                                >
+                                  <ThemedText style={styles.actionTitle}>
+                                    {action.type || action.action || 'Acción'} - ID: {action.id?.substring(0, 20) || 'N/A'}
+                                  </ThemedText>
+                                  <Ionicons
+                                    name={isActionExpanded ? "chevron-up" : "chevron-down"}
+                                    size={16}
+                                    color="#666"
+                                  />
+                                </TouchableOpacity>
+
+                                {isActionExpanded && (
+                                  <ThemedView style={styles.actionContent}>
+                                    <ThemedText style={styles.actionData}>
+                                      {formatActionData(action)}
+                                    </ThemedText>
+                                    <TouchableOpacity
+                                      style={styles.deleteButton}
+                                      onPress={() => handleDeleteAction(storageKey, action.id)}
+                                    >
+                                      <Ionicons name="trash" size={18} color="#FF3B30" />
+                                      <ThemedText style={styles.deleteButtonText}>Eliminar</ThemedText>
+                                    </TouchableOpacity>
+                                  </ThemedView>
+                                )}
+                              </ThemedView>
+                            );
+                          })}
+                        </ThemedView>
+                      )}
+                    </ThemedView>
+                  );
+                })
+              )}
+            </ScrollView>
+          </ThemedView>
+        </View>
+      </Modal>
       <SlideMenu
         isVisible={isMenuVisible}
         onClose={handleMenuClose}
@@ -384,6 +597,124 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 16,
     opacity: 0.7,
+  },
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  floatModalCardMovimientos: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    width: '100%',
+    maxWidth: 500,
+    maxHeight: '80%',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    overflow: 'hidden',
+  },
+  floatModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+    backgroundColor: '#fff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#000',
+  },
+  emptyContainer: {
+    padding: 20,
+    alignItems: 'center',
+  },
+  emptyText: {
+    fontSize: 14,
+    color: '#666',
+    marginTop: 10,
+  },
+  sectionContainer: {
+    width: '100%',
+    marginBottom: 12,
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    overflow: 'hidden',
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: '#F8F9FA',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+  },
+  sectionTitleModal: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#007AFF',
+    flex: 1,
+  },
+  actionsContainer: {
+    padding: 8,
+  },
+  actionItem: {
+    marginBottom: 8,
+    backgroundColor: '#F8F9FA',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    overflow: 'hidden',
+  },
+  actionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  actionTitle: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#333',
+    flex: 1,
+  },
+  actionContent: {
+    padding: 12,
+    backgroundColor: '#fff',
+    borderTopWidth: 1,
+    borderTopColor: '#E0E0E0',
+  },
+  actionData: {
+    fontSize: 11,
+    color: '#666',
+    fontFamily: 'monospace',
+    marginBottom: 12,
+  },
+  deleteButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: '#FFEBEE',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#FFCDD2',
+  },
+  deleteButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#FF3B30',
+    marginLeft: 6,
   },
 });
 

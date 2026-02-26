@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessToken } from "../../../utils/verifyToken";
-import { prisma } from "../../../utils/prismaClient";
+import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
 
@@ -14,19 +14,26 @@ function parseDateTime(value: any): Date | null {
 
 export async function GET(req: NextRequest) {
   try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
+    const { valid, expired, message } = await verifyAccessTokenByApi(req);
     if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
-    const rows = await prisma.c_boleta_apreciacion_vulnerabilidad.findMany({
-      include: {
-        e_estructura_cliente: { select: { nombre: true } },
-        e_estructura_sucursal: { select: { nombre: true } },
-        e_estructura_puesto: { select: { nombre: true } },
+    const rows = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "c_boleta_apreciacion_vulnerabilidad",
+        operation: "findMany",
+        include: {
+          e_estructura_cliente: { select: { nombre: true } },
+          e_estructura_sucursal: { select: { nombre: true } },
+          e_estructura_puesto: { select: { nombre: true } },
+        },
+        orderBy: { id: "desc" },
       },
-      orderBy: { id: "desc" },
     });
 
-    const mapped = rows.map((r) => ({
+    const rowsArray = Array.isArray(rows) ? rows : [];
+    const mapped = rowsArray.map((r: any) => ({
       id: r.id,
       cliente_id: r.cliente_id,
       cliente_nombre: (r as any).e_estructura_cliente?.nombre ?? "",
@@ -55,10 +62,8 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const { valid, expired, payload, message } = verifyAccessToken(req);
-    if (!valid) {
-      return NextResponse.json({ status: false, message: message ?? "Token inválido o expirado" }, { status: 401 });
-    }
+    const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
+    if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
     const body = await req.json();
     const {
@@ -97,27 +102,57 @@ export async function POST(req: NextRequest) {
 
     // Validar IDs existan (mínimo)
     const [cliente, corpo, puesto] = await Promise.all([
-      prisma.e_estructura_cliente.findUnique({ where: { id: parseInt(String(cliente_id)) } }),
-      prisma.e_estructura_sucursal.findUnique({ where: { id: parseInt(String(corpo_id)) } }),
-      prisma.e_estructura_puesto.findUnique({ where: { id: parseInt(String(puesto_id)) } }),
+      callDynamicPrisma({
+        req,
+        data: {
+          action: "GET",
+          table: "e_estructura_cliente",
+          operation: "findUnique",
+          where: { id: parseInt(String(cliente_id)) },
+        },
+      }),
+      callDynamicPrisma({
+        req,
+        data: {
+          action: "GET",
+          table: "e_estructura_sucursal",
+          operation: "findUnique",
+          where: { id: parseInt(String(corpo_id)) },
+        },
+      }),
+      callDynamicPrisma({
+        req,
+        data: {
+          action: "GET",
+          table: "e_estructura_puesto",
+          operation: "findUnique",
+          where: { id: parseInt(String(puesto_id)) },
+        },
+      }),
     ]);
     if (!cliente) return NextResponse.json({ status: false, message: "Cliente inválido" }, { status: 200 });
     if (!corpo) return NextResponse.json({ status: false, message: "Corpo inválido" }, { status: 200 });
     if (!puesto) return NextResponse.json({ status: false, message: "Puesto inválido" }, { status: 200 });
 
-    const created = await prisma.c_boleta_apreciacion_vulnerabilidad.create({
+    const created = await callDynamicPrisma({
+      req,
       data: {
-        cliente_id: parseInt(String(cliente_id)),
-        corpo_id: parseInt(String(corpo_id)),
-        puesto_id: parseInt(String(puesto_id)),
-        fecha: fechaDate,
-        enlace: String(enlace),
-        nombre_solicitante: String(nombre_solicitante),
-        boleta: String(boleta),
-        metricas_vulnerablidad: String(metricas_vulnerablidad),
-        observaciones: typeof observaciones === "string" ? observaciones : "",
-        firma_solicitante: String(firma_solicitante),
-        firma_responsable: String(firma_responsable),
+        action: "POST",
+        table: "c_boleta_apreciacion_vulnerabilidad",
+        operation: "create",
+        data: {
+          cliente_id: parseInt(String(cliente_id)),
+          corpo_id: parseInt(String(corpo_id)),
+          puesto_id: parseInt(String(puesto_id)),
+          fecha: fechaDate.toISOString(),
+          enlace: String(enlace),
+          nombre_solicitante: String(nombre_solicitante),
+          boleta: String(boleta),
+          metricas_vulnerablidad: String(metricas_vulnerablidad),
+          observaciones: typeof observaciones === "string" ? observaciones : "",
+          firma_solicitante: String(firma_solicitante),
+          firma_responsable: String(firma_responsable),
+        },
       },
     });
 
@@ -130,55 +165,85 @@ export async function POST(req: NextRequest) {
       let puestoNombre = "Desconocido";
       let fechaRegistro = now.toISOString().split("T")[0];
       let horaRegistro = now.toISOString().split("T")[1].split(".")[0];
-      const empleado = await prisma.c_empleado.findUnique({ where: { id: parseInt(String(payload?.id ?? "0"), 10) } });
+      const empleado = await callDynamicPrisma({
+        req,
+        data: {
+          action: "GET",
+          table: "c_empleado",
+          operation: "findUnique",
+          where: { id: parseInt(String(payload?.id ?? "0"), 10) },
+        },
+      });
       if (empleado) {
-        empNombre = empleado.nombre + " " + empleado.primer_apellido + " " + empleado.segundo_apellido;
+        empNombre = (empleado as any).nombre + " " + (empleado as any).primer_apellido + " " + (empleado as any).segundo_apellido;
       }
-      if (created.corpo_id) {
-        const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: created.corpo_id } });
+      if ((created as any).corpo_id) {
+        const sucursal = await callDynamicPrisma({
+          req,
+          data: {
+            action: "GET",
+            table: "e_estructura_sucursal",
+            operation: "findUnique",
+            where: { id: (created as any).corpo_id },
+          },
+        });
         if (sucursal) {
-          sucursalNombre = sucursal.nombre;
+          sucursalNombre = (sucursal as any).nombre;
         }
       }
-      if (created.puesto_id) {
-        const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: created.puesto_id } });
+      if ((created as any).puesto_id) {
+        const puesto = await callDynamicPrisma({
+          req,
+          data: {
+            action: "GET",
+            table: "e_estructura_puesto",
+            operation: "findUnique",
+            where: { id: (created as any).puesto_id },
+          },
+        });
         if (puesto) {
-          puestoNombre = puesto.nombre + " (" + puesto.codigo + ")";
+          puestoNombre = (puesto as any).nombre + " (" + (puesto as any).codigo + ")";
         }
       }
       const descriptionNotificacion = "El empleado " + empNombre + " ha registrado una apreciación de vulnerabilidad en el puesto " + puestoNombre + " en la sucursal " + sucursalNombre + " el día " + fechaRegistro + " a las " + horaRegistro;
-      sendNotificationByRole(created.corpo_id, [parseInt(String(payload?.id ?? "0"), 10)], "Apreciación de vulnerabilidad registrada", descriptionNotificacion, ["ADMINISTRATIVO", "SUPERVISOR"]);
+      await sendNotificationByRole(req, (created as any).corpo_id, [parseInt(String(payload?.id ?? "0"), 10)], "Apreciación de vulnerabilidad registrada", descriptionNotificacion, ["ADMINISTRATIVO", "SUPERVISOR"]);
     }
 
     // Registrar cambio de creación
     const createdBy = parseInt(String(payload?.id ?? 0), 10) || 0;
-    await prisma.c_cambios_apps_modules.create({
+    await callDynamicPrisma({
+      req,
       data: {
-        nombre_tabla: "c_boleta_apreciacion_vulnerabilidad",
-        registro_id: created.id,
-        cambios: JSON.stringify([{
-          prop: "__created__",
-          before: null,
-          after: {
-            id: created.id,
-            cliente_id: created.cliente_id,
-            corpo_id: created.corpo_id,
-            puesto_id: created.puesto_id,
-            fecha: created.fecha.toISOString(),
-            enlace: created.enlace,
-            nombre_solicitante: created.nombre_solicitante,
-            boleta: created.boleta,
-            metricas_vulnerablidad: created.metricas_vulnerablidad,
-            observaciones: created.observaciones,
-          },
-        }]),
-        created_at: toZonedTime(new Date(), "America/Costa_Rica"),
-        created_by: createdBy,
+        action: "POST",
+        table: "c_cambios_apps_modules",
+        operation: "create",
+        data: {
+          nombre_tabla: "c_boleta_apreciacion_vulnerabilidad",
+          registro_id: (created as any).id,
+          cambios: JSON.stringify([{
+            prop: "__created__",
+            before: null,
+            after: {
+              id: (created as any).id,
+              cliente_id: (created as any).cliente_id,
+              corpo_id: (created as any).corpo_id,
+              puesto_id: (created as any).puesto_id,
+              fecha: fechaDate.toISOString(),
+              enlace: (created as any).enlace,
+              nombre_solicitante: (created as any).nombre_solicitante,
+              boleta: (created as any).boleta,
+              metricas_vulnerablidad: (created as any).metricas_vulnerablidad,
+              observaciones: (created as any).observaciones,
+            },
+          }]),
+          created_at: toZonedTime(new Date(), "America/Costa_Rica").toISOString(),
+          created_by: createdBy,
+        },
       },
     });
 
     return NextResponse.json(
-      { status: true, message: "Registro creado correctamente", id: created.id },
+      { status: true, message: "Registro creado correctamente", id: (created as any).id },
       { status: 200 }
     );
   } catch (error: unknown) {
