@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -312,16 +312,22 @@ export default function PermitRequestScreenV2() {
       const json = await resp.json().catch(() => ({}));
       if (!resp.ok || !json?.status) throw new Error(json?.message || 'No se pudieron cargar las plazas');
       const data = Array.isArray(json.data) ? json.data : [];
-      setPlazas(data.map((p: any) => ({
+      const mapped = data.map((p: any) => ({
         id: Number(p.id),
         nombre_plaza: String(p.nombre_plaza ?? '').trim() || 'Plaza',
         nombre_puesto: p.nombre_puesto != null ? String(p.nombre_puesto).trim() : null,
         nombre_sucursal: p.nombre_sucursal != null ? String(p.nombre_sucursal).trim() : null,
         nombre_cliente: p.nombre_cliente != null ? String(p.nombre_cliente).trim() : null,
-      })));
-      if (!data.length) setSelectedPlazaId(null);
-      else if (!selectedPlazaId || !data.some((p: any) => Number(p.id) === selectedPlazaId)) {
-        setSelectedPlazaId(Number(data[0]?.id) || null);
+      }));
+      setPlazas(mapped);
+      if (mapped.length === 0) {
+        setSelectedPlazaId(null);
+        Alert.alert(
+          'Sin plazas',
+          'No se encontraron plazas asignadas a tu usuario. No puedes crear una solicitud de permiso sin una plaza válida.'
+        );
+      } else {
+        setSelectedPlazaId(Number(mapped[0]?.id) || null);
       }
     } catch (e: any) {
       setPlazas([]);
@@ -330,11 +336,7 @@ export default function PermitRequestScreenV2() {
     } finally {
       setIsLoadingPlazas(false);
     }
-  }, [refreshAccessToken, logout, selectedPlazaId]);
-
-  useEffect(() => {
-    if (isCreating && plazas.length === 0 && !isLoadingPlazas) fetchPlazas();
-  }, [isCreating, plazas.length, isLoadingPlazas, fetchPlazas]);
+  }, [refreshAccessToken, logout]);
 
   const fetchTurnosPreview = async () => {
     if (!selectedPlazaId) {
@@ -722,6 +724,7 @@ export default function PermitRequestScreenV2() {
               onPress={() => {
                 resetCreateForm();
                 setIsCreating(true);
+                fetchPlazas();
               }}
               activeOpacity={0.85}
             >
