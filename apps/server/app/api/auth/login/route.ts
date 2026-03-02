@@ -1,290 +1,38 @@
-/* eslint-disable @typescript-eslint/no-require-imports */
 import { NextRequest, NextResponse } from 'next/server';
-import { v4 as uuidv4 } from 'uuid';
-import { toZonedTime } from 'date-fns-tz';
-import { callDynamicPrisma } from '../../../../utils/callDynamicPrisma';
-const jwt = require('jsonwebtoken');
-const bcrypt = require('bcrypt');
-const dotenv = require('dotenv');
-import crypto from "crypto";
-dotenv.config();
-
-function hashToken(token: string): string {
-    return crypto.createHash("sha256").update(token).digest("hex");
-}
+import axios from 'axios';
 
 export async function POST(request: NextRequest) {
-    try {
-        const body = await request.json();
-        const { cedula, password } = body;
+  try {
+    const body = await request.json();
 
-        if (!cedula || !password) {
-            return NextResponse.json(
-                { status: false, message: "Cédula y contraseña son requeridos" },
-                { status: 400 }
-            );
-        }
+    const serverUrl = process.env.SERVER_URL?.trim();
+    const baseUrl =
+      serverUrl && serverUrl.length > 0
+        ? serverUrl.replace(/\/+$/, '')
+        : request.nextUrl.origin;
 
-        const empleado = await callDynamicPrisma({
-            req: request,
-            shouldVerifyAccessToken: false,
-            data: {
-                action: "GET",
-                table: "c_empleado",
-                operation: "findFirst",
-                where: { cedula: cedula }
-            }
-        });
+    const authHeader = request.headers.get('authorization') || '';
 
-        if (!empleado) {
-            return NextResponse.json(
-                { status: false, message: "Empleado inválido" },
-                { status: 401 }
-            );
-        }
+    const response = await axios.post(
+      `${baseUrl}/api/dynamic-prisma/auth/login`,
+      body,
+      {
+        headers: {
+          Authorization: authHeader,
+          'Content-Type': 'application/json',
+        },
+        validateStatus: () => true,
+      }
+    );
 
-        if (!empleado.password) {
-            return NextResponse.json(
-                { status: false, message: "Contraseña inválida" },
-                { status: 401 }
-            );
-        }
-
-        if (empleado.fecha_contratacion == null) {
-            return NextResponse.json(
-                { status: false, message: "Empleado no ha sido contratado" },
-                { status: 401 }
-            );
-        }
-
-        if (empleado.estado == "BA") {
-            return NextResponse.json(
-                { status: false, message: "Empleado fue dado de baja" },
-                { status: 401 }
-            );
-        }
-
-        const passwordExpiresAt = empleado.password_expires_at ? new Date(empleado.password_expires_at) : null;
-        if (passwordExpiresAt && passwordExpiresAt < toZonedTime(new Date(), "America/Costa_Rica")) {
-            return NextResponse.json(
-                { status: false, passwordExpired: true, message: "Contraseña expirada, debe cambiarla" },
-                { status: 401 }
-            );
-        }
-
-        const passwordMatch = await bcrypt.compare(password, empleado.password);
-
-        if (!passwordMatch) {
-            return NextResponse.json(
-                { status: false, message: "La contraseña es incorrecta" },
-                { status: 401 }
-            );
-        }
-
-        if (!process.env.JWT_SECRET || !process.env.JWT_REFRESH_SECRET) {
-            throw new Error("JWT secrets not configured");
-        }
-
-        const sessionId = uuidv4();
-
-        const accessToken = jwt.sign(
-            { id: empleado.id, cedula: empleado.cedula, sessionId },
-            process.env.JWT_SECRET!,
-            { expiresIn: "15m" }
-        );
-
-        const refreshToken = jwt.sign(
-            { id: empleado.id, sessionId },
-            process.env.JWT_REFRESH_SECRET!,
-            { expiresIn: "7d" }
-        );
-
-        const now = toZonedTime(new Date(), "America/Costa_Rica");
-
-        await callDynamicPrisma({
-            req: request,
-            shouldVerifyAccessToken: false,
-            data: {
-                action: "UPDATE",
-                table: "refresh_token",
-                operation: "updateMany",
-                many: true,
-                where: { empleadoId: empleado.id },
-                data: { revoked: true },
-                returning: false
-            }
-        });
-
-        await callDynamicPrisma({
-            req: request,
-            shouldVerifyAccessToken: false,
-            data: {
-                action: "POST",
-                table: "refresh_token",
-                data: {
-                    token: hashToken(refreshToken),
-                    empleadoId: empleado.id,
-                    sessionId,
-                    createdAt: now.toISOString(),
-                    expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
-                },
-                returning: false
-            }
-        });
-
-        const empleado_plaza = await callDynamicPrisma({
-            req: request,
-            shouldVerifyAccessToken: false,
-            data: {
-                action: "GET",
-                table: "c_empleado_plaza",
-                operation: "findMany",
-                where: {
-                    empleado_id: empleado.id
-                }
-            }
-        });
-
-        const roles: { role: { name: string, id: number }, division: { id: number, name: string } }[] = [];
-        const empleadoPlazaArray = Array.isArray(empleado_plaza) ? empleado_plaza : [];
-        for (const item of empleadoPlazaArray) {
-
-            if (!item.plaza_id || !item.division_id) {
-                continue;
-            }
-
-            const division = await callDynamicPrisma({
-                req: request,
-                shouldVerifyAccessToken: false,
-                data: {
-                    action: "GET",
-                    table: "n_division",
-                    operation: "findFirst",
-                    where: {
-                        id: item.division_id
-                    }
-                }
-            });
-
-            if (!division) {
-                continue;
-            }
-
-            const plaza = await callDynamicPrisma({
-                req: request,
-                shouldVerifyAccessToken: false,
-                data: {
-                    action: "GET",
-                    table: "e_estructura_plazas",
-                    operation: "findFirst",
-                    where: {
-                        id: item.plaza_id
-                    }
-                }
-            });
-
-            if (!plaza || !plaza.categoriaSalarial_id) {
-                continue;
-            }
-
-            const categoria_salarial = await callDynamicPrisma({
-                req: request,
-                shouldVerifyAccessToken: false,
-                data: {
-                    action: "GET",
-                    table: "pg_categoria_salarial",
-                    operation: "findFirst",
-                    where: {
-                        id: plaza.categoriaSalarial_id
-                    }
-                }
-            });
-
-            if (!categoria_salarial || !categoria_salarial.categoriaEmpleado_id) {
-                continue;
-            }
-
-            const categoria_empleado = await callDynamicPrisma({
-                req: request,
-                shouldVerifyAccessToken: false,
-                data: {
-                    action: "GET",
-                    table: "pg_categoria_empleado",
-                    operation: "findFirst",
-                    where: {
-                        id: categoria_salarial.categoriaEmpleado_id
-                    }
-                }
-            });
-
-            if (!categoria_empleado) {
-                continue;
-            }
-
-            let role = "OPERATIVO";
-            switch (categoria_empleado.codigo) {
-                case "OFI":
-                    role = "OPERATIVO";
-                    break;
-                case "MIS":
-                    role = "OPERATIVO";
-                    break;
-                case "ADM":
-                    role = "ADMINISTRATIVO";
-                    break;
-                case "COO":
-                    role = "SUPERVISOR";
-                    break;
-                case "SUP":
-                    role = "SUPERVISOR";
-                    break;
-                case "OFC":
-                    role = "OPERATIVO";
-                    break;
-            }
-
-            const exist_role = roles.find(role => role.role.id === categoria_empleado.id && role.division.id === item.division_id);
-            if (exist_role) {
-                continue;
-            }
-
-            roles.push({
-                role: { name: role, id: categoria_empleado.id },
-                division: { id: item.division_id, name: division.nombre }
-            });
-        }
-
-        // Retornar éxito con el token de acceso y refresh
-        return NextResponse.json(
-            {
-                status: true,
-                message: "Logeado con éxito",
-                accessToken,
-                refreshToken,
-                createdAt: now.getTime(), // Fecha en formato numérico
-                empleado: {
-                    id: empleado.id,
-                    cedula: empleado.cedula,
-                    nombre: empleado.nombre,
-                    apellido: empleado.primer_apellido,
-                    segundo_apellido: empleado.segundo_apellido,
-                    email: empleado.Email,
-                    telefono: empleado.telefono,
-                    tipoCedula: empleado.tipoCedula,
-                    fechaContratacion: empleado.fecha_contratacion,
-                    firmaManual: empleado.firma_manual,
-                    roles: roles,
-                    supervisor_id: empleado.supervisor_id
-                }
-            },
-            { status: 200 }
-        );
-
-    } catch (error) {
-        console.error('Error en login:', error);
-        return NextResponse.json(
-            { status: false, message: "Error interno del servidor" },
-            { status: 500 }
-        );
-    }
+    const data = response.data;
+    return NextResponse.json(data, { status: response.status });
+  } catch (error: any) {
+    console.error('Error proxying auth/login to dynamic-prisma:', error?.message || error);
+    return NextResponse.json(
+      { status: false, message: 'Error interno del servidor' },
+      { status: 500 }
+    );
+  }
 }
+

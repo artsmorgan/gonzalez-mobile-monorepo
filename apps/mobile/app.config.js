@@ -69,8 +69,8 @@ module.exports = {
       API_SERVER: process.env.EXPO_PUBLIC_API_SERVER ||
         process.env.API_SERVER ||
         process.env.NEXT_PUBLIC_API_SERVER ||
-        // api-gonzalez-mobile-monorepo-production.up.railway.app
-        "https://api-gonzalez-mobile-monorepo-production.up.railway.app", // Local dev fallback
+        // https://api-gonzalez-mobile-monorepo-production.up.railway.app
+        "https://barrett-nondelirious-denisha.ngrok-free.dev", // Local dev fallback
       MINUTES_LIFE_TIME_TOKEN: 15, // 15 minutes (default)
       APP_MODE: process.env.APP_MODE || process.env.NODE_ENV || "dev",
       router: {},

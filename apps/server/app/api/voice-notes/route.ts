@@ -2,12 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { toZonedTime, format } from "date-fns-tz";
-import fs from 'fs';
-import path from 'path';
 import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
 import { sendNotificationByRole, sendNotificationByPlaza } from "../../../utils/sendNotification";
-
 import { getUserMarca } from "../../../utils/getUserMarca";
+
+export const runtime = "nodejs";
 
 export async function GET(req: NextRequest) {
     try {
@@ -103,15 +102,24 @@ export async function GET(req: NextRequest) {
 
             let nombre_firma = "No disponible";
             if (voiceNote.firma_responsable) {
-                const id_firma = atob(voiceNote.firma_responsable).split(":")[1];
-                const firma = await callDynamicPrisma({
-                    req,
-                    data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: parseInt(id_firma) } }
-                });
-                if (firma) {
-                    nombre_firma = firma.nombre + " " + firma.primer_apellido + " " + firma.segundo_apellido;
-                    if (firma.cedula) {
-                        nombre_firma += " (" + firma.cedula + ")";
+                let id_firma: string | null = null;
+                try {
+                    const decoded = Buffer.from(String(voiceNote.firma_responsable), "base64").toString("utf8");
+                    id_firma = decoded.split(":")[1] || null;
+                } catch {
+                    id_firma = null;
+                }
+
+                if (id_firma) {
+                    const firma = await callDynamicPrisma({
+                        req,
+                        data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: parseInt(id_firma, 10) } }
+                    });
+                    if (firma) {
+                        nombre_firma = firma.nombre + " " + firma.primer_apellido + " " + firma.segundo_apellido;
+                        if (firma.cedula) {
+                            nombre_firma += " (" + firma.cedula + ")";
+                        }
                     }
                 }
             }
@@ -143,7 +151,7 @@ export async function GET(req: NextRequest) {
                 id_local: "",
                 file_base64: "",
                 created_by: voiceNote.created_by,
-                created_at: voiceNote.created_at.toISOString()
+                created_at: voiceNote.created_at
             });
         }
 
@@ -151,6 +159,7 @@ export async function GET(req: NextRequest) {
     }
     catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        console.log(errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }

@@ -183,7 +183,7 @@ function VoiceNoteAudioPlayer({
 }
 
 export default function VoiceNotesScreen() {
-  const { employee, refreshAccessToken, logout } = useAuth();
+  const { employee, refreshAccessToken, logout, accessToken } = useAuth();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const navigation = useNavigation<VoiceNotesScreenNavigationProp>();
 
@@ -247,6 +247,17 @@ export default function VoiceNotesScreen() {
   const [filterCreatedAt, setFilterCreatedAt] = useState('');
   const [isFiltersExpanded, setIsFiltersExpanded] = useState(false);
   const [showFilterCreatedAtPicker, setShowFilterCreatedAtPicker] = useState(false);
+
+  const appendTokenToUrl = useCallback(
+    (url: string) => {
+      if (!url) return '';
+      if (!accessToken || accessToken.trim().length === 0) return url;
+      if (/[?&]token=/.test(url)) return url;
+      const separator = url.includes('?') ? '&' : '?';
+      return `${url}${separator}token=${encodeURIComponent(accessToken)}`;
+    },
+    [accessToken]
+  );
 
   useFocusEffect(
     useCallback(() => {
@@ -965,7 +976,7 @@ export default function VoiceNotesScreen() {
           return newMap;
         });
       } else {
-        // Online audio: use API URL
+        // Online audio: use API URL con token, siguiendo el estándar de JobManualsScreen
         const hasConnection = await checkConnection();
         if (!hasConnection) {
           Alert.alert('Error', 'No se puede reproducir el audio sin conexión a internet.');
@@ -977,8 +988,9 @@ export default function VoiceNotesScreen() {
           throw new Error('Server URL not configured');
         }
 
-        // Use API URL directly as audio source
-        const audioUri = `${apiUrl}/api/voice-notes/${voiceNote.id}/get-note`;
+        // Use API URL directly as audio source (con token en query)
+        const rawUrl = `${apiUrl}/api/voice-notes/${voiceNote.id}/get-note`;
+        const audioUri = appendTokenToUrl(rawUrl);
         setAudioUris(prev => {
           const newMap = new Map(prev);
           newMap.set(key, audioUri);

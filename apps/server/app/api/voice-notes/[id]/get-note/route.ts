@@ -15,8 +15,12 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         return NextResponse.json({ status: false, message: 'ID faltante' }, { status: 400 });
     }
 
+    // Permitir autenticación vía token en query (misma estrategia que JobManualsScreen / dynamic files)
+    const tokenFromQuery = req.nextUrl.searchParams.get("token") || undefined;
+
     const voiceNote = await callDynamicPrisma({
         req,
+        token: tokenFromQuery,
         data: { action: "GET", table: "c_notas_voz", operation: "findUnique", where: { id } }
     });
     if (!voiceNote) {
