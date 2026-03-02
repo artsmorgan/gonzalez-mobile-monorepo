@@ -4632,6 +4632,7 @@ model c_solicitud_permiso {
   firma_responsable              String   @db.LongText
   firma_ejecutivo_cuenta_digital String?  @db.LongText
   firma_ejecutivo_cuenta_manual  String?  @db.LongText
+  accionPersonal_id              Int?
   created_at                     DateTime @default(now())
   created_by                     Int
 

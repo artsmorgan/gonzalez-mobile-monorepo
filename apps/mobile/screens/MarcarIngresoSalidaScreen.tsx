@@ -108,6 +108,8 @@ export default function MarcarIngresoSalidaScreen() {
   const [attendanceData, setAttendanceData] = useState<AttendanceSuccessResponse | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isUpdating, setIsUpdating] = useState(false);
+  const [isProcessingMark, setIsProcessingMark] = useState(false);
+  const [processingType, setProcessingType] = useState<'entrada' | 'salida' | null>(null);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [exitReason, setExitReason] = useState('');
   const [showAbsentReasonForm, setShowAbsentReasonForm] = useState(false);
@@ -136,25 +138,38 @@ export default function MarcarIngresoSalidaScreen() {
     }
   }, [isAuthenticated, isLoading, navigation]);
 
-  // Fetch attendance status every 30 seconds
+  // Fetch attendance status every 30 segundos (solo cuando no se está procesando una marca)
   useEffect(() => {
-    if (isAuthenticated && employee) {
-      // Fetch immediately
+    if (isAuthenticated && employee && !isProcessingMark) {
+      // Limpiar cualquier intervalo previo
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+
+      // Fetch inmediato
       fetchAttendanceStatus();
 
-      // Set up interval for every 30 seconds
+      // Intervalo cada 30 segundos
       intervalRef.current = setInterval(() => {
         fetchAttendanceStatus();
       }, 30000);
 
-      // Cleanup interval on unmount
+      // Cleanup
       return () => {
         if (intervalRef.current) {
           clearInterval(intervalRef.current);
+          intervalRef.current = null;
         }
       };
     }
-  }, [isAuthenticated, employee]);
+
+    // Si se está procesando una marca, limpiar intervalo
+    if (isProcessingMark && intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+  }, [isAuthenticated, employee, isProcessingMark]);
 
   const fetchAttendanceStatus = async () => {
     try {
@@ -459,6 +474,13 @@ export default function MarcarIngresoSalidaScreen() {
   };
 
   const confirmAction = async (type: string, reason: string = '') => {
+    // Desactivar el polling mientras se procesa la marca
+    setIsProcessingMark(true);
+    setProcessingType(type === 'salida' ? 'salida' : 'entrada');
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
 
     if (!attendanceData || !attendanceData.marca || !attendanceData.marca.id) {
       throw new Error('No se encontró la marca');
@@ -535,6 +557,10 @@ export default function MarcarIngresoSalidaScreen() {
         data.message
       );
     }
+
+    // Reactivar el polling después de completar el proceso (éxito o error)
+    setIsProcessingMark(false);
+    setProcessingType(null);
   };
 
   const getJobManuals = async (marcaId: number) => {
@@ -1913,6 +1939,15 @@ export default function MarcarIngresoSalidaScreen() {
                 <ThemedText style={styles.retryButtonText}>{getActionIcon('retry')}</ThemedText>
               </TouchableOpacity>
             </ThemedView>
+          ) : isProcessingMark ? (
+            <ThemedView style={styles.loadingContainer}>
+              <ActivityIndicator size="large" color="#007AFF" />
+              <ThemedText style={styles.loadingDataText}>
+                {processingType === 'salida'
+                  ? 'Procesando salida, por favor no cierre la ventana...'
+                  : 'Procesando ingreso, por favor no cierre la ventana...'}
+              </ThemedText>
+            </ThemedView>
           ) : isLoadingData ? (
             <ThemedView style={styles.loadingContainer}>
               <ActivityIndicator size="large" color="#007AFF" />
@@ -2262,6 +2297,7 @@ const styles = StyleSheet.create({
   loadingDataText: {
     fontSize: 16,
     opacity: 0.7,
+    textAlign: 'center',
   },
   errorContainer: {
     flex: 1,
