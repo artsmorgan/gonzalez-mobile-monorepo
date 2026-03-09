@@ -353,6 +353,21 @@ export default function ApreciacionVulnerabilidadScreen() {
     }
   };
 
+  const formatSignatureForDisplay = (value?: string | null) => {
+    if (!value) return '';
+    return value.startsWith('data:') ? value : `data:image/png;base64,${value}`;
+  };
+
+  const formatFirmaDateLabel = (timestamp: string | undefined): string => {
+    if (!timestamp) return '';
+    const ms = Number(timestamp);
+    if (!Number.isFinite(ms)) return String(timestamp);
+    const d = new Date(ms);
+    const date = d.toISOString().split('T')[0];
+    const time = d.toISOString().split('T')[1]?.split('.')[0] ?? '';
+    return `${date} ${time}`;
+  };
+
   const requestLocation = async () => {
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
@@ -438,20 +453,18 @@ export default function ApreciacionVulnerabilidadScreen() {
   const fetchStructure = async () => {
     setIsStructureLoading(true);
     try {
-      const isConnected = await getConnectionStatus();
-      if (!isConnected) {
-        const cacheStr = await AsyncStorage.getItem('main_structure_cache');
-        if (cacheStr) {
-          const cached = JSON.parse(cacheStr);
-          if (Array.isArray(cached)) {
-            setStructure(cached);
-            return;
-          }
+      const cacheStr = await AsyncStorage.getItem('main_structure_cache');
+      if (cacheStr) {
+        const cached = JSON.parse(cacheStr);
+        if (Array.isArray(cached)) {
+          setStructure(cached);
+          return;
         }
-        setStructure([]);
-        return;
       }
+      setStructure([]);
+      return;
 
+      /*
       const res = await getMainStructure({ refreshAccessToken, logout });
       if (res.status && Array.isArray(res.structure)) setStructure(res.structure);
       else {
@@ -463,6 +476,7 @@ export default function ApreciacionVulnerabilidadScreen() {
           else setStructure([]);
         } else setStructure([]);
       }
+      */
     } catch {
       const cacheStr = await AsyncStorage.getItem('main_structure_cache');
       if (cacheStr) {
@@ -622,8 +636,8 @@ export default function ApreciacionVulnerabilidadScreen() {
     [structure]
   );
 
-  const resetForm = () => {
-    setFecha(new Date());
+  const resetForm = (horaAccion: number) => {
+    setFecha(new Date(horaAccion));
     setEnlace('');
     setNombreSolicitante('');
     setObservaciones('');
@@ -641,16 +655,27 @@ export default function ApreciacionVulnerabilidadScreen() {
     setFirmaResponsable('');
   };
 
-  const startCreating = () => {
-    resetForm();
+  const startCreating = async () => {
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora de acción');
+      return;
+    }
+    console.log('horaAccion', horaAccion);
+    resetForm(horaAccion);
     setEditing(null);
     setIsCreating(true);
   };
 
-  const startEditing = (it: VulnUI) => {
+  const startEditing = async (it: VulnUI) => {
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora de acción');
+      return;
+    }
     setEditing(it);
     setIsCreating(true);
-    setFecha(it.fecha ? new Date(it.fecha) : new Date());
+    setFecha(it.fecha ? new Date(it.fecha) : new Date(horaAccion));
     setEnlace(it.enlace || '');
     setNombreSolicitante(it.nombre_solicitante || '');
     setObservaciones(it.observaciones || '');
@@ -739,7 +764,7 @@ export default function ApreciacionVulnerabilidadScreen() {
     if (!nombreSolicitante.trim()) return Alert.alert('Error', 'Campo requerido: Nombre solicitante') as any;
     const vulnerabilidad = boleta.find((s) => s.key === PORCENTAJE_SECTION_KEY)?.vulnerabilityLevel;
     if (!vulnerabilidad) return Alert.alert('Error', 'Debes seleccionar el porcentaje de vulnerabilidad') as any;
-    if (!firmaSolicitante) return Alert.alert('Error', 'Debes registrar la firma del solicitante') as any;
+    // firma_solicitante es opcional; solo se requiere la firma responsable.
     if (!firmaResponsable) return Alert.alert('Error', 'Debes registrar la firma del responsable') as any;
     return true;
   };
@@ -774,13 +799,13 @@ export default function ApreciacionVulnerabilidadScreen() {
         if (isConnected) {
           const res = await createApreciacionVulnerabilidad({ requestData: payload, refreshAccessToken, logout });
           if (res.status) {
-            setSubmitResponse({ type: 'success', message: res.message || 'Registro creado correctamente' });
+            Alert.alert('Éxito', res.message || 'Registro creado correctamente');
             setTimeout(async () => {
               setIsCreating(false);
               await fetchItems();
             }, 2000);
           } else {
-            setSubmitResponse({ type: 'error', message: res.message || 'No se pudo crear' });
+            Alert.alert('Error', res.message || 'No se pudo crear');
           }
         } else {
           const localId = `local-vuln-${Date.now()}`;
@@ -803,7 +828,7 @@ export default function ApreciacionVulnerabilidadScreen() {
           setItems(next);
           await AsyncStorage.setItem('apreciacion_vulnerabilidad_cache', JSON.stringify(next));
           await upsertAction({ type: 'create', id: localId, requestData: payload });
-          setSubmitResponse({ type: 'success', message: 'Se sincronizará cuando vuelva la conexión.' });
+          Alert.alert('Éxito', 'Se sincronizará cuando vuelva la conexión.');
           setTimeout(async () => {
             setIsCreating(false);
             await fetchItems();
@@ -816,14 +841,14 @@ export default function ApreciacionVulnerabilidadScreen() {
       if (isConnected && !isLocal) {
         const res = await updateApreciacionVulnerabilidad({ id: editing.id, requestData: payload, refreshAccessToken, logout });
         if (res.status) {
-          setSubmitResponse({ type: 'success', message: res.message || 'Registro actualizado correctamente' });
+          Alert.alert('Éxito', res.message || 'Registro actualizado correctamente');
           setTimeout(async () => {
             setIsCreating(false);
             setEditing(null);
             await fetchItems();
           }, 2000);
         } else {
-          setSubmitResponse({ type: 'error', message: res.message || 'No se pudo actualizar' });
+          Alert.alert('Error', res.message || 'No se pudo actualizar');
         }
       } else {
         const next = items.map((it) => {
@@ -841,7 +866,7 @@ export default function ApreciacionVulnerabilidadScreen() {
           await upsertAction({ type: 'update', id: editing.id, requestData: payload });
         }
 
-        setSubmitResponse({ type: 'success', message: 'Los cambios se sincronizarán cuando vuelva la conexión.' });
+        Alert.alert('Éxito', 'Los cambios se sincronizarán cuando vuelva la conexión.');
         setTimeout(async () => {
           setIsCreating(false);
           setEditing(null);
@@ -850,7 +875,7 @@ export default function ApreciacionVulnerabilidadScreen() {
       }
     } catch (error) {
       console.error('Error saving apreciacion vulnerabilidad:', error);
-      setSubmitResponse({ type: 'error', message: 'Error al guardar el registro' });
+      Alert.alert('Error', 'Error al guardar el registro');
     } finally {
       setIsSubmitting(false);
     }
@@ -1801,7 +1826,7 @@ export default function ApreciacionVulnerabilidadScreen() {
                 onChangeText={setObservaciones}
               />
 
-              <ThemedText style={styles.sectionTitle}>Firma solicitante *</ThemedText>
+              <ThemedText style={styles.sectionTitle}>Firma solicitante (opcional)</ThemedText>
               {firmaSolicitante ? (
                 <ThemedView style={styles.signaturePreviewContainer}>
                   <Image source={{ uri: firmaSolicitante }} style={styles.signaturePreview} resizeMode="contain" />
@@ -1815,53 +1840,56 @@ export default function ApreciacionVulnerabilidadScreen() {
                 <ThemedText style={styles.openSignatureButtonText}>{firmaSolicitante ? 'Modificar firma' : 'Agregar firma'}</ThemedText>
               </TouchableOpacity>
 
-              <ThemedText style={styles.sectionTitle}>Firma responsable *</ThemedText>
-              <ThemedView style={styles.signatureButtons}>
-                <TouchableOpacity
-                  style={[styles.signatureButton, isGeneratingFirma && styles.signatureButtonDisabled]}
-                  onPress={handleGenerateFirmaResponsable}
-                  disabled={isGeneratingFirma}
-                >
-                  {isGeneratingFirma ? (
-                    <ActivityIndicator size="small" color="#FFFFFF" />
-                  ) : (
-                    <>
-                      <Ionicons name="finger-print" size={18} color="#FFFFFF" />
-                      <ThemedText style={styles.signatureButtonText}>Generar</ThemedText>
-                    </>
-                  )}
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.signatureButton} onPress={handleScanFirmaResponsable}>
-                  <Ionicons name="qr-code" size={18} color="#FFFFFF" />
-                  <ThemedText style={styles.signatureButtonText}>Escanear QR</ThemedText>
-                </TouchableOpacity>
-              </ThemedView>
-              {!firmaResponsable ? (
-                <ThemedText style={styles.signatureHintMuted}>Aún no hay firma responsable.</ThemedText>
-              ) : (
-                <ThemedView style={styles.firmaInfoBox}>
-                  <ThemedView style={{ flex: 1, paddingRight: 10 }}>
-                    <ThemedText style={styles.firmaInfoTitle}>Información de la firma:</ThemedText>
-                    {(() => {
-                      const info = decodeFirmaHash(firmaResponsable);
-                      if (!info) return <ThemedText style={styles.firmaInfoValue}>Formato no decodificable</ThemedText>;
-                      return (
+              {/* Firma del responsable (digital: generar o escanear QR) */}
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formLabel}>Firma del responsable *</ThemedText>
+                {!firmaResponsable ? (
+                  <ThemedView style={styles.signatureButtonsRow}>
+                    <TouchableOpacity
+                      style={[styles.signatureButtonPrimary, isGeneratingFirma && styles.signatureButtonPrimaryDisabled]}
+                      onPress={handleGenerateFirmaResponsable}
+                      disabled={isGeneratingFirma}
+                    >
+                      {isGeneratingFirma ? (
+                        <ActivityIndicator size="small" color="#FFFFFF" />
+                      ) : (
                         <>
-                          <ThemedText style={styles.firmaInfoValue}>Sesión: {info.sessionId || 'N/A'}</ThemedText>
-                          <ThemedText style={styles.firmaInfoValue}>Empleado: {info.empleadoId || 'N/A'}</ThemedText>
-                          <ThemedText style={styles.firmaInfoValue}>
-                            Lat: {info.latitud || 'N/A'} | Long: {info.longitud || 'N/A'}
-                          </ThemedText>
-                          <ThemedText style={styles.firmaInfoValue}>Hora: {info.timestamp || 'N/A'}</ThemedText>
+                          <Ionicons name="finger-print" size={20} color="#FFFFFF" />
+                          <ThemedText style={styles.signatureButtonPrimaryText}>Generar firma</ThemedText>
                         </>
-                      );
-                    })()}
+                      )}
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.signatureButtonPrimary} onPress={handleScanFirmaResponsable}>
+                      <Ionicons name="qr-code" size={20} color="#FFFFFF" />
+                      <ThemedText style={styles.signatureButtonPrimaryText}>Escanear QR</ThemedText>
+                    </TouchableOpacity>
                   </ThemedView>
-                  <TouchableOpacity style={styles.firmaClearButtonTiny} onPress={() => setFirmaResponsable('')}>
-                    <Ionicons name="trash" size={18} color="#FFFFFF" />
-                  </TouchableOpacity>
-                </ThemedView>
-              )}
+                ) : (
+                  <ThemedView style={styles.signatureInfo}>
+                    <ThemedView style={{ flex: 1, paddingRight: 8 }}>
+                      <ThemedText style={styles.signatureInfoTitle}>
+                        Información de la firma del responsable
+                      </ThemedText>
+                      {(() => {
+                        const info = decodeFirmaHash(firmaResponsable);
+                        if (!info) return <ThemedText style={styles.signatureInfoText}>Formato no decodificable</ThemedText>;
+                        return (
+                          <>
+                            <ThemedText style={styles.signatureInfoText}>ID de sesión: {info.sessionId}</ThemedText>
+                            <ThemedText style={styles.signatureInfoText}>ID del empleado: {info.empleadoId}</ThemedText>
+                            <ThemedText style={styles.signatureInfoText}>Latitud: {info.latitud}</ThemedText>
+                            <ThemedText style={styles.signatureInfoText}>Longitud: {info.longitud}</ThemedText>
+                            <ThemedText style={styles.signatureInfoText}>Fecha y hora: {formatFirmaDateLabel(info.timestamp)}</ThemedText>
+                          </>
+                        );
+                      })()}
+                    </ThemedView>
+                    <TouchableOpacity style={styles.firmaClearButtonTiny} onPress={() => setFirmaResponsable('')}>
+                      <Ionicons name="trash" size={18} color="#FFFFFF" />
+                    </TouchableOpacity>
+                  </ThemedView>
+                )}
+              </ThemedView>
 
               {submitResponse && (
                 <ThemedView style={[styles.responseContainer, submitResponse.type === 'success' ? styles.responseSuccess : styles.responseError]}>
@@ -2040,12 +2068,91 @@ export default function ApreciacionVulnerabilidadScreen() {
                           {(Array.isArray(parsed) ? parsed : []).length > 0 && (
                             <ThemedView style={styles.filterGroupSearch}>
                               <ThemedText style={styles.filterLabel}>Cambios:</ThemedText>
-                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => (
-                                <ThemedText key={`c-${row.id}-${idx}`} style={styles.changeDescription}>
-                                  <ThemedText style={{ fontWeight: '800' }}>{String(c?.prop ?? '-')}: </ThemedText>
-                                  {formatChangeValue(c?.prop, c?.after)}
-                                </ThemedText>
-                              ))}
+                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => {
+                                const prop = String(c?.prop ?? '-');
+                                const value = c?.after;
+
+                                // Caso especial: registro creado (__created__)
+                                if (prop === '__created__' && value && typeof value === 'object') {
+                                  const created: any = value;
+                                  return (
+                                    <React.Fragment key={`c-${row.id}-${idx}-created`}>
+                                      <ThemedView style={styles.changeDescriptionContainer}>
+                                        <ThemedText style={styles.changeDescription}>
+                                          <ThemedText style={{ fontWeight: '800' }}>Registro creado</ThemedText>
+                                        </ThemedText>
+                                      </ThemedView>
+
+                                      {/* Campos no relacionados con firmas */}
+                                      {Object.entries(created).map(([k, v]) => {
+                                        if (k === 'firma_solicitante' || k === 'firma_responsable') return null;
+                                        return (
+                                          <ThemedView key={`c-${row.id}-${idx}-${k}`} style={styles.changeDescriptionContainer}>
+                                            <ThemedText style={styles.changeDescription}>
+                                              <ThemedText style={{ fontWeight: '800' }}>{k}: </ThemedText>
+                                              {formatChangeValue(k, v)}
+                                            </ThemedText>
+                                          </ThemedView>
+                                        );
+                                      })}
+
+                                      {/* Firma responsable (hash decodificado) */}
+                                      {typeof created.firma_responsable === 'string' && created.firma_responsable.trim() && (
+                                        <ThemedView style={styles.changeDescriptionContainer}>
+                                          <ThemedText style={styles.changeDescription}>
+                                            <ThemedText style={{ fontWeight: '800' }}>firma_responsable: </ThemedText>
+                                            {(() => {
+                                              const info = decodeFirmaHash(created.firma_responsable);
+                                              return info
+                                                ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${info.timestamp || 'N/A'}`
+                                                : 'Firma responsable (formato no decodificable)';
+                                            })()}
+                                          </ThemedText>
+                                        </ThemedView>
+                                      )}
+
+                                      {/* Firma solicitante (imagen) */}
+                                      {typeof created.firma_solicitante === 'string' && created.firma_solicitante.trim() && (
+                                        <ThemedView style={styles.changeDescriptionContainer}>
+                                          <ThemedText style={styles.changeDescription}>
+                                            <ThemedText style={{ fontWeight: '800' }}>firma_solicitante</ThemedText>
+                                          </ThemedText>
+                                          <Image
+                                            source={{ uri: formatSignatureForDisplay(created.firma_solicitante) }}
+                                            style={styles.cambioSignatureImage}
+                                            resizeMode="contain"
+                                          />
+                                        </ThemedView>
+                                      )}
+                                    </React.Fragment>
+                                  );
+                                }
+
+                                const isManualSignatureField = prop === 'firma_solicitante';
+                                const isResponsableSignatureField = prop === 'firma_responsable';
+
+                                return (
+                                  <ThemedView key={`c-${row.id}-${idx}`} style={styles.changeDescriptionContainer}>
+                                    <ThemedText style={styles.changeDescription}>
+                                      <ThemedText style={{ fontWeight: '800' }}>{prop}: </ThemedText>
+                                      {!isManualSignatureField && !isResponsableSignatureField && formatChangeValue(prop, value)}
+                                      {isResponsableSignatureField && (() => {
+                                        const info = typeof value === 'string' ? decodeFirmaHash(value) : null;
+                                        if (!info) return 'Firma responsable (formato no decodificable)';
+                                        return `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${info.timestamp || 'N/A'}`;
+                                      })()}
+                                    </ThemedText>
+
+                                    {isManualSignatureField && typeof value === 'string' && value && (
+                                      <Image
+                                        source={{ uri: formatSignatureForDisplay(value) }}
+                                        style={styles.cambioSignatureImage}
+                                        resizeMode="contain"
+                                      />
+                                    )}
+                                  </ThemedView>
+                                );
+                              })}
                             </ThemedView>
                           )}
                         </ThemedView>
@@ -2232,7 +2339,16 @@ const styles = StyleSheet.create({
   cambioCollapsableHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, backgroundColor: '#F8F9FA' },
   cambioCollapsableTitle: { fontSize: 14, fontWeight: '600', color: '#007AFF', flex: 1 },
   cambioCollapsableContent: { padding: 12, gap: 8, backgroundColor: '#F8F9FA' },
-  changeDescription: { fontSize: 14, lineHeight: 20, color: '#666', marginBottom: 8 },
+  changeDescriptionContainer: { marginBottom: 8 },
+  changeDescription: { fontSize: 14, lineHeight: 20, color: '#666' },
+  cambioSignatureImage: {
+    marginTop: 6,
+    height: 80,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    backgroundColor: '#FFFFFF',
+  },
   filterGroupSearch: { marginBottom: 12 },
 
   // boleta
@@ -2303,7 +2419,23 @@ const styles = StyleSheet.create({
   },
   openSignatureButtonText: { fontWeight: '800', color: '#000' },
 
-  // Firma responsable (patrón estándar)
+  // Firma responsable (alineado con StaffEvaluationsScreen)
+  formGroup: { marginBottom: 16 },
+  formLabel: { fontSize: 14, fontWeight: '600', marginBottom: 8, color: '#333' },
+  signatureButtonsRow: { flexDirection: 'row', gap: 10, marginTop: 4 },
+  signatureButtonPrimary: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    borderRadius: 8,
+    backgroundColor: '#007AFF',
+    gap: 8,
+    flex: 1,
+  },
+  signatureButtonPrimaryText: { color: '#FFFFFF', fontSize: 14, fontWeight: '600' },
+  signatureButtonPrimaryDisabled: { opacity: 0.6 },
+
   signatureButtons: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, backgroundColor: '#fff', marginTop: 8 },
   signatureButton: {
     backgroundColor: '#007AFF',
@@ -2319,6 +2451,17 @@ const styles = StyleSheet.create({
   signatureButtonDisabled: { backgroundColor: '#999' },
   signatureButtonText: { color: '#FFFFFF', fontSize: 14, fontWeight: '600', marginLeft: 8 },
   signatureHintMuted: { marginTop: 6, color: '#999' },
+
+  signatureInfo: {
+    backgroundColor: '#F5F5F5',
+    borderRadius: 8,
+    padding: 10,
+    marginTop: 8,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  signatureInfoTitle: { fontSize: 14, fontWeight: 'bold', marginBottom: 4 },
+  signatureInfoText: { fontSize: 12, marginBottom: 2 },
 
   firmaInfoBox: {
     marginTop: 10,

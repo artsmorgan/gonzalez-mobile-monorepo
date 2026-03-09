@@ -14,6 +14,16 @@ interface DeleteStaffEvaluationParams {
   logout: () => Promise<any>;
 }
 
+export type StaffEvaluationSignatureField = 'firma_empleado' | 'firma_empleado_manual';
+
+interface UpdateStaffEvaluationSignatureParams {
+  evaluationId: number;
+  field: StaffEvaluationSignatureField;
+  value: string | null;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
 interface ApiResponse {
   status: boolean;
   message: string;
@@ -102,6 +112,52 @@ export const deleteStaffEvaluation = async ({
     return {
       status: false,
       message: 'Error al eliminar la evaluación de personal',
+    };
+  }
+};
+
+export const updateStaffEvaluationSignature = async ({
+  evaluationId,
+  field,
+  value,
+  refreshAccessToken,
+  logout,
+}: UpdateStaffEvaluationSignatureParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+
+    const response = await authedFetch({
+      url: `${apiUrl}/api/evaluation/${evaluationId}`,
+      init: {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ field, value: value ?? '' }),
+      },
+      refreshAccessToken,
+      logout,
+    });
+
+    if (!response) {
+      throw new Error('Sesión expirada');
+    }
+
+    const data: ApiResponse = await response.json();
+
+    if (!response.ok || !data.status) {
+      throw new Error(data.message || `HTTP error! status: ${response.status}`);
+    }
+
+    return data;
+  } catch (error) {
+    console.error('Error updating staff evaluation signature:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al actualizar la firma',
     };
   }
 };

@@ -921,7 +921,7 @@ export default function ComplaintsMasterScreen() {
   const saveComplaint = async () => {
     const currentMarca = await AsyncStorage.getItem('current_marca');
     if (!currentMarca) {
-      setSubmitResponse({ type: 'error', message: 'No se encontró la marca actual' });
+      Alert.alert('Error', 'No se encontró la marca actual');
       return;
     }
 
@@ -932,7 +932,7 @@ export default function ComplaintsMasterScreen() {
       const currentMarcaData = JSON.parse(currentMarca);
 
       if (!firmaResponsable) {
-        setSubmitResponse({ type: 'error', message: 'La firma del responsable es requerida' });
+        Alert.alert('Error', 'La firma del responsable es requerida');
         setIsSubmitting(false);
         return;
       }
@@ -977,13 +977,13 @@ export default function ComplaintsMasterScreen() {
         });
 
         if (result.status) {
-          setSubmitResponse({ type: 'success', message: result.message || 'Queja guardada correctamente' });
+          Alert.alert('Éxito', result.message || 'Queja guardada correctamente');
           setTimeout(() => {
             cancelCreating();
             fetchComplaints();
           }, 2000);
         } else {
-          setSubmitResponse({ type: 'error', message: result.message || 'Error al guardar la queja' });
+          Alert.alert('Error', result.message || 'Error al guardar la queja');
         }
       } else {
         const localId = generateRandomId();
@@ -1001,6 +1001,12 @@ export default function ComplaintsMasterScreen() {
 
         const cacheStr = await AsyncStorage.getItem('evaluations_cache');
         const cache = cacheStr ? JSON.parse(cacheStr) : [];
+
+        const horaAccion = await getHoraAccion();
+        if (!horaAccion) {
+          Alert.alert('Error', 'No se pudo obtener la hora');
+          return;
+        }
 
         const newRecordCache: Complaint = {
           id: '',
@@ -1024,14 +1030,14 @@ export default function ComplaintsMasterScreen() {
           estado: estado.trim() || null,
           accion_correctiva_preventiva: accionCorrectivaPreventiva.trim() || null,
           firma_responsable: requestData.firma_responsable || null,
-          created_at: new Date().toISOString(),
+          created_at: new Date(horaAccion).toISOString(),
           synced: false,
         };
 
         cache.push({ ...newRecordCache, type: 'complaints_master' });
         await AsyncStorage.setItem('evaluations_cache', JSON.stringify(cache));
 
-        setSubmitResponse({ type: 'success', message: 'Queja registrada localmente. Se sincronizará cuando haya conexión.' });
+        Alert.alert('Éxito', 'Queja registrada localmente. Se sincronizará cuando haya conexión.');
         setTimeout(() => {
           cancelCreating();
           fetchComplaints();
@@ -1039,7 +1045,7 @@ export default function ComplaintsMasterScreen() {
       }
     } catch (err) {
       console.error('Error saving complaint:', err);
-      setSubmitResponse({ type: 'error', message: 'No se pudo guardar la queja' });
+      Alert.alert('Error', 'No se pudo guardar la queja');
     } finally {
       setIsSubmitting(false);
     }
@@ -1053,7 +1059,7 @@ export default function ComplaintsMasterScreen() {
 
     try {
       if (!firmaResponsable && (!editingRecord.firma_responsable || editingRecord.firma_responsable.trim().length === 0)) {
-        setSubmitResponse({ type: 'error', message: 'La firma del responsable es requerida' });
+        Alert.alert('Error', 'La firma del responsable es requerida');
         setIsSubmitting(false);
         return;
       }
@@ -1099,13 +1105,13 @@ export default function ComplaintsMasterScreen() {
         });
 
         if (result.status) {
-          setSubmitResponse({ type: 'success', message: result.message || 'Queja actualizada correctamente' });
+          Alert.alert('Éxito', result.message || 'Queja actualizada correctamente');
           setTimeout(() => {
             cancelEditing();
             fetchComplaints();
           }, 2000);
         } else {
-          setSubmitResponse({ type: 'error', message: result.message || 'Error al actualizar la queja' });
+          Alert.alert('Error', result.message || 'Error al actualizar la queja');
         }
       } else {
         const actionsStr = await AsyncStorage.getItem('evaluations_actions');
@@ -1151,7 +1157,7 @@ export default function ComplaintsMasterScreen() {
           await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
         }
 
-        setSubmitResponse({ type: 'success', message: 'Queja actualizada localmente. Se sincronizará cuando haya conexión.' });
+        Alert.alert('Éxito', 'Queja actualizada localmente. Se sincronizará cuando haya conexión.');
         setTimeout(() => {
           cancelEditing();
           fetchComplaints();
@@ -1159,7 +1165,7 @@ export default function ComplaintsMasterScreen() {
       }
     } catch (err) {
       console.error('Error updating complaint:', err);
-      setSubmitResponse({ type: 'error', message: 'No se pudo actualizar la queja' });
+      Alert.alert('Error', 'No se pudo actualizar la queja');
     } finally {
       setIsSubmitting(false);
     }
@@ -1187,7 +1193,7 @@ export default function ComplaintsMasterScreen() {
                 });
 
                 if (result.status) {
-                  Alert.alert('Éxito', 'Queja eliminada correctamente');
+                  Alert.alert('Éxito', result.message || 'Queja eliminada correctamente');
                   fetchComplaints();
                 } else {
                   Alert.alert('Error', result.message || 'Error al eliminar la queja');

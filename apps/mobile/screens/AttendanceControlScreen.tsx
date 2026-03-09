@@ -835,8 +835,13 @@ export default function AttendanceControlScreen() {
     return `local-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
   };
 
-  const resetForm = () => {
-    setFecha(new Date());
+  const resetForm = async () => {
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
+    setFecha(new Date(horaAccion));
     setTurno('');
     setTotalPresentes('');
     setColaboradores([]);
@@ -932,10 +937,10 @@ export default function AttendanceControlScreen() {
     ]);
   };
 
-  const startCreating = () => {
+  const startCreating = async () => {
     setIsCreating(true);
     setEditingRecord(null);
-    resetForm();
+    await resetForm();
 
     // Request location permissions (firma)
     (async () => {
@@ -953,9 +958,9 @@ export default function AttendanceControlScreen() {
     })();
   };
 
-  const cancelCreating = () => {
+  const cancelCreating = async () => {
     setIsCreating(false);
-    resetForm();
+    await resetForm();
   };
 
   const startEditing = async (record: AttendanceControl) => {
@@ -1162,9 +1167,9 @@ export default function AttendanceControlScreen() {
     }
   };
 
-  const cancelEditing = () => {
+  const cancelEditing = async () => {
     setEditingRecord(null);
-    resetForm();
+    await resetForm();
   };
 
   const handleDateChange = (event: any, selectedDate?: Date) => {
@@ -1315,7 +1320,7 @@ export default function AttendanceControlScreen() {
   const saveControlHandler = async () => {
     const currentMarca = await AsyncStorage.getItem('current_marca');
     if (!currentMarca) {
-      setSubmitResponse({ type: 'error', message: 'No se encontró la marca actual' });
+      Alert.alert('Error', 'No se encontró la marca actual');
       return;
     }
 
@@ -1326,14 +1331,14 @@ export default function AttendanceControlScreen() {
       const currentMarcaData = JSON.parse(currentMarca);
 
       if (!firmaResponsableHash) {
-        setSubmitResponse({ type: 'error', message: 'Debes generar la firma del responsable antes de guardar' });
+        Alert.alert('Error', 'Debes generar la firma del responsable antes de guardar');
         setIsSubmitting(false);
         return;
       }
 
       // Validar campos jerárquicos
       if (!formEmpresaId || !formClienteId || !formDivisionId || !formContratoId || !formCorpoId) {
-        setSubmitResponse({ type: 'error', message: 'Debe seleccionar Empresa, Cliente, División, Contrato y Sucursal' });
+        Alert.alert('Error', 'Debe seleccionar Empresa, Cliente, División, Contrato y Sucursal');
         setIsSubmitting(false);
         return;
       }
@@ -1365,7 +1370,7 @@ export default function AttendanceControlScreen() {
       const isConnected = await getConnectionStatus();
 
       if (!isConnected) {
-        setSubmitResponse({ type: 'error', message: 'Este módulo funciona exclusivamente con internet' });
+        Alert.alert('Error', 'Este módulo funciona exclusivamente con internet');
         return;
       }
 
@@ -1376,17 +1381,17 @@ export default function AttendanceControlScreen() {
       });
 
       if (result.status) {
-        setSubmitResponse({ type: 'success', message: result.message || 'Control de asistencia guardado correctamente' });
+        Alert.alert('Éxito', result.message || 'Control de asistencia guardado correctamente');
         setTimeout(() => {
           cancelCreating();
           fetchControls();
         }, 2000);
       } else {
-        setSubmitResponse({ type: 'error', message: result.message || 'Error al guardar el control de asistencia' });
+        Alert.alert('Error', result.message || 'Error al guardar el control de asistencia');
       }
     } catch (err) {
       console.error('Error saving control:', err);
-      setSubmitResponse({ type: 'error', message: 'No se pudo guardar el control de asistencia' });
+      Alert.alert('Error', 'No se pudo guardar el control de asistencia');
     } finally {
       setIsSubmitting(false);
     }
@@ -1401,20 +1406,20 @@ export default function AttendanceControlScreen() {
     try {
       const recordId = editingRecord.id || editingRecord.id_local;
       if (!recordId) {
-        setSubmitResponse({ type: 'error', message: 'ID de registro no encontrado para actualizar' });
+        Alert.alert('Error', 'ID de registro no encontrado para actualizar');
         setIsSubmitting(false);
         return;
       }
 
       if (!firmaResponsableHash) {
-        setSubmitResponse({ type: 'error', message: 'Debes generar la firma del responsable antes de actualizar' });
+        Alert.alert('Error', 'Debes generar la firma del responsable antes de actualizar');
         setIsSubmitting(false);
         return;
       }
 
       // Validar campos jerárquicos
       if (!formEmpresaId || !formClienteId || !formDivisionId || !formContratoId || !formCorpoId) {
-        setSubmitResponse({ type: 'error', message: 'Debe seleccionar Empresa, Cliente, División, Contrato y Sucursal' });
+        Alert.alert('Error', 'Debe seleccionar Empresa, Cliente, División, Contrato y Sucursal');
         setIsSubmitting(false);
         return;
       }
@@ -1449,7 +1454,7 @@ export default function AttendanceControlScreen() {
       const isConnected = await getConnectionStatus();
 
       if (!isConnected) {
-        setSubmitResponse({ type: 'error', message: 'Este módulo funciona exclusivamente con internet' });
+        Alert.alert('Error', 'Este módulo funciona exclusivamente con internet');
         return;
       }
 
@@ -1461,17 +1466,17 @@ export default function AttendanceControlScreen() {
       });
 
       if (result.status) {
-        setSubmitResponse({ type: 'success', message: result.message || 'Control de asistencia actualizado correctamente' });
+        Alert.alert('Éxito', result.message || 'Control de asistencia actualizado correctamente');
         setTimeout(() => {
           cancelEditing();
           fetchControls();
         }, 2000);
       } else {
-        setSubmitResponse({ type: 'error', message: result.message || 'Error al actualizar el control de asistencia' });
+        Alert.alert('Error', result.message || 'Error al actualizar el control de asistencia');
       }
     } catch (err) {
       console.error('Error updating control:', err);
-      setSubmitResponse({ type: 'error', message: 'No se pudo actualizar el control de asistencia' });
+      Alert.alert('Error', 'No se pudo actualizar el control de asistencia');
     } finally {
       setIsSubmitting(false);
     }

@@ -89,6 +89,7 @@ export default function PuestoUbicacionScreen() {
     const fetchMainStructure = useCallback(async () => {
         try {
             setIsStructureLoading(true);
+            /*
             const isConnected = await getConnectionStatus();
 
             if (isConnected) {
@@ -124,24 +125,32 @@ export default function PuestoUbicacionScreen() {
                     throw new Error(data.message || 'Error al cargar estructura');
                 }
             } else {
-                // Cargar desde cache
-                const cacheStr = await AsyncStorage.getItem('main_structure_cache');
-                if (cacheStr) {
-                    const cached = JSON.parse(cacheStr);
-                    setStructure(cached);
-                }
+                
+            }
+            */
+            // Cargar desde cache
+            const cacheStr = await AsyncStorage.getItem('main_structure_cache');
+            if (cacheStr) {
+                const cached = JSON.parse(cacheStr);
+                setStructure(cached);
+            } else {
+                setStructure([]);
             }
         } catch (error) {
             console.error('Error fetching main structure:', error);
+            setStructure([]);
             // Intentar cargar desde cache en caso de error
             try {
                 const cacheStr = await AsyncStorage.getItem('main_structure_cache');
                 if (cacheStr) {
                     const cached = JSON.parse(cacheStr);
                     setStructure(cached);
+                } else {
+                    setStructure([]);
                 }
             } catch (cacheError) {
                 console.error('Error loading from cache:', cacheError);
+                setStructure([]);
             }
         } finally {
             setIsStructureLoading(false);
@@ -312,7 +321,7 @@ export default function PuestoUbicacionScreen() {
 
                 const data = await response.json();
                 if (data.status) {
-                    setSubmitResponse({ type: 'success', message: data.message || 'Ubicación del puesto actualizada correctamente' });
+                    Alert.alert('Éxito', data.message || 'Ubicación del puesto actualizada correctamente');
                     // Actualizar datos locales
                     setPuestoData({
                         lat: String(deviceLocation.latitude),
@@ -321,7 +330,7 @@ export default function PuestoUbicacionScreen() {
                     // Recargar estructura para obtener datos actualizados
                     await fetchMainStructure();
                 } else {
-                    setSubmitResponse({ type: 'error', message: data.message || 'Error al actualizar la ubicación' });
+                    Alert.alert('Error', data.message || 'Error al actualizar la ubicación');
                 }
             } else {
                 // Offline: guardar acción para sincronizar después
@@ -369,7 +378,7 @@ export default function PuestoUbicacionScreen() {
                     lng: String(deviceLocation.longitude),
                 });
 
-                setSubmitResponse({ type: 'success', message: 'Ubicación guardada localmente. Se sincronizará cuando haya conexión.' });
+                Alert.alert('Éxito', 'Ubicación guardada localmente. Se sincronizará cuando haya conexión.');
             }
         } catch (error: any) {
             console.error('Error updating puesto ubicacion:', error);

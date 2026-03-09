@@ -504,7 +504,12 @@ export default function TrainingsScreen() {
     return `${day}-${month}-${year}`;
   };
 
-  const startCreating = () => {
+  const startCreating = async () => {
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
     setIsCreating(true);
     setFormKey(prev => prev + 1); // Incrementar key para forzar re-render
     tituloRef.current = '';
@@ -512,7 +517,7 @@ export default function TrainingsScreen() {
     observacionesRef.current = '';
     nombreResponsableRef.current = employee?.name || '';
     cedulaResponsableRef.current = employee?.cedula || '';
-    setFechaCapacitacion(new Date().toISOString().split('T')[0]);
+    setFechaCapacitacion(new Date(horaAccion).toISOString().split('T')[0]);
     setSelectedTipo('Prescencial');
     setSelectedEmpleados([]);
     setSelectedPuestos([]);

@@ -233,6 +233,7 @@ export async function POST(req: NextRequest) {
               puesto_id: created.puesto_id,
               nombre_llavero: created.nombre_llavero,
               observaciones: created.observaciones,
+              firma_responsable: created.firma_responsable,
             },
           }]),
           created_at: createdAt.toISOString(),

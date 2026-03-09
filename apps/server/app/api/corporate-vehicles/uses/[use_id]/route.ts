@@ -137,7 +137,11 @@ export async function PUT(
       km_fin: km_fin !== undefined ? Number(km_fin ?? 0) : existingObj.km_fin,
       motivo: motivo !== undefined ? String(motivo ?? "") : existingObj.motivo,
       firma_conductor:
-        firma_conductor !== undefined ? String(firma_conductor ?? "") : existingObj.firma_conductor,
+        firma_conductor !== undefined
+          ? (firma_conductor != null && String(firma_conductor).trim().length > 0
+              ? String(firma_conductor).trim()
+              : null)
+          : existingObj.firma_conductor,
       firma_responsable:
         firma_responsable !== undefined ? String(firma_responsable ?? "") : existingObj.firma_responsable,
     };

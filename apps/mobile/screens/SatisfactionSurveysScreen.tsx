@@ -30,7 +30,7 @@ import SignatureScreen from "react-native-signature-canvas";
 import { jwtDecode } from 'jwt-decode';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import * as Network from 'expo-network';
-import { createSurvey as createSurveyAPI } from '@/hooks/surveysFunctions';
+import { createSurvey as createSurveyAPI, updateSurveySignature } from '@/hooks/surveysFunctions';
 import { eventBus } from '@/hooks/eventBus';
 import authedFetch from '@/hooks/authedFetch';
 import getValidAccessTokenOrLogout from '@/hooks/getValidAccessTokenOrLogout';
@@ -309,6 +309,13 @@ export default function SatisfactionSurveysScreen() {
   const [isFiltersExpanded, setIsFiltersExpanded] = useState(false);
   const [showFilterFechaPicker, setShowFilterFechaPicker] = useState(false);
 
+  // Modal: añadir firma persona evaluada (en lista, cuando falta)
+  const [addSignatureModalVisible, setAddSignatureModalVisible] = useState(false);
+  const [addSignatureSurvey, setAddSignatureSurvey] = useState<Survey | null>(null);
+  const addSignatureManualRef = useRef<any>(null);
+  const [addSignatureManualKey, setAddSignatureManualKey] = useState(0);
+  const [isAddSignatureSubmitting, setIsAddSignatureSubmitting] = useState(false);
+
   // Input refs
   const empresaEvaluadaInputRef = useRef<TextInput>(null);
   const personaNombreInputRef = useRef<TextInput>(null);
@@ -396,11 +403,16 @@ export default function SatisfactionSurveysScreen() {
         try {
           const parsed = JSON.parse(cacheStr);
           if (Array.isArray(parsed)) setStructure(parsed);
+          else setStructure([]);
         } catch {
           // ignore
+          setStructure([]);
         }
       }
-
+      else {
+        setStructure([]);
+      }
+      /*
       const isConnected = await getConnectionStatus();
       if (!isConnected) {
         hasLoadedMainStructureRef.current = true;
@@ -432,6 +444,7 @@ export default function SatisfactionSurveysScreen() {
         setStructure(incoming);
         await AsyncStorage.setItem('main_structure_cache', JSON.stringify(incoming));
       }
+        */
       hasLoadedMainStructureRef.current = true;
     } catch (e) {
       console.error('Error fetching main structure for satisfaction surveys:', e);
@@ -974,7 +987,7 @@ export default function SatisfactionSurveysScreen() {
     return `${year}-${month}-${day}T00:00:00.000Z`;
   };
 
-  const startCreating = () => {
+  const startCreating = async () => {
     setIsCreating(true);
     setFormKey(prev => prev + 1);
     resetForm();
@@ -985,6 +998,12 @@ export default function SatisfactionSurveysScreen() {
     setFormDivisionId(marcaDivisionId);
     setFormCorpoId(marcaCorpoId);
     setFormPuestoId(marcaPuestoId);
+
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
 
     // Si hay cliente seleccionado, llenar empresa_evaluado
     if (marcaClienteId) {
@@ -1034,7 +1053,7 @@ export default function SatisfactionSurveysScreen() {
       setSelectedPuesto(puestos[0].id);
     }
 
-    const today = new Date();
+    const today = new Date(horaAccion);
     setFechaEncuesta(today);
     fechaEncuestaRef.current = formatDateToISO(today);
 
@@ -1146,11 +1165,7 @@ export default function SatisfactionSurveysScreen() {
       }
     }
 
-    const finalPersonSignature = personSignatureRef.current || personSignature;
-    if (!finalPersonSignature) {
-      Alert.alert('Error', 'Debe agregar la firma de la persona evaluada');
-      return;
-    }
+    // firma_persona_evaluada es opcional
 
     if (!responsableNombreRef.current.trim()) {
       Alert.alert('Error', 'Debe ingresar el nombre del responsable');
@@ -1447,6 +1462,75 @@ export default function SatisfactionSurveysScreen() {
             personSignatureRef.current = null;
           }
         }
+      ]
+    );
+  };
+
+  const openAddSignatureModal = (survey: Survey) => {
+    setAddSignatureSurvey(survey);
+    setAddSignatureManualKey((k) => k + 1);
+    setAddSignatureModalVisible(true);
+  };
+
+  const closeAddSignatureModal = () => {
+    setAddSignatureModalVisible(false);
+    setAddSignatureSurvey(null);
+  };
+
+  const triggerAddSignatureManualRead = () => {
+    try {
+      addSignatureManualRef.current?.readSignature?.();
+    } catch {
+      Alert.alert('Error', 'No se pudo leer la firma. Dibuje primero en el recuadro.');
+    }
+  };
+
+  const handleAddSignatureManualRead = (signature: string) => {
+    const sig = String(signature || '').trim();
+    if (!sig || sig.length < 10) {
+      Alert.alert('Error', 'No se detectó la firma. Intenta de nuevo.');
+      return;
+    }
+    const survey = addSignatureSurvey;
+    if (!survey || survey.id === 0) return;
+    Alert.alert(
+      'Confirmar',
+      '¿Guardar esta firma de la persona evaluada en el registro?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Aceptar',
+          onPress: async () => {
+            setIsAddSignatureSubmitting(true);
+            try {
+              const result = await updateSurveySignature({
+                surveyId: survey.id,
+                field: 'firma_persona_evaluada',
+                value: sig,
+                refreshAccessToken,
+                logout,
+              });
+              if (result.status) {
+                const personaUri = sig.startsWith('data:') ? sig : `data:image/png;base64,${sig}`;
+                setDecodedFirmas((prev) => {
+                  const next = new Map(prev);
+                  const existing = next.get(survey.id) || { responsable: null, persona: null };
+                  next.set(survey.id, { ...existing, persona: personaUri });
+                  return next;
+                });
+                closeAddSignatureModal();
+                await fetchSurveys(true);
+                Alert.alert('Éxito', result.message || 'Firma actualizada correctamente');
+              } else {
+                Alert.alert('Error', result.message || 'No se pudo actualizar la firma.');
+              }
+            } catch (e) {
+              Alert.alert('Error', (e instanceof Error ? e.message : 'No se pudo actualizar la firma.'));
+            } finally {
+              setIsAddSignatureSubmitting(false);
+            }
+          },
+        },
       ]
     );
   };
@@ -2135,7 +2219,7 @@ export default function SatisfactionSurveysScreen() {
                                   )}
 
                                   {/* Firma persona evaluada */}
-                                  {firmasData.persona && (
+                                  {firmasData.persona ? (
                                     <ThemedView style={styles.firmaSection}>
                                       <ThemedText style={styles.firmaSectionTitle}>Firma de la Persona Evaluada:</ThemedText>
                                       <ThemedView style={styles.signatureImageContainer}>
@@ -2148,6 +2232,20 @@ export default function SatisfactionSurveysScreen() {
                                           }}
                                         />
                                       </ThemedView>
+                                    </ThemedView>
+                                  ) : (
+                                    <ThemedView style={styles.firmaSection}>
+                                      <ThemedText style={styles.firmaSectionTitle}>Firma de la Persona Evaluada:</ThemedText>
+                                      <ThemedText style={styles.emptyText}>No hay firma de la persona evaluada registrada</ThemedText>
+                                      {survey.id > 0 && (
+                                        <TouchableOpacity
+                                          style={[styles.signatureButton, { marginTop: 8 }]}
+                                          onPress={() => openAddSignatureModal(survey)}
+                                        >
+                                          <Ionicons name="create-outline" size={20} color="#FFFFFF" />
+                                          <ThemedText style={styles.signatureButtonText}>Añadir firma persona evaluada</ThemedText>
+                                        </TouchableOpacity>
+                                      )}
                                     </ThemedView>
                                   )}
                                 </>
@@ -2545,9 +2643,9 @@ export default function SatisfactionSurveysScreen() {
                     />
                   </ThemedView>
 
-                  {/* Firma persona evaluada */}
+                  {/* Firma persona evaluada (opcional) */}
                   <ThemedView style={styles.formGroup}>
-                    <ThemedText style={styles.label}>Firma de la persona que realiza la encuesta:</ThemedText>
+                    <ThemedText style={styles.label}>Firma de la persona que realiza la encuesta (opcional):</ThemedText>
 
                     {personSignature ? (
                       <ThemedView style={styles.signaturePreviewContainer}>
@@ -2728,6 +2826,62 @@ export default function SatisfactionSurveysScreen() {
           onChange={handleFilterFechaChange}
         />
       )}
+
+      {/* Modal Añadir firma persona evaluada (en lista, cuando falta) */}
+      <Modal
+        visible={addSignatureModalVisible}
+        animationType="fade"
+        transparent
+        presentationStyle="overFullScreen"
+        onRequestClose={closeAddSignatureModal}
+      >
+        <View style={styles.addSignatureOverlay}>
+          <ThemedView style={styles.addSignatureModalCard}>
+            <ThemedView style={styles.addSignatureModalHeader}>
+              <ThemedText style={styles.modalTitle}>Añadir firma persona evaluada</ThemedText>
+              <TouchableOpacity onPress={closeAddSignatureModal}>
+                <Ionicons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+            </ThemedView>
+            <ThemedText style={styles.addSignatureModalHint}>Dibuje la firma dentro del recuadro.</ThemedText>
+            <View style={styles.addSignaturePadBox}>
+              <SignatureScreen
+                ref={addSignatureManualRef}
+                onOK={handleAddSignatureManualRead}
+                onEmpty={() => {
+                  Alert.alert('Error', 'No se detectó la firma. Intenta de nuevo.');
+                }}
+                descriptionText=""
+                clearText=""
+                confirmText=""
+                webStyle={`
+                  .m-signature-pad--footer {display: none; margin: 0px;}
+                  .m-signature-pad {box-shadow: none; border: none;}
+                  body,html {width: 100%; height: 100%; background: #ffffff;}
+                `}
+                key={addSignatureManualKey}
+              />
+            </View>
+            <ThemedView style={styles.modalActions}>
+              <TouchableOpacity style={styles.modalClearButton} onPress={closeAddSignatureModal}>
+                <ThemedText style={styles.modalClearButtonText}>Cancelar</ThemedText>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalAcceptButton, isAddSignatureSubmitting && { opacity: 0.6 }]}
+                onPress={triggerAddSignatureManualRead}
+                disabled={isAddSignatureSubmitting}
+              >
+                {isAddSignatureSubmitting ? (
+                  <ActivityIndicator size="small" color="#000000" />
+                ) : (
+                  <Ionicons name="checkmark" size={20} color="#000000" />
+                )}
+                <ThemedText style={styles.modalAcceptButtonText}>Confirmar</ThemedText>
+              </TouchableOpacity>
+            </ThemedView>
+          </ThemedView>
+        </View>
+      </Modal>
 
       <AppFooter />
       <SlideMenu isVisible={isMenuVisible} onClose={handleMenuClose} onHomePress={handleHomePress} />
@@ -3374,6 +3528,46 @@ const styles = StyleSheet.create({
     borderColor: '#E0E0E0',
     borderRadius: 8,
     backgroundColor: '#FFFFFF',
+  },
+  addSignatureOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 20,
+  },
+  addSignatureModalCard: {
+    width: '100%',
+    maxWidth: 520,
+    borderRadius: 14,
+    backgroundColor: '#FFFFFF',
+    overflow: 'hidden',
+  },
+  addSignatureModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+    backgroundColor: '#F8F9FA',
+  },
+  addSignatureModalHint: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    color: '#666',
+    fontSize: 13,
+  },
+  addSignaturePadBox: {
+    marginTop: 10,
+    marginHorizontal: 16,
+    height: 260,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    overflow: 'hidden',
   },
   evaluacionesContainer: {
     marginTop: 12,

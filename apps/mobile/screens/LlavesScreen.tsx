@@ -37,8 +37,8 @@ type MovimientoUI = {
   telefono: string;
   fecha: string;
   hora: string;
-  firma_entrega: string;
-  firma_recibe: string;
+  firma_entrega?: string | null;
+  firma_recibe?: string | null;
   firma_responsable: string;
 };
 
@@ -54,8 +54,8 @@ type MovimientoLlaveroUI = {
   telefono: string;
   fecha: string;
   hora: string;
-  firma_entrega: string;
-  firma_recibe: string;
+  firma_entrega?: string | null;
+  firma_recibe?: string | null;
   firma_responsable: string;
 };
 
@@ -186,6 +186,11 @@ export default function LlavesScreen() {
     } catch {
       return null;
     }
+  };
+
+  const formatSignatureForDisplay = (value?: string | null): string => {
+    if (!value) return '';
+    return value.startsWith('data:') ? value : `data:image/png;base64,${value}`;
   };
 
   const dateToLocalString = (d: Date): string => {
@@ -323,6 +328,7 @@ export default function LlavesScreen() {
       }
 
       const isConnected = await getConnectionStatus();
+      console.log('isConnected', isConnected);
       if (isConnected) {
         const res = await listLlaves({
           marcaId: current.id,
@@ -650,14 +656,6 @@ export default function LlavesScreen() {
       Alert.alert('Error', `Campo requerido: ${missing.label}`);
       return false;
     }
-    if (!movFirmaEntrega) {
-      Alert.alert('Error', 'Debes registrar la firma de entrega');
-      return false;
-    }
-    if (!movFirmaRecibe) {
-      Alert.alert('Error', 'Debes registrar la firma de recibe');
-      return false;
-    }
     if (!movFirmaResponsable) {
       Alert.alert('Error', 'Debes registrar la firma responsable');
       return false;
@@ -737,12 +735,17 @@ export default function LlavesScreen() {
     setIsMovFiltersExpanded(false);
   };
 
-  const startMovCreating = () => {
+  const startMovCreating = async () => {
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora de acción');
+      return;
+    }
     resetMovForm();
     setMovIsCreating(true);
     setMovEditing(null);
-    setMovFecha(dateToLocalString(new Date()));
-    setMovHora(timeToHHMMSS(new Date()));
+    setMovFecha(dateToLocalString(new Date(horaAccion)));
+    setMovHora(timeToHHMMSS(new Date(horaAccion)));
   };
 
   const startMovEditing = (m: MovimientoUI) => {
@@ -1002,25 +1005,31 @@ export default function LlavesScreen() {
 
     setIsSubmitting(true);
     setSubmitResponse(null);
-
+    
     try {
       const isConnected = await getConnectionStatus();
       const payload = await buildPayload();
+
+      const horaAccion = await getHoraAccion();
+      if (!horaAccion) {
+        Alert.alert('Error', 'No se pudo obtener la hora de acción');
+        return;
+      }
 
       // create
       if (!editing) {
         if (isConnected) {
           const res = await createLlave({ requestData: payload, refreshAccessToken, logout });
           if (res.status) {
-            setSubmitResponse({ type: 'success', message: res.message || 'Llave creada correctamente' });
+            Alert.alert('Éxito', res.message || 'Llave creada correctamente');
             setIsCreating(false);
             await fetchLlaves();
           } else {
-            setSubmitResponse({ type: 'error', message: res.message || 'No se pudo crear la llave' });
+            Alert.alert('Error', res.message || 'No se pudo crear la llave');
           }
         } else {
           const localId = `local-${Date.now()}`;
-          const nowIso = new Date().toISOString();
+          const nowIso = new Date(horaAccion).toISOString();
           const localItem: LlaveUI = {
             id: 0,
             id_local: localId,
@@ -1040,7 +1049,7 @@ export default function LlavesScreen() {
           await AsyncStorage.setItem('llaves_cache', JSON.stringify(next));
           await upsertAction({ type: 'create', id: localId, requestData: payload });
 
-          setSubmitResponse({ type: 'success', message: 'La llave se sincronizará cuando vuelva la conexión.' });
+          Alert.alert('Éxito', 'La llave se sincronizará cuando vuelva la conexión.');
           setIsCreating(false);
         }
         return;
@@ -1051,12 +1060,12 @@ export default function LlavesScreen() {
       if (isConnected && !isLocal) {
         const res = await updateLlave({ id: editing.id, requestData: payload, refreshAccessToken, logout });
         if (res.status) {
-          setSubmitResponse({ type: 'success', message: res.message || 'Llave actualizada correctamente' });
+          Alert.alert('Éxito', res.message || 'Llave actualizada correctamente');
           setIsCreating(false);
           setEditing(null);
           await fetchLlaves();
         } else {
-          setSubmitResponse({ type: 'error', message: res.message || 'No se pudo actualizar la llave' });
+          Alert.alert('Error', res.message || 'No se pudo actualizar la llave');
         }
       } else {
         // offline update (o item aún no sincronizado)
@@ -1085,13 +1094,13 @@ export default function LlavesScreen() {
           await upsertAction({ type: 'update', id: editing.id, requestData: payload });
         }
 
-        setSubmitResponse({ type: 'success', message: 'Los cambios se sincronizarán cuando vuelva la conexión.' });
+        Alert.alert('Éxito', 'Los cambios se sincronizarán cuando vuelva la conexión.');
         setIsCreating(false);
         setEditing(null);
       }
     } catch (error) {
       console.error('Error saving llave:', error);
-      setSubmitResponse({ type: 'error', message: 'Error al guardar la llave' });
+      Alert.alert('Error', 'Error al guardar la llave');
     } finally {
       setIsSubmitting(false);
     }
@@ -1133,20 +1142,26 @@ export default function LlavesScreen() {
       const isConnected = await getConnectionStatus();
       const payload = await buildLlaveroPayload();
 
+      const horaAccion = await getHoraAccion();
+      if (!horaAccion) {
+        Alert.alert('Error', 'No se pudo obtener la hora de acción');
+        return;
+      }
+
       // create
       if (!llaveroEditing) {
         if (isConnected) {
           const res = await createLlavero({ requestData: payload, refreshAccessToken, logout });
           if (res.status) {
-            setSubmitResponse({ type: 'success', message: res.message || 'Llavero creado correctamente' });
+            Alert.alert('Éxito', res.message || 'Llavero creado correctamente');
             setIsLlaveroCreating(false);
             await fetchLlaveros();
           } else {
-            setSubmitResponse({ type: 'error', message: res.message || 'No se pudo crear el llavero' });
+            Alert.alert('Error', res.message || 'No se pudo crear el llavero');
           }
         } else {
           const localId = `local-llavero-${Date.now()}`;
-          const nowIso = new Date().toISOString();
+          const nowIso = new Date(horaAccion).toISOString();
           const current = await loadMarcaContext();
           const localItem: LlaveroUI = {
             id: 0,
@@ -1167,7 +1182,7 @@ export default function LlavesScreen() {
           await AsyncStorage.setItem('llaveros_cache', JSON.stringify(next));
           await upsertLlaveroAction({ type: 'create', id: localId, requestData: payload });
 
-          setSubmitResponse({ type: 'success', message: 'El llavero se sincronizará cuando vuelva la conexión.' });
+          Alert.alert('Éxito', 'El llavero se sincronizará cuando vuelva la conexión.');
           setIsLlaveroCreating(false);
         }
         return;
@@ -1178,12 +1193,12 @@ export default function LlavesScreen() {
       if (isConnected && !isLocal) {
         const res = await updateLlavero({ id: llaveroEditing.id, requestData: payload, refreshAccessToken, logout });
         if (res.status) {
-          setSubmitResponse({ type: 'success', message: res.message || 'Llavero actualizado correctamente' });
+          Alert.alert('Éxito', res.message || 'Llavero actualizado correctamente');
           setIsLlaveroCreating(false);
           setLlaveroEditing(null);
           await fetchLlaveros();
         } else {
-          setSubmitResponse({ type: 'error', message: res.message || 'No se pudo actualizar el llavero' });
+          Alert.alert('Error', res.message || 'No se pudo actualizar el llavero');
         }
       } else {
         // offline update
@@ -1209,13 +1224,13 @@ export default function LlavesScreen() {
           await upsertLlaveroAction({ type: 'update', id: llaveroEditing.id, requestData: payload });
         }
 
-        setSubmitResponse({ type: 'success', message: 'Los cambios se sincronizarán cuando vuelva la conexión.' });
+        Alert.alert('Éxito', 'Los cambios se sincronizarán cuando vuelva la conexión.');
         setIsLlaveroCreating(false);
         setLlaveroEditing(null);
       }
     } catch (error) {
       console.error('Error saving llavero:', error);
-      setSubmitResponse({ type: 'error', message: 'Error al guardar el llavero' });
+      Alert.alert('Error', 'Error al guardar el llavero');
     } finally {
       setIsSubmitting(false);
     }
@@ -1290,14 +1305,6 @@ export default function LlavesScreen() {
       Alert.alert('Error', `Campo requerido: ${missing.label}`);
       return false;
     }
-    if (!llaveroMovFirmaEntrega) {
-      Alert.alert('Error', 'Debes registrar la firma de entrega');
-      return false;
-    }
-    if (!llaveroMovFirmaRecibe) {
-      Alert.alert('Error', 'Debes registrar la firma de recibe');
-      return false;
-    }
     if (!llaveroMovFirmaResponsable) {
       Alert.alert('Error', 'Debes registrar la firma responsable');
       return false;
@@ -1344,12 +1351,17 @@ export default function LlavesScreen() {
     setIsLlaveroMovFiltersExpanded(false);
   };
 
-  const startLlaveroMovCreating = () => {
+  const startLlaveroMovCreating = async () => {
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora de acción');
+      return;
+    }
     resetLlaveroMovForm();
     setLlaveroMovIsCreating(true);
     setLlaveroMovEditing(null);
-    setLlaveroMovFecha(dateToLocalString(new Date()));
-    setLlaveroMovHora(timeToHHMMSS(new Date()));
+    setLlaveroMovFecha(dateToLocalString(new Date(horaAccion)));
+    setLlaveroMovHora(timeToHHMMSS(new Date(horaAccion)));
   };
 
   const startLlaveroMovEditing = (m: MovimientoLlaveroUI) => {
@@ -2650,7 +2662,7 @@ export default function LlavesScreen() {
                   <Ionicons name="time-outline" size={18} color="#007AFF" />
                 </TouchableOpacity>
 
-                <ThemedText style={styles.sectionTitle}>Firma entrega *</ThemedText>
+                <ThemedText style={styles.sectionTitle}>Firma entrega (Opcional)</ThemedText>
                 {movFirmaEntrega ? (
                   <ThemedView style={styles.signaturePreviewContainer}>
                     <Image source={{ uri: movFirmaEntrega }} style={styles.signaturePreview} resizeMode="contain" />
@@ -2664,7 +2676,7 @@ export default function LlavesScreen() {
                   <ThemedText style={styles.openSignatureButtonText}>{movFirmaEntrega ? 'Modificar firma' : 'Agregar firma'}</ThemedText>
                 </TouchableOpacity>
 
-                <ThemedText style={styles.sectionTitle}>Firma recibe *</ThemedText>
+                <ThemedText style={styles.sectionTitle}>Firma recibe (Opcional)</ThemedText>
                 {movFirmaRecibe ? (
                   <ThemedView style={styles.signaturePreviewContainer}>
                     <Image source={{ uri: movFirmaRecibe }} style={styles.signaturePreview} resizeMode="contain" />
@@ -2979,7 +2991,7 @@ export default function LlavesScreen() {
                   <Ionicons name="time-outline" size={18} color="#007AFF" />
                 </TouchableOpacity>
 
-                <ThemedText style={styles.sectionTitle}>Firma entrega *</ThemedText>
+                <ThemedText style={styles.sectionTitle}>Firma entrega (Opcional)</ThemedText>
                 {llaveroMovFirmaEntrega ? (
                   <ThemedView style={styles.signaturePreviewContainer}>
                     <Image source={{ uri: llaveroMovFirmaEntrega }} style={styles.signaturePreview} resizeMode="contain" />
@@ -2993,7 +3005,7 @@ export default function LlavesScreen() {
                   <ThemedText style={styles.openSignatureButtonText}>{llaveroMovFirmaEntrega ? 'Modificar firma' : 'Agregar firma'}</ThemedText>
                 </TouchableOpacity>
 
-                <ThemedText style={styles.sectionTitle}>Firma recibe *</ThemedText>
+                <ThemedText style={styles.sectionTitle}>Firma recibe (Opcional)</ThemedText>
                 {llaveroMovFirmaRecibe ? (
                   <ThemedView style={styles.signaturePreviewContainer}>
                     <Image source={{ uri: llaveroMovFirmaRecibe }} style={styles.signaturePreview} resizeMode="contain" />
@@ -3358,12 +3370,82 @@ export default function LlavesScreen() {
                           {(Array.isArray(parsed) ? parsed : []).length > 0 && (
                             <ThemedView style={styles.filterGroupSearch}>
                               <ThemedText style={styles.filterLabel}>Cambios:</ThemedText>
-                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => (
-                                <ThemedText key={`c-${row.id}-${idx}`} style={styles.changeDescription}>
-                                  <ThemedText style={{ fontWeight: '800' }}>{String(c?.prop ?? '-')}: </ThemedText>
-                                  {formatChangeValue(c?.prop, c?.after)}
-                                </ThemedText>
-                              ))}
+                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => {
+                                const prop = String(c?.prop ?? '-');
+                                const value = c?.after;
+
+                                if (prop === '__created__' && value && typeof value === 'object') {
+                                  const created: any = value;
+                                  return (
+                                    <React.Fragment key={`c-${row.id}-${idx}-created`}>
+                                      <ThemedView style={styles.changeDescriptionContainer}>
+                                        <ThemedText style={styles.changeDescription}>
+                                          <ThemedText style={{ fontWeight: '800' }}>Registro creado</ThemedText>
+                                        </ThemedText>
+                                      </ThemedView>
+                                      {Object.entries(created).map(([k, v]) => {
+                                        if (k === 'firma_entrega' || k === 'firma_recibe' || k === 'firma_responsable') return null;
+                                        return (
+                                          <ThemedView key={`c-${row.id}-${idx}-${k}`} style={styles.changeDescriptionContainer}>
+                                            <ThemedText style={styles.changeDescription}>
+                                              <ThemedText style={{ fontWeight: '800' }}>{k}: </ThemedText>
+                                              {formatChangeValue(k, v)}
+                                            </ThemedText>
+                                          </ThemedView>
+                                        );
+                                      })}
+                                      {typeof created.firma_responsable === 'string' && created.firma_responsable.trim() && (
+                                        <ThemedView style={styles.changeDescriptionContainer}>
+                                          <ThemedText style={styles.changeDescription}>
+                                            <ThemedText style={{ fontWeight: '800' }}>firma_responsable: </ThemedText>
+                                            {(() => {
+                                              const info = decodeFirmaHash(created.firma_responsable);
+                                              return info
+                                                ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${info.timestamp || 'N/A'}`
+                                                : 'Firma responsable (formato no decodificable)';
+                                            })()}
+                                          </ThemedText>
+                                        </ThemedView>
+                                      )}
+                                      {created.firma_entrega && (
+                                        <ThemedView style={styles.changeDescriptionContainer}>
+                                          <ThemedText style={styles.changeDescription}>
+                                            <ThemedText style={{ fontWeight: '800' }}>firma_entrega: </ThemedText>
+                                          </ThemedText>
+                                          <Image source={{ uri: formatSignatureForDisplay(created.firma_entrega) }} style={styles.cambioSignatureImage} resizeMode="contain" />
+                                        </ThemedView>
+                                      )}
+                                      {created.firma_recibe && (
+                                        <ThemedView style={styles.changeDescriptionContainer}>
+                                          <ThemedText style={styles.changeDescription}>
+                                            <ThemedText style={{ fontWeight: '800' }}>firma_recibe: </ThemedText>
+                                          </ThemedText>
+                                          <Image source={{ uri: formatSignatureForDisplay(created.firma_recibe) }} style={styles.cambioSignatureImage} resizeMode="contain" />
+                                        </ThemedView>
+                                      )}
+                                    </React.Fragment>
+                                  );
+                                }
+
+                                const isResponsable = prop === 'firma_responsable';
+                                const isManualSignature = prop === 'firma_entrega' || prop === 'firma_recibe';
+                                return (
+                                  <ThemedView key={`c-${row.id}-${idx}`} style={styles.changeDescriptionContainer}>
+                                    <ThemedText style={styles.changeDescription}>
+                                      <ThemedText style={{ fontWeight: '800' }}>{prop}: </ThemedText>
+                                      {!isManualSignature && !isResponsable && formatChangeValue(prop, value)}
+                                      {isResponsable && (() => {
+                                        const info = typeof value === 'string' ? decodeFirmaHash(value) : null;
+                                        if (!info) return 'Firma responsable (formato no decodificable)';
+                                        return `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${info.timestamp || 'N/A'}`;
+                                      })()}
+                                    </ThemedText>
+                                    {isManualSignature && value && (
+                                      <Image source={{ uri: formatSignatureForDisplay(value) }} style={styles.cambioSignatureImage} resizeMode="contain" />
+                                    )}
+                                  </ThemedView>
+                                );
+                              })}
                             </ThemedView>
                           )}
                         </ThemedView>
@@ -3787,6 +3869,8 @@ const styles = StyleSheet.create({
   cambioCollapsableTitle: { fontSize: 14, fontWeight: '600', color: '#007AFF', flex: 1 },
   cambioCollapsableContent: { padding: 12, gap: 8, backgroundColor: '#F8F9FA' },
   changeDescription: { fontSize: 14, lineHeight: 20, color: '#666', marginBottom: 8 },
+  changeDescriptionContainer: { marginBottom: 8 },
+  cambioSignatureImage: { marginTop: 6, height: 80, width: 160, backgroundColor: '#f0f0f0', borderRadius: 4 },
   signatureModalHint: { paddingHorizontal: 16, paddingTop: 12, color: '#666', fontSize: 13 },
   signaturePadBox: {
     marginTop: 10,

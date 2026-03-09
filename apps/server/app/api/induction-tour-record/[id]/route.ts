@@ -103,11 +103,21 @@ export async function PUT(
         if (temas_desarrollados !== undefined) updateData.temas_desarrollados = temas_desarrollados ? String(temas_desarrollados) : "[]";
         if (aspectos_especificos !== undefined) updateData.aspectos_especificos = aspectos_especificos ? String(aspectos_especificos) : "[]";
         if (participantes !== undefined) updateData.participantes = participantes ? String(participantes) : "[]";
-        if (firma_supervisor !== undefined) updateData.firma_supervisor = firma_supervisor ? String(firma_supervisor) : "";
-        if (firma_empleado !== undefined) updateData.firma_empleado = firma_empleado ? String(firma_empleado).trim() : "";
+        if (firma_supervisor !== undefined) {
+            updateData.firma_supervisor =
+                firma_supervisor != null && String(firma_supervisor).trim().length > 0
+                    ? String(firma_supervisor).trim()
+                    : null;
+        }
+        if (firma_empleado !== undefined) {
+            updateData.firma_empleado =
+                firma_empleado != null && String(firma_empleado).trim().length > 0
+                    ? String(firma_empleado).trim()
+                    : null;
+        }
         if (firma_responsable !== undefined) updateData.firma_responsable = firma_responsable ? String(firma_responsable) : "";
 
-        // Registrar cambios (solo campos actualizados, excluyendo firmas)
+        // Registrar cambios (solo campos actualizados, incluyendo firmas)
         const eq = (a: any, b: any) => {
             if (a === b) return true;
             if (a == null && b == null) return true;
@@ -119,8 +129,6 @@ export async function PUT(
 
         const cambiosArr: Array<{ prop: string; before: any; after: any }> = [];
         for (const [k, v] of Object.entries(updateData)) {
-            if (k.startsWith("firma_")) continue; // Excluir firmas
-
             const before = existingObj[k];
             const after = v;
             if (!eq(before, after)) {

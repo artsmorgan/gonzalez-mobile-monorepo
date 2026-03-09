@@ -161,9 +161,24 @@ export async function PUT(
         if (actividades !== undefined) updateData.actividades = String(actividades);
         if (inventario !== undefined) updateData.inventario = String(inventario);
         if (otras_observaciones !== undefined) updateData.otras_observaciones = otras_observaciones ? String(otras_observaciones) : null;
-        if (firma_representante_cliente !== undefined) updateData.firma_representante_cliente = String(firma_representante_cliente);
-        if (firma_representante_empresa_entrante !== undefined) updateData.firma_representante_empresa_entrante = String(firma_representante_empresa_entrante);
-        if (firma_representante_empresa_saliente !== undefined) updateData.firma_representante_empresa_saliente = String(firma_representante_empresa_saliente);
+        if (firma_representante_cliente !== undefined) {
+            updateData.firma_representante_cliente =
+                firma_representante_cliente != null && String(firma_representante_cliente).trim().length > 0
+                    ? String(firma_representante_cliente)
+                    : null;
+        }
+        if (firma_representante_empresa_entrante !== undefined) {
+            updateData.firma_representante_empresa_entrante =
+                firma_representante_empresa_entrante != null && String(firma_representante_empresa_entrante).trim().length > 0
+                    ? String(firma_representante_empresa_entrante)
+                    : null;
+        }
+        if (firma_representante_empresa_saliente !== undefined) {
+            updateData.firma_representante_empresa_saliente =
+                firma_representante_empresa_saliente != null && String(firma_representante_empresa_saliente).trim().length > 0
+                    ? String(firma_representante_empresa_saliente)
+                    : null;
+        }
         if (firma_responsable !== undefined) updateData.firma_responsable = String(firma_responsable);
 
         // Registrar cambios (solo campos actualizados, excluyendo firmas)
@@ -178,8 +193,6 @@ export async function PUT(
 
         const cambiosArr: Array<{ prop: string; before: any; after: any }> = [];
         for (const [k, v] of Object.entries(updateData)) {
-            if (k.startsWith("firma_")) continue; // Excluir firmas
-
             const before = existingObj[k];
             const after = v;
             if (!eq(before, after)) {

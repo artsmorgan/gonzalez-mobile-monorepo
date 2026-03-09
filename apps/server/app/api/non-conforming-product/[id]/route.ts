@@ -116,11 +116,19 @@ export async function PUT(
             tipo_servicio_no_conforme: tipo_servicio_no_conforme !== undefined ? String(tipo_servicio_no_conforme ?? "") : existingRecordObj.tipo_servicio_no_conforme,
             persona_identifico_pnc: persona_identifico_pnc !== undefined ? String(persona_identifico_pnc ?? "") : existingRecordObj.persona_identifico_pnc,
             firma_persona_identifico_pnc:
-                firma_persona_identifico_pnc !== undefined ? String(firma_persona_identifico_pnc ?? "") : existingRecordObj.firma_persona_identifico_pnc,
+                firma_persona_identifico_pnc !== undefined
+                    ? (firma_persona_identifico_pnc != null && String(firma_persona_identifico_pnc).trim().length > 0
+                        ? String(firma_persona_identifico_pnc).trim()
+                        : null)
+                    : existingRecordObj.firma_persona_identifico_pnc,
             descripcion: descripcion !== undefined ? String(descripcion ?? "") : existingRecordObj.descripcion,
             persona_origino_pnc: persona_origino_pnc !== undefined ? String(persona_origino_pnc ?? "") : existingRecordObj.persona_origino_pnc,
             firma_persona_origino_pnc:
-                firma_persona_origino_pnc !== undefined ? String(firma_persona_origino_pnc ?? "") : existingRecordObj.firma_persona_origino_pnc,
+                firma_persona_origino_pnc !== undefined
+                    ? (firma_persona_origino_pnc != null && String(firma_persona_origino_pnc).trim().length > 0
+                        ? String(firma_persona_origino_pnc).trim()
+                        : null)
+                    : existingRecordObj.firma_persona_origino_pnc,
             accion_implementada: accion_implementada !== undefined ? String(accion_implementada ?? "") : existingRecordObj.accion_implementada,
             fecha_solucion: fecha_solucion !== undefined ? (parseDateOnly(fecha_solucion) ?? fechaSolExisting) : fechaSolExisting,
             responsable_aprobar: responsable_aprobar !== undefined ? String(responsable_aprobar ?? "") : existingRecordObj.responsable_aprobar,
@@ -135,7 +143,7 @@ export async function PUT(
             updateData.fecha_solucion = updateData.fecha_solucion.toISOString();
         }
 
-        // Registrar cambios (solo campos actualizados, excluyendo firmas)
+        // Registrar cambios (solo campos actualizados, incluyendo firmas)
         const eq = (a: any, b: any) => {
             if (a === b) return true;
             if (a == null && b == null) return true;
@@ -147,9 +155,6 @@ export async function PUT(
 
         const cambiosArr: Array<{ prop: string; before: any; after: any }> = [];
         for (const [k, v] of Object.entries(updateData)) {
-            // Excluir firmas
-            if (k.startsWith("firma_")) continue;
-
             const before = existingRecordObj[k];
             const after = v;
             if (!eq(before, after)) {

@@ -32,7 +32,7 @@ import { useQRScanner } from '@/hooks/useQRScanner';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import SignatureScreen from 'react-native-signature-canvas';
-import { createStaffEvaluation, deleteStaffEvaluation } from '@/hooks/staffEvaluationsFunctions';
+import { createStaffEvaluation, deleteStaffEvaluation, updateStaffEvaluationSignature } from '@/hooks/staffEvaluationsFunctions';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import authedFetch from '@/hooks/authedFetch';
 import getValidAccessTokenOrLogout from '@/hooks/getValidAccessTokenOrLogout';
@@ -92,6 +92,7 @@ interface EvaluationQuestion {
   title: string;
   answear: string;
   image: string | null;
+  images?: string[]; // múltiples imágenes por objetivo
   editableTitle?: boolean;
   imageOrientation?: 'horizontal' | 'vertical';
 }
@@ -120,7 +121,7 @@ interface StaffEvaluation {
   comentarios: string;
   tipo: string;
   firma_evaluador: string;
-  firma_empleado: string;
+  firma_empleado?: string | null;
   firma_empleado_manual?: string | null;
   id_local: string;
 }
@@ -235,6 +236,15 @@ export default function StaffEvaluationsScreen() {
   const signatureManualRef = useRef<any>(null);
   const [signatureManualKey, setSignatureManualKey] = useState(0);
   const [isReadingManualSignature, setIsReadingManualSignature] = useState(false);
+
+  // Modal añadir firma (lista): digital o manual para un registro existente
+  const [addSignatureModalVisible, setAddSignatureModalVisible] = useState(false);
+  const [addSignatureEvaluation, setAddSignatureEvaluation] = useState<StaffEvaluation | null>(null);
+  const [addSignatureType, setAddSignatureType] = useState<'firma_empleado' | 'firma_empleado_manual' | null>(null);
+  const [addSignatureQRValue, setAddSignatureQRValue] = useState<string | null>(null);
+  const addSignatureManualRef = useRef<any>(null);
+  const [addSignatureManualKey, setAddSignatureManualKey] = useState(0);
+  const [isAddSignatureSubmitting, setIsAddSignatureSubmitting] = useState(false);
 
   // Date pickers
   const [showFechaIngresoPicker, setShowFechaIngresoPicker] = useState(false);
@@ -378,6 +388,7 @@ export default function StaffEvaluationsScreen() {
         title: t,
         answear: '10', // Por defecto todas las estrellas seleccionadas
         image: null,
+        images: [],
         editableTitle: false,
       }));
 
@@ -397,6 +408,7 @@ export default function StaffEvaluationsScreen() {
             title: fixedTitles && fixedTitles[i] ? fixedTitles[i] : '',
             answear: '10', // Por defecto todas las estrellas seleccionadas
             image: null,
+            images: [],
             editableTitle: editableTitle,
           });
         }
@@ -557,6 +569,7 @@ export default function StaffEvaluationsScreen() {
 
       if (hasConnection) {
         setIsStructureLoading(true);
+        /*
         const structureRes = await authedFetch({
           url: `${apiUrl}/api/main-structure`,
           init: {
@@ -577,10 +590,13 @@ export default function StaffEvaluationsScreen() {
             setStructure([]);
           }
         } else {
-          const structureCacheStr = await AsyncStorage.getItem('main_structure_cache');
-          if (structureCacheStr) setStructure(JSON.parse(structureCacheStr));
-          else setStructure([]);
+          
         }
+        */
+        
+        const structureCacheStr = await AsyncStorage.getItem('main_structure_cache');
+        if (structureCacheStr) setStructure(JSON.parse(structureCacheStr));
+        else setStructure([]);
         setIsStructureLoading(false);
 
         // Evaluaciones
@@ -1055,6 +1071,136 @@ export default function StaffEvaluationsScreen() {
     closeFirmaEmpleadoManualModal();
   };
 
+  const openAddSignatureModal = (type: 'firma_empleado' | 'firma_empleado_manual', ev: StaffEvaluation) => {
+    setAddSignatureEvaluation(ev);
+    setAddSignatureType(type);
+    setAddSignatureQRValue(null);
+    setAddSignatureManualKey((k) => k + 1);
+    setAddSignatureModalVisible(true);
+  };
+
+  const closeAddSignatureModal = () => {
+    setAddSignatureModalVisible(false);
+    setAddSignatureEvaluation(null);
+    setAddSignatureType(null);
+    setAddSignatureQRValue(null);
+  };
+
+  const handleAddSignatureScanQR = async () => {
+    try {
+      const qrData = await scanQR();
+      if (!qrData) return;
+      try {
+        const decoded = atob(qrData);
+        const parts = decoded.split(':');
+        if (parts.length !== 5) {
+          Alert.alert('Error', 'El QR no tiene la estructura esperada');
+          return;
+        }
+        setAddSignatureQRValue(qrData);
+      } catch {
+        Alert.alert('Error', 'El QR escaneado no es válido');
+      }
+    } catch (error) {
+      console.error('Error scanning QR for add signature:', error);
+      Alert.alert('Error', 'No se pudo escanear el código QR');
+    }
+  };
+
+  const handleAddSignatureConfirmDigital = async () => {
+    if (!addSignatureEvaluation || addSignatureType !== 'firma_empleado' || !addSignatureQRValue) {
+      Alert.alert('Aviso', 'Escanea un código QR primero.');
+      return;
+    }
+    if (addSignatureEvaluation.id === 0) {
+      Alert.alert('Aviso', 'Esta evaluación aún no está sincronizada. No se puede añadir firma.');
+      return;
+    }
+    Alert.alert(
+      'Confirmar',
+      '¿Guardar esta firma digital en el registro?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Aceptar',
+          onPress: async () => {
+            setIsAddSignatureSubmitting(true);
+            try {
+              const result = await updateStaffEvaluationSignature({
+                evaluationId: addSignatureEvaluation.id,
+                field: 'firma_empleado',
+                value: addSignatureQRValue,
+                refreshAccessToken,
+                logout,
+              });
+              if (result.status) {
+                closeAddSignatureModal();
+                fetchData();
+              } else {
+                Alert.alert('Error', result.message || 'No se pudo actualizar la firma.');
+              }
+            } catch (e) {
+              Alert.alert('Error', (e instanceof Error ? e.message : 'No se pudo actualizar la firma.'));
+            } finally {
+              setIsAddSignatureSubmitting(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const triggerAddSignatureManualRead = () => {
+    try {
+      addSignatureManualRef.current?.readSignature?.();
+    } catch {
+      Alert.alert('Error', 'No se pudo leer la firma. Dibuje primero en el recuadro.');
+    }
+  };
+
+  const handleAddSignatureManualRead = (signature: string) => {
+    const sig = String(signature || '').trim();
+    if (!sig || sig.length < 10) {
+      Alert.alert('Error', 'No se detectó la firma. Intenta de nuevo.');
+      return;
+    }
+    const ev = addSignatureEvaluation;
+    const field = addSignatureType;
+    if (!ev || field !== 'firma_empleado_manual' || ev.id === 0) return;
+    Alert.alert(
+      'Confirmar',
+      '¿Guardar esta firma manual en el registro?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Aceptar',
+          onPress: async () => {
+            setIsAddSignatureSubmitting(true);
+            try {
+              const result = await updateStaffEvaluationSignature({
+                evaluationId: ev.id,
+                field: 'firma_empleado_manual',
+                value: sig,
+                refreshAccessToken,
+                logout,
+              });
+              if (result.status) {
+                closeAddSignatureModal();
+                fetchData();
+              } else {
+                Alert.alert('Error', result.message || 'No se pudo actualizar la firma.');
+              }
+            } catch (e) {
+              Alert.alert('Error', (e instanceof Error ? e.message : 'No se pudo actualizar la firma.'));
+            } finally {
+              setIsAddSignatureSubmitting(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
   const updateQuestionField = (
     sectionIndex: number,
     questionIndex: number,
@@ -1071,6 +1217,42 @@ export default function StaffEvaluationsScreen() {
       const question = section.questions[questionIndex];
       if (!question) return prev;
       (question as any)[field] = value;
+      return copy;
+    });
+  };
+
+  const appendQuestionImage = (
+    sectionIndex: number,
+    questionIndex: number,
+    uri: string,
+    orientation?: 'horizontal' | 'vertical'
+  ) => {
+    setEvaluationSections((prev) => {
+      const copy = prev.map((s) => ({
+        ...s,
+        questions: s.questions.map((q) => ({ ...q })),
+      }));
+      const section = copy[sectionIndex];
+      if (!section) return prev;
+      const question = section.questions[questionIndex];
+      if (!question) return prev;
+
+      if (!Array.isArray(question.images)) {
+        const initial: string[] = [];
+        if (question.image) initial.push(question.image);
+        question.images = initial;
+      }
+      question.images!.push(uri);
+
+      // Mantener compatibilidad: la primera imagen también se refleja en `image`
+      if (!question.image) {
+        question.image = uri;
+      }
+
+      if (orientation && !question.imageOrientation) {
+        question.imageOrientation = orientation;
+      }
+
       return copy;
     });
   };
@@ -1122,14 +1304,13 @@ export default function StaffEvaluationsScreen() {
       const [sectionIndexStr, questionIndexStr] = currentQuestionKey.split('-');
       const sIdx = parseInt(sectionIndexStr, 10);
       const qIdx = parseInt(questionIndexStr, 10);
-      updateQuestionField(sIdx, qIdx, 'image', formattedBase64);
 
-      // Calcular orientación a partir de las dimensiones de la foto
+      let orientation: 'horizontal' | 'vertical' | undefined;
       if (photo.width && photo.height) {
-        const orientation: 'horizontal' | 'vertical' =
-          photo.width >= photo.height ? 'horizontal' : 'vertical';
-        updateQuestionField(sIdx, qIdx, 'imageOrientation', orientation);
+        orientation = photo.width >= photo.height ? 'horizontal' : 'vertical';
       }
+
+      appendQuestionImage(sIdx, qIdx, formattedBase64, orientation);
     } catch (error) {
       console.error('Error capturing question image:', error);
       setCameraVisible(false);
@@ -1164,10 +1345,6 @@ export default function StaffEvaluationsScreen() {
     }
     if (!firmaEvaluadorHash || !firmaEvaluador) {
       Alert.alert('Error', 'Debes generar la firma del evaluador');
-      return false;
-    }
-    if (!firmaEmpleadoHash || !firmaEmpleado) {
-      Alert.alert('Error', 'Debes registrar la firma del funcionario');
       return false;
     }
     return true;
@@ -1235,7 +1412,7 @@ export default function StaffEvaluationsScreen() {
                 evaluacion: JSON.stringify(sectionsForPayload),
                 comentarios: comentariosGeneralesRef.current.trim() || '-',
                 firma_evaluador: firmaEvaluadorHash!,
-                firma_empleado: firmaEmpleadoHash!,
+                firma_empleado: firmaEmpleadoHash ?? null,
                 firma_empleado_manual: firmaEmpleadoManual || null,
               };
 
@@ -1286,7 +1463,7 @@ export default function StaffEvaluationsScreen() {
                   comentarios: comentariosGeneralesRef.current.trim() || '-',
                   tipo: tipoEvaluacionRef.current,
                   firma_evaluador: firmaEvaluadorHash!,
-                  firma_empleado: firmaEmpleadoHash!,
+                  firma_empleado: firmaEmpleadoHash ?? null,
                   firma_empleado_manual: firmaEmpleadoManual || null,
                   id_local: localId,
                 };
@@ -1511,6 +1688,12 @@ export default function StaffEvaluationsScreen() {
       console.error('Error decoding signature:', e);
       return null;
     }
+  };
+
+  const getQuestionImages = (q: EvaluationQuestion): string[] => {
+    if (Array.isArray(q.images) && q.images.length > 0) return q.images;
+    if (q.image) return [q.image];
+    return [];
   };
 
   const renderCreateForm = () => {
@@ -1852,21 +2035,25 @@ export default function StaffEvaluationsScreen() {
                         >
                           {getActionIcon('camera')}
                           <ThemedText style={styles.cameraSmallButtonText}>
-                            {q.image ? 'Cambiar imagen' : 'Tomar imagen (opcional)'}
+                            {getQuestionImages(q).length > 0
+                              ? 'Agregar otra imagen'
+                              : 'Tomar imagen (opcional)'}
                           </ThemedText>
                         </TouchableOpacity>
-                        {q.image && (
-                          <Image
-                            source={{ uri: q.image }}
-                            style={[
-                              styles.questionImagePreview,
-                              q.imageOrientation === 'vertical'
-                                ? styles.questionImagePreviewVertical
-                                : styles.questionImagePreviewHorizontal,
-                            ]}
-                            resizeMode="contain"
-                          />
-                        )}
+                        {getQuestionImages(q).length > 0 &&
+                          getQuestionImages(q).map((uri, idx) => (
+                            <Image
+                              key={idx}
+                              source={{ uri }}
+                              style={[
+                                styles.questionImagePreview,
+                                q.imageOrientation === 'vertical'
+                                  ? styles.questionImagePreviewVertical
+                                  : styles.questionImagePreviewHorizontal,
+                              ]}
+                              resizeMode="contain"
+                            />
+                          ))}
                       </>
                     )}
                 </ThemedView>
@@ -1960,7 +2147,7 @@ export default function StaffEvaluationsScreen() {
 
         {/* Firma del funcionario */}
         <ThemedView style={styles.formGroup}>
-          <ThemedText style={styles.formLabel}>Firma del funcionario *</ThemedText>
+          <ThemedText style={styles.formLabel}>Firma del funcionario (Opcional)</ThemedText>
           {!firmaEmpleado ? (
             <TouchableOpacity
               style={styles.signatureButtonPrimary}
@@ -2005,7 +2192,7 @@ export default function StaffEvaluationsScreen() {
             <ThemedText style={styles.warningText}>{firmaEmpleadoWarning}</ThemedText>
           )}
 
-          <ThemedText style={[styles.formLabel, { marginTop: 10 }]}>Firma manual del funcionario</ThemedText>
+          <ThemedText style={[styles.formLabel, { marginTop: 10 }]}>Firma manual del funcionario (Opcional)</ThemedText>
           {firmaEmpleadoManual ? (
             <ThemedView style={styles.signaturePreviewContainer}>
               <Image source={{ uri: firmaEmpleadoManual }} style={styles.signaturePreview} resizeMode="contain" />
@@ -2047,7 +2234,7 @@ export default function StaffEvaluationsScreen() {
     const firmasExpanded = expandedFirmas.has(key);
     const sections = parseEvaluacionField(ev);
     const evalSig = decodeSignature(ev.firma_evaluador);
-    const empSig = decodeSignature(ev.firma_empleado);
+    const empSig = ev.firma_empleado ? decodeSignature(ev.firma_empleado) : null;
 
     return (
       <ThemedView key={key} style={styles.evaluationCard}>
@@ -2115,23 +2302,27 @@ export default function StaffEvaluationsScreen() {
                         <ThemedText style={styles.evalLabel}>Respuesta: </ThemedText>
                         <ThemedText style={styles.evalValue}>{q.answear}</ThemedText>
                       </ThemedText>
-                      {q.image && (
-                        <Image
-                          source={{
-                            uri:
-                              ev.id_local === '' && !q.image.startsWith('data:')
-                                ? appendTokenToUrl(`${Constants.expoConfig?.extra?.API_SERVER}/api/evaluation/${ev.id}/get-image/${q.image}`)
-                                : q.image,
-                          }}
-                          style={[
-                            styles.questionImagePreviewList,
-                            q.imageOrientation === 'vertical'
-                              ? styles.questionImagePreviewListVertical
-                              : styles.questionImagePreviewListHorizontal,
-                          ]}
-                          resizeMode="contain"
-                        />
-                      )}
+                      {getQuestionImages(q).length > 0 &&
+                        getQuestionImages(q).map((img, idx) => (
+                          <Image
+                            key={idx}
+                            source={{
+                              uri:
+                                ev.id_local === '' && !img.startsWith('data:')
+                                  ? appendTokenToUrl(
+                                    `${Constants.expoConfig?.extra?.API_SERVER}/api/evaluation/${ev.id}/get-image/${img}`
+                                  )
+                                  : img,
+                            }}
+                            style={[
+                              styles.questionImagePreviewList,
+                              q.imageOrientation === 'vertical'
+                                ? styles.questionImagePreviewListVertical
+                                : styles.questionImagePreviewListHorizontal,
+                            ]}
+                            resizeMode="contain"
+                          />
+                        ))}
                     </ThemedView>
                   ))}
                 </ThemedView>
@@ -2184,23 +2375,38 @@ export default function StaffEvaluationsScreen() {
             <ThemedText style={[styles.signatureInfoTitle, { marginTop: 12 }]}>
               Firma del funcionario
             </ThemedText>
-            {empSig ? (
-              <>
-                <ThemedText style={styles.signatureInfoText}>
-                  ID de sesión: {empSig.sessionId}
-                </ThemedText>
-                <ThemedText style={styles.signatureInfoText}>
-                  ID del empleado: {empSig.empleadoId}
-                </ThemedText>
-                <ThemedText style={styles.signatureInfoText}>
-                  Latitud: {empSig.latitud}
-                </ThemedText>
-                <ThemedText style={styles.signatureInfoText}>
-                  Longitud: {empSig.longitud}
-                </ThemedText>
-              </>
+            {ev.firma_empleado ? (
+              empSig ? (
+                <>
+                  <ThemedText style={styles.signatureInfoText}>
+                    ID de sesión: {empSig.sessionId}
+                  </ThemedText>
+                  <ThemedText style={styles.signatureInfoText}>
+                    ID del empleado: {empSig.empleadoId}
+                  </ThemedText>
+                  <ThemedText style={styles.signatureInfoText}>
+                    Latitud: {empSig.latitud}
+                  </ThemedText>
+                  <ThemedText style={styles.signatureInfoText}>
+                    Longitud: {empSig.longitud}
+                  </ThemedText>
+                </>
+              ) : (
+                <ThemedText style={styles.emptyText}>No se pudo interpretar la firma</ThemedText>
+              )
             ) : (
-              <ThemedText style={styles.emptyText}>No se pudo interpretar la firma</ThemedText>
+              <>
+                <ThemedText style={styles.emptyText}>No hay firma del funcionario registrada</ThemedText>
+                {ev.id > 0 && (
+                  <TouchableOpacity
+                    style={[styles.signatureButtonPrimary, { marginTop: 8 }]}
+                    onPress={() => openAddSignatureModal('firma_empleado', ev)}
+                  >
+                    <Ionicons name="qr-code" size={20} color="#FFFFFF" />
+                    <ThemedText style={styles.signatureButtonText}>Añadir firma digital</ThemedText>
+                  </TouchableOpacity>
+                )}
+              </>
             )}
 
             <ThemedText style={[styles.signatureInfoTitle, { marginTop: 12 }]}>
@@ -2211,7 +2417,18 @@ export default function StaffEvaluationsScreen() {
                 <Image source={{ uri: ev.firma_empleado_manual }} style={styles.signaturePreview} resizeMode="contain" />
               </ThemedView>
             ) : (
-              <ThemedText style={styles.emptyText}>No hay firma manual registrada</ThemedText>
+              <>
+                <ThemedText style={styles.emptyText}>No hay firma manual registrada</ThemedText>
+                {ev.id > 0 && (
+                  <TouchableOpacity
+                    style={[styles.signatureButtonPrimary, { marginTop: 8 }]}
+                    onPress={() => openAddSignatureModal('firma_empleado_manual', ev)}
+                  >
+                    <Ionicons name="create-outline" size={20} color="#FFFFFF" />
+                    <ThemedText style={styles.signatureButtonText}>Añadir firma manual</ThemedText>
+                  </TouchableOpacity>
+                )}
+              </>
             )}
           </ThemedView>
         )}
@@ -2428,6 +2645,112 @@ export default function StaffEvaluationsScreen() {
         currentRoute="StaffEvaluations"
       />
       {QRScannerComponent}
+
+      {/* Modal Añadir firma (digital o manual) en collapsable */}
+      <Modal
+        visible={addSignatureModalVisible}
+        animationType="fade"
+        transparent
+        presentationStyle="overFullScreen"
+        onRequestClose={closeAddSignatureModal}
+      >
+        <View style={styles.overlay}>
+          <ThemedView style={styles.floatModalCard}>
+            <ThemedView style={styles.floatModalHeader}>
+              <ThemedText style={styles.modalTitle}>
+                {addSignatureType === 'firma_empleado' ? 'Añadir firma digital' : 'Añadir firma manual'}
+              </ThemedText>
+              <TouchableOpacity onPress={closeAddSignatureModal}>
+                <Ionicons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+            </ThemedView>
+            {addSignatureType === 'firma_empleado' && (
+              <>
+                <ThemedView style={{ padding: 16 }}>
+                  <TouchableOpacity
+                    style={[styles.signatureButtonPrimary, { marginBottom: 12 }]}
+                    onPress={handleAddSignatureScanQR}
+                  >
+                    <Ionicons name="qr-code" size={20} color="#FFFFFF" />
+                    <ThemedText style={styles.signatureButtonText}>Escanear código QR</ThemedText>
+                  </TouchableOpacity>
+                  {addSignatureQRValue && (() => {
+                    const decoded = decodeSignature(addSignatureQRValue);
+                    return decoded ? (
+                      <ThemedView style={styles.signatureInfo}>
+                        <ThemedText style={styles.signatureInfoTitle}>Firma escaneada</ThemedText>
+                        <ThemedText style={styles.signatureInfoText}>Sesión: {decoded.sessionId}</ThemedText>
+                        <ThemedText style={styles.signatureInfoText}>Empleado: {decoded.empleadoId}</ThemedText>
+                        <ThemedText style={styles.signatureInfoText}>Hora: {formatDateLabel(decoded.timestamp)}</ThemedText>
+                        <ThemedText style={styles.signatureInfoText}>Lat: {decoded.latitud} / Long: {decoded.longitud}</ThemedText>
+                      </ThemedView>
+                    ) : (
+                      <ThemedText style={styles.emptyText}>No se pudo interpretar el QR</ThemedText>
+                    );
+                  })()}
+                </ThemedView>
+                <ThemedView style={styles.modalActions}>
+                  <TouchableOpacity style={styles.modalClearButton} onPress={closeAddSignatureModal}>
+                    <ThemedText style={styles.modalClearButtonText}>Cancelar</ThemedText>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.modalAcceptButton, (!addSignatureQRValue || isAddSignatureSubmitting) && { opacity: 0.6 }]}
+                    onPress={handleAddSignatureConfirmDigital}
+                    disabled={!addSignatureQRValue || isAddSignatureSubmitting}
+                  >
+                    {isAddSignatureSubmitting ? (
+                      <ActivityIndicator size="small" color="#000000" />
+                    ) : (
+                      <Ionicons name="checkmark" size={20} color="#000000" />
+                    )}
+                    <ThemedText style={styles.modalAcceptButtonText}>Confirmar</ThemedText>
+                  </TouchableOpacity>
+                </ThemedView>
+              </>
+            )}
+            {addSignatureType === 'firma_empleado_manual' && (
+              <>
+                <ThemedText style={styles.signatureModalHint}>Dibuje la firma dentro del recuadro.</ThemedText>
+                <View style={styles.signaturePadBox}>
+                  <SignatureScreen
+                    ref={addSignatureManualRef}
+                    onOK={handleAddSignatureManualRead}
+                    onEmpty={() => {
+                      Alert.alert('Error', 'No se detectó la firma. Intenta de nuevo.');
+                    }}
+                    descriptionText=""
+                    clearText=""
+                    confirmText=""
+                    webStyle={`
+                      .m-signature-pad--footer {display: none; margin: 0px;}
+                      .m-signature-pad {box-shadow: none; border: none;}
+                      body,html {width: 100%; height: 100%; background: #ffffff;}
+                    `}
+                    key={addSignatureManualKey}
+                  />
+                </View>
+                <ThemedView style={styles.modalActions}>
+                  <TouchableOpacity style={styles.modalClearButton} onPress={closeAddSignatureModal}>
+                    <ThemedText style={styles.modalClearButtonText}>Cancelar</ThemedText>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.modalAcceptButton, isAddSignatureSubmitting && { opacity: 0.6 }]}
+                    onPress={triggerAddSignatureManualRead}
+                    disabled={isAddSignatureSubmitting}
+                  >
+                    {isAddSignatureSubmitting ? (
+                      <ActivityIndicator size="small" color="#000000" />
+                    ) : (
+                      <Ionicons name="checkmark" size={20} color="#000000" />
+                    )}
+                    <ThemedText style={styles.modalAcceptButtonText}>Confirmar</ThemedText>
+                  </TouchableOpacity>
+                </ThemedView>
+              </>
+            )}
+          </ThemedView>
+        </View>
+      </Modal>
 
       <Modal
         visible={isFirmaManualModalVisible}

@@ -110,7 +110,12 @@ export async function PUT(
           : existingObj.kilometraje_siguiente_revision,
       imagen_despues: imagen_despues !== undefined ? imagenDespuesFileName : existingObj.imagen_despues,
       nombre_mecanico: nombre_mecanico !== undefined ? String(nombre_mecanico ?? "") : existingObj.nombre_mecanico,
-      firma_mecanico: firma_mecanico !== undefined ? String(firma_mecanico ?? "") : existingObj.firma_mecanico,
+      firma_mecanico:
+        firma_mecanico !== undefined
+          ? (firma_mecanico != null && String(firma_mecanico).trim().length > 0
+              ? String(firma_mecanico).trim()
+              : null)
+          : existingObj.firma_mecanico,
       firma_responsable:
         firma_responsable !== undefined ? String(firma_responsable ?? "") : existingObj.firma_responsable,
     };

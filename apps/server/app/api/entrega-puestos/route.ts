@@ -433,7 +433,9 @@ export async function GET(req: NextRequest) {
                 action: "GET",
                 table: "e_estructura_articulo_corpo_puesto_plan",
                 operation: "findMany",
-                where: { puesto_id: marcaAnterior.puesto_id, id: { notIn: articulos_return.map((articulo: any) => articulo.id) } },
+                where: { OR: [{ puesto_id: marcaAnterior.puesto_id }, { corpo_id: marcaAnterior.corpo_id }],
+                    id: { notIn: articulos_return.map((articulo: any) => articulo.id) }
+                },
             },
         });
         const articulosPlanArray = Array.isArray(articulos_puesto_plan) ? articulos_puesto_plan : [];
@@ -466,7 +468,7 @@ export async function GET(req: NextRequest) {
                 action: "GET",
                 table: "e_estructura_articulo_corpo_puesto_entrega",
                 operation: "findMany",
-                where: { puesto_id: marcaAnterior.puesto_id },
+                where: { OR: [{ puesto_id: marcaAnterior.puesto_id }, { corpo_id: marcaAnterior.corpo_id }] },
             },
         });
         const articulosEntregaArray = Array.isArray(articulos_puesto_entrega) ? articulos_puesto_entrega : [];

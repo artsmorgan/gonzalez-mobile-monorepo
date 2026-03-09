@@ -415,6 +415,7 @@ export async function POST(req: NextRequest) {
               temas_a_tratar: recordObj.temas_a_tratar,
               colaboradores: recordObj.colaboradores,
               capacitadores: recordObj.capacitadores,
+              firma_responsable: recordObj.firma_responsable,
             },
           }]),
           created_at: createdAt.toISOString(),

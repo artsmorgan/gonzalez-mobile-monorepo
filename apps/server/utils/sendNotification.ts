@@ -65,10 +65,7 @@ export async function sendNotificationByRole(req: NextRequest, corpoId: number, 
                                     break;
                             }
 
-                            console.log("role", role);
-
                             if (roles.includes(role)) {
-                                console.log(8);
                                 receiver.push(plaza.id);
                             }
                         }
@@ -80,6 +77,7 @@ export async function sendNotificationByRole(req: NextRequest, corpoId: number, 
 
 
     if (receiver.length > 0) {
+        console.log("sendNotificationByRole");
         const notification = await callDynamicPrisma({
             req,
             data: {
@@ -164,6 +162,7 @@ export async function sendNotificationByPlaza(req: NextRequest, marcaDiaId: numb
 
 export async function sendNotificationByEmployee(req: NextRequest, corpoId: number, empleadoSenderIds: number[], title: string, description: string, employeeIds: number[]) {
     if (employeeIds.length > 0) {
+        console.log(employeeIds.length);
         const notification = await callDynamicPrisma({
             req,
             data: {

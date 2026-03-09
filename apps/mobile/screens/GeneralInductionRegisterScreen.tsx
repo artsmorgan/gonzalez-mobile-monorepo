@@ -596,9 +596,12 @@ export default function GeneralInductionRegisterScreen() {
           if (Array.isArray(parsed)) setStructure(parsed);
         } catch {
           // ignore
+          setStructure([]);
         }
+      } else {
+        setStructure([]);
       }
-
+/*
       const isConnected = await getConnectionStatus();
       if (!isConnected) return;
 
@@ -624,6 +627,7 @@ export default function GeneralInductionRegisterScreen() {
         setStructure(incoming);
         await AsyncStorage.setItem('main_structure_cache', JSON.stringify(incoming));
       }
+      */
     } catch (e) {
       console.error('Error fetching main structure for general induction register:', e);
     } finally {
@@ -1289,8 +1293,8 @@ export default function GeneralInductionRegisterScreen() {
     }
   }, [scanQR, fetchEmpleadoByIdForColaborador]);
 
-  const resetForm = () => {
-    setFecha(new Date());
+  const resetForm = async ( horaAccion: number ) => {
+    setFecha(new Date(horaAccion));
     setSelectedTemas(allTemasLeafSelected);
     setColaboradoresList([]);
     setCapacitadoresList([]);
@@ -1301,17 +1305,27 @@ export default function GeneralInductionRegisterScreen() {
     setEditingRecord(null);
   };
 
-  const startCreate = () => {
-    resetForm();
+  const startCreate = async () => {
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
+    resetForm(horaAccion);
     setIsCreating(true);
   };
 
-  const startEditing = (record: GeneralInductionRegisterRecord) => {
+  const startEditing = async (record: GeneralInductionRegisterRecord) => {
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
     try {
       setIsCreating(true);
       setEditingRecord({ id: record.id ? String(record.id) : null, id_local: record.id_local || '' });
 
-      setFecha(record.fecha ? new Date(record.fecha) : new Date());
+      setFecha(record.fecha ? new Date(record.fecha) : new Date(horaAccion));
 
       // Parse temas meta for structure IDs
       const temasObj = safeJsonParse<any>(record.temas_a_tratar, null);
@@ -1469,24 +1483,24 @@ export default function GeneralInductionRegisterScreen() {
 
     try {
       if (!selectedEmpresaId || !selectedClienteId || !selectedSucursalId) {
-        setSubmitResponse({ type: 'error', message: 'Empresa, Cliente y Sucursal son obligatorios' });
+        Alert.alert('Error', 'Empresa, Cliente y Sucursal son obligatorios');
         setIsSubmitting(false);
         return;
       }
       if (!selectedDivisionId || !selectedDivisionNode) {
-        setSubmitResponse({ type: 'error', message: 'No se pudo determinar la división (marca actual)' });
+        Alert.alert('Error', 'No se pudo determinar la división (marca actual)');
         setIsSubmitting(false);
         return;
       }
       if (!firmaResponsableHash.trim()) {
-        setSubmitResponse({ type: 'error', message: 'Firma responsable (QR/Generar) es obligatoria' });
+        Alert.alert('Error', 'Firma responsable (QR/Generar) es obligatoria');
         setIsSubmitting(false);
         return;
       }
 
       const temasPayload = buildTemasPayload();
       if (!Array.isArray(temasPayload.selected) || temasPayload.selected.length === 0) {
-        setSubmitResponse({ type: 'error', message: 'Debe seleccionar al menos 1 tema (checkbox)' });
+        Alert.alert('Error', 'Debe seleccionar al menos 1 tema (checkbox)');
         setIsSubmitting(false);
         return;
       }
@@ -1523,6 +1537,13 @@ export default function GeneralInductionRegisterScreen() {
 
       const isConnected = await getConnectionStatus();
 
+      const horaAccion = await getHoraAccion();
+      if (!horaAccion) {
+        Alert.alert('Error', 'No se pudo obtener la hora');
+        setIsSubmitting(false);
+        return;
+      }
+
       // create
       if (!editingRecord || (!editingRecord.id && !editingRecord.id_local)) {
         if (isConnected) {
@@ -1532,10 +1553,10 @@ export default function GeneralInductionRegisterScreen() {
             logout,
           });
           if (!result.status) throw new Error(result.message || 'No se pudo crear el registro');
-          setSubmitResponse({ type: 'success', message: result.message || 'Registro creado correctamente' });
+          Alert.alert('Éxito', result.message || 'Registro creado correctamente');
           setTimeout(() => {
             setIsCreating(false);
-            resetForm();
+            resetForm(horaAccion);
             fetchRecords();
           }, 2000);
         } else {
@@ -1552,7 +1573,7 @@ export default function GeneralInductionRegisterScreen() {
             colaboradores: requestData.colaboradores,
             capacitadores: requestData.capacitadores,
             firma_responsable: requestData.firma_responsable,
-            created_at: new Date().toISOString(),
+            created_at: new Date(horaAccion).toISOString(),
             created_by: String(employee?.id || ''),
             synced: false,
           };
@@ -1573,10 +1594,10 @@ export default function GeneralInductionRegisterScreen() {
           cache.push({ ...newCacheRecord, type: 'general_induction_register' });
           await AsyncStorage.setItem('evaluations_cache', JSON.stringify(cache));
 
-          setSubmitResponse({ type: 'success', message: 'Se guardó localmente y se sincronizará al recuperar conexión' });
+          Alert.alert('Éxito', 'Se guardó localmente y se sincronizará al recuperar conexión');
           setTimeout(() => {
             setIsCreating(false);
-            resetForm();
+            resetForm(horaAccion);
             fetchRecords();
           }, 2000);
         }
@@ -1604,10 +1625,15 @@ export default function GeneralInductionRegisterScreen() {
             logout,
           });
           if (!result.status) throw new Error(result.message || 'No se pudo actualizar el registro');
-          setSubmitResponse({ type: 'success', message: result.message || 'Registro actualizado correctamente' });
+          Alert.alert('Éxito', result.message || 'Registro actualizado correctamente');
+          const horaAccion = await getHoraAccion();
+          if (!horaAccion) {
+            Alert.alert('Error', 'No se pudo obtener la hora');
+            return;
+          }
           setTimeout(() => {
             setIsCreating(false);
-            resetForm();
+            resetForm(horaAccion);
             fetchRecords();
           }, 2000);
           return;
@@ -1653,15 +1679,20 @@ export default function GeneralInductionRegisterScreen() {
         });
         await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
 
-        setSubmitResponse({ type: 'success', message: 'El servidor no está disponible. Se guardó localmente y se sincronizará al recuperar conexión' });
+        Alert.alert('Éxito', 'El servidor no está disponible. Se guardó localmente y se sincronizará al recuperar conexión');
+        const horaAccion = await getHoraAccion();
+        if (!horaAccion) {
+          Alert.alert('Error', 'No se pudo obtener la hora');
+          return;
+        }
         setTimeout(() => {
           setIsCreating(false);
-          resetForm();
+          resetForm(horaAccion);
           fetchRecords();
         }, 2000);
       }
     } catch (e: any) {
-      setSubmitResponse({ type: 'error', message: e?.message || 'No se pudo guardar el registro' });
+      Alert.alert('Error', e?.message || 'No se pudo guardar el registro');
     } finally {
       setIsSubmitting(false);
     }
@@ -2668,9 +2699,14 @@ export default function GeneralInductionRegisterScreen() {
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.listItemButton, styles.cancelButton]}
-                  onPress={() => {
+                  onPress={async () => {
                     setIsCreating(false);
-                    resetForm();
+                    const horaAccion = await getHoraAccion();
+                    if (!horaAccion) {
+                      Alert.alert('Error', 'No se pudo obtener la hora');
+                      return;
+                    }
+                    resetForm(horaAccion);
                   }}
                   activeOpacity={0.85}
                   disabled={isSubmitting}
@@ -2810,12 +2846,144 @@ export default function GeneralInductionRegisterScreen() {
                           {(Array.isArray(parsed) ? parsed : []).length > 0 && (
                             <ThemedView style={styles.filterGroupSearch}>
                               <ThemedText style={styles.filterLabel}>Cambios:</ThemedText>
-                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => (
-                                <ThemedText key={`c-${row.id}-${idx}`} style={styles.changeDescription}>
-                                  <ThemedText style={{ fontWeight: '800' }}>{String(c?.prop ?? '-')}: </ThemedText>
-                                  {formatChangeValue(c?.prop, c?.after)}
-                                </ThemedText>
-                              ))}
+                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => {
+                                const prop = String(c?.prop ?? '-');
+                                const value = c?.after;
+                                const isFirmaResponsable = prop === 'firma_responsable';
+
+                                if (prop === '__created__' && value && typeof value === 'object') {
+                                  const created: any = value;
+                                  return (
+                                    <React.Fragment key={`c-${row.id}-${idx}-created`}>
+                                      <ThemedView style={styles.changeDescriptionContainer}>
+                                        <ThemedText style={styles.changeDescription}>
+                                          <ThemedText style={{ fontWeight: '800' }}>Registro creado</ThemedText>
+                                        </ThemedText>
+                                      </ThemedView>
+                                      {Object.entries(created).map(([k, v]) => {
+                                        if (k === 'firma_responsable') {
+                                          const info = decodeFirmaHash(typeof v === 'string' ? v : String(v ?? ''));
+                                          return (
+                                            <ThemedView key={`c-${row.id}-${idx}-${k}`} style={styles.changeDescriptionContainer}>
+                                              <ThemedText style={styles.changeDescription}>
+                                                <ThemedText style={{ fontWeight: '800' }}>{k}: </ThemedText>
+                                                {info
+                                                  ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${info.timestamp || 'N/A'}`
+                                                  : 'Firma (formato no decodificable)'}
+                                              </ThemedText>
+                                            </ThemedView>
+                                          );
+                                        }
+                                        if (k === 'colaboradores' || k === 'capacitadores') {
+                                          const arr = (() => {
+                                            if (Array.isArray(v)) return v as any[];
+                                            if (typeof v === 'string') {
+                                              try {
+                                                return JSON.parse(v) as any[];
+                                              } catch {
+                                                return [];
+                                              }
+                                            }
+                                            return [];
+                                          })();
+                                          const label = k === 'colaboradores' ? 'Colaboradores' : 'Capacitadores';
+                                          return (
+                                            <ThemedView key={`c-${row.id}-${idx}-${k}`} style={styles.changeDescriptionContainer}>
+                                              <ThemedText style={[styles.changeDescription, { fontWeight: '800' }]}>{label}:</ThemedText>
+                                              {arr.length === 0 ? (
+                                                <ThemedText style={styles.changeDescription}>—</ThemedText>
+                                              ) : (
+                                                arr.map((p: any, i: number) => (
+                                                  <ThemedView key={`p-${k}-${i}`} style={styles.changeDescriptionContainer}>
+                                                    <ThemedText style={styles.changeDescription}>
+                                                      {i + 1}. {String(p?.nombre ?? '').trim() || '—'} (Cédula: {String(p?.cedula ?? '').trim() || '—'} - Puesto: {String(p?.puesto_text ?? '').trim() || '—'})
+                                                    </ThemedText>
+                                                    {p?.firma ? (
+                                                      <Image
+                                                        source={{ uri: formatSignatureForDisplay(p.firma) ?? '' }}
+                                                        style={styles.cambioSignatureImage}
+                                                        resizeMode="contain"
+                                                      />
+                                                    ) : (
+                                                      <ThemedText style={styles.changeDescription}>Sin firma</ThemedText>
+                                                    )}
+                                                  </ThemedView>
+                                                ))
+                                              )}
+                                            </ThemedView>
+                                          );
+                                        }
+                                        return (
+                                          <ThemedView key={`c-${row.id}-${idx}-${k}`} style={styles.changeDescriptionContainer}>
+                                            <ThemedText style={styles.changeDescription}>
+                                              <ThemedText style={{ fontWeight: '800' }}>{k}: </ThemedText>
+                                              {formatChangeValue(k, v)}
+                                            </ThemedText>
+                                          </ThemedView>
+                                        );
+                                      })}
+                                    </React.Fragment>
+                                  );
+                                }
+
+                                if (prop === 'colaboradores' || prop === 'capacitadores') {
+                                  const arr = (() => {
+                                    if (Array.isArray(value)) return value as any[];
+                                    if (typeof value === 'string') {
+                                      try {
+                                        return JSON.parse(value) as any[];
+                                      } catch {
+                                        return [];
+                                      }
+                                    }
+                                    return [];
+                                  })();
+                                  const label = prop === 'colaboradores' ? 'Colaboradores' : 'Capacitadores';
+                                  return (
+                                    <ThemedView key={`c-${row.id}-${idx}`} style={styles.changeDescriptionContainer}>
+                                      <ThemedText style={[styles.changeDescription, { fontWeight: '800' }]}>{label}:</ThemedText>
+                                      {arr.length === 0 ? (
+                                        <ThemedText style={styles.changeDescription}>—</ThemedText>
+                                      ) : (
+                                        arr.map((p: any, i: number) => (
+                                          <ThemedView key={`p-${prop}-${i}`} style={styles.changeDescriptionContainer}>
+                                            <ThemedText style={styles.changeDescription}>
+                                              {i + 1}. {String(p?.nombre ?? '').trim() || '—'} (Cédula: {String(p?.cedula ?? '').trim() || '—'} - Puesto: {String(p?.puesto_text ?? '').trim() || '—'})
+                                            </ThemedText>
+                                            {p?.firma ? (
+                                              <Image
+                                                source={{ uri: formatSignatureForDisplay(p.firma) ?? '' }}
+                                                style={styles.cambioSignatureImage}
+                                                resizeMode="contain"
+                                              />
+                                            ) : (
+                                              <ThemedText style={styles.changeDescription}>Sin firma</ThemedText>
+                                            )}
+                                          </ThemedView>
+                                        ))
+                                      )}
+                                    </ThemedView>
+                                  );
+                                }
+
+                                return (
+                                  <ThemedView key={`c-${row.id}-${idx}`} style={styles.changeDescriptionContainer}>
+                                    <ThemedText style={styles.changeDescription}>
+                                      <ThemedText style={{ fontWeight: '800' }}>{prop}: </ThemedText>
+                                      {isFirmaResponsable && typeof value === 'string' && value.trim()
+                                        ? (() => {
+                                            const info = decodeFirmaHash(value);
+                                            return info
+                                              ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${info.timestamp || 'N/A'}`
+                                              : 'Firma (formato no decodificable)';
+                                          })()
+                                        : !isFirmaResponsable
+                                          ? formatChangeValue(prop, value)
+                                          : 'N/A'}
+                                    </ThemedText>
+                                  </ThemedView>
+                                );
+                              })}
                             </ThemedView>
                           )}
                         </ThemedView>
@@ -3225,6 +3393,8 @@ const styles = StyleSheet.create({
   cambioCollapsableTitle: { fontSize: 14, fontWeight: '600', color: '#007AFF', flex: 1 },
   cambioCollapsableContent: { padding: 12, gap: 8, backgroundColor: '#F8F9FA' },
   changeDescription: { fontSize: 14, lineHeight: 20, color: '#666', marginBottom: 8 },
+  changeDescriptionContainer: { marginBottom: 8 },
+  cambioSignatureImage: { marginTop: 6, height: 80, width: 160, backgroundColor: '#f0f0f0', borderRadius: 4 },
   filterGroupSearch: { marginBottom: 12 },
 
   smallButton: {

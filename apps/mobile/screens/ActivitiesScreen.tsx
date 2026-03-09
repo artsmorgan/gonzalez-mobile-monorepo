@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, Modal, TextInput, Image, View, Platform } from 'react-native';
+import { StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, Modal, TextInput, Image, View, Platform, Dimensions } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
@@ -22,7 +22,7 @@ import { Buffer } from 'buffer';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import { eventBus } from '@/hooks/eventBus';
 import { useQRScanner } from '@/hooks/useQRScanner';
-import { createActivity } from '@/hooks/activitiesFunctions';
+import { createActivity, deleteCreatedActivity, listCreatedActivitiesByPuesto, updateCreatedActivity } from '@/hooks/activitiesFunctions';
 import authedFetch from '@/hooks/authedFetch';
 import getValidAccessTokenOrLogout from '@/hooks/getValidAccessTokenOrLogout';
 
@@ -163,25 +163,33 @@ const ActivityItemComponent: React.FC<ActivityItemProps> = ({
   }, [apiUrl, activity.id]);
 
   React.useEffect(() => {
-    if (!activity.is_revision_equipo) {
-      const loadImages = async () => {
-        const connectionStatus = await getConnectionStatus();
+    const shouldLoadActivityImage =
+      (!activity.is_revision_equipo && activity.imagen_adjunta) ||
+      (activity.is_revision_equipo && activity.is_marcada && activity.imagen_adjunta);
 
-        // Always load cached image
-        const cached = await getCachedActivityImage(activity.id);
-        setCachedActivityImage(cached);
-
-        // If online, also load from server
-        if (connectionStatus) {
-          await loadActivityImageFromServer();
-        } else {
-          setServerActivityImageBase64(null);
-        }
-      };
-
-      loadImages();
+    if (!shouldLoadActivityImage) {
+      setCachedActivityImage(null);
+      setServerActivityImageBase64(null);
+      return;
     }
-  }, [activity.id, activity.is_revision_equipo, activity.imagen_adjunta, loadActivityImageFromServer, getConnectionStatus]);
+
+    const loadImages = async () => {
+      const connectionStatus = await getConnectionStatus();
+
+      // Always load cached image
+      const cached = await getCachedActivityImage(activity.id);
+      setCachedActivityImage(cached);
+
+      // If online, also load from server
+      if (connectionStatus) {
+        await loadActivityImageFromServer();
+      } else {
+        setServerActivityImageBase64(null);
+      }
+    };
+
+    loadImages();
+  }, [activity.id, activity.is_revision_equipo, activity.is_marcada, activity.imagen_adjunta, loadActivityImageFromServer, getConnectionStatus]);
 
   return (
     <ThemedView style={styles.activityCard}>
@@ -278,8 +286,8 @@ const ActivityItemComponent: React.FC<ActivityItemProps> = ({
           </ThemedView>
         )}
 
-        {/* Show existing image for normal activities (is_revision_equipo = false) */}
-        {!activity.is_revision_equipo && activity.imagen_adjunta && (
+        {/* Show existing image for normal activities and for marked inventory review activities */}
+        {activity.imagen_adjunta && (!activity.is_revision_equipo || activity.is_marcada) && (
           <ThemedView style={styles.imagePreviewContainer}>
             <ThemedText style={styles.imagePreviewTitle}>Imagen adjunta:</ThemedText>
             {(() => {
@@ -378,7 +386,13 @@ const InventoryItemComponent: React.FC<InventoryItemProps> = ({
   const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
 
   const loadImageFromServer = React.useCallback(async () => {
-    if (!apiUrl || !inventory.revision_equipo?.id) return;
+    if (
+      !apiUrl ||
+      !inventory.revision_equipo?.id ||
+      !inventory.revision_equipo?.imagen_adjunta
+    ) {
+      return;
+    }
 
     try {
       const token = (await AsyncStorage.getItem('access_token')) || '';
@@ -431,9 +445,16 @@ const InventoryItemComponent: React.FC<InventoryItemProps> = ({
     } catch (error) {
       console.error('Error fetching image:', error);
     }
-  }, [apiUrl, inventory.revision_equipo?.id]);
+  }, [apiUrl, inventory.revision_equipo?.id, inventory.revision_equipo?.imagen_adjunta]);
 
   React.useEffect(() => {
+    if (!inventory.revision_equipo?.imagen_adjunta) {
+      // Esta revisión de equipo no tiene imagen asociada; evitamos peticiones innecesarias
+      setCachedImage(null);
+      setServerImageBase64(null);
+      return;
+    }
+
     const checkConnectionAndLoadImage = async () => {
       const connectionStatus = await getConnectionStatus();
       setIsConnected(connectionStatus);
@@ -453,7 +474,7 @@ const InventoryItemComponent: React.FC<InventoryItemProps> = ({
     };
 
     checkConnectionAndLoadImage();
-  }, [inventory.revision_equipo?.id, imageRefreshKey, loadImageFromServer]);
+  }, [inventory.revision_equipo?.id, inventory.revision_equipo?.imagen_adjunta, imageRefreshKey, loadImageFromServer]);
 
   return (
     <View style={styles.tableRow}>
@@ -594,6 +615,25 @@ interface ArticuloRuleEntry {
   reglas: { id: string; nombre: string; valor: string }[];
 }
 
+type MainStructurePuestoNode = { id: number; nombre: string; plazas: PlazaOption[] };
+type MainStructureSucursalNode = { id: number; nombre: string; puestos: MainStructurePuestoNode[] };
+type MainStructureContratoNode = { id: number; nombre: string; sucursales: MainStructureSucursalNode[] };
+type MainStructureDivisionNode = { id: number; nombre: string; contratos: MainStructureContratoNode[] };
+type MainStructureClienteNode = { id: number; nombre: string; division: MainStructureDivisionNode[] };
+type MainStructureEmpresaNode = { id: number; nombre: string; clientes: MainStructureClienteNode[] };
+type MainStructureTree = MainStructureEmpresaNode[];
+
+interface CreatedActivityItem {
+  id: number;
+  nombre_actividad: string;
+  descripcion_actividad: string;
+  fecha_inicio: string;
+  fecha_fin: string | null;
+  frecuencia: string;
+  es_revision_equipo: boolean;
+  firma_responsable: string;
+}
+
 interface SignatureData {
   raw: string;
   sessionId: string;
@@ -652,6 +692,7 @@ export default function ActivitiesScreen() {
   // Importante: "sin internet" NO cuenta como error (solo es un estado informativo)
   const [offlineMessage, setOfflineMessage] = useState<string | null>(null);
   const [hasCurrentMarca, setHasCurrentMarca] = useState<boolean>(false);
+  const [moduleStep, setModuleStep] = useState<'assigned' | 'created' | 'form'>('assigned');
 
   // Bitacora modal state
   const [isBitacoraModalVisible, setIsBitacoraModalVisible] = useState(false);
@@ -680,6 +721,8 @@ export default function ActivitiesScreen() {
   }, []);
   // Repetition config modal state
   const [isCreateActivityVisible, setIsCreateActivityVisible] = useState(false);
+  const [isEditingCreatedActivity, setIsEditingCreatedActivity] = useState(false);
+  const [editingCreatedActivityId, setEditingCreatedActivityId] = useState<number | null>(null);
   const [repetitionType, setRepetitionType] = useState<'daily' | 'weekly' | 'monthly-weekday' | 'monthly-last' | 'yearly' | 'weekdays' | 'custom'>('custom');
   const [weeklyLabel, setWeeklyLabel] = useState<string>('Cada semana');
   const [monthlyWeekdayLabel, setMonthlyWeekdayLabel] = useState<string>('Mes (día sem.)');
@@ -716,10 +759,32 @@ export default function ActivitiesScreen() {
   const [signatureEmployeeName, setSignatureEmployeeName] = useState<string | null>(null);
   const [isProcessingSignature, setIsProcessingSignature] = useState(false);
   const [isSubmittingActivity, setIsSubmittingActivity] = useState(false);
+  const [createdActivities, setCreatedActivities] = useState<CreatedActivityItem[]>([]);
+  const [isLoadingCreatedActivities, setIsLoadingCreatedActivities] = useState(false);
+
+  // Jerarquía desde cache (sin endpoint)
+  const [structure, setStructure] = useState<MainStructureTree>([]);
+  const [isStructureLoading, setIsStructureLoading] = useState(false);
+  const [assignToAllDivision, setAssignToAllDivision] = useState(false);
+  const [selectedDivisionForAll, setSelectedDivisionForAll] = useState<number | null>(null);
+  const [selectedEmpresaId, setSelectedEmpresaId] = useState<number | null>(null);
+  const [selectedClienteId, setSelectedClienteId] = useState<number | null>(null);
+  const [selectedDivisionId, setSelectedDivisionId] = useState<number | null>(null);
+  const [selectedContratoId, setSelectedContratoId] = useState<number | null>(null);
+  const [selectedSucursalId, setSelectedSucursalId] = useState<number | null>(null);
+  const [selectedPuestoFilterId, setSelectedPuestoFilterId] = useState<number | null>(null);
+  const [role, setRole] = useState<string | null>(null);
   const { scanQR, QRScannerComponent } = useQRScanner();
+
+  // Modal: ver cambios de actividades creadas
+  const [isCambiosModalVisible, setIsCambiosModalVisible] = useState(false);
+  const [cambiosTitle, setCambiosTitle] = useState<string>('Cambios');
+  const [cambiosItems, setCambiosItems] = useState<any[]>([]);
+  const [expandedCambioId, setExpandedCambioId] = useState<number | null>(null);
 
   useFocusEffect(
     useCallback(() => {
+      //findCurrentMarca();
       fetchActivities();
     }, [])
   );
@@ -876,9 +941,10 @@ export default function ActivitiesScreen() {
     }
   };
 
-  const resetCreateActivityForm = () => {
+  const resetCreateActivityForm = (_horaAccion: string) => {
     setActivityName('');
     setActivityDescription('');
+    // Siempre iniciar en la fecha actual para evitar fechas inválidas
     setActivityStartDate(new Date());
     setShowStartDatePicker(false);
     setTipoActividad('Normal');
@@ -906,10 +972,13 @@ export default function ActivitiesScreen() {
     try {
       setCatalogError(null);
       setIsLoadingCatalogs(true);
+      setModuleStep('form');
+      setIsCreateActivityVisible(true);
       const currentMarcaStr = await AsyncStorage.getItem('current_marca');
       if (!currentMarcaStr) {
         Alert.alert('Error', 'No se encontró la marca actual. Registra una marca antes de crear actividades.');
         setIsCreateActivityVisible(false);
+        setModuleStep('created');
         return;
       }
 
@@ -924,8 +993,14 @@ export default function ActivitiesScreen() {
       setCurrentCorpoId(currentMarcaData.corpo.id);
 
       const isConnected = await getConnectionStatus();
+      if (!isConnected) {
+        Alert.alert('Sin conexión', 'Este submódulo funciona exclusivamente con internet.');
+        setIsCreateActivityVisible(false);
+        setModuleStep('created');
+        return;
+      }
       await Promise.all([
-        loadPuestosCatalog(currentMarcaData.corpo.id, isConnected),
+        loadMainStructureCache(),
         loadArticulosCatalog(isConnected),
       ]);
     } catch (error) {
@@ -933,6 +1008,22 @@ export default function ActivitiesScreen() {
       setCatalogError('No se pudieron cargar los catálogos. Intenta nuevamente.');
     } finally {
       setIsLoadingCatalogs(false);
+    }
+  };
+
+  const loadMainStructureCache = async () => {
+    try {
+      setIsStructureLoading(true);
+      const cache = await AsyncStorage.getItem('main_structure_cache');
+      const parsed = cache ? JSON.parse(cache) : [];
+      const empresas = Array.isArray(parsed) ? parsed : [];
+      setStructure(empresas);
+    } catch (error) {
+      console.error('Error loading main_structure_cache:', error);
+      setStructure([]);
+      setCatalogError('No se pudo leer la jerarquía guardada.');
+    } finally {
+      setIsStructureLoading(false);
     }
   };
 
@@ -1241,14 +1332,29 @@ export default function ActivitiesScreen() {
   };
 
   const openRepetitionModal = async () => {
-    resetCreateActivityForm();
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora de acción');
+      return;
+    }
+    resetCreateActivityForm(String(horaAccion));
+    setIsEditingCreatedActivity(false);
+    setEditingCreatedActivityId(null);
     setIsCreateActivityVisible(true);
     await prepareCreateActivityForm();
   };
 
-  const closeRepetitionModal = () => {
-    resetCreateActivityForm();
+  const closeRepetitionModal = async () => {
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora de acción');
+      return;
+    }
+    resetCreateActivityForm(String(horaAccion));
     setIsCreateActivityVisible(false);
+    setModuleStep('created');
+    setIsEditingCreatedActivity(false);
+    setEditingCreatedActivityId(null);
   };
 
   const formatDateForDisplay = (date: Date) => {
@@ -1296,7 +1402,18 @@ export default function ActivitiesScreen() {
     } else {
       setMarkedPlazaIds([]);
     }
+    
   }, [selectedPuestoId, assignedResponsables]);
+
+  const findCurrentMarca = async () => {
+    const currentMarca = await AsyncStorage.getItem('current_marca');
+    setRole(null);
+    if (currentMarca) {
+      const currentMarcaData = JSON.parse(currentMarca);
+      setRole(currentMarcaData.roleDivision.role.nombre);
+      console.log('Role:', role);
+    }
+  };
 
   const handleSelectPuesto = (value: string) => {
     setSelectedPuestoId(value);
@@ -1322,7 +1439,7 @@ export default function ActivitiesScreen() {
     }
 
     const puestoId = parseInt(selectedPuestoId, 10);
-    const puesto = puestos.find(p => p.id === puestoId);
+    const puesto = effectivePuestos.find(p => p.id === puestoId);
     if (!puesto) {
       Alert.alert('Validación', 'El puesto seleccionado no es válido.');
       return;
@@ -1391,7 +1508,7 @@ export default function ActivitiesScreen() {
       return;
     }
     const puestoId = parseInt(selectedPuestoId, 10);
-    const puesto = puestos.find(p => p.id === puestoId);
+    const puesto = effectivePuestos.find(p => p.id === puestoId);
     if (!puesto) {
       Alert.alert('Validación', 'El puesto seleccionado no es válido.');
       return;
@@ -1695,7 +1812,7 @@ export default function ActivitiesScreen() {
   const submitCreateActivity = async () => {
     try {
       setIsSubmittingActivity(true);
-      const frequencyConfig = buildFrequencyConfig();
+      const frequencyConfig = await buildFrequencyConfig();
       const frequencyString = JSON.stringify(frequencyConfig);
 
       const reglasPayload = articuloRules.map(rule => ({
@@ -1715,10 +1832,17 @@ export default function ActivitiesScreen() {
           })),
       }));
 
+      const fechaInicioStr = formatDateForApi(activityStartDate);
+      const fechaFinValue =
+        endType === 'date' && endDate
+          ? endDate
+          : null;
+
       const requestData = {
         marca_id: currentMarcaId,
         nombre_actividad: activityName.trim(),
-        fecha_inicio: formatDateForApi(activityStartDate),
+        fecha_inicio: fechaInicioStr,
+        fecha_fin: fechaFinValue,
         frecuencia: frequencyString,
         es_revision_equipo: tipoActividad === 'Inventario',
         descripcion_actividad: activityDescription.trim(),
@@ -1728,25 +1852,40 @@ export default function ActivitiesScreen() {
       };
 
       const isConnected = await getConnectionStatus();
-      if (isConnected) {
-        const response = await createActivity({
-          requestData,
-          refreshAccessToken,
-          logout,
-        });
+      if (!isConnected) {
+        Alert.alert(
+          'Sin conexión',
+          'La creación y edición de actividades solo está disponible con conexión a internet.'
+        );
+        return;
+      }
 
-        if (response.status) {
-          Alert.alert('Éxito', 'La actividad se creó correctamente.');
-          closeRepetitionModal();
-          await fetchActivities();
-          eventBus.emit('activitiesUpdated');
-        } else {
-          Alert.alert('Error', response.message || 'No se pudo crear la actividad.');
-        }
-      } else {
-        await queueCreateActivityAction(requestData);
-        Alert.alert('Modo offline', 'La actividad se guardó y se sincronizará cuando recuperes la conexión.');
+      const response = isEditingCreatedActivity && editingCreatedActivityId
+        ? await updateCreatedActivity({
+            activityId: editingCreatedActivityId,
+            requestData: {
+              ...requestData,
+              puestos_ids: Array.from(new Set(assignedResponsables.map((r) => r.puestoId))),
+            },
+            refreshAccessToken,
+            logout,
+          })
+        : await createActivity({
+            requestData,
+            refreshAccessToken,
+            logout,
+          });
+
+      if (response.status) {
+        Alert.alert('Éxito', isEditingCreatedActivity ? 'La actividad se actualizó correctamente.' : 'La actividad se creó correctamente.');
         closeRepetitionModal();
+        await fetchActivities();
+        if (selectedPuestoFilterId) {
+          await fetchCreatedActivitiesByPuesto(selectedPuestoFilterId);
+        }
+        eventBus.emit('activitiesUpdated');
+      } else {
+        Alert.alert('Error', response.message || 'No se pudo guardar la actividad.');
       }
     } catch (error) {
       console.error('Error creating activity:', error);
@@ -1763,19 +1902,28 @@ export default function ActivitiesScreen() {
       return;
     }
 
+    const selectedPuestosCount = Array.from(new Set(assignedResponsables.map((r) => r.puestoId))).length;
+    const confirmationMessage = selectedPuestosCount > 100
+      ? `Se seleccionaron ${selectedPuestosCount} puestos. El proceso puede tardar un tiempo. ¿Deseas continuar?`
+      : (isEditingCreatedActivity ? '¿Deseas actualizar esta actividad?' : '¿Deseas crear esta actividad?');
+
     Alert.alert(
       'Confirmar',
-      '¿Deseas crear esta actividad?',
+      confirmationMessage,
       [
         { text: 'Cancelar', style: 'cancel' },
-        { text: 'Crear', onPress: submitCreateActivity },
+        { text: isEditingCreatedActivity ? 'Actualizar' : 'Crear', onPress: submitCreateActivity },
       ],
       { cancelable: false }
     );
   };
 
-  const buildFrequencyConfig = () => {
-    const baseDate = activityStartDate || new Date();
+  const buildFrequencyConfig = async () => {
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      throw new Error('No se pudo obtener la hora de acción');
+    }
+    const baseDate = activityStartDate || new Date(String(horaAccion));
     const currentWeekday = baseDate.getDay();
     const currentDay = baseDate.getDate();
     const currentMonth = baseDate.getMonth() + 1;
@@ -2190,10 +2338,332 @@ export default function ActivitiesScreen() {
     );
   };
 
-  const selectedPuesto = selectedPuestoId ? puestos.find(p => p.id === parseInt(selectedPuestoId, 10)) : null;
+  const empresasOptions = structure;
+  const selectedEmpresa = empresasOptions.find((e) => e.id === selectedEmpresaId) || null;
+  const clientesOptions = selectedEmpresa?.clientes || [];
+  const selectedCliente = clientesOptions.find((c) => c.id === selectedClienteId) || null;
+  const divisionesOptions = selectedCliente?.division || [];
+  const selectedDivision = divisionesOptions.find((d) => d.id === selectedDivisionId) || null;
+  const contratosOptions = selectedDivision?.contratos || [];
+  const selectedContrato = contratosOptions.find((c) => c.id === selectedContratoId) || null;
+  const sucursalesOptions = selectedContrato?.sucursales || [];
+  const selectedSucursal = sucursalesOptions.find((s) => s.id === selectedSucursalId) || null;
+  const puestosOptionsFromHierarchy = selectedSucursal?.puestos || [];
+  const filteredPuestos = selectedPuestoFilterId
+    ? puestosOptionsFromHierarchy.filter((p) => p.id === selectedPuestoFilterId)
+    : puestosOptionsFromHierarchy;
+
+  const getDivisionPuestos = useCallback((divisionId: number) => {
+    for (const empresa of structure) {
+      for (const cliente of empresa.clientes || []) {
+        for (const division of cliente.division || []) {
+          if (division.id !== divisionId) continue;
+          return (division.contratos || [])
+            .flatMap((contrato) => contrato.sucursales || [])
+            .flatMap((sucursal) => sucursal.puestos || []);
+        }
+      }
+    }
+    return [];
+  }, [structure]);
+
+  const effectivePuestos = assignToAllDivision && selectedDivisionForAll
+    ? getDivisionPuestos(selectedDivisionForAll)
+    : filteredPuestos;
+
+  const handleConfirmPuestosSelection = () => {
+    const uniquePuestosCount = Array.from(new Set(effectivePuestos.map((p) => p.id))).length;
+    if (uniquePuestosCount === 0) {
+      Alert.alert('Validación', 'Selecciona una jerarquía válida para obtener puestos.');
+      return;
+    }
+    if (uniquePuestosCount > 100) {
+      Alert.alert(
+        'Confirmación',
+        `Se seleccionarán ${uniquePuestosCount} puestos. Este proceso puede tardar más de lo normal.`,
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          {
+            text: 'Confirmar',
+            style: 'default',
+            onPress: () => {
+              setAssignedResponsables(
+                effectivePuestos.map((puesto) => ({
+                  puestoId: puesto.id,
+                  puestoNombre: puesto.nombre,
+                  assignAll: true,
+                  plazas: [],
+                }))
+              );
+            },
+          },
+        ]
+      );
+      return;
+    }
+    setAssignedResponsables(
+      effectivePuestos.map((puesto) => ({
+        puestoId: puesto.id,
+        puestoNombre: puesto.nombre,
+        assignAll: true,
+        plazas: [],
+      }))
+    );
+    Alert.alert('Listo', `Se utilizarán ${uniquePuestosCount} puestos en el formulario.`);
+  };
+
+  const fetchCreatedActivitiesByPuesto = useCallback(async (puestoId: number) => {
+    try {
+      const isConnected = await getConnectionStatus();
+      if (!isConnected) {
+        Alert.alert('Sin conexión', 'Este submódulo funciona exclusivamente con internet.');
+        return;
+      }
+      setIsLoadingCreatedActivities(true);
+      const data = await listCreatedActivitiesByPuesto({ puestoId, refreshAccessToken, logout });
+      if (data.status) {
+        setCreatedActivities(Array.isArray(data.actividades) ? data.actividades : []);
+      } else {
+        Alert.alert('Error', data.message || 'No se pudo cargar la lista de actividades creadas.');
+      }
+    } finally {
+      setIsLoadingCreatedActivities(false);
+    }
+  }, [getConnectionStatus, logout, refreshAccessToken]);
+
+  const handleDeleteCreatedActivity = async (activityId: number) => {
+    const isConnected = await getConnectionStatus();
+    if (!isConnected) {
+      Alert.alert('Sin conexión', 'Este submódulo funciona exclusivamente con internet.');
+      return;
+    }
+    Alert.alert('Eliminar actividad', '¿Deseas eliminar esta actividad?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Eliminar',
+        style: 'destructive',
+        onPress: async () => {
+          const response = await deleteCreatedActivity({ activityId, refreshAccessToken, logout });
+          if (!response.status) {
+            Alert.alert('Error', response.message || 'No se pudo eliminar la actividad.');
+            return;
+          }
+          if (selectedPuestoFilterId) {
+            await fetchCreatedActivitiesByPuesto(selectedPuestoFilterId);
+          }
+        },
+      },
+    ]);
+  };
+
+  const closeCambiosModal = () => {
+    setIsCambiosModalVisible(false);
+    setCambiosItems([]);
+    setExpandedCambioId(null);
+  };
+
+  const formatCambioCreatedAt = (value: any) => {
+    if (!value) return '-';
+    try {
+      const date = new Date(value);
+      return date.toLocaleString('es-CR', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true,
+      });
+    } catch {
+      return String(value);
+    }
+  };
+
+  const formatFrequencyForDisplay = (rawValue: any): string => {
+    let parsed: any = rawValue;
+    if (typeof rawValue === 'string') {
+      try {
+        parsed = JSON.parse(rawValue);
+      } catch {
+        return rawValue;
+      }
+    }
+    if (!parsed || typeof parsed !== 'object') return String(rawValue ?? '-');
+
+    const labels: Record<string, string> = {
+      title: 'Título',
+      type: 'Tipo',
+      interval: 'Intervalo',
+      unit: 'Unidad',
+      weekday: 'Día de semana',
+      weekdays: 'Días seleccionados',
+      weekOrdinal: 'Ordinal semanal',
+      monthOption: 'Opción mensual',
+      month: 'Mes',
+      day: 'Día',
+      endType: 'Finalización',
+      endDate: 'Fecha de finalización',
+    };
+    const orderedKeys = [
+      'title', 'type', 'interval', 'unit', 'weekday', 'weekdays',
+      'weekOrdinal', 'monthOption', 'month', 'day', 'endType', 'endDate',
+    ];
+
+    const lines: string[] = [];
+    for (const key of orderedKeys) {
+      if (parsed[key] === undefined || parsed[key] === null || parsed[key] === '') continue;
+      const value = Array.isArray(parsed[key]) ? parsed[key].join(', ') : String(parsed[key]);
+      lines.push(`${labels[key] || key}: ${value}`);
+    }
+
+    for (const [key, value] of Object.entries(parsed)) {
+      if (orderedKeys.includes(key)) continue;
+      lines.push(`${labels[key] || key}: ${Array.isArray(value) ? value.join(', ') : String(value)}`);
+    }
+
+    return lines.join('\n') || '-';
+  };
+
+  const formatDigitalSignatureForDisplay = (rawValue: any): string => {
+    if (!rawValue) return '-';
+    if (typeof rawValue !== 'string') return String(rawValue);
+    try {
+      const decoded = decodeSignatureHash(rawValue);
+      return [
+        `Sesión: ${decoded.sessionId || 'N/A'}`,
+        `Empleado: ${decoded.employeeId || 'N/A'}`,
+        `Latitud: ${decoded.latitude || 'N/A'}`,
+        `Longitud: ${decoded.longitude || 'N/A'}`,
+        `Hora: ${decoded.timestamp ? generateDateTime(decoded.timestamp) : 'N/A'}`,
+      ].join('\n');
+    } catch {
+      return 'Firma digital (formato no decodificable)';
+    }
+  };
+
+  const formatChangeValue = (prop: string, value: any): string => {
+    if (value === null || value === undefined) return '-';
+    if (prop === 'frecuencia') return formatFrequencyForDisplay(value);
+    if (prop === 'firma_responsable') return formatDigitalSignatureForDisplay(value);
+
+    if (typeof value === 'string') {
+      if (value.trim().startsWith('{') || value.trim().startsWith('[')) {
+        try {
+          const parsed = JSON.parse(value);
+          if (prop === 'frecuencia') return formatFrequencyForDisplay(parsed);
+          if (typeof parsed === 'object') return JSON.stringify(parsed, null, 2);
+        } catch {
+          return value;
+        }
+      }
+      return value;
+    }
+
+    if (typeof value === 'object') {
+      return JSON.stringify(value, null, 2);
+    }
+    return String(value);
+  };
+
+  const handleViewCreatedActivityChanges = async (activityId: number) => {
+    try {
+      const isConnected = await getConnectionStatus();
+      if (!isConnected) {
+        Alert.alert('Sin conexión', 'Este submódulo funciona exclusivamente con internet.');
+        return;
+      }
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) {
+        Alert.alert('Error', 'No se encontró la URL del servidor.');
+        return;
+      }
+      const response = await authedFetch({
+        url: `${apiUrl}/api/cambios-apps-modules?tabla=e_actividades&registro_id=${activityId}`,
+        init: { method: 'GET' },
+        refreshAccessToken,
+        logout,
+      });
+      if (!response) return;
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.status) {
+        throw new Error(data.message || 'No se pudieron cargar los cambios');
+      }
+      const items = Array.isArray(data.data) ? data.data : [];
+      setCambiosItems(items);
+      setCambiosTitle(`Cambios - Actividad #${activityId}`);
+      setIsCambiosModalVisible(true);
+    } catch (error: any) {
+      console.error('Error loading activity changes:', error);
+      Alert.alert('Error', error?.message || 'No se pudo consultar el registro de cambios.');
+    }
+  };
+
+  const startEditCreatedActivity = (activity: CreatedActivityItem) => {
+    setEditingCreatedActivityId(activity.id);
+    setIsEditingCreatedActivity(true);
+    setActivityName(activity.nombre_actividad || '');
+    setActivityDescription(activity.descripcion_actividad || '');
+    setActivityStartDate(activity.fecha_inicio ? new Date(activity.fecha_inicio) : new Date());
+    setEndType('date');
+    setEndDate(activity.fecha_fin ? formatDateForApi(new Date(activity.fecha_fin)) : formatDateForApi(new Date()));
+    setTipoActividad(activity.es_revision_equipo ? 'Inventario' : 'Normal');
+    try {
+      const decoded = decodeSignatureHash(activity.firma_responsable || '');
+      setSignatureData({
+        raw: activity.firma_responsable || '',
+        sessionId: decoded.sessionId,
+        employeeId: decoded.employeeId,
+        latitude: decoded.latitude,
+        longitude: decoded.longitude,
+        timestamp: decoded.timestamp,
+      });
+    } catch {
+      setSignatureData(null);
+    }
+    setIsCreateActivityVisible(true);
+    setModuleStep('form');
+  };
+
+  const selectedPuesto = selectedPuestoId ? effectivePuestos.find(p => p.id === parseInt(selectedPuestoId, 10)) : null;
   const selectedPuestoEntry = selectedPuesto ? assignedResponsables.find(r => r.puestoId === selectedPuesto.id) : null;
   const selectedPuestoPlazas = selectedPuesto?.plazas || [];
   const canAssignEntirePuesto = Boolean(selectedPuesto && !selectedPuestoEntry);
+
+  const resetHierarchyBelowEmpresa = () => {
+    setSelectedClienteId(null);
+    setSelectedDivisionId(null);
+    setSelectedContratoId(null);
+    setSelectedSucursalId(null);
+    setSelectedPuestoFilterId(null);
+    setCreatedActivities([]);
+  };
+
+  const resetHierarchyBelowCliente = () => {
+    setSelectedDivisionId(null);
+    setSelectedContratoId(null);
+    setSelectedSucursalId(null);
+    setSelectedPuestoFilterId(null);
+    setCreatedActivities([]);
+  };
+
+  const resetHierarchyBelowDivision = () => {
+    setSelectedContratoId(null);
+    setSelectedSucursalId(null);
+    setSelectedPuestoFilterId(null);
+    setCreatedActivities([]);
+  };
+
+  const resetHierarchyBelowContrato = () => {
+    setSelectedSucursalId(null);
+    setSelectedPuestoFilterId(null);
+    setCreatedActivities([]);
+  };
+
+  const resetHierarchyBelowSucursal = () => {
+    setSelectedPuestoFilterId(null);
+    setCreatedActivities([]);
+  };
 
   if (isLoading) {
     return (
@@ -2272,14 +2742,34 @@ export default function ActivitiesScreen() {
               {getActionIcon('activities')} Actividades
             </ThemedText>
             <ThemedText style={styles.subtitle}>
-              Lista de actividades asignadas
+              {moduleStep === 'assigned'
+                ? 'Actividades asignadas'
+                : moduleStep === 'created'
+                  ? 'Actividades creadas'
+                  : 'Formulario de actividad'}
             </ThemedText>
           </ThemedView>
 
-          {/* Create Button */}
+          {moduleStep === 'assigned' && role !== 'OPERATIVO' && (
+            <TouchableOpacity
+              style={styles.createButton}
+              onPress={async () => {
+                const isConnected = await getConnectionStatus();
+                if (!isConnected) {
+                  Alert.alert('Sin conexión', 'Este submódulo funciona exclusivamente con internet.');
+                  return;
+                }
+                await loadMainStructureCache();
+                setModuleStep('created');
+              }}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="add" size={20} color="#FFFFFF" />
+            </TouchableOpacity>
+          )}
 
           {/* Activities List */}
-          {!isCreateActivityVisible && (
+          {moduleStep === 'assigned' && (
             <ThemedView style={styles.activitiesContainer}>
               {error ? (
                 <ThemedView style={styles.errorContainer}>
@@ -2303,8 +2793,171 @@ export default function ActivitiesScreen() {
             </ThemedView>
           )}
 
+          {moduleStep === 'created' && (
+            <ThemedView style={styles.repetitionModalContainer}>
+              <TouchableOpacity style={styles.secondaryButtonOutline} onPress={() => setModuleStep('assigned')}>
+                <Ionicons name="arrow-back" size={18} color="#007AFF" />
+                <ThemedText style={styles.secondaryButtonOutlineText}>Volver a asignadas</ThemedText>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={[styles.createButton, { marginTop: 10 }]} onPress={openRepetitionModal}>
+                <Ionicons name="add" size={20} color="#fff" />
+              </TouchableOpacity>
+
+              <ThemedView style={styles.sectionCard}>
+                {isStructureLoading ? (
+                  <ActivityIndicator size="small" color="#007AFF" />
+                ) : (
+                  <>
+                    <ThemedText style={styles.formLabel}>Empresa</ThemedText>
+                    <ThemedView style={styles.pickerContainer}>
+                      <Picker
+                        selectedValue={selectedEmpresaId ? String(selectedEmpresaId) : ''}
+                        onValueChange={(v) => { setSelectedEmpresaId(v ? Number(v) : null); resetHierarchyBelowEmpresa(); }}
+                        style={styles.picker}
+                      >
+                        <Picker.Item label="Selecciona empresa" value="" />
+                        {empresasOptions.map((empresa) => (
+                          <Picker.Item key={empresa.id} label={empresa.nombre} value={String(empresa.id)} />
+                        ))}
+                      </Picker>
+                    </ThemedView>
+
+                    {selectedEmpresaId && (
+                      <>
+                        <ThemedText style={styles.formLabel}>Cliente</ThemedText>
+                        <ThemedView style={styles.pickerContainer}>
+                          <Picker
+                            selectedValue={selectedClienteId ? String(selectedClienteId) : ''}
+                            onValueChange={(v) => { setSelectedClienteId(v ? Number(v) : null); resetHierarchyBelowCliente(); }}
+                            style={styles.picker}
+                          >
+                            <Picker.Item label="Selecciona cliente" value="" />
+                            {clientesOptions.map((cliente) => (
+                              <Picker.Item key={cliente.id} label={cliente.nombre} value={String(cliente.id)} />
+                            ))}
+                          </Picker>
+                        </ThemedView>
+                      </>
+                    )}
+
+                    {selectedClienteId && (
+                      <>
+                        <ThemedText style={styles.formLabel}>División</ThemedText>
+                        <ThemedView style={styles.pickerContainer}>
+                          <Picker
+                            selectedValue={selectedDivisionId ? String(selectedDivisionId) : ''}
+                            onValueChange={(v) => { setSelectedDivisionId(v ? Number(v) : null); resetHierarchyBelowDivision(); }}
+                            style={styles.picker}
+                          >
+                            <Picker.Item label="Selecciona división" value="" />
+                            {divisionesOptions.map((division) => (
+                              <Picker.Item key={division.id} label={division.nombre} value={String(division.id)} />
+                            ))}
+                          </Picker>
+                        </ThemedView>
+                      </>
+                    )}
+
+                    {selectedDivisionId && (
+                      <>
+                        <ThemedText style={styles.formLabel}>Contrato</ThemedText>
+                        <ThemedView style={styles.pickerContainer}>
+                          <Picker
+                            selectedValue={selectedContratoId ? String(selectedContratoId) : ''}
+                            onValueChange={(v) => { setSelectedContratoId(v ? Number(v) : null); resetHierarchyBelowContrato(); }}
+                            style={styles.picker}
+                          >
+                            <Picker.Item label="Selecciona contrato" value="" />
+                            {contratosOptions.map((contrato) => (
+                              <Picker.Item key={contrato.id} label={contrato.nombre} value={String(contrato.id)} />
+                            ))}
+                          </Picker>
+                        </ThemedView>
+                      </>
+                    )}
+
+                    {selectedContratoId && (
+                      <>
+                        <ThemedText style={styles.formLabel}>Sucursal</ThemedText>
+                        <ThemedView style={styles.pickerContainer}>
+                          <Picker
+                            selectedValue={selectedSucursalId ? String(selectedSucursalId) : ''}
+                            onValueChange={(v) => { setSelectedSucursalId(v ? Number(v) : null); resetHierarchyBelowSucursal(); }}
+                            style={styles.picker}
+                          >
+                            <Picker.Item label="Selecciona sucursal" value="" />
+                            {sucursalesOptions.map((sucursal) => (
+                              <Picker.Item key={sucursal.id} label={sucursal.nombre} value={String(sucursal.id)} />
+                            ))}
+                          </Picker>
+                        </ThemedView>
+                      </>
+                    )}
+
+                    {selectedSucursalId && (
+                      <>
+                        <ThemedText style={styles.formLabel}>Puesto</ThemedText>
+                        <ThemedView style={styles.pickerContainer}>
+                          <Picker
+                            selectedValue={selectedPuestoFilterId ? String(selectedPuestoFilterId) : ''}
+                            onValueChange={async (v) => {
+                              const next = v ? Number(v) : null;
+                              setSelectedPuestoFilterId(next);
+                              setCreatedActivities([]);
+                              if (next) await fetchCreatedActivitiesByPuesto(next);
+                            }}
+                            style={styles.picker}
+                          >
+                            <Picker.Item label="Selecciona puesto" value="" />
+                            {puestosOptionsFromHierarchy.map((puesto) => (
+                              <Picker.Item key={puesto.id} label={puesto.nombre} value={String(puesto.id)} />
+                            ))}
+                          </Picker>
+                        </ThemedView>
+                      </>
+                    )}
+                  </>
+                )}
+              </ThemedView>
+
+              {isLoadingCreatedActivities ? (
+                <ActivityIndicator size="small" color="#007AFF" />
+              ) : createdActivities.length === 0 ? (
+                <ThemedText style={styles.helperText}>Selecciona un puesto para cargar actividades creadas.</ThemedText>
+              ) : (
+                createdActivities.map((item) => (
+                  <ThemedView key={item.id} style={styles.assignedItem}>
+                    <ThemedText style={styles.assignedTitle}>{item.nombre_actividad}</ThemedText>
+                    <ThemedText style={styles.helperText}>{item.descripcion_actividad}</ThemedText>
+                    <View style={styles.modalButtons}>
+                      <TouchableOpacity
+                        style={[styles.editButton, styles.createdActionButton]}
+                        onPress={() => startEditCreatedActivity(item)}
+                      >
+                        <Ionicons name="pencil" size={18} color="#FFFFFF" />
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[styles.changesButton, styles.createdActionButton]}
+                        onPress={() => handleViewCreatedActivityChanges(item.id)}
+                      >
+                        <Ionicons name="time-outline" size={18} color="#FFFFFF" />
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[styles.deleteButton, styles.createdActionButton]}
+                        onPress={() => handleDeleteCreatedActivity(item.id)}
+                      >
+                        <Ionicons name="trash" size={18} color="#FFFFFF" />
+                      </TouchableOpacity>
+                    </View>
+                  </ThemedView>
+                ))
+              )}
+            </ThemedView>
+          )}
+
           {/* Activity creation form (inline, hides activities list) */}
-          {isCreateActivityVisible && (
+          {moduleStep === 'form' && isCreateActivityVisible && (
             <ThemedView style={styles.repetitionModalContainer}>
               <ScrollView
                 contentContainerStyle={{ paddingBottom: 16 }}
@@ -2357,18 +3010,107 @@ export default function ActivitiesScreen() {
                     <ActivityIndicator size="small" color="#007AFF" />
                   ) : (
                     <>
-                      <ThemedText style={styles.formLabel}>Puestos</ThemedText>
+                      <ThemedText style={styles.formLabel}>Jerarquía para puestos</ThemedText>
                       <ThemedView style={styles.pickerContainer}>
                         <Picker
-                          selectedValue={selectedPuestoId}
-                          onValueChange={handleSelectPuesto}
+                          selectedValue={selectedEmpresaId ? String(selectedEmpresaId) : ''}
+                          onValueChange={(v) => { setSelectedEmpresaId(v ? Number(v) : null); resetHierarchyBelowEmpresa(); }}
                           style={styles.picker}
                         >
-                          <Picker.Item label="Selecciona un puesto" value="" />
-                          {puestos.map(puesto => (
-                            <Picker.Item key={puesto.id} label={puesto.nombre} value={String(puesto.id)} />
+                          <Picker.Item label="Selecciona empresa" value="" />
+                          {empresasOptions.map((empresa) => (
+                            <Picker.Item key={empresa.id} label={empresa.nombre} value={String(empresa.id)} />
                           ))}
                         </Picker>
+                      </ThemedView>
+                      {!!selectedEmpresaId && (
+                        <ThemedView style={styles.pickerContainer}>
+                          <Picker
+                            selectedValue={selectedClienteId ? String(selectedClienteId) : ''}
+                            onValueChange={(v) => { setSelectedClienteId(v ? Number(v) : null); resetHierarchyBelowCliente(); }}
+                            style={styles.picker}
+                          >
+                            <Picker.Item label="Selecciona cliente" value="" />
+                            {clientesOptions.map((cliente) => (
+                              <Picker.Item key={cliente.id} label={cliente.nombre} value={String(cliente.id)} />
+                            ))}
+                          </Picker>
+                        </ThemedView>
+                      )}
+                      {!!selectedClienteId && (
+                        <ThemedView style={styles.pickerContainer}>
+                          <Picker
+                            selectedValue={selectedDivisionId ? String(selectedDivisionId) : ''}
+                            onValueChange={(v) => { setSelectedDivisionId(v ? Number(v) : null); resetHierarchyBelowDivision(); }}
+                            style={styles.picker}
+                          >
+                            <Picker.Item label="Selecciona división" value="" />
+                            {divisionesOptions.map((division) => (
+                              <Picker.Item key={division.id} label={division.nombre} value={String(division.id)} />
+                            ))}
+                          </Picker>
+                        </ThemedView>
+                      )}
+                      {!!selectedDivisionId && (
+                        <>
+                          <TouchableOpacity
+                            style={styles.secondaryButtonOutline}
+                            onPress={() => {
+                              setAssignToAllDivision(!assignToAllDivision);
+                              setSelectedDivisionForAll(assignToAllDivision ? null : selectedDivisionId);
+                            }}
+                          >
+                            <ThemedText style={styles.secondaryButtonOutlineText}>
+                              {assignToAllDivision ? 'Quitar selección de toda la división' : 'Seleccionar todos los puestos de la división'}
+                            </ThemedText>
+                          </TouchableOpacity>
+                          {!assignToAllDivision && (
+                            <ThemedView style={styles.pickerContainer}>
+                              <Picker
+                                selectedValue={selectedContratoId ? String(selectedContratoId) : ''}
+                                onValueChange={(v) => { setSelectedContratoId(v ? Number(v) : null); resetHierarchyBelowContrato(); }}
+                                style={styles.picker}
+                              >
+                                <Picker.Item label="Selecciona contrato" value="" />
+                                {contratosOptions.map((contrato) => (
+                                  <Picker.Item key={contrato.id} label={contrato.nombre} value={String(contrato.id)} />
+                                ))}
+                              </Picker>
+                            </ThemedView>
+                          )}
+                          {!assignToAllDivision && !!selectedContratoId && (
+                            <ThemedView style={styles.pickerContainer}>
+                              <Picker
+                                selectedValue={selectedSucursalId ? String(selectedSucursalId) : ''}
+                                onValueChange={(v) => { setSelectedSucursalId(v ? Number(v) : null); resetHierarchyBelowSucursal(); }}
+                                style={styles.picker}
+                              >
+                                <Picker.Item label="Selecciona sucursal" value="" />
+                                {sucursalesOptions.map((sucursal) => (
+                                  <Picker.Item key={sucursal.id} label={sucursal.nombre} value={String(sucursal.id)} />
+                                ))}
+                              </Picker>
+                            </ThemedView>
+                          )}
+                        </>
+                      )}
+                      <ThemedText style={styles.helperText}>Puestos disponibles: {effectivePuestos.length}</ThemedText>
+                      <TouchableOpacity style={styles.secondaryButton} onPress={handleConfirmPuestosSelection}>
+                        <ThemedText style={styles.secondaryButtonText}>Confirmar selección de puestos</ThemedText>
+                      </TouchableOpacity>
+
+                      <ThemedText style={styles.formLabel}>Puestos</ThemedText>
+                      <ThemedView style={styles.pickerContainer}>
+                          <Picker
+                            selectedValue={selectedPuestoId}
+                            onValueChange={handleSelectPuesto}
+                            style={styles.picker}
+                          >
+                            <Picker.Item label="Selecciona un puesto" value="" />
+                            {effectivePuestos.map(puesto => (
+                              <Picker.Item key={puesto.id} label={puesto.nombre} value={String(puesto.id)} />
+                            ))}
+                          </Picker>
                       </ThemedView>
 
                       {selectedPuesto && (
@@ -2964,6 +3706,124 @@ export default function ActivitiesScreen() {
         </ThemedView>
       </Modal>
 
+      {/* Modal: ver cambios de actividades creadas */}
+      <Modal
+        visible={isCambiosModalVisible}
+        animationType="fade"
+        transparent
+        presentationStyle="overFullScreen"
+        onRequestClose={closeCambiosModal}
+      >
+        <ThemedView style={styles.modalOverlay}>
+          <ThemedView style={styles.modalContainer}>
+            <ThemedView style={styles.modalHeader}>
+              <ThemedText style={styles.modalTitle}>{cambiosTitle}</ThemedText>
+              <TouchableOpacity onPress={closeCambiosModal}>
+                <Ionicons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+            </ThemedView>
+
+            <ScrollView
+              style={{ maxHeight: Dimensions.get('window').height * 0.75 }}
+              contentContainerStyle={{ padding: 16 }}
+            >
+              {(!cambiosItems || cambiosItems.length === 0) ? (
+                <ThemedView style={styles.emptyContainer}>
+                  <ThemedText style={styles.emptyText}>No hay cambios registrados</ThemedText>
+                </ThemedView>
+              ) : (
+                cambiosItems.map((row: any) => {
+                  let parsed: any[] = [];
+                  try {
+                    parsed = row?.cambios ? JSON.parse(row.cambios) : [];
+                  } catch {
+                    parsed = [];
+                  }
+                  const createdAtLabel = formatCambioCreatedAt(row?.created_at);
+                  const isOpen = expandedCambioId === row.id;
+
+                  return (
+                    <ThemedView key={`chg-${row.id}`} style={styles.cambioCollapsableMain}>
+                      <TouchableOpacity
+                        style={styles.cambioCollapsableHeader}
+                        onPress={() => setExpandedCambioId((prev) => (prev === row.id ? null : row.id))}
+                        activeOpacity={0.8}
+                      >
+                        <ThemedText style={styles.cambioCollapsableTitle}>
+                          {createdAtLabel}
+                        </ThemedText>
+                        <Ionicons
+                          name={isOpen ? "chevron-up" : "chevron-down"}
+                          size={18}
+                          color="#007AFF"
+                        />
+                      </TouchableOpacity>
+
+                      {isOpen && (
+                        <ThemedView style={styles.cambioCollapsableContent}>
+                          <ThemedView style={styles.filterGroupSearch}>
+                            <ThemedText style={styles.filterLabel}>Cambio realizado por:</ThemedText>
+                            <ThemedText style={styles.changeDescription}>
+                              {row.empleado_nombre || 'Desconocido'}
+                              {row.empleado_cedula ? ` - Cédula: ${row.empleado_cedula}` : ''}
+                            </ThemedText>
+                          </ThemedView>
+
+                          {(Array.isArray(parsed) ? parsed : []).length > 0 && (
+                            <ThemedView style={styles.filterGroupSearch}>
+                              <ThemedText style={styles.filterLabel}>Cambios:</ThemedText>
+                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => {
+                                const prop = String(c?.prop ?? '-');
+                                const value = c?.after;
+
+                                if (prop === '__created__' && value && typeof value === 'object') {
+                                  const created: any = value;
+                                  return (
+                                    <React.Fragment key={`c-${row.id}-${idx}-created`}>
+                                      <ThemedView style={styles.changeDescriptionContainer}>
+                                        <ThemedText style={styles.changeDescription}>
+                                          <ThemedText style={{ fontWeight: '800' }}>Registro creado</ThemedText>
+                                        </ThemedText>
+                                      </ThemedView>
+
+                                      {Object.entries(created).map(([k, v]) => {
+                                        const displayValue = formatChangeValue(k, v);
+                                        return (
+                                          <ThemedView key={`c-${row.id}-${idx}-${k}`} style={styles.changeDescriptionContainer}>
+                                            <ThemedText style={styles.changeDescription}>
+                                              <ThemedText style={{ fontWeight: '800' }}>{k}: </ThemedText>
+                                              {displayValue}
+                                            </ThemedText>
+                                          </ThemedView>
+                                        );
+                                      })}
+                                    </React.Fragment>
+                                  );
+                                }
+
+                                const displayValue = formatChangeValue(prop, value);
+                                return (
+                                  <ThemedView key={`c-${row.id}-${idx}`} style={styles.changeDescriptionContainer}>
+                                    <ThemedText style={styles.changeDescription}>
+                                      <ThemedText style={{ fontWeight: '800' }}>{prop}: </ThemedText>
+                                      {displayValue}
+                                    </ThemedText>
+                                  </ThemedView>
+                                );
+                              })}
+                            </ThemedView>
+                          )}
+                        </ThemedView>
+                      )}
+                    </ThemedView>
+                  );
+                })
+              )}
+            </ScrollView>
+          </ThemedView>
+        </ThemedView>
+      </Modal>
+
       <AppFooter />
       <SlideMenu
         isVisible={isMenuVisible}
@@ -3014,7 +3874,6 @@ const styles = StyleSheet.create({
     padding: 16,
     borderRadius: 8,
     alignItems: 'center',
-    marginBottom: 20,
   },
   createButtonText: {
     color: '#fff',
@@ -3284,6 +4143,55 @@ const styles = StyleSheet.create({
     gap: 12,
     backgroundColor: '#FAFAFA',
   },
+  cambioCollapsableMain: {
+    width: '100%',
+    marginBottom: 10,
+    backgroundColor: '#fff',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    overflow: 'hidden',
+  },
+  cambioCollapsableHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: '#F8F9FA',
+  },
+  cambioCollapsableTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#007AFF',
+    flex: 1,
+  },
+  cambioCollapsableContent: {
+    padding: 12,
+    backgroundColor: '#F8F9FA',
+    gap: 8,
+  },
+  changeDescriptionContainer: {
+    marginBottom: 8,
+  },
+  changeDescription: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: '#666',
+  },
+  filterGroupSearch: {
+    marginBottom: 12,
+  },
+  filterLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 8,
+    color: '#000000',
+  },
+  createdActionButton: {
+    flex: 1,
+    marginTop: 8,
+  },
   repetitionModalContainer: {
     width: '100%',
     maxWidth: 600,
@@ -3552,6 +4460,107 @@ const styles = StyleSheet.create({
     color: '#007AFF',
     fontWeight: '600',
     textAlign: 'center',
+  },
+  
+  editButton: {
+    marginTop: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: '#007AFF',
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
+  editButtonDisabled: {
+    opacity: 0.5,
+  },
+  editButtonText: {
+    color: '#fff',
+    fontWeight: '600',
+  },
+  editButtonOutline: {
+    marginTop: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    borderWidth: 1,
+    borderColor: '#007AFF',
+    borderRadius: 8,
+    paddingVertical: 10,
+  },
+  editButtonOutlineText: {
+    color: '#007AFF',
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  changesButton: {
+    marginTop: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: '#5856D6' , // Púrpura oscuro
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
+  changesButtonDisabled: {
+    opacity: 0.5,
+  },
+  changesButtonText: {
+    color: '#fff',
+    fontWeight: '600',
+  },
+  changesButtonOutline: {
+    marginTop: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    borderWidth: 1,
+    borderColor: '#5856D6',
+    borderRadius: 8,
+    paddingVertical: 10,
+  },
+  changesButtonOutlineText: {
+    color: '#5856D6',
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  
+  deleteButton: {
+    marginTop: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: '#F44336' , // Rojo oscuro
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
+  deleteButtonDisabled: {
+    opacity: 0.5,
+  },
+  deleteButtonText: {
+    color: '#fff',
+    fontWeight: '600',
+  },
+  deleteButtonOutline: {
+    marginTop: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    borderWidth: 1,
+    borderColor: '#F44336',
+    borderRadius: 8,
+    paddingVertical: 10,
+  },
+  deleteButtonOutlineText: {
+    color: '#F44336',
+    fontWeight: '600',
+    textAlign: 'center', 
   },
   assignedList: {
     marginTop: 12,

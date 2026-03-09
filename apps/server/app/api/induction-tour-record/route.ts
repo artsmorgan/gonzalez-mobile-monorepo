@@ -219,11 +219,6 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ status: false, message: "empleado_id inválido" }, { status: 400 });
         }
 
-        // Validar firma_empleado
-        if (!firma_empleado || String(firma_empleado).trim().length === 0) {
-            return NextResponse.json({ status: false, message: "firma_empleado es requerida" }, { status: 400 });
-        }
-
         const fechaParsed = parseFechaInput(fecha);
 
         // Autocompletar campos desde la marca
@@ -245,8 +240,14 @@ export async function POST(req: NextRequest) {
             temas_desarrollados: temas_desarrollados ? String(temas_desarrollados) : "[]",
             aspectos_especificos: aspectos_especificos ? String(aspectos_especificos) : "[]",
             participantes: participantes ? String(participantes) : "[]",
-            firma_supervisor: firma_supervisor ? String(firma_supervisor) : "",
-            firma_empleado: firma_empleado ? String(firma_empleado).trim() : "",
+            firma_supervisor:
+                firma_supervisor != null && String(firma_supervisor).trim().length > 0
+                    ? String(firma_supervisor).trim()
+                    : null,
+            firma_empleado:
+                firma_empleado != null && String(firma_empleado).trim().length > 0
+                    ? String(firma_empleado).trim()
+                    : null,
             firma_responsable: firma_responsable ? String(firma_responsable) : "",
             created_at: createdAt.toISOString(),
             created_by: createdBy.toString()
@@ -296,6 +297,9 @@ export async function POST(req: NextRequest) {
                             temas_desarrollados: newRecordObj.temas_desarrollados,
                             aspectos_especificos: newRecordObj.aspectos_especificos,
                             participantes: newRecordObj.participantes,
+                            firma_supervisor: newRecordObj.firma_supervisor,
+                            firma_empleado: newRecordObj.firma_empleado,
+                            firma_responsable: newRecordObj.firma_responsable,
                         },
                     }]),
                     created_at: createdAt.toISOString(),

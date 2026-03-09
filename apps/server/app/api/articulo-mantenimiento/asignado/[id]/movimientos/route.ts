@@ -14,10 +14,23 @@ function parseDateOnly(value: any): Date | null {
 
 function parseTimeOnly(value: any): Date | null {
   if (!value) return null;
-  const s = String(value);
-  const d = s.includes("T") ? new Date(s) : new Date(`1970-01-01T${s}`);
-  if (isNaN(d.getTime())) return null;
-  return d;
+  const s = String(value).trim();
+  if (s.includes("T")) return new Date(s);
+  const m = s.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (!m) return null;
+  const hh = Math.min(23, Math.max(0, Number(m[1])));
+  const mm = Math.min(59, Math.max(0, Number(m[2])));
+  const ss = m[3] != null ? Math.min(59, Math.max(0, Number(m[3]))) : 0;
+  return new Date(Date.UTC(1970, 0, 1, hh, mm, ss, 0));
+}
+
+function timeToHHmm(val: any): string | null {
+  if (val == null) return null;
+  const d = val instanceof Date ? val : (typeof val === "string" ? new Date(val) : null);
+  if (!d || Number.isNaN(d.getTime())) return null;
+  const hh = d.getUTCHours();
+  const mm = d.getUTCMinutes();
+  return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
 }
 
 async function getMarcaDiaOrFail(req: NextRequest, marcaId: number) {
@@ -97,7 +110,13 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
       }
     });
 
-    return NextResponse.json({ status: true, data: rows }, { status: 200 });
+    const rowsArray = Array.isArray(rows) ? rows : [];
+    const withHora = rowsArray.map((r: any) => ({
+      ...r,
+      hora: timeToHHmm(r.hora) ?? r.hora,
+    }));
+
+    return NextResponse.json({ status: true, data: withHora }, { status: 200 });
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in GET /api/articulo-mantenimiento/asignado/[id]/movimientos:", errorMessage);
@@ -146,8 +165,6 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
       telefono,
       entrega,
       recibe,
-      firma_entrega,
-      firma_recibe,
       firma_responsable,
     ];
     if (requiredStrings.some((v) => typeof v !== "string" || v.trim().length === 0)) {
@@ -170,8 +187,14 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
           recibe: String(recibe),
           fecha: fechaDate.toISOString(),
           hora: horaDate.toISOString(),
-          firma_entrega: String(firma_entrega),
-          firma_recibe: String(firma_recibe),
+          firma_entrega:
+            firma_entrega != null && typeof firma_entrega === "string" && firma_entrega.trim().length > 0
+              ? firma_entrega.trim()
+              : null,
+          firma_recibe:
+            firma_recibe != null && typeof firma_recibe === "string" && firma_recibe.trim().length > 0
+              ? firma_recibe.trim()
+              : null,
           firma_responsable: String(firma_responsable),
         }
       }
@@ -191,6 +214,9 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
         { prop: "recibe", before: null, after: String(recibe) },
         { prop: "fecha", before: null, after: fechaDate.toISOString() },
         { prop: "hora", before: null, after: horaDate.toISOString() },
+        { prop: "firma_entrega", before: null, after: firma_entrega != null && typeof firma_entrega === "string" && firma_entrega.trim().length > 0 ? firma_entrega.trim() : null },
+        { prop: "firma_recibe", before: null, after: firma_recibe != null && typeof firma_recibe === "string" && firma_recibe.trim().length > 0 ? firma_recibe.trim() : null },
+        { prop: "firma_responsable", before: null, after: String(firma_responsable) },
       ];
       await callDynamicPrisma({
         req,

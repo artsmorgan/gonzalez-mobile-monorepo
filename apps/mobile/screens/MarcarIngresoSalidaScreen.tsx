@@ -94,6 +94,7 @@ interface AttendanceErrorResponse {
   status: false;
   message: string;
   absent?: boolean; // Dato absent puede ser opcional
+  marca_id?: number;
 }
 
 type AttendanceResponse = AttendanceSuccessResponse | AttendanceErrorResponse;
@@ -110,6 +111,7 @@ export default function MarcarIngresoSalidaScreen() {
   const [isUpdating, setIsUpdating] = useState(false);
   const [isProcessingMark, setIsProcessingMark] = useState(false);
   const [processingType, setProcessingType] = useState<'entrada' | 'salida' | null>(null);
+  const [revertMarcaId, setRevertMarcaId] = useState<number | null>(null);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [exitReason, setExitReason] = useState('');
   const [showAbsentReasonForm, setShowAbsentReasonForm] = useState(false);
@@ -326,15 +328,26 @@ export default function MarcarIngresoSalidaScreen() {
       }
 
       if (result) {
+        // Si la actualización periódica fue exitosa, limpiamos cualquier posible marca pendiente de revertir
+        setRevertMarcaId(null);
         await setCurrentAttendanceData(marca_send, horaAccionValue);
       } else {
-        if (data && typeof data === 'object' && 'absent' in data && data.absent !== undefined && data.absent === true) {
-          // Show absent reason form
+        const errorData = data as AttendanceErrorResponse;
+
+        // Si viene absent:true, mostramos el formulario de ausencia
+        if (errorData && typeof errorData === 'object' && errorData.absent === true) {
           setShowAbsentReasonForm(true);
-          setErrorMessage((data as AttendanceErrorResponse).message);
+          setErrorMessage(errorData.message);
           return;
         }
-        setErrorMessage((data as AttendanceErrorResponse).message);
+
+        // Si viene un marca_id junto con status:false, habilitamos el botón de "Revertir salida"
+        if (errorData && errorData.marca_id !== undefined && errorData.marca_id !== null) {
+          console.log("Marca ID", errorData.marca_id);
+          setRevertMarcaId(errorData.marca_id);
+        }
+
+        setErrorMessage(errorData.message);
       }
     } catch (error) {
       console.error('Error fetching attendance status:', error);
@@ -390,10 +403,11 @@ export default function MarcarIngresoSalidaScreen() {
 
     const action = attendanceData.estado === 'No ingresado' ? 'ingresar' : 'salir';
     const actionText = attendanceData.estado === 'No ingresado' ? 'Ingresar' : 'Salir';
+    const actionExtraText = attendanceData.estado === 'No ingresado' ? '' : ' Si lo haces, no podrás acceder a la mayoría de las opciones del menú.';
 
     Alert.alert(
       'Confirmar acción',
-      `¿Estás seguro de que deseas ${action}?`,
+      `¿Estás seguro de que deseas ${action}?${actionExtraText}`,
       [
         {
           text: 'Cancelar',
@@ -507,9 +521,27 @@ export default function MarcarIngresoSalidaScreen() {
     }
 
     if (data.status) {
+      // Si la actualización fue exitosa, limpiamos cualquier posible marca pendiente de revertir
+      setRevertMarcaId(null);
       try {
         if (type === 'entrada') {
           if (attendanceData) {
+            const access_token = await AsyncStorage.getItem('access_token') || '';
+            const refresh_token = await AsyncStorage.getItem('refresh_token') || '';
+            const token_created_at = await AsyncStorage.getItem('token_created_at') || '';
+            const disconnected_info = await AsyncStorage.getItem('disconnected_info') || '';
+            const server_time = await AsyncStorage.getItem('server_time') || '';
+            const main_structure_cache = await AsyncStorage.getItem('main_structure_cache') || '';
+
+            await AsyncStorage.clear();
+            
+            await AsyncStorage.setItem('access_token', access_token);
+            await AsyncStorage.setItem('refresh_token', refresh_token);
+            await AsyncStorage.setItem('token_created_at', token_created_at);
+            await AsyncStorage.setItem('disconnected_info', disconnected_info);
+            await AsyncStorage.setItem('server_time', server_time);
+            await AsyncStorage.setItem('main_structure_cache', main_structure_cache);
+
             attendanceData.marca.hora_entrada_digitada = new Date(horaAccion).toISOString();
             await AsyncStorage.setItem('current_marca', JSON.stringify(attendanceData.marca));
             await Promise.all([
@@ -531,8 +563,11 @@ export default function MarcarIngresoSalidaScreen() {
               getLlaves(attendanceData.marca.id),
               getLlaveros(attendanceData.marca.id),
               getCategoriesMantenimiento(),
-              getMainStructure()
             ]);
+
+            if (!main_structure_cache || main_structure_cache === '') {
+              await getMainStructure();
+            }
           }
         }
         else {
@@ -552,6 +587,11 @@ export default function MarcarIngresoSalidaScreen() {
           : 'Salida registrada correctamente'
       );
     } else {
+      // Si el backend devuelve una marca específica para revertir, guardamos su ID
+      if (data && typeof data.marca_id === 'number') {
+        setRevertMarcaId(data.marca_id);
+      }
+
       Alert.alert(
         'Error',
         data.message
@@ -1219,6 +1259,62 @@ export default function MarcarIngresoSalidaScreen() {
     navigation.navigate('Home');
   };
 
+  const performRevertLeaving = async (marcaId: number) => {
+    try {
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) {
+        throw new Error('Server URL not configured');
+      }
+
+      const response = await authedFetch({
+        url: `${apiUrl}/api/attendance/${marcaId}/revert-leaving`,
+        init: {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        },
+        refreshAccessToken,
+        logout,
+      });
+
+      if (!response) return;
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      if (data.status) {
+        Alert.alert('Éxito', 'La salida ha sido revertida correctamente.');
+        setRevertMarcaId(null);
+        await fetchAttendanceStatus();
+      } else {
+        Alert.alert('Error', data.message || 'No se pudo revertir la salida.');
+      }
+    } catch (error) {
+      console.error('Error reverting leaving:', error);
+      Alert.alert('Error', 'No se pudo revertir la salida. Por favor, intenta nuevamente.');
+    }
+  };
+
+  const handleRevertLeaving = () => {
+    if (!revertMarcaId) return;
+
+    Alert.alert(
+      'Confirmar',
+      '¿Deseas revertir la salida registrada?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Revertir salida',
+          style: 'destructive',
+          onPress: () => performRevertLeaving(revertMarcaId),
+        },
+      ],
+    );
+  };
+
   const handleBack = () => {
     navigation.goBack();
   };
@@ -1874,6 +1970,8 @@ export default function MarcarIngresoSalidaScreen() {
             </TouchableOpacity>
           </ThemedView>
           {/* Test Button - Always Visible */}
+          
+          {true && (
           <ThemedView style={styles.testButtonContainer}>
             <TouchableOpacity
               style={[
@@ -1886,6 +1984,7 @@ export default function MarcarIngresoSalidaScreen() {
               </ThemedText>
             </TouchableOpacity>
           </ThemedView>
+          )}
 
           {/* Content Section */}
           {isLoadingLocation ? (
@@ -1993,6 +2092,16 @@ export default function MarcarIngresoSalidaScreen() {
               )}
 
               <ThemedText style={styles.errorText}>{getActionIcon('warning')} {errorMessage}</ThemedText>
+                {revertMarcaId !== null && (
+                  <TouchableOpacity
+                    style={styles.revertButton}
+                    onPress={handleRevertLeaving}
+                  >
+                    <ThemedText style={styles.revertButtonText}>
+                      Revertir salida
+                    </ThemedText>
+                  </TouchableOpacity>
+                )}
               <TouchableOpacity
                 style={styles.retryButton}
                 onPress={fetchAttendanceStatus}
@@ -2119,9 +2228,20 @@ export default function MarcarIngresoSalidaScreen() {
                   {isUpdating ? (
                     <ActivityIndicator size="small" color="#FFFFFF" />
                   ) : (
-                    <ThemedText style={styles.actionButtonText}>
-                      {attendanceData.estado === 'No ingresado' ? getActionIcon('start') : getActionIcon('end')}
-                    </ThemedText>
+                    <ThemedView style={[{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 8,
+                      backgroundColor: attendanceData.estado === 'No ingresado' ? '#34C759' : '#FF3B30',
+                    }]}>
+                      <ThemedText style={styles.actionButtonText}>
+                        {attendanceData.estado === 'No ingresado' ? 'Marcar ingreso' : 'Marcar salida'}
+                      </ThemedText>
+                      <ThemedText style={styles.actionButtonText}>
+                        {attendanceData.estado === 'No ingresado' ? getActionIcon('start') : getActionIcon('end')}
+                      </ThemedText>
+                    </ThemedView>
                   )}
                 </TouchableOpacity>
               </ThemedView>
@@ -2324,6 +2444,20 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
+  revertButton: {
+    marginTop: 12,
+    backgroundColor: '#FF3B30',
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  revertButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+  },
   contentContainer: {
     flex: 1,
     gap: 30,
@@ -2495,6 +2629,13 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 18,
     fontWeight: '700',
+  },
+  actionButtonTextContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#007AFF',
   },
   loadingText: {
     textAlign: 'center',

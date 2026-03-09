@@ -38,6 +38,92 @@ interface ApiResponse {
   message: string;
 }
 
+export const listCreatedActivitiesByPuesto = async ({
+  puestoId,
+  refreshAccessToken,
+  logout,
+}: {
+  puestoId: number;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}): Promise<{ status: boolean; message?: string; actividades?: any[] }> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) throw new Error('Server URL not configured');
+
+    const response = await authedFetch({
+      url: `${apiUrl}/api/activities/created/puesto/${puestoId}`,
+      init: { method: 'GET' },
+      refreshAccessToken,
+      logout,
+    });
+    if (!response) throw new Error('Sesión expirada');
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error listing created activities by puesto:', error);
+    return { status: false, message: 'Error al listar actividades creadas' };
+  }
+};
+
+export const updateCreatedActivity = async ({
+  activityId,
+  requestData,
+  refreshAccessToken,
+  logout,
+}: {
+  activityId: number;
+  requestData: any;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) throw new Error('Server URL not configured');
+    const response = await authedFetch({
+      url: `${apiUrl}/api/activities/created/${activityId}`,
+      init: {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestData),
+      },
+      refreshAccessToken,
+      logout,
+    });
+    if (!response) throw new Error('Sesión expirada');
+    return await response.json();
+  } catch (error) {
+    console.error('Error updating created activity:', error);
+    return { status: false, message: 'Error al actualizar actividad' };
+  }
+};
+
+export const deleteCreatedActivity = async ({
+  activityId,
+  refreshAccessToken,
+  logout,
+}: {
+  activityId: number;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) throw new Error('Server URL not configured');
+    const response = await authedFetch({
+      url: `${apiUrl}/api/activities/created/${activityId}`,
+      init: { method: 'DELETE' },
+      refreshAccessToken,
+      logout,
+    });
+    if (!response) throw new Error('Sesión expirada');
+    return await response.json();
+  } catch (error) {
+    console.error('Error deleting created activity:', error);
+    return { status: false, message: 'Error al eliminar actividad' };
+  }
+};
+
 export const createActivity = async ({
   requestData,
   refreshAccessToken,

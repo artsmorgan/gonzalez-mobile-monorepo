@@ -607,8 +607,8 @@ export default function MantenimientoEquipoScreen() {
     const [showMovFechaPicker, setShowMovFechaPicker] = useState(false);
     const [showMovHoraPicker, setShowMovHoraPicker] = useState(false);
 
-    const [movFirmaEntrega, setMovFirmaEntrega] = useState('');
-    const [movFirmaRecibe, setMovFirmaRecibe] = useState('');
+    const [movFirmaEntrega, setMovFirmaEntrega] = useState<string>('');
+    const [movFirmaRecibe, setMovFirmaRecibe] = useState<string>('');
     const [movFirmaResponsable, setMovFirmaResponsable] = useState('');
     const [isGeneratingMovFirma, setIsGeneratingMovFirma] = useState(false);
 
@@ -763,7 +763,8 @@ export default function MantenimientoEquipoScreen() {
 
     const handleArmaSignatureRead = useCallback((signature: string) => {
         setIsReadingArmaSignature(true);
-        setArmaFirma(signature);
+        const uri = formatSignatureForDisplay(signature) || signature;
+        setArmaFirma(uri);
         setTimeout(() => {
             setIsReadingArmaSignature(false);
             closeArmaSignatureModal();
@@ -889,6 +890,23 @@ export default function MantenimientoEquipoScreen() {
         } catch {
             return null;
         }
+    };
+
+    /** Convierte base64 o data URI a URI válida para Image (sin saltos de línea ni espacios en el base64). */
+    const formatSignatureForDisplay = (value?: string | null): string => {
+        if (!value || typeof value !== 'string') return '';
+        const trimmed = value.trim();
+        if (!trimmed) return '';
+        if (trimmed.startsWith('data:')) {
+            const base64Match = trimmed.match(/^data:[^;]+;base64,(.+)$/s);
+            if (base64Match) {
+                const base64Clean = base64Match[1].replace(/\s+/g, '');
+                return `data:image/png;base64,${base64Clean}`;
+            }
+            return trimmed;
+        }
+        const base64Clean = trimmed.replace(/\s+/g, '');
+        return `data:image/png;base64,${base64Clean}`;
     };
 
     const requestLocation = async () => {
@@ -1023,8 +1041,13 @@ export default function MantenimientoEquipoScreen() {
             if (cacheStr) {
                 const parsed = JSON.parse(cacheStr);
                 if (Array.isArray(parsed)) setStructure(parsed);
+                else setStructure([]);
+            }
+            else {
+                setStructure([]);
             }
 
+            /*
             const isConnected = await getConnectionStatus();
             if (!isConnected) return;
 
@@ -1051,6 +1074,7 @@ export default function MantenimientoEquipoScreen() {
                     await AsyncStorage.setItem('main_structure_cache', JSON.stringify(data.structure));
                 }
             }
+            */
         } catch (e) {
             console.error('Error fetching main structure:', e);
         }
@@ -1545,7 +1569,7 @@ export default function MantenimientoEquipoScreen() {
                 setArmaFotoAntesLocal(null);
                 setArmaFotoDespuesLocal(null);
                 setArmaArmeroNombre(typeof parsed?.armero_nombre === 'string' ? parsed.armero_nombre : '');
-                setArmaFirma(typeof parsed?.firma === 'string' ? parsed.firma : '');
+                setArmaFirma(typeof parsed?.firma === 'string' ? (formatSignatureForDisplay(parsed.firma) || parsed.firma) : '');
                 setMantArmasForm(String(raw));
             } else {
                 setEsArma(false);
@@ -1887,7 +1911,7 @@ export default function MantenimientoEquipoScreen() {
         const isConnected = await getConnectionStatus();
         const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
         if (!apiUrl) {
-            setSubmitResponse({ type: 'error', message: 'Server URL not configured' });
+            Alert.alert('Error', 'Server URL not configured');
             setIsSubmitting(false);
             return;
         }
@@ -1950,12 +1974,16 @@ export default function MantenimientoEquipoScreen() {
         //   pero NO enviamos marcar_como_resuelto=true para no sobre-escribir la fecha en el backend.
         if (marcarComoResuelto) {
             // Fecha solución desde getHoraAccion (tiempo servidor ajustado) y enviar a API
+            const horaAccion = await getHoraAccion(); // ms epoch ajustado
+            if (!horaAccion) {
+                Alert.alert('Error', 'No se pudo obtener la hora');
+                return;
+            }
             let iso = '';
             try {
-                const horaAccion = await getHoraAccion(); // ms epoch ajustado
-                iso = new Date(Number(horaAccion)).toISOString();
+                iso = new Date(horaAccion).toISOString();
             } catch {
-                iso = new Date().toISOString();
+                iso = new Date(horaAccion).toISOString();
             }
 
             requestData.marcar_como_resuelto = true;
@@ -2035,7 +2063,7 @@ export default function MantenimientoEquipoScreen() {
                             mantenimientoId: selectedActivo.id,
                             patch: mainStructurePatch,
                         });
-                        setSubmitResponse({ type: 'success', message: data.message || 'Mantenimiento actualizado correctamente' });
+                        Alert.alert('Éxito', data.message || 'Mantenimiento actualizado correctamente');
                         setTimeout(async () => {
                             setIsUpdating(false);
                             setSelectedActivo(null);
@@ -2047,13 +2075,13 @@ export default function MantenimientoEquipoScreen() {
                             await fetchReportes();
                         }, 2000);
                     } else {
-                        setSubmitResponse({ type: 'error', message: data.message || 'No se pudo actualizar el mantenimiento' });
+                        Alert.alert('Error', data.message || 'No se pudo actualizar el mantenimiento');
                     }
                 } else {
-                    setSubmitResponse({ type: 'error', message: 'No se pudo actualizar el mantenimiento' });
+                    Alert.alert('Error', 'No se pudo actualizar el mantenimiento');
                 }
             } catch (error: any) {
-                setSubmitResponse({ type: 'error', message: error.message || 'No se pudo actualizar el mantenimiento' });
+                Alert.alert('Error', error.message || 'No se pudo actualizar el mantenimiento');
             } finally {
                 setIsSubmitting(false);
             }
@@ -2120,7 +2148,7 @@ export default function MantenimientoEquipoScreen() {
                 patch: mainStructurePatch,
             });
 
-            setSubmitResponse({ type: 'success', message: 'Los cambios se sincronizarán cuando vuelva la conexión.' });
+            Alert.alert('Éxito', 'Los cambios se sincronizarán cuando vuelva la conexión.');
             setTimeout(async () => {
                 setIsUpdating(false);
                 setSelectedActivo(null);
@@ -2341,14 +2369,7 @@ export default function MantenimientoEquipoScreen() {
             Alert.alert('Error', `Campo requerido: ${missing.label}`);
             return false;
         }
-        if (!movFirmaEntrega) {
-            Alert.alert('Error', 'Debes registrar la firma de entrega');
-            return false;
-        }
-        if (!movFirmaRecibe) {
-            Alert.alert('Error', 'Debes registrar la firma de recibe');
-            return false;
-        }
+        // Firma de entrega y firma de recibe son opcionales; solo se requiere la firma responsable.
         if (!movFirmaResponsable) {
             Alert.alert('Error', 'Debes registrar la firma responsable');
             return false;
@@ -2499,12 +2520,17 @@ export default function MantenimientoEquipoScreen() {
         setIsMovFiltersExpanded(false);
     };
 
-    const startMovCreating = () => {
+    const startMovCreating = async () => {
+        const horaAccion = await getHoraAccion();
+        if (!horaAccion) {
+            Alert.alert('Error', 'No se pudo obtener la hora de acción');
+            return;
+        }
         resetMovForm();
         setMovIsCreating(true);
         setMovEditing(null);
-        setMovFecha(dateToLocalString(new Date()));
-        setMovHora(timeToHHMMSS(new Date()));
+        setMovFecha(dateToLocalString(new Date(horaAccion)));
+        setMovHora(timeToHHMMSS(new Date(horaAccion)));
     };
 
     const startMovEditing = (m: MovimientoArticuloMantenimientoItem) => {
@@ -3115,7 +3141,7 @@ export default function MantenimientoEquipoScreen() {
                         <ThemedText style={styles.armasSectionTitle}>Firma:</ThemedText>
                         <TouchableOpacity style={styles.armasSignatureBox} onPress={openArmaSignatureModal} activeOpacity={0.85}>
                             {armaFirma ? (
-                                <Image source={{ uri: armaFirma }} style={styles.armasSignatureImage} resizeMode="contain" />
+                                <Image key={`arma-firma-${armaFirma.length}`} source={{ uri: armaFirma.startsWith('data:') ? armaFirma : formatSignatureForDisplay(armaFirma) || '' }} style={styles.armasSignatureImage} resizeMode="contain" />
                             ) : (
                                 <ThemedText style={styles.armasSignatureHint}>Toca aquí para firmar</ThemedText>
                             )}
@@ -3604,8 +3630,6 @@ export default function MantenimientoEquipoScreen() {
 
             <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
                 <ThemedView style={styles.content}>
-                    {error ? <ThemedText style={styles.errorText}>{error}</ThemedText> : null}
-
                     <ThemedView style={styles.titleContainer}>
                         <ThemedText type="title" style={styles.title}>
                             <Ionicons name="construct" size={22} color="#000000" /> Equipo del puesto
@@ -4003,7 +4027,7 @@ export default function MantenimientoEquipoScreen() {
                                         <Ionicons name="time-outline" size={18} color="#007AFF" />
                                     </TouchableOpacity>
 
-                                    <ThemedText style={styles.sectionTitle}>Firma entrega *</ThemedText>
+                                    <ThemedText style={styles.sectionTitle}>Firma entrega (opcional)</ThemedText>
                                     {movFirmaEntrega ? (
                                         <ThemedView style={styles.signaturePreviewContainer}>
                                             <Image source={{ uri: movFirmaEntrega }} style={styles.signaturePreview} resizeMode="contain" />
@@ -4017,7 +4041,7 @@ export default function MantenimientoEquipoScreen() {
                                         <ThemedText style={styles.openSignatureButtonText}>{movFirmaEntrega ? 'Modificar firma' : 'Agregar firma'}</ThemedText>
                                     </TouchableOpacity>
 
-                                    <ThemedText style={styles.sectionTitle}>Firma recibe *</ThemedText>
+                                    <ThemedText style={styles.sectionTitle}>Firma recibe (opcional)</ThemedText>
                                     {movFirmaRecibe ? (
                                         <ThemedView style={styles.signaturePreviewContainer}>
                                             <Image source={{ uri: movFirmaRecibe }} style={styles.signaturePreview} resizeMode="contain" />
@@ -4359,12 +4383,83 @@ export default function MantenimientoEquipoScreen() {
                                                     {(Array.isArray(parsed) ? parsed : []).length > 0 && (
                                                         <ThemedView style={styles.filterGroupSearch}>
                                                             <ThemedText style={styles.filterLabel}>Cambios:</ThemedText>
-                                                            {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => (
-                                                                <ThemedText key={`c-${row.id}-${idx}`} style={styles.changeDescription}>
-                                                                    <ThemedText style={{ fontWeight: '800' }}>{String(c?.prop ?? '-')}: </ThemedText>
-                                                                    {String(c?.after ?? '')}
-                                                                </ThemedText>
-                                                            ))}
+                                                            {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => {
+                                                                const prop = String(c?.prop ?? '-');
+                                                                const value = c?.after;
+                                                                const isFirmaManual = prop === 'firma_entrega' || prop === 'firma_recibe';
+                                                                const isFirmaResponsable = prop === 'firma_responsable';
+                                                                const isMantArmasForm = prop === 'mant_armas_form';
+                                                                const isMantArmasFormFirma = prop === 'mant_armas_form.firma' || (prop.endsWith('.firma') && prop.includes('mant_armas'));
+
+                                                                if (isMantArmasFormFirma && value != null && typeof value === 'string') {
+                                                                    return (
+                                                                        <ThemedView key={`c-${row.id}-${idx}`} style={styles.changeDescriptionContainer}>
+                                                                            <ThemedText style={styles.changeDescription}>
+                                                                                <ThemedText style={{ fontWeight: '800' }}>{prop}: </ThemedText>
+                                                                            </ThemedText>
+                                                                            <Image source={{ uri: formatSignatureForDisplay(value) || '' }} style={styles.cambioSignatureImage} resizeMode="contain" />
+                                                                        </ThemedView>
+                                                                    );
+                                                                }
+
+                                                                if (isMantArmasForm && value != null) {
+                                                                    let armasObj: any = null;
+                                                                    try {
+                                                                        armasObj = typeof value === 'string' ? JSON.parse(value) : value;
+                                                                    } catch {
+                                                                        armasObj = null;
+                                                                    }
+                                                                    if (armasObj && typeof armasObj === 'object') {
+                                                                        const firmaVal = armasObj.firma;
+                                                                        return (
+                                                                            <ThemedView key={`c-${row.id}-${idx}`} style={styles.changeDescriptionContainer}>
+                                                                                <ThemedText style={[styles.changeDescription, { fontWeight: '800' }]}>{prop}:</ThemedText>
+                                                                                {Object.entries(armasObj).map(([k, v]) => {
+                                                                                    if (k === 'firma') {
+                                                                                        return (
+                                                                                            <ThemedView key={`${row.id}-${idx}-${k}`} style={styles.changeDescriptionContainer}>
+                                                                                                <ThemedText style={styles.changeDescription}>
+                                                                                                    <ThemedText style={{ fontWeight: '800' }}>firma (arma): </ThemedText>
+                                                                                                </ThemedText>
+                                                                                                {v ? (
+                                                                                                    <Image source={{ uri: formatSignatureForDisplay(typeof v === 'string' ? v : String(v)) || '' }} style={styles.cambioSignatureImage} resizeMode="contain" />
+                                                                                                ) : (
+                                                                                                    <ThemedText style={styles.changeDescription}>—</ThemedText>
+                                                                                                )}
+                                                                                            </ThemedView>
+                                                                                        );
+                                                                                    }
+                                                                                    const displayVal = v !== null && v !== undefined && typeof v === 'object' && !(v instanceof Date)
+                                                                                        ? JSON.stringify(v)
+                                                                                        : String(v ?? '');
+                                                                                    return (
+                                                                                        <ThemedText key={`${row.id}-${idx}-${k}`} style={styles.changeDescription}>
+                                                                                            <ThemedText style={{ fontWeight: '800' }}>{k}: </ThemedText>
+                                                                                            {displayVal}
+                                                                                        </ThemedText>
+                                                                                    );
+                                                                                })}
+                                                                            </ThemedView>
+                                                                        );
+                                                                    }
+                                                                }
+
+                                                                return (
+                                                                    <ThemedView key={`c-${row.id}-${idx}`} style={styles.changeDescriptionContainer}>
+                                                                        <ThemedText style={styles.changeDescription}>
+                                                                            <ThemedText style={{ fontWeight: '800' }}>{prop}: </ThemedText>
+                                                                            {!isFirmaManual && !isFirmaResponsable && !isMantArmasForm && !isMantArmasFormFirma && String(value ?? '')}
+                                                                            {isFirmaResponsable && typeof value === 'string' && value.trim() && (() => {
+                                                                                const info = decodeFirmaHash(value);
+                                                                                return info ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${info.timestamp || 'N/A'}` : 'Firma (formato no decodificable)';
+                                                                            })()}
+                                                                        </ThemedText>
+                                                                        {isFirmaManual && value && (
+                                                                            <Image source={{ uri: formatSignatureForDisplay(value) }} style={styles.cambioSignatureImage} resizeMode="contain" />
+                                                                        )}
+                                                                    </ThemedView>
+                                                                );
+                                                            })}
                                                         </ThemedView>
                                                     )}
                                                 </ThemedView>
@@ -4735,6 +4830,8 @@ const styles = StyleSheet.create({
         color: '#666',
         marginBottom: 8,
     },
+    changeDescriptionContainer: { marginBottom: 8 },
+    cambioSignatureImage: { marginTop: 6, height: 80, width: 160, backgroundColor: '#f0f0f0', borderRadius: 4 },
 
     listItemButtons: { marginTop: 10, flexDirection: 'row', justifyContent: 'space-between', gap: 12 },
     listItemButton: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 12, borderRadius: 8, gap: 8 },

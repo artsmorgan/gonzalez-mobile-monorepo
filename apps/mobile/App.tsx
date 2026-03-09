@@ -121,6 +121,7 @@ import MutuosAcuerdosScreen from './screens/MutuosAcuerdosScreen';
 import EntregaPuestosScreen from './screens/EntregaPuestosScreen';
 import ChecklistSupervisionScreen from './screens/ChecklistSupervisionScreen';
 import PuestoUbicacionScreen from './screens/PuestoUbicacionScreen';
+import JerarquiaScreen from './screens/JerarquiaScreen';
 import { createStaffEvaluation, deleteStaffEvaluation } from './hooks/staffEvaluationsFunctions';
 
 export type RootStackParamList = {
@@ -225,6 +226,7 @@ export type RootStackParamList = {
   EntregaPuestos: undefined;
   ChecklistSupervision: undefined;
   PuestoUbicacion: undefined;
+  Jerarquia: undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -313,6 +315,7 @@ function RootNavigator() {
       <Stack.Screen name="EntregaPuestos" component={EntregaPuestosScreen} />
       <Stack.Screen name="ChecklistSupervision" component={ChecklistSupervisionScreen} />
       <Stack.Screen name="PuestoUbicacion" component={PuestoUbicacionScreen} />
+      <Stack.Screen name="Jerarquia" component={JerarquiaScreen} />
     </Stack.Navigator>
   );
 }
@@ -522,6 +525,10 @@ function AppContent() {
     // Procesar acciones una por una
     for (const action of actions) {
       try {
+        const horaAccion = await getHoraAccion();
+        if (!horaAccion) {
+          return;
+        }
         if (action.type === 'create') {
           console.log('Creando manual de trabajo:', action.id);
           const result = await createJobManual({
@@ -616,6 +623,7 @@ function AppContent() {
                   } catch {
                     filesForVis = [];
                   }
+
                   const newVis = {
                     id: Date.now(),
                     empleado_id: employee?.id || 0,
@@ -624,8 +632,8 @@ function AppContent() {
                     firma_empleado: action.firma,
                     quiz_answear: action.quizAnswear ?? null,
                     approved: null,
-                    created_at: new Date().toISOString(),
-                    updated_at: new Date().toISOString(),
+                    created_at: new Date(horaAccion).toISOString(),
+                    updated_at: new Date(horaAccion).toISOString(),
                     files: filesForVis,
                   };
                   return {
@@ -666,7 +674,7 @@ function AppContent() {
                         ...v,
                         approved: action.approved,
                         approved_pending: false,
-                        updated_at: new Date().toISOString(),
+                        updated_at: new Date(horaAccion).toISOString(),
                       };
                     }
                     return v;

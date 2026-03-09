@@ -179,6 +179,7 @@ export default function InductionTourRecordScreen() {
   const [filterPuestoId, setFilterPuestoId] = useState<number | null>(null);
   const [filterPlazaId, setFilterPlazaId] = useState<number | null>(null);
   const [isHierarchyFiltersExpanded, setIsHierarchyFiltersExpanded] = useState(false);
+  const hasFetchedStructureRef = useRef<boolean>(false);
 
   // Empleado selection states
   const [selectedEmpleadoId, setSelectedEmpleadoId] = useState<number | null>(null);
@@ -766,6 +767,7 @@ export default function InductionTourRecordScreen() {
         throw new Error('Server URL not configured');
       }
 
+      /*
       if (isConnected) {
         const structureRes = await authedFetch({
           url: `${apiUrl}/api/main-structure`,
@@ -792,17 +794,19 @@ export default function InductionTourRecordScreen() {
           else setStructure([]);
         }
       } else {
-        const structureCacheStr = await AsyncStorage.getItem('main_structure_cache');
-        if (structureCacheStr) {
-          try {
-            const parsed = JSON.parse(structureCacheStr);
-            if (Array.isArray(parsed)) setStructure(parsed);
-          } catch {
-            setStructure([]);
-          }
-        } else {
+        
+      }
+      */
+      const structureCacheStr = await AsyncStorage.getItem('main_structure_cache');
+      if (structureCacheStr) {
+        try {
+          const parsed = JSON.parse(structureCacheStr);
+          if (Array.isArray(parsed)) setStructure(parsed);
+        } catch {
           setStructure([]);
         }
+      } else {
+        setStructure([]);
       }
     } catch (error) {
       console.error('Error fetching main structure:', error);
@@ -893,7 +897,14 @@ export default function InductionTourRecordScreen() {
     const cliente = formClientes.find((c: any) => c.id === formClienteId);
     if (!cliente) return [];
     const divisiones = cliente?.division || [];
-    // Recopilar todos los contratos de todas las divisiones del cliente
+
+    // Si hay división seleccionada, solo mostrar contratos de esa división
+    if (formDivisionId) {
+      const division = divisiones.find((d: any) => d.id === formDivisionId);
+      return division?.contratos || [];
+    }
+
+    // Si no hay división seleccionada, recopilar todos los contratos de todas las divisiones del cliente
     const contratos: any[] = [];
     divisiones.forEach((division: any) => {
       division.contratos?.forEach((contrato: any) => {
@@ -903,7 +914,7 @@ export default function InductionTourRecordScreen() {
       });
     });
     return contratos;
-  }, [formClientes, formClienteId]);
+  }, [formClientes, formClienteId, formDivisionId]);
 
   const formSucursales = useMemo(() => {
     const contrato = formContratos.find((c: any) => c.id === formContratoId);
@@ -1023,7 +1034,10 @@ export default function InductionTourRecordScreen() {
   useFocusEffect(
     useCallback(() => {
       loadMarcaContext();
-      fetchMainStructure();
+      if (!hasFetchedStructureRef.current) {
+        fetchMainStructure();
+        hasFetchedStructureRef.current = true;
+      }
       fetchRecords();
       eventBus.on('connectionRestored', fetchRecords);
       return () => {
@@ -1032,8 +1046,13 @@ export default function InductionTourRecordScreen() {
     }, [fetchRecords, fetchMainStructure])
   );
 
-  const resetForm = () => {
-    setFecha(new Date());
+  const resetForm = async () => {
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
+    setFecha(new Date(horaAccion));
     setDivision('Otros');
     setRenglonEdificio('');
     setSupervisorCliente('');
@@ -1076,15 +1095,15 @@ export default function InductionTourRecordScreen() {
     setExpandedFirmaResponsableIds([]);
   };
 
-  const startCreating = () => {
+  const startCreating =  async () => {
     setIsCreating(true);
     setEditingRecord(null);
-    resetForm();
+    await resetForm();
   };
 
-  const cancelCreating = () => {
+  const cancelCreating = async () => {
     setIsCreating(false);
-    resetForm();
+    await resetForm();
   };
 
   const startEditing = (record: InductionTourRecord) => {
@@ -1120,11 +1139,44 @@ export default function InductionTourRecordScreen() {
       }
     }
 
+    const recordAny = record as any;
+    const empresaId = recordAny.empresa_id != null ? Number(recordAny.empresa_id) : null;
+    const clienteId = recordAny.cliente_id != null ? Number(recordAny.cliente_id) : null;
+    const contratoId = recordAny.contrato_id != null ? Number(recordAny.contrato_id) : null;
+    const corpoId = recordAny.corpo_id != null ? Number(recordAny.corpo_id) : null;
+    const puestoId = recordAny.puesto_id != null ? Number(recordAny.puesto_id) : null;
+    const plazaId = recordAny.plaza_id != null ? Number(recordAny.plaza_id) : null;
+
+    // Cargar jerarquía desde main_structure_cache (structure)
+    setFormEmpresaId(empresaId);
+    setFormClienteId(clienteId);
+
+    let divisionIdFound: number | null = null;
+    const divisionName = record.division || 'Otros';
+    if (empresaId != null && clienteId != null && contratoId != null) {
+      const empresa = (Array.isArray(structure) ? structure : []).find((e: any) => e.id === empresaId);
+      const cliente = empresa?.clientes?.find((c: any) => c.id === clienteId);
+      const divisiones = cliente?.division || [];
+      for (const div of divisiones) {
+        const hasContrato = div.contratos?.some((c: any) => c.id === contratoId);
+        if (hasContrato) {
+          divisionIdFound = div.id;
+          break;
+        }
+      }
+    }
+    setFormDivisionId(divisionIdFound);
+    setDivision(divisionName);
+    setFormContratoId(contratoId);
+    setFormCorpoId(corpoId);
+    setFormPuestoId(puestoId);
+    setFormPlazaId(plazaId);
+
     setEditingRecord({
       id: record.id ? String(record.id) : null,
       id_local: record.id_local,
       fecha: record.fecha || '',
-      division: record.division || 'Otros',
+      division: divisionName,
       renglon_edificio: record.renglon_edificio || '',
       supervisor_cliente: record.supervisor_cliente || '',
       supervisor_corporacion: record.supervisor_corporacion || '',
@@ -1150,17 +1202,6 @@ export default function InductionTourRecordScreen() {
         if (!Number.isNaN(d.getTime())) setFecha(d);
       }
     }
-    // Cargar división - buscar el ID de división basado en el nombre
-    const divisionName = record.division || 'Otros';
-    setDivision(divisionName);
-    // Mapear nombre de división al ID (4 = Seguridad, 5 = Aseo y limpieza)
-    if (divisionName === 'Seguridad') {
-      setFormDivisionId(4);
-    } else if (divisionName === 'Aseo y limpieza') {
-      setFormDivisionId(5);
-    } else {
-      setFormDivisionId(null);
-    }
     setTemasDesarrollados(temasArray);
     setAspectosEspecificos(aspectosArray);
     setParticipantes(participantesArray);
@@ -1168,7 +1209,6 @@ export default function InductionTourRecordScreen() {
     setFirmaResponsableHash(record.firma_responsable || '');
 
     // Cargar empleado_id y firma_empleado si existen
-    const recordAny = record as any;
     if (recordAny.empleado_id) {
       const empId = Number(recordAny.empleado_id);
       setSelectedEmpleadoId(empId);
@@ -1195,9 +1235,9 @@ export default function InductionTourRecordScreen() {
     setExpandedParticipanteIndices(participantesArray.map((_, i) => i));
   };
 
-  const cancelEditing = () => {
+  const cancelEditing = async () => {
     setEditingRecord(null);
-    resetForm();
+    await resetForm();
   };
 
   const handleDateChange = (event: any, selectedDate?: Date) => {
@@ -1405,10 +1445,6 @@ export default function InductionTourRecordScreen() {
       return;
     }
 
-    if (!firmaEmpleadoManual || !firmaEmpleadoManual.trim()) {
-      Alert.alert('Error', 'Firma del empleado es obligatoria');
-      return;
-    }
 
     const currentMarcaData = JSON.parse(currentMarca);
 
@@ -1458,13 +1494,13 @@ export default function InductionTourRecordScreen() {
                 });
 
                 if (result.status) {
-                  setSubmitResponse({ type: 'success', message: result.message || 'Registro de inducción y recorrido guardado correctamente' });
+                  Alert.alert('Éxito', result.message || 'Registro de inducción y recorrido guardado correctamente');
                   setTimeout(() => {
                     cancelCreating();
                     fetchRecords();
                   }, 2000);
                 } else {
-                  setSubmitResponse({ type: 'error', message: result.message || 'Error al guardar el registro de inducción y recorrido' });
+                  Alert.alert('Error', result.message || 'Error al guardar el registro de inducción y recorrido');
                 }
               } else {
                 const localId = generateRandomId();
@@ -1482,6 +1518,11 @@ export default function InductionTourRecordScreen() {
 
                 const cacheStr = await AsyncStorage.getItem('evaluations_cache');
                 const cache = cacheStr ? JSON.parse(cacheStr) : [];
+                const horaAccion = await getHoraAccion();
+                if (!horaAccion) {
+                  Alert.alert('Error', 'No se pudo obtener la hora');
+                  return;
+                }
 
                 const newRecordCache: InductionTourRecord = {
                   id: '',
@@ -1499,17 +1540,23 @@ export default function InductionTourRecordScreen() {
                   }))) : null,
                   firma_supervisor: getBase64Only(firmaSupervisor),
                   firma_responsable: firmaResponsableHash.trim(),
-                  created_at: new Date().toISOString(),
+                  created_at: new Date(horaAccion).toISOString(),
                   synced: false,
                 };
-                // Agregar empleado_id y firma_empleado al cache (aunque no estén en el tipo, se guardan en el objeto)
+                // Agregar empleado_id, firma_empleado y jerarquía al cache para poder cargar el formulario al editar
                 (newRecordCache as any).empleado_id = empleadoIdRef.current;
                 (newRecordCache as any).firma_empleado = firmaEmpleadoManual ? String(firmaEmpleadoManual).trim() : '';
+                (newRecordCache as any).empresa_id = formEmpresaId;
+                (newRecordCache as any).cliente_id = formClienteId;
+                (newRecordCache as any).contrato_id = formContratoId;
+                (newRecordCache as any).corpo_id = formCorpoId;
+                (newRecordCache as any).puesto_id = formPuestoId;
+                (newRecordCache as any).plaza_id = formPlazaId;
 
                 cache.push({ ...newRecordCache, type: 'induction_tour_record' });
                 await AsyncStorage.setItem('evaluations_cache', JSON.stringify(cache));
 
-                setSubmitResponse({ type: 'success', message: 'Registro de inducción y recorrido registrado localmente. Se sincronizará cuando haya conexión.' });
+                Alert.alert('Éxito', 'Registro de inducción y recorrido registrado localmente. Se sincronizará cuando haya conexión.');
                 setTimeout(() => {
                   cancelCreating();
                   fetchRecords();
@@ -1517,7 +1564,7 @@ export default function InductionTourRecordScreen() {
               }
             } catch (err) {
               console.error('Error saving record:', err);
-              setSubmitResponse({ type: 'error', message: 'No se pudo guardar el registro de inducción y recorrido' });
+              Alert.alert('Error', 'No se pudo guardar el registro de inducción y recorrido');
             } finally {
               setIsSubmitting(false);
             }
@@ -1548,11 +1595,6 @@ export default function InductionTourRecordScreen() {
 
     if (!selectedEmpleadoId || !empleadoIdRef.current) {
       Alert.alert('Error', 'Empleado es obligatorio');
-      return;
-    }
-
-    if (!firmaEmpleadoManual || !firmaEmpleadoManual.trim()) {
-      Alert.alert('Error', 'Firma del empleado es obligatoria');
       return;
     }
 
@@ -1602,13 +1644,13 @@ export default function InductionTourRecordScreen() {
                 });
 
                 if (result.status) {
-                  setSubmitResponse({ type: 'success', message: result.message || 'Registro de inducción y recorrido actualizado correctamente' });
+                  Alert.alert('Éxito', result.message || 'Registro de inducción y recorrido actualizado correctamente');
                   setTimeout(() => {
                     cancelEditing();
                     fetchRecords();
                   }, 2000);
                 } else {
-                  setSubmitResponse({ type: 'error', message: result.message || 'Error al actualizar el registro de inducción y recorrido' });
+                  Alert.alert('Error', result.message || 'Error al actualizar el registro de inducción y recorrido');
                 }
               } else {
                 const actionsStr = await AsyncStorage.getItem('evaluations_actions');
@@ -1664,7 +1706,7 @@ export default function InductionTourRecordScreen() {
                   await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
                 }
 
-                setSubmitResponse({ type: 'success', message: 'Registro de inducción y recorrido actualizado localmente. Se sincronizará cuando haya conexión.' });
+                Alert.alert('Éxito', 'Registro de inducción y recorrido actualizado localmente. Se sincronizará cuando haya conexión.');
                 setTimeout(() => {
                   cancelEditing();
                   fetchRecords();
@@ -1672,7 +1714,7 @@ export default function InductionTourRecordScreen() {
               }
             } catch (err) {
               console.error('Error updating record:', err);
-              setSubmitResponse({ type: 'error', message: 'No se pudo actualizar el registro de inducción y recorrido' });
+              Alert.alert('Error', 'No se pudo actualizar el registro de inducción y recorrido');
             } finally {
               setIsSubmitting(false);
             }
@@ -2541,7 +2583,7 @@ export default function InductionTourRecordScreen() {
 
                   {/* Firma del empleado */}
                   <ThemedView style={styles.formGroup}>
-                    <ThemedText style={styles.formLabel}>Firma del empleado *</ThemedText>
+                    <ThemedText style={styles.formLabel}>Firma del empleado (Opcional)</ThemedText>
                     {firmaEmpleadoManual ? (
                       <ThemedView style={styles.signaturePreviewContainer}>
                         <Image source={{ uri: firmaEmpleadoManual }} style={styles.signaturePreview} resizeMode="contain" />
@@ -3069,12 +3111,245 @@ export default function InductionTourRecordScreen() {
                           {(Array.isArray(parsed) ? parsed : []).length > 0 && (
                             <ThemedView style={styles.filterGroupSearch}>
                               <ThemedText style={styles.filterLabel}>Cambios:</ThemedText>
-                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => (
-                                <ThemedText key={`c-${row.id}-${idx}`} style={styles.changeDescription}>
-                                  <ThemedText style={{ fontWeight: '800' }}>{String(c?.prop ?? '-')}: </ThemedText>
-                                  {formatChangeValue(c?.prop, c?.after)}
-                                </ThemedText>
-                              ))}
+                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => {
+                                const prop = String(c?.prop ?? '-');
+                                const value = c?.after;
+                                const isFirmaSupervisor = prop === 'firma_supervisor';
+                                const isFirmaEmpleado = prop === 'firma_empleado';
+                                const isFirmaResponsable = prop === 'firma_responsable';
+
+                                if (prop === '__created__' && value && typeof value === 'object') {
+                                  const created: any = value;
+                                  return (
+                                    <React.Fragment key={`c-${row.id}-${idx}-created`}>
+                                      <ThemedView style={styles.changeDescriptionContainer}>
+                                        <ThemedText style={styles.changeDescription}>
+                                          <ThemedText style={{ fontWeight: '800' }}>Registro creado</ThemedText>
+                                        </ThemedText>
+                                      </ThemedView>
+                                      {Object.entries(created).map(([k, v]) => {
+                                        if (k === 'firma_supervisor' || k === 'firma_empleado') {
+                                          const uri =
+                                            formatSignatureForDisplay(
+                                              typeof v === 'string' ? v : v != null ? String(v) : null
+                                            ) ?? '';
+                                          return (
+                                            <ThemedView
+                                              key={`c-${row.id}-${idx}-${k}`}
+                                              style={styles.changeDescriptionContainer}
+                                            >
+                                              <ThemedText style={styles.changeDescription}>
+                                                <ThemedText style={{ fontWeight: '800' }}>{k}: </ThemedText>
+                                              </ThemedText>
+                                              {uri ? (
+                                                <Image
+                                                  source={{ uri }}
+                                                  style={styles.cambioSignatureImage}
+                                                  resizeMode="contain"
+                                                />
+                                              ) : (
+                                                <ThemedText style={styles.changeDescription}>Sin firma</ThemedText>
+                                              )}
+                                            </ThemedView>
+                                          );
+                                        }
+                                        if (k === 'firma_responsable') {
+                                          const info = decodeFirmaHash(
+                                            typeof v === 'string' ? v : v != null ? String(v) : null
+                                          );
+                                          return (
+                                            <ThemedView
+                                              key={`c-${row.id}-${idx}-${k}`}
+                                              style={styles.changeDescriptionContainer}
+                                            >
+                                              <ThemedText style={styles.changeDescription}>
+                                                <ThemedText style={{ fontWeight: '800' }}>{k}: </ThemedText>
+                                                {info
+                                                  ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${
+                                                      info.empleadoId || 'N/A'
+                                                    } - Hora: ${info.timestamp || 'N/A'}`
+                                                  : 'Firma (formato no decodificable)'}
+                                              </ThemedText>
+                                            </ThemedView>
+                                          );
+                                        }
+                                        if (k === 'participantes') {
+                                          const arr = (() => {
+                                            if (Array.isArray(v)) return v as any[];
+                                            if (typeof v === 'string') {
+                                              try {
+                                                return JSON.parse(v) as any[];
+                                              } catch {
+                                                return [];
+                                              }
+                                            }
+                                            return [];
+                                          })();
+                                          return (
+                                            <ThemedView
+                                              key={`c-${row.id}-${idx}-${k}`}
+                                              style={styles.changeDescriptionContainer}
+                                            >
+                                              <ThemedText
+                                                style={[styles.changeDescription, { fontWeight: '800' }]}
+                                              >
+                                                Participantes:
+                                              </ThemedText>
+                                              {arr.length === 0 ? (
+                                                <ThemedText style={styles.changeDescription}>—</ThemedText>
+                                              ) : (
+                                                arr.map((p: any, i: number) => {
+                                                  const sigUri =
+                                                    formatSignatureForDisplay(
+                                                      typeof p?.firma === 'string'
+                                                        ? p.firma
+                                                        : p?.firma != null
+                                                          ? String(p.firma)
+                                                          : null
+                                                    ) ?? '';
+                                                  return (
+                                                    <ThemedView
+                                                      key={`p-${i}`}
+                                                      style={styles.changeDescriptionContainer}
+                                                    >
+                                                      <ThemedText style={styles.changeDescription}>
+                                                        {i + 1}.{' '}
+                                                        {String(p?.nombre_completo ?? '').trim() || '—'} (Cédula:{' '}
+                                                        {String(p?.cedula ?? '').trim() || '—'})
+                                                      </ThemedText>
+                                                      {sigUri ? (
+                                                        <Image
+                                                          source={{ uri: sigUri }}
+                                                          style={styles.cambioSignatureImage}
+                                                          resizeMode="contain"
+                                                        />
+                                                      ) : (
+                                                        <ThemedText style={styles.changeDescription}>
+                                                          Sin firma
+                                                        </ThemedText>
+                                                      )}
+                                                    </ThemedView>
+                                                  );
+                                                })
+                                              )}
+                                            </ThemedView>
+                                          );
+                                        }
+                                        return (
+                                          <ThemedView
+                                            key={`c-${row.id}-${idx}-${k}`}
+                                            style={styles.changeDescriptionContainer}
+                                          >
+                                            <ThemedText style={styles.changeDescription}>
+                                              <ThemedText style={{ fontWeight: '800' }}>{k}: </ThemedText>
+                                              {formatChangeValue(k, v)}
+                                            </ThemedText>
+                                          </ThemedView>
+                                        );
+                                      })}
+                                    </React.Fragment>
+                                  );
+                                }
+
+                                if (prop === 'participantes') {
+                                  const arr = (() => {
+                                    if (Array.isArray(value)) return value as any[];
+                                    if (typeof value === 'string') {
+                                      try {
+                                        return JSON.parse(value) as any[];
+                                      } catch {
+                                        return [];
+                                      }
+                                    }
+                                    return [];
+                                  })();
+                                  return (
+                                    <ThemedView
+                                      key={`c-${row.id}-${idx}`}
+                                      style={styles.changeDescriptionContainer}
+                                    >
+                                      <ThemedText
+                                        style={[styles.changeDescription, { fontWeight: '800' }]}
+                                      >
+                                        Participantes:
+                                      </ThemedText>
+                                      {arr.length === 0 ? (
+                                        <ThemedText style={styles.changeDescription}>—</ThemedText>
+                                      ) : (
+                                        arr.map((p: any, i: number) => {
+                                          const sigUri =
+                                            formatSignatureForDisplay(
+                                              typeof p?.firma === 'string'
+                                                ? p.firma
+                                                : p?.firma != null
+                                                  ? String(p.firma)
+                                                  : null
+                                            ) ?? '';
+                                          return (
+                                            <ThemedView
+                                              key={`p-${i}`}
+                                              style={styles.changeDescriptionContainer}
+                                            >
+                                              <ThemedText style={styles.changeDescription}>
+                                                {i + 1}. {String(p?.nombre_completo ?? '').trim() || '—'} (Cédula:{' '}
+                                                {String(p?.cedula ?? '').trim() || '—'})
+                                              </ThemedText>
+                                              {sigUri ? (
+                                                <Image
+                                                  source={{ uri: sigUri }}
+                                                  style={styles.cambioSignatureImage}
+                                                  resizeMode="contain"
+                                                />
+                                              ) : (
+                                                <ThemedText style={styles.changeDescription}>Sin firma</ThemedText>
+                                              )}
+                                            </ThemedView>
+                                          );
+                                        })
+                                      )}
+                                    </ThemedView>
+                                  );
+                                }
+
+                                return (
+                                  <ThemedView
+                                    key={`c-${row.id}-${idx}`}
+                                    style={styles.changeDescriptionContainer}
+                                  >
+                                    <ThemedText style={styles.changeDescription}>
+                                      <ThemedText style={{ fontWeight: '800' }}>{prop}: </ThemedText>
+                                      {isFirmaResponsable && typeof value === 'string' && value.trim()
+                                        ? (() => {
+                                            const info = decodeFirmaHash(value);
+                                            return info
+                                              ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${
+                                                  info.empleadoId || 'N/A'
+                                                } - Hora: ${info.timestamp || 'N/A'}`
+                                              : 'Firma (formato no decodificable)';
+                                          })()
+                                        : !isFirmaResponsable
+                                          ? formatChangeValue(prop, value)
+                                          : 'N/A'}
+                                    </ThemedText>
+                                    {(isFirmaSupervisor || isFirmaEmpleado) && value ? (
+                                      <Image
+                                        source={{
+                                          uri:
+                                            formatSignatureForDisplay(
+                                              typeof value === 'string'
+                                                ? value
+                                                : value != null
+                                                  ? String(value)
+                                                  : null
+                                            ) ?? '',
+                                        }}
+                                        style={styles.cambioSignatureImage}
+                                        resizeMode="contain"
+                                      />
+                                    ) : null}
+                                  </ThemedView>
+                                );
+                              })}
                             </ThemedView>
                           )}
                         </ThemedView>
@@ -3765,6 +4040,8 @@ const styles = StyleSheet.create({
   cambioCollapsableTitle: { fontSize: 14, fontWeight: '600', color: '#007AFF', flex: 1 },
   cambioCollapsableContent: { padding: 12, gap: 8, backgroundColor: '#F8F9FA' },
   changeDescription: { fontSize: 14, lineHeight: 20, color: '#666', marginBottom: 8 },
+  changeDescriptionContainer: { marginBottom: 8 },
+  cambioSignatureImage: { marginTop: 6, height: 80, width: 160, backgroundColor: '#f0f0f0', borderRadius: 4 },
   filterGroupSearch: { marginBottom: 12 },
   listItemButtonText: {
     color: '#FFFFFF',

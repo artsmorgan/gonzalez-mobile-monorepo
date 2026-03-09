@@ -103,9 +103,10 @@ interface OpeningClosingPosition {
   actividades: string;
   inventario: string;
   otras_observaciones: string | null;
-  firma_representante_cliente: string;
-  firma_representante_empresa_entrante: string;
-  firma_representante_empresa_saliente: string;
+  // Firmas de representantes son opcionales en BD y UI
+  firma_representante_cliente?: string | null;
+  firma_representante_empresa_entrante?: string | null;
+  firma_representante_empresa_saliente?: string | null;
   firma_responsable: string;
   cliente_nombre?: string | null;
   corpo_nombre?: string | null;
@@ -414,15 +415,19 @@ export default function OpeningClosingPositionScreen() {
 
   const formatDate = (date: Date): string => {
     // yyyy-mm-dd (compatible con server new Date())
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
+    const dateString = date.toISOString().split('T')[0].split('-');
+    const year = dateString[0];
+    const month = dateString[1];
+    const day = dateString[2];
     return `${year}-${month}-${day}`;
   };
 
   const formatDateForDisplay = (date: Date): string => {
+    console.log('date', date);
     const [year, month, day] = formatDate(date).split('-');
-    return `${day}-${month}-${year}`;
+    const dateString = `${day}-${month}-${year}`;
+    console.log('dateString', dateString);
+    return dateString;
   };
 
   // Helper para extraer solo el base64 de las firmas
@@ -524,11 +529,16 @@ export default function OpeningClosingPositionScreen() {
         try {
           const parsed = JSON.parse(cacheStr);
           if (Array.isArray(parsed)) setStructure(parsed);
+          else setStructure([]);
         } catch {
           // ignore
+          setStructure([]);
         }
       }
-
+      else {
+        setStructure([]);
+      }
+      /*
       const isConnected = await getConnectionStatus();
       if (!isConnected) return;
 
@@ -556,6 +566,7 @@ export default function OpeningClosingPositionScreen() {
         setStructure(incoming);
         await AsyncStorage.setItem('main_structure_cache', JSON.stringify(incoming));
       }
+      */
     } catch (e) {
       console.error('Error fetching main structure for opening-closing-position:', e);
     } finally {
@@ -804,8 +815,13 @@ export default function OpeningClosingPositionScreen() {
     }
   }, [isSeguridadDivision, isCreating, editingRecord, loadArticulosCatalog]);
 
-  const resetForm = () => {
-    setFechaRealizado(new Date());
+  const resetForm = async () => {
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
+    setFechaRealizado(new Date(horaAccion));
     setTipo('Apertura');
     setNombreRepresentanteCliente('');
     setNombreRepresentanteEmpresaEntrante('');
@@ -823,18 +839,18 @@ export default function OpeningClosingPositionScreen() {
     setFirmaResponsable('');
   };
 
-  const startCreating = () => {
+  const startCreating = async () => {
     setIsCreating(true);
     setEditingRecord(null);
-    resetForm();
+    await resetForm();
   };
 
-  const cancelCreating = () => {
+  const cancelCreating = async () => {
     setIsCreating(false);
-    resetForm();
+    await resetForm();
   };
 
-  const startEditing = (record: OpeningClosingPosition) => {
+  const startEditing = async (record: OpeningClosingPosition) => {
     setIsCreating(false);
     let actividadesArray: ActividadItem[] = [];
     let inventarioArray: InventarioItem[] = [];
@@ -870,7 +886,13 @@ export default function OpeningClosingPositionScreen() {
       divisionNode?.contratos?.find((ct) => (ct.sucursales || []).some((s) => s.id === record.corpo_id)) ?? null;
     if (contratoFound) setSelectedContratoId(contratoFound.id);
 
-    setFechaRealizado(record.fecha ? new Date(String(record.fecha)) : new Date());
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
+
+    setFechaRealizado(record.fecha ? new Date(record.fecha) : new Date(horaAccion));
     setTipo((record.tipo === 'Cierre' ? 'Cierre' : 'Apertura'));
     setNombreRepresentanteCliente(record.nombre_representante_cliente || '');
     setNombreRepresentanteEmpresaEntrante(record.nombre_representante_empresa_entrante || '');
@@ -884,15 +906,15 @@ export default function OpeningClosingPositionScreen() {
     setDeletedRemoteImageIds([]);
 
     setOtrasObservaciones(record.otras_observaciones || '');
-    setFirmaRepresentanteCliente(formatSignatureForDisplay(record.firma_representante_cliente));
-    setFirmaRepresentanteEmpresaEntrante(formatSignatureForDisplay(record.firma_representante_empresa_entrante));
-    setFirmaRepresentanteEmpresaSaliente(formatSignatureForDisplay(record.firma_representante_empresa_saliente));
+    setFirmaRepresentanteCliente(formatSignatureForDisplay(record.firma_representante_cliente ?? null));
+    setFirmaRepresentanteEmpresaEntrante(formatSignatureForDisplay(record.firma_representante_empresa_entrante ?? null));
+    setFirmaRepresentanteEmpresaSaliente(formatSignatureForDisplay(record.firma_representante_empresa_saliente ?? null));
     setFirmaResponsable(record.firma_responsable || '');
   };
 
-  const cancelEditing = () => {
+  const cancelEditing = async () => {
     setEditingRecord(null);
-    resetForm();
+    await resetForm();
   };
 
   const handleDateChange = (event: any, selectedDate?: Date) => {
@@ -1094,7 +1116,7 @@ export default function OpeningClosingPositionScreen() {
   const savePositionHandler = async () => {
     const currentMarca = await AsyncStorage.getItem('current_marca');
     if (!currentMarca) {
-      setSubmitResponse({ type: 'error', message: 'No se encontró la marca actual' });
+      Alert.alert('Error', 'No se encontró la marca actual');
       return;
     }
 
@@ -1105,25 +1127,21 @@ export default function OpeningClosingPositionScreen() {
       const currentMarcaData = JSON.parse(currentMarca);
 
       if (!selectedClienteId || !selectedSucursalId || !selectedPuestoId || !selectedDivisionId) {
-        setSubmitResponse({ type: 'error', message: 'Debes seleccionar Cliente / División / Contrato / Sucursal / Puesto' });
+        Alert.alert('Error', 'Debes seleccionar Cliente / División / Contrato / Sucursal / Puesto');
         setIsSubmitting(false);
         return;
       }
       if (!nombreRepresentanteCliente.trim() || !nombreRepresentanteEmpresaEntrante.trim() || !nombreRepresentanteEmpresaSaliente.trim()) {
-        setSubmitResponse({ type: 'error', message: 'Debes completar los nombres de representantes' });
+        Alert.alert('Error', 'Debes completar los nombres de representantes');
         setIsSubmitting(false);
         return;
       }
       const fCliente = getBase64Only(firmaRepresentanteCliente);
       const fEntrante = getBase64Only(firmaRepresentanteEmpresaEntrante);
       const fSaliente = getBase64Only(firmaRepresentanteEmpresaSaliente);
-      if (!fCliente || !fEntrante || !fSaliente) {
-        setSubmitResponse({ type: 'error', message: 'Debes registrar las 3 firmas dibujadas' });
-        setIsSubmitting(false);
-        return;
-      }
+      
       if (!firmaResponsable) {
-        setSubmitResponse({ type: 'error', message: 'Debes registrar la firma del responsable (QR)' });
+        Alert.alert('Error', 'Debes registrar la firma del responsable (QR)');
         setIsSubmitting(false);
         return;
       }
@@ -1173,13 +1191,13 @@ export default function OpeningClosingPositionScreen() {
         });
 
         if (result.status) {
-          setSubmitResponse({ type: 'success', message: result.message || 'Apertura-Cierre de Puesto guardado correctamente' });
+          Alert.alert('Éxito', result.message || 'Apertura-Cierre de Puesto guardado correctamente');
           setTimeout(() => {
             cancelCreating();
             fetchPositions();
           }, 2000);
         } else {
-          setSubmitResponse({ type: 'error', message: result.message || 'Error al guardar la apertura-cierre de puesto' });
+          Alert.alert('Error', result.message || 'Error al guardar la apertura-cierre de puesto');
         }
       } else {
         const localId = generateRandomId();
@@ -1197,6 +1215,12 @@ export default function OpeningClosingPositionScreen() {
 
         const cacheStr = await AsyncStorage.getItem('evaluations_cache');
         const cache = cacheStr ? JSON.parse(cacheStr) : [];
+
+        const horaAccion = await getHoraAccion();
+        if (!horaAccion) {
+          Alert.alert('Error', 'No se pudo obtener la hora');
+          return;
+        }
 
         const newRecordCache: OpeningClosingPosition = {
           id: null,
@@ -1222,14 +1246,14 @@ export default function OpeningClosingPositionScreen() {
           puesto_nombre: (selectedSucursalNode?.puestos || []).find((p) => p.id === selectedPuestoId)?.nombre || null,
           division_nombre: selectedDivisionNode?.nombre || null,
           images_local: imagenesLocal,
-          created_at: new Date().toISOString(),
+          created_at: new Date(horaAccion).toISOString(),
           synced: false,
         };
 
         cache.push({ ...newRecordCache, type: 'opening_closing_position' });
         await AsyncStorage.setItem('evaluations_cache', JSON.stringify(cache));
 
-        setSubmitResponse({ type: 'success', message: 'Apertura-Cierre de Puesto registrado localmente. Se sincronizará cuando haya conexión.' });
+        Alert.alert('Éxito', 'Apertura-Cierre de Puesto registrado localmente. Se sincronizará cuando haya conexión.');
         setTimeout(() => {
           cancelCreating();
           fetchPositions();
@@ -1237,7 +1261,7 @@ export default function OpeningClosingPositionScreen() {
       }
     } catch (err) {
       console.error('Error saving position:', err);
-      setSubmitResponse({ type: 'error', message: 'No se pudo guardar la apertura-cierre de puesto' });
+      Alert.alert('Error', 'No se pudo guardar la apertura-cierre de puesto');
     } finally {
       setIsSubmitting(false);
     }
@@ -1252,7 +1276,7 @@ export default function OpeningClosingPositionScreen() {
     try {
       const recordId = editingRecord.id || editingRecord.id_local;
       if (!recordId) {
-        setSubmitResponse({ type: 'error', message: 'ID de registro no encontrado para actualizar' });
+        Alert.alert('Error', 'ID de registro no encontrado para actualizar');
         setIsSubmitting(false);
         return;
       }
@@ -1260,25 +1284,21 @@ export default function OpeningClosingPositionScreen() {
       const recordIdStr = typeof recordId === 'number' ? String(recordId) : recordId;
 
       if (!selectedClienteId || !selectedSucursalId || !selectedPuestoId || !selectedDivisionId) {
-        setSubmitResponse({ type: 'error', message: 'Debes seleccionar Cliente / División / Contrato / Sucursal / Puesto' });
+        Alert.alert('Error', 'Debes seleccionar Cliente / División / Contrato / Sucursal / Puesto');
         setIsSubmitting(false);
         return;
       }
       if (!nombreRepresentanteCliente.trim() || !nombreRepresentanteEmpresaEntrante.trim() || !nombreRepresentanteEmpresaSaliente.trim()) {
-        setSubmitResponse({ type: 'error', message: 'Debes completar los nombres de representantes' });
+        Alert.alert('Error', 'Debes completar los nombres de representantes');
         setIsSubmitting(false);
         return;
       }
       const fCliente = getBase64Only(firmaRepresentanteCliente);
       const fEntrante = getBase64Only(firmaRepresentanteEmpresaEntrante);
       const fSaliente = getBase64Only(firmaRepresentanteEmpresaSaliente);
-      if (!fCliente || !fEntrante || !fSaliente) {
-        setSubmitResponse({ type: 'error', message: 'Debes registrar las 3 firmas dibujadas' });
-        setIsSubmitting(false);
-        return;
-      }
+      
       if (!firmaResponsable) {
-        setSubmitResponse({ type: 'error', message: 'Debes registrar la firma del responsable (QR)' });
+        Alert.alert('Error', 'Debes registrar la firma del responsable (QR)');
         setIsSubmitting(false);
         return;
       }
@@ -1329,13 +1349,13 @@ export default function OpeningClosingPositionScreen() {
         });
 
         if (result.status) {
-          setSubmitResponse({ type: 'success', message: result.message || 'Apertura-Cierre de Puesto actualizado correctamente' });
+          Alert.alert('Éxito', result.message || 'Apertura-Cierre de Puesto actualizado correctamente');
           setTimeout(() => {
             cancelEditing();
             fetchPositions();
           }, 2000);
         } else {
-          setSubmitResponse({ type: 'error', message: result.message || 'Error al actualizar la apertura-cierre de puesto' });
+          Alert.alert('Error', result.message || 'Error al actualizar la apertura-cierre de puesto');
         }
       } else {
         const actionsStr = await AsyncStorage.getItem('evaluations_actions');
@@ -1386,7 +1406,7 @@ export default function OpeningClosingPositionScreen() {
           await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
         }
 
-        setSubmitResponse({ type: 'success', message: 'Apertura-Cierre de Puesto actualizado localmente. Se sincronizará cuando haya conexión.' });
+        Alert.alert('Éxito', 'Apertura-Cierre de Puesto actualizado localmente. Se sincronizará cuando haya conexión.');
         setTimeout(() => {
           cancelEditing();
           fetchPositions();
@@ -1394,7 +1414,7 @@ export default function OpeningClosingPositionScreen() {
       }
     } catch (err) {
       console.error('Error updating position:', err);
-      setSubmitResponse({ type: 'error', message: 'No se pudo actualizar la apertura-cierre de puesto' });
+      Alert.alert('Error', 'No se pudo actualizar la apertura-cierre de puesto');
     } finally {
       setIsSubmitting(false);
     }
@@ -2591,12 +2611,75 @@ export default function OpeningClosingPositionScreen() {
                           {(Array.isArray(parsed) ? parsed : []).length > 0 && (
                             <ThemedView style={styles.filterGroupSearch}>
                               <ThemedText style={styles.filterLabel}>Cambios:</ThemedText>
-                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => (
-                                <ThemedText key={`c-${row.id}-${idx}`} style={styles.changeDescription}>
-                                  <ThemedText style={{ fontWeight: '800' }}>{String(c?.prop ?? '-')}: </ThemedText>
-                                  {formatChangeValue(c?.prop, c?.after)}
-                                </ThemedText>
-                              ))}
+                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => {
+                                const prop = String(c?.prop ?? '-');
+                                const value = c?.after;
+                                const manualSignatureProps = ['firma_representante_cliente', 'firma_representante_empresa_entrante', 'firma_representante_empresa_saliente'];
+
+                                if (prop === '__created__' && value && typeof value === 'object') {
+                                  const created: any = value;
+                                  return (
+                                    <React.Fragment key={`c-${row.id}-${idx}-created`}>
+                                      <ThemedView style={styles.changeDescriptionContainer}>
+                                        <ThemedText style={styles.changeDescription}>
+                                          <ThemedText style={{ fontWeight: '800' }}>Registro creado</ThemedText>
+                                        </ThemedText>
+                                      </ThemedView>
+                                      {Object.entries(created).map(([k, v]) => {
+                                        if (manualSignatureProps.includes(k) || k === 'firma_responsable') return null;
+                                        return (
+                                          <ThemedView key={`c-${row.id}-${idx}-${k}`} style={styles.changeDescriptionContainer}>
+                                            <ThemedText style={styles.changeDescription}>
+                                              <ThemedText style={{ fontWeight: '800' }}>{k}: </ThemedText>
+                                              {formatChangeValue(k, v)}
+                                            </ThemedText>
+                                          </ThemedView>
+                                        );
+                                      })}
+                                      {typeof created.firma_responsable === 'string' && created.firma_responsable.trim() && (
+                                        <ThemedView style={styles.changeDescriptionContainer}>
+                                          <ThemedText style={styles.changeDescription}>
+                                            <ThemedText style={{ fontWeight: '800' }}>firma_responsable: </ThemedText>
+                                            {(() => {
+                                              const info = decodeFirmaHash(created.firma_responsable);
+                                              return info
+                                                ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${info.timestamp || 'N/A'}`
+                                                : 'Firma responsable (formato no decodificable)';
+                                            })()}
+                                          </ThemedText>
+                                        </ThemedView>
+                                      )}
+                                      {manualSignatureProps.map((firmaProp) => created[firmaProp] && (
+                                        <ThemedView key={`c-${row.id}-${idx}-${firmaProp}`} style={styles.changeDescriptionContainer}>
+                                          <ThemedText style={styles.changeDescription}>
+                                            <ThemedText style={{ fontWeight: '800' }}>{firmaProp}: </ThemedText>
+                                          </ThemedText>
+                                          <Image source={{ uri: formatSignatureForDisplay(created[firmaProp]) ?? '' }} style={styles.cambioSignatureImage} resizeMode="contain" />
+                                        </ThemedView>
+                                      ))}
+                                    </React.Fragment>
+                                  );
+                                }
+
+                                const isResponsable = prop === 'firma_responsable';
+                                const isManualSignature = manualSignatureProps.includes(prop);
+                                return (
+                                  <ThemedView key={`c-${row.id}-${idx}`} style={styles.changeDescriptionContainer}>
+                                    <ThemedText style={styles.changeDescription}>
+                                      <ThemedText style={{ fontWeight: '800' }}>{prop}: </ThemedText>
+                                      {!isManualSignature && !isResponsable && formatChangeValue(prop, value)}
+                                      {isResponsable && (() => {
+                                        const info = typeof value === 'string' ? decodeFirmaHash(value) : null;
+                                        if (!info) return 'Firma responsable (formato no decodificable)';
+                                        return `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${info.timestamp || 'N/A'}`;
+                                      })()}
+                                    </ThemedText>
+                                    {isManualSignature && value && (
+                                      <Image source={{ uri: formatSignatureForDisplay(value) ?? '' }} style={styles.cambioSignatureImage} resizeMode="contain" />
+                                    )}
+                                  </ThemedView>
+                                );
+                              })}
                             </ThemedView>
                           )}
                         </ThemedView>
@@ -3304,6 +3387,8 @@ const styles = StyleSheet.create({
   cambioCollapsableTitle: { fontSize: 14, fontWeight: '600', color: '#007AFF', flex: 1 },
   cambioCollapsableContent: { padding: 12, gap: 8, backgroundColor: '#F8F9FA' },
   changeDescription: { fontSize: 14, lineHeight: 20, color: '#666', marginBottom: 8 },
+  changeDescriptionContainer: { marginBottom: 8 },
+  cambioSignatureImage: { marginTop: 6, height: 80, width: 160, backgroundColor: '#f0f0f0', borderRadius: 4 },
   filterGroupSearch: { marginBottom: 12 },
   filterLabel: { fontSize: 14, fontWeight: '600', color: '#333', marginBottom: 4 },
 });

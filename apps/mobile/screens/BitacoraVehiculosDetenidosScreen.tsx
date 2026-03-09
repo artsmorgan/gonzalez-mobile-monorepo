@@ -181,31 +181,32 @@ const buildGeneralConfig = (tipo: TipoBitacora): GeneralEntry[] => {
     { key: 'empresa', label: 'Empresa', kind: 'readonly' },
     { key: 'cliente', label: 'Cliente', kind: 'readonly' },
     { key: 'corpo', label: 'Sucursal', kind: 'readonly' },
-    { key: 'oficial_transito', label: 'Oficial de tránsito', kind: 'text', required: true },
-    { key: 'codigo_oficial_transito', label: 'Código del oficial (tránsito)', kind: 'text', required: true },
-    { key: 'firma_oficial_transito', label: 'Firma del oficial (tránsito)', kind: 'signature', required: true },
-    { key: 'oficial_seguridad', label: 'Nombre oficial de seguridad', kind: 'text', required: true },
-    { key: 'codigo_oficial_seguridad', label: 'Código del oficial (seguridad)', kind: 'text', required: true },
-    { key: 'firma_oficial_seguridad', label: 'Firma del oficial (seguridad)', kind: 'signature', required: true },
+    // A excepción de Empresa / Cliente / Sucursal / Fecha / Hora, el resto será opcional
+    { key: 'oficial_transito', label: 'Oficial de tránsito', kind: 'text', required: false },
+    { key: 'codigo_oficial_transito', label: 'Código del oficial (tránsito)', kind: 'text', required: false },
+    { key: 'firma_oficial_transito', label: 'Firma del oficial (tránsito)', kind: 'signature', required: false },
+    { key: 'oficial_seguridad', label: 'Nombre oficial de seguridad', kind: 'text', required: false },
+    { key: 'codigo_oficial_seguridad', label: 'Código del oficial (seguridad)', kind: 'text', required: false },
+    { key: 'firma_oficial_seguridad', label: 'Firma del oficial (seguridad)', kind: 'signature', required: false },
     { key: 'fecha', label: 'Fecha', kind: 'date', required: true },
     { key: 'hora', label: 'Hora', kind: 'time', required: true },
-    { key: 'km', label: 'KM que marca', kind: 'text', required: true },
-    { key: 'numero_motor', label: 'Número de motor', kind: 'text', required: true },
-    { key: 'numero_placa', label: 'Número de placa', kind: 'text', required: true },
-    { key: 'marca', label: 'Marca', kind: 'text', required: true },
-    { key: 'tipo_vehiculo', label: 'Tipo', kind: 'text', required: true },
-    { key: 'color', label: 'Color', kind: 'text', required: true },
-    { key: 'vin', label: 'Número de Vin o chases', kind: 'text', required: true },
+    { key: 'km', label: 'KM que marca', kind: 'text', required: false },
+    { key: 'numero_motor', label: 'Número de motor', kind: 'text', required: false },
+    { key: 'numero_placa', label: 'Número de placa', kind: 'text', required: false },
+    { key: 'marca', label: 'Marca', kind: 'text', required: false },
+    { key: 'tipo_vehiculo', label: 'Tipo', kind: 'text', required: false },
+    { key: 'color', label: 'Color', kind: 'text', required: false },
+    { key: 'vin', label: 'Número de Vin o chases', kind: 'text', required: false },
     {
       key: 'combustible',
       label: 'Combustible',
       kind: 'select',
-      required: true,
+      required: false,
       options: ['Lleno', '3/4', '1/2', '1/4', 'Marcador malo'],
     },
-    { key: 'encargado_deposito', label: 'Encargado de depósito', kind: 'text', required: true },
-    { key: 'codigo_encargado', label: 'Código del encargado', kind: 'text', required: true },
-    { key: 'firma_encargado', label: 'Firma del encargado', kind: 'signature', required: true },
+    { key: 'encargado_deposito', label: 'Encargado de depósito', kind: 'text', required: false },
+    { key: 'codigo_encargado', label: 'Código del encargado', kind: 'text', required: false },
+    { key: 'firma_encargado', label: 'Firma del encargado', kind: 'signature', required: false },
   ];
 };
 
@@ -479,6 +480,17 @@ export default function BitacoraVehiculosDetenidosScreen() {
   const [prefillVehicleInfo, setPrefillVehicleInfo] = useState<{ vehiculo?: any; uso?: any } | null>(null);
   // Vehículo temporal para casos donde el vehículo no está en la lista cargada
   const [tempVehicle, setTempVehicle] = useState<any | null>(null);
+
+  // Datos adicionales del vehículo (opcionales) y control para registrar vehículo nuevo
+  const [shouldRegisterVehicle, setShouldRegisterVehicle] = useState<boolean>(false);
+  const [vehKilometraje, setVehKilometraje] = useState<string>('');
+  const [vehProxCambioAceite, setVehProxCambioAceite] = useState<string>('');
+  const [vehModelo, setVehModelo] = useState<string>('');
+  const [vehAnno, setVehAnno] = useState<string>('');
+  const [vehTipoAutoria, setVehTipoAutoria] = useState<string>('');
+  const [vehTituloPropiedad, setVehTituloPropiedad] = useState<boolean | null>(null);
+  const [vehRTV, setVehRTV] = useState<boolean | null>(null);
+  const [vehMarchamo, setVehMarchamo] = useState<boolean | null>(null);
 
   const [generalValues, setGeneralValues] = useState<Record<string, any>>({});
   const [revisionValues, setRevisionValues] = useState<Record<string, any>>({});
@@ -1000,6 +1012,19 @@ export default function BitacoraVehiculosDetenidosScreen() {
         // 2) Seleccionar vehículo
         if (vehiculoId && Number(vehiculoId) > 0) {
           setSelectedCorporateVehicleId(Number(vehiculoId));
+
+          const vehiculo = corporateVehicles.find((v: any) => Number(v.id) === Number(vehiculoId));
+
+          if (vehiculo) {
+            setVehKilometraje(String(vehiculo?.kilometraje ?? ''));
+            setVehProxCambioAceite(String(vehiculo?.prox_cambio_aceite ?? ''));
+            setVehModelo(String(vehiculo?.modelo ?? ''));
+            setVehAnno(String(vehiculo?.anno ?? ''));
+            setVehTipoAutoria(String(vehiculo?.tipo_autoria ?? ''));
+            setVehTituloPropiedad(vehiculo?.titulo_propiedad ?? false);
+            setVehRTV(vehiculo?.rtv ?? false);
+            setVehMarchamo(vehiculo?.marchamo ?? false);
+          }
         }
 
         // 3) Cargar usos del vehículo seleccionado (para que el Picker de usos pueda listar/seleccionar)
@@ -1259,6 +1284,13 @@ export default function BitacoraVehiculosDetenidosScreen() {
   };
 
   const resetForm = async (tipoNext: TipoBitacora) => {
+
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
+
     const current = await loadMarcaContext();
     tipoRef.current = tipoNext;
     setTipo(tipoNext);
@@ -1268,8 +1300,8 @@ export default function BitacoraVehiculosDetenidosScreen() {
     baseGeneral.empresa = current?.empresa?.nombre ?? empresaNombre ?? '';
     baseGeneral.cliente = current?.cliente?.nombre ?? clienteNombre ?? '';
     baseGeneral.corpo = current?.corpo?.nombre ?? corpoNombre ?? '';
-    baseGeneral.fecha = dateToLocalString(new Date());
-    baseGeneral.hora = timeToHHmm(new Date());
+    baseGeneral.fecha = dateToLocalString(new Date(horaAccion));
+    baseGeneral.hora = timeToHHmm(new Date(horaAccion));
     setGeneralValues(baseGeneral);
 
     const baseRev: Record<string, any> = {};
@@ -1283,7 +1315,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
     setRevisionObs(baseObs);
 
     setMovimientos([
-      { movimiento: '', fecha: dateToLocalString(new Date()), hora: timeToHHmm(new Date()), realizado_por: '', autorizado_por: '', _expanded: true },
+      { movimiento: '', fecha: dateToLocalString(new Date(horaAccion)), hora: timeToHHmm(new Date(horaAccion)), realizado_por: '', autorizado_por: '', _expanded: true },
     ]);
     setObservaciones('');
     setFirmaResponsable('');
@@ -1394,6 +1426,64 @@ export default function BitacoraVehiculosDetenidosScreen() {
         usoId: usoIdFromItem,
       });
     }
+
+    // Cargar también en los campos específicos de "Información del vehículo" los valores guardados en informacion_general
+    const kmFromInfo = gMap.kilometraje;
+    const proxAceiteFromInfo = gMap.prox_cambio_aceite;
+    const modeloFromInfo = gMap.modelo;
+    const annoFromInfo = gMap.anno;
+    const tipoAutoriaFromInfo = gMap.tipo_autoria;
+    const tituloPropFromInfo = gMap.titulo_propiedad;
+    const rtvFromInfo = gMap.rtv;
+    const marchamoFromInfo = gMap.marchamo;
+
+    setVehKilometraje((prev) =>
+      kmFromInfo !== undefined && kmFromInfo !== null && String(kmFromInfo).trim() !== ''
+        ? String(kmFromInfo)
+        : prev
+    );
+    setVehProxCambioAceite((prev) =>
+      proxAceiteFromInfo !== undefined &&
+      proxAceiteFromInfo !== null &&
+      String(proxAceiteFromInfo).trim() !== ''
+        ? String(proxAceiteFromInfo)
+        : prev
+    );
+    setVehModelo((prev) =>
+      modeloFromInfo !== undefined && modeloFromInfo !== null && String(modeloFromInfo).trim() !== ''
+        ? String(modeloFromInfo)
+        : prev
+    );
+    setVehAnno((prev) =>
+      annoFromInfo !== undefined && annoFromInfo !== null && String(annoFromInfo).trim() !== ''
+        ? String(annoFromInfo)
+        : prev
+    );
+    setVehTipoAutoria((prev) =>
+      tipoAutoriaFromInfo !== undefined &&
+      tipoAutoriaFromInfo !== null &&
+      String(tipoAutoriaFromInfo).trim() !== ''
+        ? String(tipoAutoriaFromInfo)
+        : prev
+    );
+
+    const parseBoolFromInfo = (raw: any): boolean | null => {
+      if (raw === undefined || raw === null) return null;
+      if (typeof raw === 'boolean') return raw;
+      const txt = String(raw).trim().toLowerCase();
+      if (!txt) return null;
+      if (txt === 'true' || txt === '1' || txt === 'sí' || txt === 'si') return true;
+      if (txt === 'false' || txt === '0' || txt === 'no') return false;
+      return null;
+    };
+
+    const tituloParsed = parseBoolFromInfo(tituloPropFromInfo);
+    const rtvParsed = parseBoolFromInfo(rtvFromInfo);
+    const marchamoParsed = parseBoolFromInfo(marchamoFromInfo);
+
+    setVehTituloPropiedad((prev) => (tituloParsed !== null ? tituloParsed : prev));
+    setVehRTV((prev) => (rtvParsed !== null ? rtvParsed : prev));
+    setVehMarchamo((prev) => (marchamoParsed !== null ? marchamoParsed : prev));
   };
 
   const cancelCreating = () => {
@@ -1467,10 +1557,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
       Alert.alert('Error', 'No se encontró la sucursal en la marca actual');
       return false;
     }
-    if (isPrefillMode && !selectedCorporateUseId) {
-      Alert.alert('Error', 'Debes seleccionar el uso a vincular');
-      return false;
-    }
+    // Seleccionar vehículo y uso es opcional: solo validamos jerarquía y contenido
     for (const g of generalConfig) {
       if (!g.required) continue;
       const val = generalValues[g.key];
@@ -1491,6 +1578,36 @@ export default function BitacoraVehiculosDetenidosScreen() {
     if (!firmaResponsable) {
       Alert.alert('Error', 'Debes registrar la firma responsable');
       return false;
+    }
+
+    if (vehTituloPropiedad === null) {
+      setVehTituloPropiedad(false);
+    }
+    if (vehRTV === null) {
+      setVehRTV(false);
+    }
+    if (vehMarchamo === null) {
+      setVehMarchamo(false);
+    }
+
+    // Validación específica cuando se desea registrar un vehículo nuevo
+    if (!selectedCorporateVehicleId && shouldRegisterVehicle) {
+      if (
+        !vehKilometraje.trim() ||
+        !vehProxCambioAceite.trim() ||
+        !vehModelo.trim() ||
+        !vehAnno.trim() ||
+        vehTituloPropiedad === null ||
+        vehRTV === null ||
+        vehMarchamo === null ||
+        generalValues.numero_placa?.trim() === ''
+      ) {
+        Alert.alert(
+          'Error',
+          'Para registrar un nuevo vehículo debes completar Kilometraje, Próximo cambio de aceite, Modelo, Año y Número de placa.'
+        );
+        return false;
+      }
     }
     return true;
   };
@@ -1521,6 +1638,73 @@ export default function BitacoraVehiculosDetenidosScreen() {
       };
     });
 
+    // Guardar también en informacion_general los campos de la sección "Información del vehículo"
+    infoGeneralArr.push(
+      {
+        key: 'kilometraje',
+        label: 'Kilometraje',
+        value: vehKilometraje,
+        kind: 'text',
+      },
+      {
+        key: 'prox_cambio_aceite',
+        label: 'Próximo cambio de aceite',
+        value: vehProxCambioAceite,
+        kind: 'text',
+      },
+      {
+        key: 'modelo',
+        label: 'Modelo',
+        value: vehModelo,
+        kind: 'text',
+      },
+      {
+        key: 'anno',
+        label: 'Año',
+        value: vehAnno,
+        kind: 'text',
+      },
+      {
+        key: 'tipo_autoria',
+        label: 'Tipo de autoría',
+        value: vehTipoAutoria,
+        kind: 'select',
+      },
+      {
+        key: 'titulo_propiedad',
+        label: 'Título propiedad',
+        value:
+          vehTituloPropiedad === null
+            ? ''
+            : vehTituloPropiedad
+            ? 'true'
+            : 'false',
+        kind: 'text',
+      },
+      {
+        key: 'rtv',
+        label: 'RTV',
+        value:
+          vehRTV === null
+            ? ''
+            : vehRTV
+            ? 'true'
+            : 'false',
+        kind: 'text',
+      },
+      {
+        key: 'marchamo',
+        label: 'Marchamo',
+        value:
+          vehMarchamo === null
+            ? ''
+            : vehMarchamo
+            ? 'true'
+            : 'false',
+        kind: 'text',
+      }
+    );
+
     const infoRevisionArr: any[] = [];
     for (const r of revisionConfig) {
       if (r.kind === 'heading') {
@@ -1540,12 +1724,31 @@ export default function BitacoraVehiculosDetenidosScreen() {
       autorizado_por: m.autorizado_por,
     }));
 
+    // Datos para registro opcional de vehículo nuevo (cuando no hay vehiculo_id seleccionado)
+    let registerVehiclePayload: any = undefined;
+    if (!selectedCorporateVehicleId && shouldRegisterVehicle) {
+      const placa = generalValues.numero_placa || "";
+      const tipoVeh = generalValues.tipo_vehiculo || tipoRef.current || "";
+      registerVehiclePayload = {
+        placa,
+        tipo: tipoVeh,
+        tipo_autoria: vehTipoAutoria.trim(),
+        kilometraje: Number(vehKilometraje || 0),
+        prox_cambio_aceite: Number(vehProxCambioAceite || 0),
+        modelo: vehModelo || "",
+        anno: Number(vehAnno || 0),
+        titulo_propiedad: vehTituloPropiedad === true,
+        rtv: vehRTV === true,
+        marchamo: vehMarchamo === true,
+      };
+    }
+
     return {
       ...(marca_id ? { marca_id } : {}),
       empresa_id: marcaEmpresaId,
       cliente_id: marcaClienteId,
       sucursal_id: marcaCorpoId,
-      vehiculo_id: selectedCorporateVehicleId, // Incluir vehiculo_id en el payload
+      vehiculo_id: selectedCorporateVehicleId, // Incluir vehiculo_id en el payload (opcional)
       uso_id: selectedCorporateUseId,
       tipo: tipoRef.current,
       informacion_general: infoGeneralArr,
@@ -1553,6 +1756,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
       movimientos_vehiculos: movs,
       observaciones,
       firma_responsable: firmaResponsable,
+      ...(registerVehiclePayload ? { register_vehicle: registerVehiclePayload } : {}),
     };
   };
 
@@ -1619,6 +1823,12 @@ export default function BitacoraVehiculosDetenidosScreen() {
     if (!employee) return;
     if (!validateForm()) return;
 
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
+
     setIsSubmitting(true);
     setSubmitResponse(null);
 
@@ -1641,12 +1851,12 @@ export default function BitacoraVehiculosDetenidosScreen() {
               bitacora: {
                 id: res.id,
                 tipo: tipoRef.current,
-                created_at: new Date().toISOString(),
+                created_at: new Date(horaAccion).toISOString(),
               },
             });
           }
 
-          setSubmitResponse({ type: 'success', message: res.message || 'Bitácora creada correctamente' });
+          Alert.alert('Éxito', res.message || 'Bitácora creada correctamente');
           setTimeout(async () => {
             await fetchBitacoras();
             setIsCreating(false);
@@ -1661,7 +1871,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
 
         const cacheStr = await AsyncStorage.getItem('bitacora_vehiculo_detenido_cache');
         const cache = cacheStr ? JSON.parse(cacheStr) : [];
-        const createdAt = new Date().toISOString();
+        const createdAt = new Date(horaAccion).toISOString();
 
         const localItem: any = {
           id: 0,
@@ -1699,7 +1909,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
         const updatedCache = [localItem, ...cache.filter((b: any) => b.id_local !== id_local)];
         await AsyncStorage.setItem('bitacora_vehiculo_detenido_cache', JSON.stringify(updatedCache));
         setBitacoras(updatedCache);
-        setSubmitResponse({ type: 'success', message: 'Bitácora guardada localmente. Se sincronizará cuando haya conexión.' });
+        Alert.alert('Éxito', 'Bitácora guardada localmente. Se sincronizará cuando haya conexión.');
         setTimeout(() => {
           setIsCreating(false);
           if (returnTo) navigation.goBack();
@@ -1716,7 +1926,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
           logout,
         });
         if (!res.status) throw new Error(res.message || 'No se pudo actualizar');
-        setSubmitResponse({ type: 'success', message: res.message || 'Bitácora actualizada correctamente' });
+        Alert.alert('Éxito', res.message || 'Bitácora actualizada correctamente');
         setTimeout(async () => {
           await fetchBitacoras();
           setIsCreating(false);
@@ -1736,13 +1946,13 @@ export default function BitacoraVehiculosDetenidosScreen() {
       const updatedCache = cache.map((b: any) => (b.id === editing.id ? { ...b, ...requestData } : b));
       await AsyncStorage.setItem('bitacora_vehiculo_detenido_cache', JSON.stringify(updatedCache));
       setBitacoras(updatedCache);
-      setSubmitResponse({ type: 'success', message: 'Cambios guardados localmente. Se sincronizarán cuando haya conexión.' });
+      Alert.alert('Éxito', 'Cambios guardados localmente. Se sincronizarán cuando haya conexión.');
       setTimeout(() => {
         setIsCreating(false);
         if (returnTo) navigation.goBack();
       }, 2000);
     } catch (e: any) {
-      setSubmitResponse({ type: 'error', message: e.message || 'No se pudo guardar' });
+      Alert.alert('Error', e.message || 'No se pudo guardar');
     } finally {
       setIsSubmitting(false);
     }
@@ -1801,10 +2011,15 @@ export default function BitacoraVehiculosDetenidosScreen() {
     ]);
   };
 
-  const addMovimiento = () => {
+  const addMovimiento = async () => {
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
     setMovimientos((prev) => [
       ...prev,
-      { movimiento: '', fecha: dateToLocalString(new Date()), hora: timeToHHmm(new Date()), realizado_por: '', autorizado_por: '', _expanded: true },
+      { movimiento: '', fecha: dateToLocalString(new Date(horaAccion)), hora: timeToHHmm(new Date(horaAccion)), realizado_por: '', autorizado_por: '', _expanded: true },
     ]);
   };
 
@@ -1822,9 +2037,14 @@ export default function BitacoraVehiculosDetenidosScreen() {
     setShowDatePicker(true);
   };
 
-  const openTimePicker = (key: string, currentValue?: string) => {
+  const openTimePicker = async (key: string, currentValue?: string) => {
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
     setTimePickerKey(key);
-    const d = new Date();
+    const d = new Date(horaAccion);
     if (currentValue && currentValue.includes(':')) {
       const [hh, mm] = currentValue.split(':');
       d.setHours(parseInt(hh || '0', 10), parseInt(mm || '0', 10), 0, 0);
@@ -2020,15 +2240,24 @@ export default function BitacoraVehiculosDetenidosScreen() {
                           if (newVehicleId !== selectedCorporateVehicleId) {
                             setSelectedCorporateUseId(null);
                           }
-                          // Establecer automáticamente el tipo basándose en el tipo del vehículo seleccionado
-                          if (newVehicleId) {
-                            // Buscar primero en la lista de vehículos cargados
-                            let selectedVehicle = corporateVehicles.find((veh: any) => Number(veh.id) === Number(newVehicleId));
-                            // Si no está en la lista, buscar en el vehículo temporal
-                            if (!selectedVehicle && tempVehicle && Number(tempVehicle.id) === Number(newVehicleId)) {
-                              selectedVehicle = tempVehicle;
-                            }
-                            if (selectedVehicle && selectedVehicle.tipo) {
+
+                          // Si se deselecciona el vehículo, no hacemos nada más
+                          if (!newVehicleId) {
+                            return;
+                          }
+
+                          // Buscar primero en la lista de vehículos cargados
+                          let selectedVehicle = corporateVehicles.find(
+                            (veh: any) => Number(veh.id) === Number(newVehicleId)
+                          );
+                          // Si no está en la lista, buscar en el vehículo temporal
+                          if (!selectedVehicle && tempVehicle && Number(tempVehicle.id) === Number(newVehicleId)) {
+                            selectedVehicle = tempVehicle;
+                          }
+
+                          if (selectedVehicle) {
+                            // Establecer automáticamente el tipo basándose en el tipo del vehículo seleccionado
+                            if (selectedVehicle.tipo) {
                               const vehicleTipo = String(selectedVehicle.tipo).trim();
                               // Verificar si el tipo del vehículo coincide con uno de los tipos válidos
                               if (TYPE_OPTIONS.includes(vehicleTipo as TipoBitacora)) {
@@ -2040,6 +2269,58 @@ export default function BitacoraVehiculosDetenidosScreen() {
                                   await resetForm(tipoToSet);
                                 }
                               }
+                            }
+
+                            // Autocompletar información adicional del vehículo
+      const kmVal = selectedVehicle.kilometraje;
+      const proxAceiteVal = selectedVehicle.prox_cambio_aceite;
+      const modeloVal = selectedVehicle.modelo;
+      const annoVal = selectedVehicle.anno;
+                          const tipoAutoriaVal = selectedVehicle.tipo_autoria;
+
+                            setVehKilometraje(
+                              kmVal !== null && kmVal !== undefined ? String(kmVal) : ''
+                            );
+                            setVehProxCambioAceite(
+                              proxAceiteVal !== null && proxAceiteVal !== undefined
+                                ? String(proxAceiteVal)
+                                : ''
+                            );
+                            setVehModelo(
+                              modeloVal !== null && modeloVal !== undefined ? String(modeloVal) : ''
+                            );
+                            setVehAnno(
+                              annoVal !== null && annoVal !== undefined ? String(annoVal) : ''
+                            );
+                          if (tipoAutoriaVal === 'Cliente' || tipoAutoriaVal === 'Corporativo') {
+                            setVehTipoAutoria(String(tipoAutoriaVal));
+                          } else {
+                            setVehTipoAutoria('');
+                          }
+
+                            // Documentos
+                            if (
+                              selectedVehicle.titulo_propiedad === true ||
+                              selectedVehicle.titulo_propiedad === false
+                            ) {
+                              setVehTituloPropiedad(selectedVehicle.titulo_propiedad);
+                            } else {
+                              setVehTituloPropiedad(null);
+                            }
+
+                            if (selectedVehicle.rtv === true || selectedVehicle.rtv === false) {
+                              setVehRTV(selectedVehicle.rtv);
+                            } else {
+                              setVehRTV(null);
+                            }
+
+                            if (
+                              selectedVehicle.marchamo === true ||
+                              selectedVehicle.marchamo === false
+                            ) {
+                              setVehMarchamo(selectedVehicle.marchamo);
+                            } else {
+                              setVehMarchamo(null);
                             }
                           }
                         }}
@@ -2110,6 +2391,132 @@ export default function BitacoraVehiculosDetenidosScreen() {
                   El tipo se establece automáticamente según el vehículo seleccionado
                 </ThemedText>
               )}
+
+              {/* Información adicional del vehículo (opcional) */}
+              <ThemedView style={styles.vehicleExtraContainer}>
+                {/* Checkbox "Registrar vehículo" solo si NO hay vehículo seleccionado */}
+                {!selectedCorporateVehicleId && (
+                  <TouchableOpacity
+                    style={styles.registerVehicleRow}
+                    onPress={() => setShouldRegisterVehicle((prev) => !prev)}
+                  >
+                    <View style={styles.checkboxOuter}>
+                      {shouldRegisterVehicle && <View style={styles.checkboxInner} />}
+                    </View>
+                    <ThemedText style={styles.registerVehicleLabel}>Registrar vehículo</ThemedText>
+                  </TouchableOpacity>
+                )}
+
+                <ThemedText style={styles.sectionSubtitle}>Información del vehículo (opcional)</ThemedText>
+
+                <ThemedView style={styles.row}>
+                  <ThemedText style={styles.label}>Kilometraje</ThemedText>
+                  <TextInput
+                    style={styles.input}
+                    value={vehKilometraje}
+                    onChangeText={setVehKilometraje}
+                    placeholder="Kilometraje"
+                    placeholderTextColor="#999"
+                    keyboardType="numeric"
+                  />
+                </ThemedView>
+
+                <ThemedView style={styles.row}>
+                  <ThemedText style={styles.label}>Próximo cambio de aceite</ThemedText>
+                  <TextInput
+                    style={styles.input}
+                    value={vehProxCambioAceite}
+                    onChangeText={setVehProxCambioAceite}
+                    placeholder="Próximo cambio de aceite"
+                    placeholderTextColor="#999"
+                    keyboardType="numeric"
+                  />
+                </ThemedView>
+
+                <ThemedView style={styles.row}>
+                  <ThemedText style={styles.label}>Modelo</ThemedText>
+                  <TextInput
+                    style={styles.input}
+                    value={vehModelo}
+                    onChangeText={setVehModelo}
+                    placeholder="Modelo"
+                    placeholderTextColor="#999"
+                  />
+                </ThemedView>
+
+                <ThemedView style={styles.row}>
+                  <ThemedText style={styles.label}>Año</ThemedText>
+                  <TextInput
+                    style={styles.input}
+                    value={vehAnno}
+                    onChangeText={setVehAnno}
+                    placeholder="Año"
+                    placeholderTextColor="#999"
+                    keyboardType="numeric"
+                  />
+                </ThemedView>
+
+                <ThemedView style={styles.row}>
+                  <ThemedText style={styles.label}>Tipo de autoría</ThemedText>
+                  <ThemedView style={styles.pickerContainer}>
+                    <Picker
+                      selectedValue={vehTipoAutoria || ''}
+                      onValueChange={(v) => setVehTipoAutoria(String(v))}
+                      style={styles.picker}
+                    >
+                      <Picker.Item label="Seleccionar..." value="" />
+                      <Picker.Item label="Cliente" value="Cliente" />
+                      <Picker.Item label="Corporativo" value="Corporativo" />
+                    </Picker>
+                  </ThemedView>
+                </ThemedView>
+
+                <ThemedText style={styles.sectionSubtitle}>Documentos (opcional)</ThemedText>
+
+                <ThemedView style={styles.checkboxGroup}>
+                  <TouchableOpacity
+                    style={styles.checkboxRow}
+                    onPress={() =>
+                      setVehTituloPropiedad((prev) =>
+                        prev === null ? true : !prev
+                      )
+                    }
+                  >
+                    <View style={styles.checkboxOuter}>
+                      {vehTituloPropiedad && <View style={styles.checkboxInner} />}
+                    </View>
+                    <ThemedText style={styles.checkboxLabel}>Título propiedad</ThemedText>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.checkboxRow}
+                    onPress={() =>
+                      setVehRTV((prev) =>
+                        prev === null ? true : !prev
+                      )
+                    }
+                  >
+                    <View style={styles.checkboxOuter}>
+                      {vehRTV && <View style={styles.checkboxInner} />}
+                    </View>
+                    <ThemedText style={styles.checkboxLabel}>RTV</ThemedText>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.checkboxRow}
+                    onPress={() =>
+                      setVehMarchamo((prev) =>
+                        prev === null ? true : !prev
+                      )
+                    }
+                  >
+                    <View style={styles.checkboxOuter}>
+                      {vehMarchamo && <View style={styles.checkboxInner} />}
+                    </View>
+                    <ThemedText style={styles.checkboxLabel}>Marchamo</ThemedText>
+                  </TouchableOpacity>
+                </ThemedView>
+              </ThemedView>
 
               {/* Formulario dinámico - información general */}
               <ThemedText style={styles.sectionTitle}>Información general</ThemedText>
@@ -2328,9 +2735,14 @@ export default function BitacoraVehiculosDetenidosScreen() {
                       />
                       <TouchableOpacity
                         style={styles.dateButton}
-                        onPress={() => {
+                        onPress={async () => {
+                          const horaAccion = await getHoraAccion();
+                          if (!horaAccion) {
+                            Alert.alert('Error', 'No se pudo obtener la hora');
+                            return;
+                          }
                           setDatePickerKey(`mov_${idx}`);
-                          setDatePickerValue(new Date());
+                          setDatePickerValue(new Date(horaAccion));
                           setShowDatePicker(true);
                         }}
                       >
@@ -2339,9 +2751,14 @@ export default function BitacoraVehiculosDetenidosScreen() {
                       </TouchableOpacity>
                       <TouchableOpacity
                         style={styles.dateButton}
-                        onPress={() => {
+                        onPress={async () => {
+                          const horaAccion = await getHoraAccion();
+                          if (!horaAccion) {
+                            Alert.alert('Error', 'No se pudo obtener la hora');
+                            return;
+                          }
                           setTimePickerKey(`mov_${idx}`);
-                          setTimePickerValue(new Date());
+                          setTimePickerValue(new Date(horaAccion));
                           setShowTimePicker(true);
                         }}
                       >
@@ -2780,8 +3197,47 @@ const styles = StyleSheet.create({
   readonlyValue: { paddingVertical: 10, paddingHorizontal: 10, backgroundColor: '#F5F5F5', borderRadius: 8, color: '#000' },
 
   sectionTitle: { marginTop: 14, fontSize: 15, fontWeight: '800', color: '#007AFF' },
+  sectionSubtitle: { marginTop: 10, fontSize: 13, fontWeight: '700', color: '#555' },
   heading: { marginTop: 12, marginBottom: 4, fontSize: 14, fontWeight: '800', color: '#000' },
   row: { marginTop: 8 },
+
+  // Contenedor extra de información del vehículo
+  vehicleExtraContainer: {
+    marginTop: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    backgroundColor: '#F8F9FA',
+    gap: 8,
+  },
+  registerVehicleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 4,
+  },
+  checkboxOuter: {
+    width: 20,
+    height: 20,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: '#007AFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+  },
+  checkboxInner: {
+    width: 12,
+    height: 12,
+    borderRadius: 2,
+    backgroundColor: '#007AFF',
+  },
+  registerVehicleLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#007AFF',
+  },
 
   movementCard: { marginTop: 10, marginBottom: 10, borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 10, padding: 10, backgroundColor: '#FAFAFA' },
   movementHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
@@ -2963,6 +3419,22 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     paddingVertical: 12,
     backgroundColor: '#FFFFFF',
+  },
+
+  // Checkboxes reutilizan checkboxOuter/checkboxInner
+  checkboxGroup: {
+    marginTop: 8,
+    gap: 8,
+  },
+  checkboxRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  checkboxLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#333',
   },
   radioOptionSelected: {
     borderColor: '#007AFF',

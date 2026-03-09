@@ -38,6 +38,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       movimientos_vehiculos,
       observaciones,
       firma_responsable,
+      register_vehicle,
     } = body ?? {};
 
     // Registrar cambios (solo campos actualizados, excluyendo firmas)
@@ -51,9 +52,65 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     };
 
     const cambiosArr: Array<{ prop: string; before: any; after: any }> = [];
+
+    // Si no hay vehiculo_id en el registro y se solicita registrar vehículo, crear primero el vehículo corporativo
+    let finalVehiculoId: number | null =
+      vehiculo_id !== undefined ? (vehiculo_id ? Number(vehiculo_id) : null) : existing.vehiculo_id ?? null;
+
+    if (!finalVehiculoId && register_vehicle) {
+      try {
+        const {
+          placa,
+          tipo: vehTipo,
+          tipo_autoria,
+          kilometraje,
+          prox_cambio_aceite,
+          modelo,
+          anno,
+          titulo_propiedad,
+          rtv,
+          marchamo,
+        } = register_vehicle as any;
+
+        const newVehicle = await callDynamicPrisma({
+          req,
+          data: {
+            action: "POST",
+            table: "c_vehiculos_corporativos",
+            operation: "create",
+            data: {
+              empresa_id: existing.empresa_id,
+              cliente_id: existing.cliente_id,
+              sucursal_id: existing.sucursal_id,
+              placa: String(placa ?? ""),
+              tipo: String(vehTipo ?? tipo ?? existing.tipo ?? ""),
+              tipo_autoria: String(tipo_autoria ?? existing.tipo_autoria ?? ""),
+              estado: "Activo",
+              kilometraje: Number(kilometraje ?? 0),
+              prox_cambio_aceite: Number(prox_cambio_aceite ?? 0),
+              modelo: String(modelo ?? ""),
+              anno: Number(anno ?? 0),
+              descripcion: "-",
+              titulo_propiedad: Boolean(titulo_propiedad ?? true),
+              rtv: Boolean(rtv ?? true),
+              marchamo: Boolean(marchamo ?? true),
+              firma_responsable: typeof firma_responsable === "string" && firma_responsable.trim().length > 0
+                ? firma_responsable
+                : String(existing.firma_responsable ?? ""),
+            },
+          },
+        });
+
+        if (newVehicle && (newVehicle as any).id) {
+          finalVehiculoId = Number((newVehicle as any).id);
+        }
+      } catch (vehError) {
+        console.error("Error creando vehículo corporativo desde bitácora (PUT):", vehError);
+      }
+    }
     const updateData: any = {
       tipo: typeof tipo === "string" ? tipo : existing.tipo,
-      vehiculo_id: vehiculo_id !== undefined ? (vehiculo_id ? Number(vehiculo_id) : null) : existing.vehiculo_id ?? null,
+      vehiculo_id: finalVehiculoId,
       uso_id: uso_id !== undefined ? (uso_id ? Number(uso_id) : null) : existing.uso_id ?? null,
       informacion_general: informacion_general !== undefined ? normalizeToStringifiedJson(informacion_general) : existing.informacion_general,
       informacion_revision: informacion_revision !== undefined ? normalizeToStringifiedJson(informacion_revision) : existing.informacion_revision,

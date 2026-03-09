@@ -13,8 +13,12 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         return NextResponse.json({ status: false, message: 'ID o imagen faltante' }, { status: 400 });
     }
 
+    // Obtener token desde el querystring (estándar para consumo desde mobile)
+    const token = req.nextUrl.searchParams.get("token") || undefined;
+
     const evaluation = await callDynamicPrisma({
         req,
+        token,
         data: { action: "GET", table: "c_evaluacion_empleado", operation: "findUnique", where: { id } }
     });
     if (!evaluation) {

@@ -64,9 +64,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       created_by: existing.created_by ?? (parseInt(String((payload as any)?.id ?? 0)) || 0),
     };
 
-    // Comparar cambios (excluir firmas)
+    // Comparar cambios (incluir firmas)
     for (const [k, v] of Object.entries(updateData)) {
-      if (k === "firma_responsable") continue; // Excluir firmas
       const before = (existing as any)[k];
       const after = v;
       if (!eq(before, after)) {

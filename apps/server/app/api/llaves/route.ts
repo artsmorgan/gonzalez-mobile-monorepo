@@ -206,6 +206,7 @@ export async function POST(req: NextRequest) {
               lugar_abre: created.lugar_abre,
               cantidad_copias: created.cantidad_copias,
               observaciones: created.observaciones,
+              firma_responsable: created.firma_responsable,
             },
           }]),
           created_at: createdAt.toISOString(),

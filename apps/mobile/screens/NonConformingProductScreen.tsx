@@ -149,6 +149,16 @@ const formatSignatureForDisplay = (value: string | null | undefined): string | n
   return `data:image/png;base64,${s}`;
 };
 
+const formatFirmaDateLabel = (timestamp: string | undefined): string => {
+  if (!timestamp) return '';
+  const ms = Number(timestamp);
+  if (!Number.isFinite(ms)) return String(timestamp);
+  const d = new Date(ms);
+  const date = d.toISOString().split('T')[0];
+  const time = d.toISOString().split('T')[1]?.split('.')[0] ?? '';
+  return `${date} ${time}`;
+};
+
 const decodeFirmaHash = (hash?: string | null) => {
   try {
     if (!hash || String(hash).trim().length === 0) return null;
@@ -368,11 +378,14 @@ export default function NonConformingProductScreen() {
         try {
           const parsed = JSON.parse(cacheStr);
           if (Array.isArray(parsed)) setStructure(parsed);
+          else setStructure([]);
         } catch {
           // ignore
+          setStructure([]);
         }
       }
 
+      /*
       const isConnected = await getConnectionStatus();
       if (!isConnected) return;
 
@@ -399,6 +412,7 @@ export default function NonConformingProductScreen() {
         setStructure(incoming);
         await AsyncStorage.setItem('main_structure_cache', JSON.stringify(incoming));
       }
+      */
     } catch (e) {
       console.error('Error fetching main structure (PNC):', e);
     } finally {
@@ -626,9 +640,9 @@ export default function NonConformingProductScreen() {
     }, [fetchRecords, fetchTiposProductoNoConforme])
   );
 
-  const resetForm = () => {
-    setFechaIdentificacion(new Date());
-    setFechaSolucion(new Date());
+  const resetForm = (horaAccion: string) => {
+    setFechaIdentificacion(new Date(horaAccion));
+    setFechaSolucion(new Date(horaAccion));
     setResponsableCuenta('');
     setTipoServicioNoConforme('');
     setPersonaIdentifico('');
@@ -645,14 +659,19 @@ export default function NonConformingProductScreen() {
     setDocumentFiles([]);
   };
 
-  const startCreate = () => {
+  const startCreate = async () => {
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora de acción');
+      return;
+    }
     setIsCreating(true);
     setEditing(null);
-    resetForm();
+    resetForm(String(horaAccion));
     // si ya tenemos defaults por marca, mantenerlos (no limpiar selects)
   };
 
-  const startEditing = (r: PncRecord) => {
+  const startEditing = async (r: PncRecord) => {
     setIsCreating(true);
     setEditing({ id: r.id, id_local: r.id_local });
 
@@ -668,8 +687,14 @@ export default function NonConformingProductScreen() {
     if (contratoFound) setSelectedContratoId(contratoFound.id);
     setSelectedSucursalId(r.corpo_id);
 
-    setFechaIdentificacion(r.fecha_identificacion ? new Date(String(r.fecha_identificacion)) : new Date());
-    setFechaSolucion(r.fecha_solucion ? new Date(String(r.fecha_solucion)) : new Date());
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora de acción');
+      return;
+    }
+
+    setFechaIdentificacion(r.fecha_identificacion ? new Date(String(r.fecha_identificacion)) : new Date(String(horaAccion)));
+    setFechaSolucion(r.fecha_solucion ? new Date(String(r.fecha_solucion)) : new Date(String(horaAccion)));
     setResponsableCuenta(r.responsable_cuenta || '');
     setTipoServicioNoConforme(r.tipo_servicio_no_conforme || '');
     setPersonaIdentifico(r.persona_identifico_pnc || '');
@@ -687,10 +712,15 @@ export default function NonConformingProductScreen() {
     setDocumentFiles([]);
   };
 
-  const cancelCreateOrEdit = () => {
+  const cancelCreateOrEdit = async () => {
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora de acción');
+      return;
+    }
     setIsCreating(false);
     setEditing(null);
-    resetForm();
+    resetForm(String(horaAccion));
   };
 
   const toggleExpanded = (key: string) => {
@@ -878,10 +908,8 @@ export default function NonConformingProductScreen() {
     if (!responsableCuenta.trim()) return 'Responsable de la cuenta es requerido';
     if (!tipoServicioNoConforme.trim()) return 'Tipo de producto no conforme es requerido';
     if (!personaIdentifico.trim()) return 'Persona que identificó el PNC es requerida';
-    if (!getBase64Only(firmaPersonaIdentifico)) return 'Firma de persona que identificó el PNC es requerida';
     if (!descripcion.trim()) return 'Descripción es requerida';
     if (!personaOrigino.trim()) return 'Persona que originó el PNC es requerida';
-    if (!getBase64Only(firmaPersonaOrigino)) return 'Firma de persona que originó el PNC es requerida';
     if (!accionImplementada.trim()) return 'Acción implementada es requerida';
     if (!responsableAprobar.trim()) return 'Responsable de aprobar es requerido';
     const firmaHash = firmaResponsable
@@ -902,10 +930,10 @@ export default function NonConformingProductScreen() {
       responsable_cuenta: responsableCuenta.trim(),
       tipo_servicio_no_conforme: tipoServicioNoConforme.trim(),
       persona_identifico_pnc: personaIdentifico.trim(),
-      firma_persona_identifico_pnc: getBase64Only(firmaPersonaIdentifico),
+      firma_persona_identifico_pnc: getBase64Only(firmaPersonaIdentifico) || null,
       descripcion: descripcion.trim(),
       persona_origino_pnc: personaOrigino.trim(),
-      firma_persona_origino_pnc: getBase64Only(firmaPersonaOrigino),
+      firma_persona_origino_pnc: getBase64Only(firmaPersonaOrigino) || null,
       accion_implementada: accionImplementada.trim(),
       fecha_solucion: dateToLocalString(fechaSolucion),
       responsable_aprobar: responsableAprobar.trim(),
@@ -933,19 +961,25 @@ export default function NonConformingProductScreen() {
         if (isConnected) {
           const res = await createNonConformingProduct({ requestData, refreshAccessToken, logout });
           if (res.status) {
-            setSubmitResponse({ type: 'success', message: res.message || 'Registro creado correctamente' });
+            Alert.alert('Éxito', res.message || 'Registro creado correctamente');
             setTimeout(() => {
               cancelCreateOrEdit();
               fetchRecords();
             }, 2000);
           } else {
-            setSubmitResponse({ type: 'error', message: res.message || 'No se pudo crear el registro' });
+            Alert.alert('Error', res.message || 'No se pudo crear el registro');
           }
           return;
         }
 
+        const horaAccion = await getHoraAccion();
+        if (!horaAccion) {
+          Alert.alert('Error', 'No se pudo obtener la hora de acción');
+          return;
+        }
+
         const localId = `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-        const nowIso = new Date().toISOString();
+        const nowIso = new Date(String(horaAccion)).toISOString();
 
         const localFiles: PncFile[] = (requestData.archivos || []).map((f: any) => ({
           id_local: `local_file_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
@@ -989,7 +1023,7 @@ export default function NonConformingProductScreen() {
         cache.push({ ...localItem, type: 'non_conforming_product' });
         await AsyncStorage.setItem('evaluations_cache', JSON.stringify(cache));
 
-        setSubmitResponse({ type: 'success', message: 'El registro se sincronizará cuando vuelva la conexión.' });
+        Alert.alert('Éxito', 'El registro se sincronizará cuando vuelva la conexión.');
         setTimeout(() => {
           cancelCreateOrEdit();
           fetchRecords();
@@ -1013,13 +1047,13 @@ export default function NonConformingProductScreen() {
       if (isConnected && !isLocal && editing.id && !String(editing.id).startsWith('local-')) {
         const res = await updateNonConformingProduct({ id: String(editing.id), requestData: requestDataUpdate, refreshAccessToken, logout });
         if (res.status) {
-          setSubmitResponse({ type: 'success', message: res.message || 'Registro actualizado correctamente' });
+          Alert.alert('Éxito', res.message || 'Registro actualizado correctamente');
           setTimeout(() => {
             cancelCreateOrEdit();
             fetchRecords();
           }, 2000);
         } else {
-          setSubmitResponse({ type: 'error', message: res.message || 'No se pudo actualizar el registro' });
+          Alert.alert('Error', res.message || 'No se pudo actualizar el registro');
         }
         return;
       }
@@ -1040,7 +1074,7 @@ export default function NonConformingProductScreen() {
         });
         await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
 
-        setSubmitResponse({ type: 'success', message: 'Los cambios se sincronizarán cuando vuelva la conexión.' });
+        Alert.alert('Éxito', 'Registro guardado localmente. Se sincronizará cuando vuelva la conexión.');
         setTimeout(() => {
           cancelCreateOrEdit();
           fetchRecords();
@@ -1048,7 +1082,7 @@ export default function NonConformingProductScreen() {
       }
     } catch (error) {
       console.error('Error saving non conforming product:', error);
-      setSubmitResponse({ type: 'error', message: 'Error al guardar el registro' });
+      Alert.alert('Error', 'No se pudo guardar el registro');
     } finally {
       setIsSubmitting(false);
     }
@@ -1291,7 +1325,7 @@ export default function NonConformingProductScreen() {
         <ThemedText style={styles.label}>Persona que identificó el PNC *</ThemedText>
         <TextInput style={styles.input} value={personaIdentifico} onChangeText={setPersonaIdentifico} placeholder="Nombre" placeholderTextColor="#999" />
 
-        <ThemedText style={styles.label}>Firma persona que identificó el PNC *</ThemedText>
+        <ThemedText style={styles.label}>Firma persona que identificó el PNC (Opcional)</ThemedText>
         {formatSignatureForDisplay(firmaPersonaIdentifico) ? (
           <Image source={{ uri: formatSignatureForDisplay(firmaPersonaIdentifico)! }} style={styles.signaturePreview} resizeMode="contain" />
         ) : null}
@@ -1306,7 +1340,7 @@ export default function NonConformingProductScreen() {
         <ThemedText style={styles.label}>Persona que originó el PNC *</ThemedText>
         <TextInput style={styles.input} value={personaOrigino} onChangeText={setPersonaOrigino} placeholder="Nombre" placeholderTextColor="#999" />
 
-        <ThemedText style={styles.label}>Firma persona que originó el PNC *</ThemedText>
+        <ThemedText style={styles.label}>Firma persona que originó el PNC (Opcional)</ThemedText>
         {formatSignatureForDisplay(firmaPersonaOrigino) ? (
           <Image source={{ uri: formatSignatureForDisplay(firmaPersonaOrigino)! }} style={styles.signaturePreview} resizeMode="contain" />
         ) : null}
@@ -1355,25 +1389,54 @@ export default function NonConformingProductScreen() {
         </ThemedView>
         {renderLocalFilesList()}
 
-        <ThemedText style={styles.sectionTitle}>Firma del responsable *</ThemedText>
-        <ThemedView style={styles.signatureButtonsRow}>
-          <TouchableOpacity style={[styles.signatureBlueButton, isGeneratingFirma && styles.signatureDisabled]} onPress={generateFirmaResponsable} disabled={isGeneratingFirma} activeOpacity={0.85}>
-            {isGeneratingFirma ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Ionicons name="finger-print" size={18} color="#FFFFFF" />}
-            <ThemedText style={styles.signatureBlueButtonText}>{isGeneratingFirma ? 'Generando...' : 'Generar'}</ThemedText>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.signatureBlueButton} onPress={handleScanQR} activeOpacity={0.85}>
-            <Ionicons name="qr-code" size={18} color="#FFFFFF" />
-            <ThemedText style={styles.signatureBlueButtonText}>Escanear QR</ThemedText>
-          </TouchableOpacity>
+        {/* Firma del responsable (digital: generar o escanear QR) */}
+        <ThemedView style={styles.formGroup}>
+          <ThemedText style={styles.formLabel}>Firma del responsable *</ThemedText>
+          {!decodedFirma ? (
+            <ThemedView style={styles.signatureButtonsRow}>
+              <TouchableOpacity
+                style={[styles.signatureButtonPrimary, isGeneratingFirma && styles.signatureDisabled]}
+                onPress={generateFirmaResponsable}
+                disabled={isGeneratingFirma}
+                activeOpacity={0.85}
+              >
+                {isGeneratingFirma ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <>
+                    <Ionicons name="finger-print" size={20} color="#FFFFFF" />
+                    <ThemedText style={styles.signatureButtonPrimaryText}>{isGeneratingFirma ? 'Generando...' : 'Generar firma'}</ThemedText>
+                  </>
+                )}
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.signatureButtonPrimary} onPress={handleScanQR} activeOpacity={0.85}>
+                <Ionicons name="qr-code" size={20} color="#FFFFFF" />
+                <ThemedText style={styles.signatureButtonPrimaryText}>Escanear QR</ThemedText>
+              </TouchableOpacity>
+            </ThemedView>
+          ) : (
+            <ThemedView style={styles.signatureInfo}>
+              <ThemedText style={styles.signatureInfoTitle}>
+                Información de la firma del responsable
+              </ThemedText>
+              <ThemedText style={styles.signatureInfoText}>
+                ID de sesión: {decodedFirma.sessionId}
+              </ThemedText>
+              <ThemedText style={styles.signatureInfoText}>
+                ID del empleado: {decodedFirma.empleadoId}
+              </ThemedText>
+              <ThemedText style={styles.signatureInfoText}>
+                Latitud: {decodedFirma.latitud}
+              </ThemedText>
+              <ThemedText style={styles.signatureInfoText}>
+                Longitud: {decodedFirma.longitud}
+              </ThemedText>
+              <ThemedText style={styles.signatureInfoText}>
+                Fecha y hora: {formatFirmaDateLabel(decodedFirma.timestamp)}
+              </ThemedText>
+            </ThemedView>
+          )}
         </ThemedView>
-        {decodedFirma ? (
-          <ThemedView style={styles.firmaInfoBox}>
-            <ThemedText style={styles.firmaInfoText}>Empleado: {decodedFirma.empleadoId}</ThemedText>
-            <ThemedText style={styles.firmaInfoText}>Timestamp: {decodedFirma.timestamp}</ThemedText>
-          </ThemedView>
-        ) : (
-          <ThemedText style={styles.helpText}>Pendiente</ThemedText>
-        )}
 
         {submitResponse && (
           <ThemedView style={[styles.responseContainer, submitResponse.type === 'success' ? styles.responseSuccess : styles.responseError]}>
@@ -1719,12 +1782,96 @@ export default function NonConformingProductScreen() {
                           {(Array.isArray(parsed) ? parsed : []).length > 0 && (
                             <ThemedView style={styles.filterGroupSearch}>
                               <ThemedText style={styles.filterLabel}>Cambios:</ThemedText>
-                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => (
-                                <ThemedText key={`c-${row.id}-${idx}`} style={styles.changeDescription}>
-                                  <ThemedText style={{ fontWeight: '800' }}>{String(c?.prop ?? '-')}: </ThemedText>
-                                  {formatChangeValue(c?.prop, c?.after)}
-                                </ThemedText>
-                              ))}
+                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => {
+                                const prop = String(c?.prop ?? '-');
+                                const value = c?.after;
+
+                                // Caso especial: registro creado (__created__)
+                                if (prop === '__created__' && value && typeof value === 'object') {
+                                  const created: any = value;
+                                  return (
+                                    <React.Fragment key={`c-${row.id}-${idx}-created`}>
+                                      <ThemedView style={styles.changeDescriptionContainer}>
+                                        <ThemedText style={styles.changeDescription}>
+                                          <ThemedText style={{ fontWeight: '800' }}>Registro creado</ThemedText>
+                                        </ThemedText>
+                                      </ThemedView>
+                                      {Object.entries(created).map(([k, v]) => {
+                                        if (k === 'firma_persona_identifico_pnc' || k === 'firma_persona_origino_pnc' || k === 'firma_responsable') return null;
+                                        return (
+                                          <ThemedView key={`c-${row.id}-${idx}-${k}`} style={styles.changeDescriptionContainer}>
+                                            <ThemedText style={styles.changeDescription}>
+                                              <ThemedText style={{ fontWeight: '800' }}>{k}: </ThemedText>
+                                              {formatChangeValue(k, v)}
+                                            </ThemedText>
+                                          </ThemedView>
+                                        );
+                                      })}
+                                      {typeof created.firma_responsable === 'string' && created.firma_responsable.trim() && (
+                                        <ThemedView style={styles.changeDescriptionContainer}>
+                                          <ThemedText style={styles.changeDescription}>
+                                            <ThemedText style={{ fontWeight: '800' }}>firma_responsable: </ThemedText>
+                                            {(() => {
+                                              const info = decodeFirmaHash(created.firma_responsable);
+                                              return info
+                                                ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${info.timestamp || 'N/A'}`
+                                                : 'Firma responsable (formato no decodificable)';
+                                            })()}
+                                          </ThemedText>
+                                        </ThemedView>
+                                      )}
+                                      {created.firma_persona_identifico_pnc && (
+                                        <ThemedView style={styles.changeDescriptionContainer}>
+                                          <ThemedText style={styles.changeDescription}>
+                                            <ThemedText style={{ fontWeight: '800' }}>firma_persona_identifico_pnc: </ThemedText>
+                                          </ThemedText>
+                                          <Image
+                                            source={{ uri: formatSignatureForDisplay(created.firma_persona_identifico_pnc) ?? '' }}
+                                            style={styles.cambioSignatureImage}
+                                            resizeMode="contain"
+                                          />
+                                        </ThemedView>
+                                      )}
+                                      {created.firma_persona_origino_pnc && (
+                                        <ThemedView style={styles.changeDescriptionContainer}>
+                                          <ThemedText style={styles.changeDescription}>
+                                            <ThemedText style={{ fontWeight: '800' }}>firma_persona_origino_pnc: </ThemedText>
+                                          </ThemedText>
+                                          <Image
+                                            source={{ uri: formatSignatureForDisplay(created.firma_persona_origino_pnc) ?? '' }}
+                                            style={styles.cambioSignatureImage}
+                                            resizeMode="contain"
+                                          />
+                                        </ThemedView>
+                                      )}
+                                    </React.Fragment>
+                                  );
+                                }
+
+                                const isResponsableSignature = prop === 'firma_responsable';
+                                const isManualSignature = prop === 'firma_persona_identifico_pnc' || prop === 'firma_persona_origino_pnc';
+
+                                return (
+                                  <ThemedView key={`c-${row.id}-${idx}`} style={styles.changeDescriptionContainer}>
+                                    <ThemedText style={styles.changeDescription}>
+                                      <ThemedText style={{ fontWeight: '800' }}>{prop}: </ThemedText>
+                                      {!isManualSignature && !isResponsableSignature && formatChangeValue(prop, value)}
+                                      {isResponsableSignature && (() => {
+                                        const info = typeof value === 'string' ? decodeFirmaHash(value) : null;
+                                        if (!info) return 'Firma responsable (formato no decodificable)';
+                                        return `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${info.timestamp || 'N/A'}`;
+                                      })()}
+                                    </ThemedText>
+                                    {isManualSignature && value && (
+                                      <Image
+                                        source={{ uri: formatSignatureForDisplay(value) ?? '' }}
+                                        style={styles.cambioSignatureImage}
+                                        resizeMode="contain"
+                                      />
+                                    )}
+                                  </ThemedView>
+                                );
+                              })}
                             </ThemedView>
                           )}
                         </ThemedView>
@@ -1905,10 +2052,31 @@ const styles = StyleSheet.create({
   filePreviewImage: { width: 44, height: 44, borderRadius: 8, backgroundColor: '#F2F2F2' },
   fileName: { flex: 1, color: '#000000' },
 
-  signatureButtonsRow: { flexDirection: 'row', gap: 10, marginTop: 8 },
+  formGroup: { marginBottom: 16 },
+  formLabel: { fontSize: 14, fontWeight: '600', marginBottom: 8, color: '#333' },
+  signatureButtonsRow: { flexDirection: 'row', gap: 10, marginTop: 4 },
+  signatureButtonPrimary: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    borderRadius: 8,
+    backgroundColor: '#007AFF',
+    gap: 8,
+    flex: 1,
+  },
+  signatureButtonPrimaryText: { color: '#FFFFFF', fontSize: 14, fontWeight: '600' },
   signatureBlueButton: { flexDirection: 'row', gap: 8, alignItems: 'center', backgroundColor: '#007AFF', paddingVertical: 10, paddingHorizontal: 12, borderRadius: 10, flex: 1, justifyContent: 'center' },
   signatureBlueButtonText: { color: '#FFFFFF', fontWeight: '700' },
   signatureDisabled: { opacity: 0.6 },
+  signatureInfo: {
+    backgroundColor: '#F5F5F5',
+    borderRadius: 8,
+    padding: 10,
+    marginTop: 8,
+  },
+  signatureInfoTitle: { fontSize: 14, fontWeight: 'bold', marginBottom: 4 },
+  signatureInfoText: { fontSize: 12, marginBottom: 2 },
   firmaInfoBox: { marginTop: 10, padding: 12, borderRadius: 10, backgroundColor: '#F5F9FF', borderWidth: 1, borderColor: '#D7E8FF' },
   firmaInfoText: { color: '#000000' },
   helpText: { color: '#666666' },
@@ -1991,6 +2159,8 @@ const styles = StyleSheet.create({
   cambioCollapsableTitle: { fontSize: 14, fontWeight: '600', color: '#007AFF', flex: 1 },
   cambioCollapsableContent: { padding: 12, gap: 8, backgroundColor: '#F8F9FA' },
   changeDescription: { fontSize: 14, lineHeight: 20, color: '#666', marginBottom: 8 },
+  changeDescriptionContainer: { marginBottom: 8 },
+  cambioSignatureImage: { marginTop: 6, height: 80, width: 160, backgroundColor: '#f0f0f0', borderRadius: 4 },
   filterGroupSearch: { marginBottom: 12 },
   filterLabel: { fontSize: 14, fontWeight: '600', color: '#333', marginBottom: 4 },
 

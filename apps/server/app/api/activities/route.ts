@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { sendNotificationByPlaza } from "../../../utils/sendNotification";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
+import { toZonedTime } from "date-fns-tz";
 
 export async function GET(req: NextRequest) {
     try {
@@ -18,12 +19,13 @@ export async function POST(req: NextRequest) {
 
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
-        const { marca_id, nombre_actividad, fecha_inicio, frecuencia, es_revision_equipo, descripcion_actividad, reglas, puestos_plazas, firma_responsable } = await req.json();
+        const { marca_id, nombre_actividad, fecha_inicio, fecha_fin, frecuencia, es_revision_equipo, descripcion_actividad, reglas, puestos_plazas, firma_responsable } = await req.json();
 
         if (!marca_id || !nombre_actividad || !fecha_inicio || !frecuencia || es_revision_equipo === undefined || !descripcion_actividad || !reglas || !firma_responsable) {
             console.log("marca_id", marca_id);
             console.log("nombre_actividad", nombre_actividad);
             console.log("fecha_inicio", fecha_inicio);
+            console.log("fecha_fin", fecha_fin);
             console.log("frecuencia", frecuencia);
             console.log("es_revision_equipo", es_revision_equipo);
             console.log("descripcion_actividad", descripcion_actividad);
@@ -47,6 +49,7 @@ export async function POST(req: NextRequest) {
                 data: {
                     nombre_actividad: nombre_actividad,
                     fecha_inicio: new Date(fecha_inicio).toISOString(),
+                    fecha_fin: fecha_fin ? new Date(fecha_fin).toISOString() : new Date(fecha_inicio).toISOString(),
                     frecuencia: frecuencia,
                     es_revision_equipo: es_revision_equipo,
                     descripcion_actividad: descripcion_actividad,
@@ -98,6 +101,37 @@ export async function POST(req: NextRequest) {
 
             const frecuencia_parse = JSON.parse(frecuencia);
             await sendNotificationByPlaza(req, marca_id, "Actividad asignada", `Se te ha asignado la actividad ${nombre_actividad}, la cual deberá realizarse "${frecuencia_parse.title}"`, plazas_ids);
+
+            const createdBy = payload?.id ? Number(payload.id) : 0;
+            await callDynamicPrisma({
+                req,
+                data: {
+                    action: "POST",
+                    table: "c_cambios_apps_modules",
+                    operation: "create",
+                    data: {
+                        nombre_tabla: "e_actividades",
+                        registro_id: actividad.id,
+                        cambios: JSON.stringify([{
+                            prop: "__created__",
+                            before: null,
+                            after: {
+                                id: actividad.id,
+                                nombre_actividad,
+                                descripcion_actividad,
+                                fecha_inicio,
+                                fecha_fin: fecha_fin || fecha_inicio,
+                                frecuencia,
+                                es_revision_equipo,
+                                firma_responsable,
+                                puestos_ids: uniquePuestoIds,
+                            },
+                        }]),
+                        created_at: toZonedTime(new Date(), "America/Costa_Rica").toISOString(),
+                        created_by: createdBy,
+                    },
+                },
+            });
         }
 
         return NextResponse.json({ status: true, message: "Actividad creada correctamente" }, { status: 200 });

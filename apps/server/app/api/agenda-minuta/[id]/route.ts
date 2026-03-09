@@ -30,9 +30,18 @@ function parseTimeInput(time: any): Date | undefined {
     const hh = Number(m[1]);
     const mm = Number(m[2]);
     if (Number.isNaN(hh) || Number.isNaN(mm) || hh < 0 || hh > 23 || mm < 0 || mm > 59) return undefined;
-    return new Date(1970, 0, 1, hh, mm, 0, 0);
+    return new Date(Date.UTC(1970, 0, 1, hh, mm, 0, 0));
   }
   return undefined;
+}
+
+function timeToHHmm(val: any): string | null {
+  if (val == null) return null;
+  const d = val instanceof Date ? val : (typeof val === "string" ? new Date(val) : null);
+  if (!d || Number.isNaN(d.getTime())) return null;
+  const hh = d.getUTCHours();
+  const mm = d.getUTCMinutes();
+  return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
 }
 
 function ensureStringJson(value: any, fallback: string) {
@@ -127,9 +136,6 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
     const cambiosArr: Array<{ prop: string; before: any; after: any }> = [];
     for (const [k, v] of Object.entries(data)) {
-      // No registramos firmas: esas se guardan aparte y no son "datos escritos"
-      if (k === "firma_responsable") continue;
-
       const before = (existingRecord as any)[k];
       const after = typeof v === "string" && /^\d{4}-\d{2}-\d{2}T/.test(v) ? new Date(v) : v;
       if (!eq(before, after)) {
@@ -178,6 +184,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       });
     }
 
+    const updatedAny = updatedRecord as any;
     return NextResponse.json(
       {
         status: true,
@@ -185,12 +192,14 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         data: {
           ...updatedRecord,
           id_local: "",
-          cliente_nombre: (updatedRecord as any).e_estructura_cliente?.nombre || null,
-          corpo_nombre: (updatedRecord as any).e_estructura_sucursal
-            ? `${(updatedRecord as any).e_estructura_sucursal.nro_sucursal} - ${(updatedRecord as any).e_estructura_sucursal.nombre}`
+          hora_inicio: timeToHHmm(updatedAny.hora_inicio) ?? updatedAny.hora_inicio,
+          hora_fin: timeToHHmm(updatedAny.hora_fin) ?? updatedAny.hora_fin,
+          cliente_nombre: updatedAny.e_estructura_cliente?.nombre || null,
+          corpo_nombre: updatedAny.e_estructura_sucursal
+            ? `${updatedAny.e_estructura_sucursal.nro_sucursal} - ${updatedAny.e_estructura_sucursal.nombre}`
             : null,
-          puesto_nombre: (updatedRecord as any).e_estructura_puesto
-            ? `${(updatedRecord as any).e_estructura_puesto.codigo ? `${(updatedRecord as any).e_estructura_puesto.codigo} - ` : ""}${(updatedRecord as any).e_estructura_puesto.nombre}`
+          puesto_nombre: updatedAny.e_estructura_puesto
+            ? `${updatedAny.e_estructura_puesto.codigo ? `${updatedAny.e_estructura_puesto.codigo} - ` : ""}${updatedAny.e_estructura_puesto.nombre}`
             : null,
         },
       },

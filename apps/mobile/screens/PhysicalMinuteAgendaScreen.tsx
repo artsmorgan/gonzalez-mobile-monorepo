@@ -162,6 +162,16 @@ const formatTimeHHmm = (date: Date): string => {
   return `${hh}:${mm}`;
 };
 
+/** Parse "HH:mm" to Date (local) so picker and display match saved time. */
+const parseTimeHHmm = (s: string | null | undefined): Date => {
+  if (!s || typeof s !== 'string') return new Date(1970, 0, 1, 0, 0, 0, 0);
+  const m = s.trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return new Date(1970, 0, 1, 0, 0, 0, 0);
+  const hh = Math.min(23, Math.max(0, Number(m[1])));
+  const mm = Math.min(59, Math.max(0, Number(m[2])));
+  return new Date(1970, 0, 1, hh, mm, 0, 0);
+};
+
 const safeJsonParse = <T,>(value: any, fallback: T): T => {
   try {
     if (!value) return fallback;
@@ -371,11 +381,16 @@ export default function PhysicalMinuteAgendaScreen() {
         try {
           const parsed = JSON.parse(cacheStr);
           if (Array.isArray(parsed)) setStructure(parsed);
+          else setStructure([]);
         } catch {
           // ignore
+          setStructure([]);
         }
       }
-
+      else {
+        setStructure([]);
+      }
+      /*
       const isConnected = await getConnectionStatus();
       if (!isConnected) return;
 
@@ -401,6 +416,7 @@ export default function PhysicalMinuteAgendaScreen() {
         setStructure(incoming);
         await AsyncStorage.setItem('main_structure_cache', JSON.stringify(incoming));
       }
+      */
     } catch (e) {
       console.error('Error fetching main structure for agenda-minuta:', e);
     } finally {
@@ -645,7 +661,7 @@ export default function PhysicalMinuteAgendaScreen() {
     }
   }, [refreshAccessToken, logout]);
 
-  const resetForm = () => {
+  const resetForm = (horaAccion: number) => {
     setSelectedEmpresaId(null);
     setSelectedClienteId(null);
     setSelectedDivisionId(null);
@@ -654,9 +670,9 @@ export default function PhysicalMinuteAgendaScreen() {
     setSelectedPuestoId(null);
     setNumero('');
     setTitulo('');
-    setFecha(new Date());
-    setHoraInicio(new Date());
-    setHoraFin(new Date());
+    setFecha(new Date(horaAccion));
+    setHoraInicio(new Date(horaAccion));
+    setHoraFin(new Date(horaAccion));
     setAutor('');
     setObservaciones('');
     setParticipantes([]);
@@ -665,10 +681,15 @@ export default function PhysicalMinuteAgendaScreen() {
     setFirmaResponsable('');
   };
 
-  const startCreate = () => {
+  const startCreate = async () => {
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora de acción');
+      return;
+    }
     setEditingRecord(null);
     setIsCreating(true);
-    resetForm();
+    resetForm(horaAccion);
   };
 
   const cancelCreateOrEdit = () => {
@@ -676,7 +697,12 @@ export default function PhysicalMinuteAgendaScreen() {
     setEditingRecord(null);
   };
 
-  const startEditing = (r: AgendaMinutaRecord) => {
+  const startEditing = async (r: AgendaMinutaRecord) => {
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora de acción');
+      return;
+    }
     setIsCreating(true);
     setEditingRecord(r);
 
@@ -698,12 +724,12 @@ export default function PhysicalMinuteAgendaScreen() {
     setObservaciones(String(r.observaciones ?? ''));
 
     const fechaParsed = r.fecha instanceof Date ? r.fecha : new Date(String(r.fecha));
-    setFecha(Number.isNaN(fechaParsed.getTime()) ? new Date() : fechaParsed);
+    setFecha(Number.isNaN(fechaParsed.getTime()) ? new Date(horaAccion) : fechaParsed);
 
-    const hi = r.hora_inicio instanceof Date ? r.hora_inicio : new Date(String(r.hora_inicio));
-    const hf = r.hora_fin instanceof Date ? r.hora_fin : new Date(String(r.hora_fin));
-    setHoraInicio(Number.isNaN(hi.getTime()) ? new Date() : hi);
-    setHoraFin(Number.isNaN(hf.getTime()) ? new Date() : hf);
+    const horaInicioVal = typeof r.hora_inicio === 'string' && /^\d{1,2}:\d{2}$/.test(r.hora_inicio) ? r.hora_inicio : (r.hora_inicio instanceof Date ? formatTimeHHmm(r.hora_inicio) : (r.hora_inicio ? formatTimeHHmm(new Date(String(r.hora_inicio))) : '00:00'));
+    const horaFinVal = typeof r.hora_fin === 'string' && /^\d{1,2}:\d{2}$/.test(r.hora_fin) ? r.hora_fin : (r.hora_fin instanceof Date ? formatTimeHHmm(r.hora_fin) : (r.hora_fin ? formatTimeHHmm(new Date(String(r.hora_fin))) : '00:00'));
+    setHoraInicio(parseTimeHHmm(horaInicioVal));
+    setHoraFin(parseTimeHHmm(horaFinVal));
 
     const parsedParticipantes = safeJsonParse<ParticipanteItem[]>(r.participantes, []);
     const parsedAcuerdos = parseAcuerdosPayload(r.acuerdos).items;
@@ -1070,7 +1096,7 @@ export default function PhysicalMinuteAgendaScreen() {
             logout,
           });
           if (res.status) {
-            setSubmitResponse({ type: 'success', message: res.message || 'Agenda minuta actualizada correctamente' });
+            Alert.alert('Éxito', res.message || 'Agenda minuta actualizada correctamente');
             setTimeout(() => {
               cancelCreateOrEdit();
               fetchRecords();
@@ -1083,7 +1109,7 @@ export default function PhysicalMinuteAgendaScreen() {
           if (msg.includes('503')) {
             // queue offline update
           } else {
-            setSubmitResponse({ type: 'error', message: res.message || 'No se pudo actualizar' });
+            Alert.alert('Error', res.message || 'No se pudo actualizar');
             setIsSubmitting(false);
             return;
           }
@@ -1110,7 +1136,7 @@ export default function PhysicalMinuteAgendaScreen() {
           return it;
         });
         await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-        setSubmitResponse({ type: 'success', message: 'Actualizado offline. Se sincronizará cuando haya conexión.' });
+        Alert.alert('Éxito', 'Actualizado offline. Se sincronizará cuando haya conexión.');
         setTimeout(() => {
           cancelCreateOrEdit();
           fetchRecords();
@@ -1122,13 +1148,13 @@ export default function PhysicalMinuteAgendaScreen() {
       if (isConnected) {
         const res = await createAgendaMinuta({ requestData: payload, refreshAccessToken, logout });
         if (res.status) {
-          setSubmitResponse({ type: 'success', message: res.message || 'Agenda minuta guardada correctamente' });
+          Alert.alert('Éxito', res.message || 'Agenda minuta guardada correctamente');
           setTimeout(() => {
             cancelCreateOrEdit();
             fetchRecords();
           }, 2000);
         } else {
-          setSubmitResponse({ type: 'error', message: res.message || 'No se pudo guardar' });
+          Alert.alert('Error', res.message || 'No se pudo guardar');
         }
         return;
       }
@@ -1141,6 +1167,13 @@ export default function PhysicalMinuteAgendaScreen() {
 
       const cacheStr = await AsyncStorage.getItem('evaluations_cache');
       const cache = cacheStr ? JSON.parse(cacheStr) : [];
+
+      const horaAccion = await getHoraAccion();
+      if (!horaAccion) {
+        Alert.alert('Error', 'No se pudo obtener la hora de acción');
+        return;
+      }
+
       const newCacheRecord: AgendaMinutaRecord = {
         id: '',
         id_local: localId,
@@ -1158,18 +1191,18 @@ export default function PhysicalMinuteAgendaScreen() {
         temas_a_tratar: payload.temas_a_tratar,
         observaciones: payload.observaciones,
         firma_responsable: payload.firma_responsable,
-        created_at: new Date().toISOString(),
+        created_at: new Date(horaAccion).toISOString(),
         synced: false,
       };
       cache.push({ ...newCacheRecord, type: 'agenda_minuta' });
       await AsyncStorage.setItem('evaluations_cache', JSON.stringify(cache));
-      setSubmitResponse({ type: 'success', message: 'Agenda minuta registrada localmente. Se sincronizará cuando haya conexión.' });
+      Alert.alert('Éxito', 'Agenda minuta registrada localmente. Se sincronizará cuando haya conexión.');
       setTimeout(() => {
         cancelCreateOrEdit();
         fetchRecords();
       }, 2000);
     } catch (e: any) {
-      setSubmitResponse({ type: 'error', message: e?.message || 'No se pudo guardar' });
+      Alert.alert('Error', e?.message || 'No se pudo guardar');
     } finally {
       setIsSubmitting(false);
     }
@@ -1263,6 +1296,11 @@ export default function PhysicalMinuteAgendaScreen() {
                   <ThemedText style={styles.listItemSubtitle}>Sucursal: {r.corpo_nombre || acuerdosMeta?.sucursal_nombre || String(r.corpo_id)}</ThemedText>
                   <ThemedText style={styles.listItemSubtitle}>Puesto: {r.puesto_nombre || acuerdosMeta?.puesto_nombre || String(r.puesto_id)}</ThemedText>
                   <ThemedText style={styles.listItemSubtitle}>Fecha: {fechaTxt}</ThemedText>
+                  <ThemedText style={styles.listItemSubtitle}>
+                    Hora: {typeof r.hora_inicio === 'string' && /^\d{1,2}:\d{2}$/.test(r.hora_inicio) ? r.hora_inicio : (r.hora_inicio ? formatTimeHHmm(r.hora_inicio instanceof Date ? r.hora_inicio : new Date(String(r.hora_inicio))) : '—')}
+                    {' – '}
+                    {typeof r.hora_fin === 'string' && /^\d{1,2}:\d{2}$/.test(r.hora_fin) ? r.hora_fin : (r.hora_fin ? formatTimeHHmm(r.hora_fin instanceof Date ? r.hora_fin : new Date(String(r.hora_fin))) : '—')}
+                  </ThemedText>
                 </ThemedView>
               </ThemedView>
 
@@ -1808,12 +1846,118 @@ export default function PhysicalMinuteAgendaScreen() {
                           {(Array.isArray(parsed) ? parsed : []).length > 0 && (
                             <ThemedView style={styles.filterGroupSearch}>
                               <ThemedText style={styles.filterLabel}>Cambios:</ThemedText>
-                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => (
-                                <ThemedText key={`c-${row.id}-${idx}`} style={styles.changeDescription}>
-                                  <ThemedText style={{ fontWeight: '800' }}>{String(c?.prop ?? '-')}: </ThemedText>
-                                  {formatChangeValue(c?.prop, c?.after)}
-                                </ThemedText>
-                              ))}
+                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => {
+                                const prop = String(c?.prop ?? '-');
+                                const value = c?.after;
+                                const isFirmaResponsable = prop === 'firma_responsable';
+
+                                if (prop === '__created__' && value && typeof value === 'object') {
+                                  const created: any = value;
+                                  return (
+                                    <React.Fragment key={`c-${row.id}-${idx}-created`}>
+                                      <ThemedView style={styles.changeDescriptionContainer}>
+                                        <ThemedText style={styles.changeDescription}>
+                                          <ThemedText style={{ fontWeight: '800' }}>Registro creado</ThemedText>
+                                        </ThemedText>
+                                      </ThemedView>
+                                      {Object.entries(created).map(([k, v]) => {
+                                        if (k === 'firma_responsable') {
+                                          const info = decodeFirmaHash(typeof v === 'string' ? v : v != null ? String(v) : null);
+                                          return (
+                                            <ThemedView key={`c-${row.id}-${idx}-${k}`} style={styles.changeDescriptionContainer}>
+                                              <ThemedText style={styles.changeDescription}>
+                                                <ThemedText style={{ fontWeight: '800' }}>{k}: </ThemedText>
+                                                {info ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${info.timestamp || 'N/A'}` : 'Firma (formato no decodificable)'}
+                                              </ThemedText>
+                                            </ThemedView>
+                                          );
+                                        }
+                                        if (k === 'participantes') {
+                                          const arr = (() => {
+                                            if (Array.isArray(v)) return v;
+                                            if (typeof v === 'string') {
+                                              try { return JSON.parse(v) as any[]; } catch { return []; }
+                                            }
+                                            return [];
+                                          })();
+                                          return (
+                                            <ThemedView key={`c-${row.id}-${idx}-${k}`} style={styles.changeDescriptionContainer}>
+                                              <ThemedText style={[styles.changeDescription, { fontWeight: '800' }]}>{k}:</ThemedText>
+                                              {arr.length === 0 ? (
+                                                <ThemedText style={styles.changeDescription}>—</ThemedText>
+                                              ) : (
+                                                arr.map((p: any, i: number) => (
+                                                  <ThemedView key={`p-${i}`} style={styles.changeDescriptionContainer}>
+                                                    <ThemedText style={styles.changeDescription}>
+                                                      {i + 1}. {String(p?.nombre ?? '').trim() || '—'} (Cédula: {String(p?.cedula ?? '').trim() || '—'})
+                                                    </ThemedText>
+                                                    {p?.firma ? (
+                                                      <Image source={{ uri: formatSignatureForDisplay(p.firma) ?? '' }} style={styles.cambioSignatureImage} resizeMode="contain" />
+                                                    ) : (
+                                                      <ThemedText style={styles.changeDescription}>Sin firma</ThemedText>
+                                                    )}
+                                                  </ThemedView>
+                                                ))
+                                              )}
+                                            </ThemedView>
+                                          );
+                                        }
+                                        return (
+                                          <ThemedView key={`c-${row.id}-${idx}-${k}`} style={styles.changeDescriptionContainer}>
+                                            <ThemedText style={styles.changeDescription}>
+                                              <ThemedText style={{ fontWeight: '800' }}>{k}: </ThemedText>
+                                              {formatChangeValue(k, v)}
+                                            </ThemedText>
+                                          </ThemedView>
+                                        );
+                                      })}
+                                    </React.Fragment>
+                                  );
+                                }
+                                if (prop === 'participantes') {
+                                  const arr = (() => {
+                                    if (Array.isArray(value)) return value;
+                                    if (typeof value === 'string') {
+                                      try { return JSON.parse(value) as any[]; } catch { return []; }
+                                    }
+                                    return [];
+                                  })();
+                                  return (
+                                    <ThemedView key={`c-${row.id}-${idx}`} style={styles.changeDescriptionContainer}>
+                                      <ThemedText style={[styles.changeDescription, { fontWeight: '800' }]}>{prop}:</ThemedText>
+                                      {arr.length === 0 ? (
+                                        <ThemedText style={styles.changeDescription}>—</ThemedText>
+                                      ) : (
+                                        arr.map((p: any, i: number) => (
+                                          <ThemedView key={`p-${i}`} style={styles.changeDescriptionContainer}>
+                                            <ThemedText style={styles.changeDescription}>
+                                              {i + 1}. {String(p?.nombre ?? '').trim() || '—'} (Cédula: {String(p?.cedula ?? '').trim() || '—'})
+                                            </ThemedText>
+                                            {p?.firma ? (
+                                              <Image source={{ uri: formatSignatureForDisplay(p.firma) ?? '' }} style={styles.cambioSignatureImage} resizeMode="contain" />
+                                            ) : (
+                                              <ThemedText style={styles.changeDescription}>Sin firma</ThemedText>
+                                            )}
+                                          </ThemedView>
+                                        ))
+                                      )}
+                                    </ThemedView>
+                                  );
+                                }
+                                return (
+                                  <ThemedView key={`c-${row.id}-${idx}`} style={styles.changeDescriptionContainer}>
+                                    <ThemedText style={styles.changeDescription}>
+                                      <ThemedText style={{ fontWeight: '800' }}>{prop}: </ThemedText>
+                                      {isFirmaResponsable && typeof value === 'string' && value.trim()
+                                        ? (() => {
+                                            const info = decodeFirmaHash(value);
+                                            return info ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${info.timestamp || 'N/A'}` : 'Firma (formato no decodificable)';
+                                          })()
+                                        : !isFirmaResponsable ? formatChangeValue(prop, value) : 'N/A'}
+                                    </ThemedText>
+                                  </ThemedView>
+                                );
+                              })}
                             </ThemedView>
                           )}
                         </ThemedView>
@@ -2276,6 +2420,8 @@ const styles = StyleSheet.create({
   cambioCollapsableTitle: { fontSize: 14, fontWeight: '600', color: '#007AFF', flex: 1 },
   cambioCollapsableContent: { padding: 12, gap: 8, backgroundColor: '#F8F9FA' },
   changeDescription: { fontSize: 14, lineHeight: 20, color: '#666', marginBottom: 8 },
+  changeDescriptionContainer: { marginBottom: 8 },
+  cambioSignatureImage: { marginTop: 6, height: 80, width: 160, backgroundColor: '#f0f0f0', borderRadius: 4 },
   filterGroupSearch: { marginBottom: 12 },
 
   // loading/empty/error

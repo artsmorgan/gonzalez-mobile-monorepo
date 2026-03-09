@@ -175,7 +175,11 @@ export async function POST(req: NextRequest) {
                                     }
                                 }
 
-                                const articulos_puesto_plan = await prisma.e_estructura_articulo_corpo_puesto_plan.findMany({ where: { puesto_id: puesto.id, id: { notIn: articulos_return.map(articulo => articulo.id) } } });
+                                const articulos_puesto_plan = await prisma.e_estructura_articulo_corpo_puesto_plan.findMany({ where: {
+                                    OR: [ { puesto_id: puesto.id } , { corpo_id: sucursal.id } ],
+                                    id: { notIn: articulos_return.map(articulo => articulo.id) }
+                                } });
+                                
                                 for (const articulo of articulos_puesto_plan) {
                                     let art_bd = null;
                                     if (articulo.articuloCP_id) {
@@ -193,7 +197,7 @@ export async function POST(req: NextRequest) {
                                     });
                                 }
 
-                                const articulos_puesto_entrega = await prisma.e_estructura_articulo_corpo_puesto_entrega.findMany({ where: { puesto_id: puesto.id } });
+                                const articulos_puesto_entrega = await prisma.e_estructura_articulo_corpo_puesto_entrega.findMany({ where: { OR: [{ puesto_id: puesto.id }, { corpo_id: sucursal.id }] } });
                                 for (const articulo of articulos_puesto_entrega) {
                                     let art_bd = null;
                                     if (articulo.nomencladorArticuloCP_id) {

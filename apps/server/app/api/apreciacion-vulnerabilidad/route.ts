@@ -89,7 +89,6 @@ export async function POST(req: NextRequest) {
       !nombre_solicitante ||
       !boleta ||
       !metricas_vulnerablidad ||
-      !firma_solicitante ||
       !firma_responsable
     ) {
       return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 200 });
@@ -150,7 +149,7 @@ export async function POST(req: NextRequest) {
           boleta: String(boleta),
           metricas_vulnerablidad: String(metricas_vulnerablidad),
           observaciones: typeof observaciones === "string" ? observaciones : "",
-          firma_solicitante: String(firma_solicitante),
+          firma_solicitante: String(firma_solicitante ?? ""),
           firma_responsable: String(firma_responsable),
         },
       },
@@ -234,6 +233,8 @@ export async function POST(req: NextRequest) {
               boleta: (created as any).boleta,
               metricas_vulnerablidad: (created as any).metricas_vulnerablidad,
               observaciones: (created as any).observaciones,
+              firma_solicitante: (created as any).firma_solicitante,
+              firma_responsable: (created as any).firma_responsable,
             },
           }]),
           created_at: toZonedTime(new Date(), "America/Costa_Rica").toISOString(),

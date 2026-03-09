@@ -378,6 +378,11 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
     navigation.navigate('PuestoUbicacion');
   };
 
+  const handleJerarquiaPress = () => {
+    onClose();
+    navigation.navigate('Jerarquia');
+  };
+
   const isActiveRoute = (route: string) => {
     return currentRoute === route;
   };
@@ -422,6 +427,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
       case 'physical-minute-agenda': return <Ionicons name="document-text" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'checklist-supervision': return <Ionicons name="checkmark-circle" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'puesto-ubicacion': return <Ionicons name="location" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'jerarquia': return <Ionicons name="git-network" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'traslado-plazas': return <Ionicons name="swap-horizontal" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'logout': return <Ionicons name="log-out" size={20} color={isActive ? '#007AFF' : '#ffffff'} />;
     }
@@ -447,7 +453,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
           {/* Header Section */}
           <ThemedView style={styles.headerSection}>
             <ThemedText type="title" style={styles.appTitle}>
-              Gonzalez App
+              MonitoreApp
             </ThemedText>
             {employee && (
               <ThemedView style={styles.userInfo}>
@@ -484,6 +490,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                 Inicio
               </ThemedText>
             </TouchableOpacity>
+            
             <TouchableOpacity
               style={[
                 styles.menuItem,
@@ -508,58 +515,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                 Perfil de Usuario
               </ThemedText>
             </TouchableOpacity>
-            {hasCurrentMarca && hasLunchTime && (
-              <TouchableOpacity
-                style={[
-                  styles.menuItem,
-                  isActiveRoute('lunch-time') && styles.activeMenuItem
-                ]}
-                onPress={handleLunchTimePress}
-              >
-                <ThemedText
-                  style={[
-                    styles.menuItemText,
-                    isActiveRoute('lunch-time') && styles.activeMenuItemText
-                  ]}
-                >
-                  {getActionIcon('lunch-time', isActiveRoute('lunch-time'))}
-                </ThemedText>
-                <ThemedText
-                  style={[
-                    styles.menuItemText,
-                    isActiveRoute('lunch-time') && styles.activeMenuItemText
-                  ]}
-                >
-                  Tiempo de Almuerzo
-                </ThemedText>
-              </TouchableOpacity>
-            )}
-            {hasCurrentMarca && (
-              <TouchableOpacity
-                style={[
-                  styles.menuItem,
-                  isActiveRoute('digital-signature') && styles.activeMenuItem
-                ]}
-                onPress={handleDigitalSignaturePress}
-              >
-                <ThemedText
-                  style={[
-                    styles.menuItemText,
-                    isActiveRoute('digital-signature') && styles.activeMenuItemText
-                  ]}
-                >
-                  {getActionIcon('digital-signature', isActiveRoute('digital-signature'))}
-                </ThemedText>
-                <ThemedText
-                  style={[
-                    styles.menuItemText,
-                    isActiveRoute('digital-signature') && styles.activeMenuItemText
-                  ]}
-                >
-                  Mi Firma Digital
-                </ThemedText>
-              </TouchableOpacity>
-            )}
+
             <TouchableOpacity
               style={[
                 styles.menuItem,
@@ -584,29 +540,82 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                 Marcar Ingreso/Salida
               </ThemedText>
             </TouchableOpacity>
-            {hasCurrentMarca && (
+            
               <TouchableOpacity
                 style={[
                   styles.menuItem,
-                  isActiveRoute('Notes') && styles.activeMenuItem
+                  isActiveRoute('digital-signature') && styles.activeMenuItem
                 ]}
-                onPress={handleNotesPress}
+                onPress={handleDigitalSignaturePress}
               >
                 <ThemedText
                   style={[
                     styles.menuItemText,
-                    isActiveRoute('Notes') && styles.activeMenuItemText
+                    isActiveRoute('digital-signature') && styles.activeMenuItemText
                   ]}
                 >
-                  {getActionIcon('notes', isActiveRoute('Notes'))}
+                  {getActionIcon('digital-signature', isActiveRoute('digital-signature'))}
                 </ThemedText>
                 <ThemedText
                   style={[
                     styles.menuItemText,
-                    isActiveRoute('Notes') && styles.activeMenuItemText
+                    isActiveRoute('digital-signature') && styles.activeMenuItemText
                   ]}
                 >
-                  Bitácora de Notas
+                  Mi Firma Digital
+                </ThemedText>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                  style={[
+                    styles.menuItem,
+                    isActiveRoute('Jerarquia') && styles.activeMenuItem
+                  ]}
+                  onPress={handleJerarquiaPress}
+                >
+                  <ThemedText
+                    style={[
+                      styles.menuItemText,
+                      isActiveRoute('Jerarquia') && styles.activeMenuItemText
+                    ]}
+                  >
+                    {getActionIcon('jerarquia', isActiveRoute('Jerarquia'))}
+                  </ThemedText>
+                  <ThemedText
+                    style={[
+                      styles.menuItemText,
+                      isActiveRoute('Jerarquia') && styles.activeMenuItemText
+                    ]}
+                  >
+                    Jerarquía
+                  </ThemedText>
+                </TouchableOpacity>
+
+            <ThemedView style={styles.menuSeparator} />
+
+            {hasCurrentMarca && (role === 'ADMINISTRATIVO' || role === 'SUPERVISOR') && division === 'Aseo y Limpieza' && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('ActaEntregaProductos') && styles.activeMenuItem
+                ]}
+                onPress={handleActaEntregaProductosPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('ActaEntregaProductos') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('acta-entrega-productos', isActiveRoute('ActaEntregaProductos'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('ActaEntregaProductos') && styles.activeMenuItemText
+                  ]}
+                >
+                  Acta de entrega de productos
                 </ThemedText>
               </TouchableOpacity>
             )}
@@ -638,29 +647,56 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && ((role === 'OPERATIVO' || role === 'SUPERVISOR') && division === 'Seguridad') && (
+            {hasCurrentMarca && (role === 'ADMINISTRATIVO' || role === 'SUPERVISOR') && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
-                  isActiveRoute('Vehicles') && styles.activeMenuItem
+                  isActiveRoute('PhysicalMinuteAgenda') && styles.activeMenuItem
                 ]}
-                onPress={handleVehiclesPress}
+                onPress={handlePhysicalMinuteAgendaPress}
               >
                 <ThemedText
                   style={[
                     styles.menuItemText,
-                    isActiveRoute('Vehicles') && styles.activeMenuItemText
+                    isActiveRoute('PhysicalMinuteAgenda') && styles.activeMenuItemText
                   ]}
                 >
-                  {getActionIcon('vehicles', isActiveRoute('Vehicles'))}
+                  {getActionIcon('physical-minute-agenda', isActiveRoute('PhysicalMinuteAgenda'))}
                 </ThemedText>
                 <ThemedText
                   style={[
                     styles.menuItemText,
-                    isActiveRoute('Vehicles') && styles.activeMenuItemText
+                    isActiveRoute('PhysicalMinuteAgenda') && styles.activeMenuItemText
                   ]}
                 >
-                  Visitas de Vehículos
+                  Agenda minuta
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+            
+            {hasCurrentMarca && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('OpeningClosingPosition') && styles.activeMenuItem
+                ]}
+                onPress={handleOpeningClosingPositionPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('OpeningClosingPosition') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('opening-closing-position', isActiveRoute('OpeningClosingPosition'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('OpeningClosingPosition') && styles.activeMenuItemText
+                  ]}
+                >
+                  Apertura-Cierre de Puesto
                 </ThemedText>
               </TouchableOpacity>
             )}
@@ -669,106 +705,25 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               <TouchableOpacity
                 style={[
                   styles.menuItem,
-                  isActiveRoute('Visitors') && styles.activeMenuItem
+                  isActiveRoute('ApreciacionVulnerabilidad') && styles.activeMenuItem
                 ]}
-                onPress={handleVisitorsPress}
+                onPress={handleApreciacionVulnerabilidadPress}
               >
                 <ThemedText
                   style={[
                     styles.menuItemText,
-                    isActiveRoute('Visitors') && styles.activeMenuItemText
+                    isActiveRoute('ApreciacionVulnerabilidad') && styles.activeMenuItemText
                   ]}
                 >
-                  {getActionIcon('visitors', isActiveRoute('Visitors'))}
+                  {getActionIcon('apreciacion-vulnerabilidad', isActiveRoute('ApreciacionVulnerabilidad'))}
                 </ThemedText>
                 <ThemedText
                   style={[
                     styles.menuItemText,
-                    isActiveRoute('Visitors') && styles.activeMenuItemText
+                    isActiveRoute('ApreciacionVulnerabilidad') && styles.activeMenuItemText
                   ]}
                 >
-                  Registro de Visitantes
-                </ThemedText>
-              </TouchableOpacity>
-            )}
-
-            {hasCurrentMarca && (
-              <TouchableOpacity
-                style={[
-                  styles.menuItem,
-                  isActiveRoute('StaffEvaluations') && styles.activeMenuItem
-                ]}
-                onPress={handleEvaluationsPress}
-              >
-                <ThemedText
-                  style={[
-                    styles.menuItemText,
-                    isActiveRoute('StaffEvaluations') && styles.activeMenuItemText
-                  ]}
-                >
-                  {getActionIcon('staffEvaluations', isActiveRoute('StaffEvaluations'))}
-                </ThemedText>
-                <ThemedText
-                  style={[
-                    styles.menuItemText,
-                    isActiveRoute('StaffEvaluations') && styles.activeMenuItemText
-                  ]}
-                >
-                  Evaluación de personal
-                </ThemedText>
-              </TouchableOpacity>
-            )}
-
-            {hasCurrentMarca && division === 'Seguridad' && (
-              <TouchableOpacity
-                style={[
-                  styles.menuItem,
-                  isActiveRoute('Incidents') && styles.activeMenuItem
-                ]}
-                onPress={handleIncidentsPress}
-              >
-                <ThemedText
-                  style={[
-                    styles.menuItemText,
-                    isActiveRoute('Incidents') && styles.activeMenuItemText
-                  ]}
-                >
-                  {getActionIcon('incidents', isActiveRoute('Incidents'))}
-                </ThemedText>
-                <ThemedText
-                  style={[
-                    styles.menuItemText,
-                    isActiveRoute('Incidents') && styles.activeMenuItemText
-                  ]}
-                >
-                  Incidentes
-                </ThemedText>
-              </TouchableOpacity>
-            )}
-
-            {hasCurrentMarca && role === 'OPERATIVO' && division === 'Seguridad' && (
-              <TouchableOpacity
-                style={[
-                  styles.menuItem,
-                  isActiveRoute('MutuosAcuerdos') && styles.activeMenuItem
-                ]}
-                onPress={handleMutuosAcuerdosPress}
-              >
-                <ThemedText
-                  style={[
-                    styles.menuItemText,
-                    isActiveRoute('MutuosAcuerdos') && styles.activeMenuItemText
-                  ]}
-                >
-                  {getActionIcon('mutuos-acuerdos', isActiveRoute('MutuosAcuerdos'))}
-                </ThemedText>
-                <ThemedText
-                  style={[
-                    styles.menuItemText,
-                    isActiveRoute('MutuosAcuerdos') && styles.activeMenuItemText
-                  ]}
-                >
-                  Mutuos acuerdos
+                  Apreciación de vulnerabilidad
                 </ThemedText>
               </TouchableOpacity>
             )}
@@ -799,35 +754,35 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                 </ThemedText>
               </TouchableOpacity>
             )}
-
-            {hasCurrentMarca && role === 'OPERATIVO' && division === 'Seguridad' && (
+            
+            {hasCurrentMarca && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
-                  isActiveRoute('BitacoraVehiculosDetenidos') && styles.activeMenuItem
+                  isActiveRoute('Notes') && styles.activeMenuItem
                 ]}
-                onPress={handleBitacoraVehiculosDetenidosPress}
+                onPress={handleNotesPress}
               >
                 <ThemedText
                   style={[
                     styles.menuItemText,
-                    isActiveRoute('BitacoraVehiculosDetenidos') && styles.activeMenuItemText
+                    isActiveRoute('Notes') && styles.activeMenuItemText
                   ]}
                 >
-                  {getActionIcon('bitacora-vehiculos-detenidos', isActiveRoute('BitacoraVehiculosDetenidos'))}
+                  {getActionIcon('notes', isActiveRoute('Notes'))}
                 </ThemedText>
                 <ThemedText
                   style={[
                     styles.menuItemText,
-                    isActiveRoute('BitacoraVehiculosDetenidos') && styles.activeMenuItemText
+                    isActiveRoute('Notes') && styles.activeMenuItemText
                   ]}
                 >
-                  Revisión de vehículos
+                  Bitácora de Novedades
                 </ThemedText>
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && role === 'SUPERVISOR' && division === 'Seguridad' && (
+            {hasCurrentMarca && role === 'OPERATIVO' && division === 'Seguridad' && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -854,115 +809,33 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && role === 'OPERATIVO' && division === 'Seguridad' && (
-              <TouchableOpacity
-                style={[
-                  styles.menuItem,
-                  isActiveRoute('Llaves') && styles.activeMenuItem
-                ]}
-                onPress={handleLlavesPress}
-              >
-                <ThemedText
-                  style={[
-                    styles.menuItemText,
-                    isActiveRoute('Llaves') && styles.activeMenuItemText
-                  ]}
-                >
-                  {getActionIcon('llaves', isActiveRoute('Llaves'))}
-                </ThemedText>
-                <ThemedText
-                  style={[
-                    styles.menuItemText,
-                    isActiveRoute('Llaves') && styles.activeMenuItemText
-                  ]}
-                >
-                  Llaves
-                </ThemedText>
-              </TouchableOpacity>
-            )}
-
-            {/* Estamos aquí */}
-            {hasCurrentMarca && (role === 'ADMINISTRATIVO' || role === 'SUPERVISOR') && division === 'Seguridad' && (
-              <TouchableOpacity
-                style={[
-                  styles.menuItem,
-                  isActiveRoute('MantenimientoEquipo') && styles.activeMenuItem
-                ]}
-                onPress={handleMantenimientoEquipoPress}
-              >
-                <ThemedText
-                  style={[
-                    styles.menuItemText,
-                    isActiveRoute('MantenimientoEquipo') && styles.activeMenuItemText
-                  ]}
-                >
-                  {getActionIcon('mantenimiento-equipo', isActiveRoute('MantenimientoEquipo'))}
-                </ThemedText>
-                <ThemedText
-                  style={[
-                    styles.menuItemText,
-                    isActiveRoute('MantenimientoEquipo') && styles.activeMenuItemText
-                  ]}
-                >
-                  Equipo del puesto
-                </ThemedText>
-              </TouchableOpacity>
-            )}
-
             {hasCurrentMarca && (role === 'ADMINISTRATIVO' || role === 'SUPERVISOR') && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
-                  isActiveRoute('PhysicalMinuteAgenda') && styles.activeMenuItem
+                  isActiveRoute('AttendanceControl') && styles.activeMenuItem
                 ]}
-                onPress={handlePhysicalMinuteAgendaPress}
+                onPress={handleAttendanceControlPress}
               >
                 <ThemedText
                   style={[
                     styles.menuItemText,
-                    isActiveRoute('PhysicalMinuteAgenda') && styles.activeMenuItemText
+                    isActiveRoute('AttendanceControl') && styles.activeMenuItemText
                   ]}
                 >
-                  {getActionIcon('physical-minute-agenda', isActiveRoute('PhysicalMinuteAgenda'))}
+                  {getActionIcon('attendance-control', isActiveRoute('AttendanceControl'))}
                 </ThemedText>
                 <ThemedText
                   style={[
                     styles.menuItemText,
-                    isActiveRoute('PhysicalMinuteAgenda') && styles.activeMenuItemText
+                    isActiveRoute('AttendanceControl') && styles.activeMenuItemText
                   ]}
                 >
-                  Agenda minuta
+                  Control de Asistencia
                 </ThemedText>
               </TouchableOpacity>
             )}
-
-            {hasCurrentMarca && role === 'OPERATIVO' && division === 'Seguridad' && (
-              <TouchableOpacity
-                style={[
-                  styles.menuItem,
-                  isActiveRoute('EntregaPuestos') && styles.activeMenuItem
-                ]}
-                onPress={handleEntregaPuestosPress}
-              >
-                <ThemedText
-                  style={[
-                    styles.menuItemText,
-                    isActiveRoute('EntregaPuestos') && styles.activeMenuItemText
-                  ]}
-                >
-                  {getActionIcon('entrega-puestos', isActiveRoute('EntregaPuestos'))}
-                </ThemedText>
-                <ThemedText
-                  style={[
-                    styles.menuItemText,
-                    isActiveRoute('EntregaPuestos') && styles.activeMenuItemText
-                  ]}
-                >
-                  Entrega de Puestos
-                </ThemedText>
-              </TouchableOpacity>
-            )}
-
+            
             {hasCurrentMarca && (role === 'OPERATIVO' || role === 'SUPERVISOR') && division === 'Seguridad' && (
               <TouchableOpacity
                 style={[
@@ -994,33 +867,6 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               <TouchableOpacity
                 style={[
                   styles.menuItem,
-                  isActiveRoute('ApreciacionVulnerabilidad') && styles.activeMenuItem
-                ]}
-                onPress={handleApreciacionVulnerabilidadPress}
-              >
-                <ThemedText
-                  style={[
-                    styles.menuItemText,
-                    isActiveRoute('ApreciacionVulnerabilidad') && styles.activeMenuItemText
-                  ]}
-                >
-                  {getActionIcon('apreciacion-vulnerabilidad', isActiveRoute('ApreciacionVulnerabilidad'))}
-                </ThemedText>
-                <ThemedText
-                  style={[
-                    styles.menuItemText,
-                    isActiveRoute('ApreciacionVulnerabilidad') && styles.activeMenuItemText
-                  ]}
-                >
-                  Apreciación de vulnerabilidad
-                </ThemedText>
-              </TouchableOpacity>
-            )}
-
-            {hasCurrentMarca && (role === 'SUPERVISOR' || role === 'ADMINISTRATIVO') && (
-              <TouchableOpacity
-                style={[
-                  styles.menuItem,
                   isActiveRoute('SatisfactionSurveys') && styles.activeMenuItem
                 ]}
                 onPress={handleSurveysPress}
@@ -1043,34 +889,225 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                 </ThemedText>
               </TouchableOpacity>
             )}
-
-            {hasCurrentMarca && (role === 'SUPERVISOR' || role === 'ADMINISTRATIVO') && (
+            
+            {hasCurrentMarca && role === 'OPERATIVO' && division === 'Seguridad' && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
-                  isActiveRoute('Trainings') && styles.activeMenuItem
+                  isActiveRoute('EntregaPuestos') && styles.activeMenuItem
                 ]}
-                onPress={handleTrainingsPress}
+                onPress={handleEntregaPuestosPress}
               >
                 <ThemedText
                   style={[
                     styles.menuItemText,
-                    isActiveRoute('Trainings') && styles.activeMenuItemText
+                    isActiveRoute('EntregaPuestos') && styles.activeMenuItemText
                   ]}
                 >
-                  {getActionIcon('trainings', isActiveRoute('Trainings'))}
+                  {getActionIcon('entrega-puestos', isActiveRoute('EntregaPuestos'))}
                 </ThemedText>
                 <ThemedText
                   style={[
                     styles.menuItemText,
-                    isActiveRoute('Trainings') && styles.activeMenuItemText
+                    isActiveRoute('EntregaPuestos') && styles.activeMenuItemText
                   ]}
                 >
-                  Registro de Capacitaciones
+                  Entrega de Puestos
                 </ThemedText>
               </TouchableOpacity>
             )}
 
+            
+            {/* Estamos aquí */}
+            {hasCurrentMarca && (role === 'ADMINISTRATIVO' || role === 'SUPERVISOR') && division === 'Seguridad' && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('MantenimientoEquipo') && styles.activeMenuItem
+                ]}
+                onPress={handleMantenimientoEquipoPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('MantenimientoEquipo') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('mantenimiento-equipo', isActiveRoute('MantenimientoEquipo'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('MantenimientoEquipo') && styles.activeMenuItemText
+                  ]}
+                >
+                  Equipo del puesto
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+
+            {hasCurrentMarca && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('StaffEvaluations') && styles.activeMenuItem
+                ]}
+                onPress={handleEvaluationsPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('StaffEvaluations') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('staffEvaluations', isActiveRoute('StaffEvaluations'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('StaffEvaluations') && styles.activeMenuItemText
+                  ]}
+                >
+                  Evaluación de personal
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+            
+            {hasCurrentMarca && division === 'Seguridad' && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('Incidents') && styles.activeMenuItem
+                ]}
+                onPress={handleIncidentsPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('Incidents') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('incidents', isActiveRoute('Incidents'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('Incidents') && styles.activeMenuItemText
+                  ]}
+                >
+                  Incidentes
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+
+            {hasCurrentMarca && role === 'OPERATIVO' && division === 'Seguridad' && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('Llaves') && styles.activeMenuItem
+                ]}
+                onPress={handleLlavesPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('Llaves') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('llaves', isActiveRoute('Llaves'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('Llaves') && styles.activeMenuItemText
+                  ]}
+                >
+                  Llaves
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+            
+            {hasCurrentMarca && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('ComplaintsMaster') && styles.activeMenuItem
+                ]}
+                onPress={handleComplaintsMasterPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('ComplaintsMaster') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('complaints-master', isActiveRoute('ComplaintsMaster'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('ComplaintsMaster') && styles.activeMenuItemText
+                  ]}
+                >
+                  Maestro de Quejas y reclamos
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+            
+            {hasCurrentMarca && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('JobManuals') && styles.activeMenuItem
+                ]}
+                onPress={handleJobManualsPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('JobManuals') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('job-manuals', isActiveRoute('JobManuals'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('JobManuals') && styles.activeMenuItemText
+                  ]}
+                >
+                  Manuales de Trabajo
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+            
+            {hasCurrentMarca && role === 'OPERATIVO' && division === 'Seguridad' && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('MutuosAcuerdos') && styles.activeMenuItem
+                ]}
+                onPress={handleMutuosAcuerdosPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('MutuosAcuerdos') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('mutuos-acuerdos', isActiveRoute('MutuosAcuerdos'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('MutuosAcuerdos') && styles.activeMenuItemText
+                  ]}
+                >
+                  Mutuos acuerdos
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+            
             {hasCurrentMarca && (
               <TouchableOpacity
                 style={[
@@ -1102,60 +1139,6 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               <TouchableOpacity
                 style={[
                   styles.menuItem,
-                  isActiveRoute('JobManuals') && styles.activeMenuItem
-                ]}
-                onPress={handleJobManualsPress}
-              >
-                <ThemedText
-                  style={[
-                    styles.menuItemText,
-                    isActiveRoute('JobManuals') && styles.activeMenuItemText
-                  ]}
-                >
-                  {getActionIcon('job-manuals', isActiveRoute('JobManuals'))}
-                </ThemedText>
-                <ThemedText
-                  style={[
-                    styles.menuItemText,
-                    isActiveRoute('JobManuals') && styles.activeMenuItemText
-                  ]}
-                >
-                  Manuales de Trabajo
-                </ThemedText>
-              </TouchableOpacity>
-            )}
-
-            {hasCurrentMarca && (
-              <TouchableOpacity
-                style={[
-                  styles.menuItem,
-                  isActiveRoute('ComplaintsMaster') && styles.activeMenuItem
-                ]}
-                onPress={handleComplaintsMasterPress}
-              >
-                <ThemedText
-                  style={[
-                    styles.menuItemText,
-                    isActiveRoute('ComplaintsMaster') && styles.activeMenuItemText
-                  ]}
-                >
-                  {getActionIcon('complaints-master', isActiveRoute('ComplaintsMaster'))}
-                </ThemedText>
-                <ThemedText
-                  style={[
-                    styles.menuItemText,
-                    isActiveRoute('ComplaintsMaster') && styles.activeMenuItemText
-                  ]}
-                >
-                  Maestro de Quejas y reclamos
-                </ThemedText>
-              </TouchableOpacity>
-            )}
-
-            {(role === 'ADMINISTRATIVO' || role === 'SUPERVISOR') && division === 'Aseo y Limpieza' && (
-              <TouchableOpacity
-                style={[
-                  styles.menuItem,
                   isActiveRoute('NonConformingProduct') && styles.activeMenuItem
                 ]}
                 onPress={handleNonConformingProductPress}
@@ -1178,35 +1161,35 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                 </ThemedText>
               </TouchableOpacity>
             )}
-
+            
             {hasCurrentMarca && (role === 'ADMINISTRATIVO' || role === 'SUPERVISOR') && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
-                  isActiveRoute('CorporateVehicles') && styles.activeMenuItem
+                  isActiveRoute('Trainings') && styles.activeMenuItem
                 ]}
-                onPress={handleCorporateVehiclesPress}
+                onPress={handleTrainingsPress}
               >
                 <ThemedText
                   style={[
                     styles.menuItemText,
-                    isActiveRoute('CorporateVehicles') && styles.activeMenuItemText
+                    isActiveRoute('Trainings') && styles.activeMenuItemText
                   ]}
                 >
-                  {getActionIcon('corporate-vehicles', isActiveRoute('CorporateVehicles'))}
+                  {getActionIcon('trainings', isActiveRoute('Trainings'))}
                 </ThemedText>
                 <ThemedText
                   style={[
                     styles.menuItemText,
-                    isActiveRoute('CorporateVehicles') && styles.activeMenuItemText
+                    isActiveRoute('Trainings') && styles.activeMenuItemText
                   ]}
                 >
-                  Vehículos corporativos
+                  Registro de Capacitaciones
                 </ThemedText>
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && (role === 'SUPERVISOR' || role === 'ADMINISTRATIVO') && division === 'Aseo y Limpieza' && (
+            {(role === 'ADMINISTRATIVO' || role === 'SUPERVISOR') && division === 'Aseo y Limpieza' && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -1229,6 +1212,60 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                   ]}
                 >
                   Registro de Induc. y Recorrd.
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+            
+            {hasCurrentMarca && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('Visitors') && styles.activeMenuItem
+                ]}
+                onPress={handleVisitorsPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('Visitors') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('visitors', isActiveRoute('Visitors'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('Visitors') && styles.activeMenuItemText
+                  ]}
+                >
+                  Registro de Visitantes
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+            
+            {hasCurrentMarca && (role === 'ADMINISTRATIVO' || role === 'SUPERVISOR') && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('CorporateVehicles') && styles.activeMenuItem
+                ]}
+                onPress={handleCorporateVehiclesPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('CorporateVehicles') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('corporate-vehicles', isActiveRoute('CorporateVehicles'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('CorporateVehicles') && styles.activeMenuItemText
+                  ]}
+                >
+                  Registro de vehículos
                 </ThemedText>
               </TouchableOpacity>
             )}
@@ -1259,34 +1296,34 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                 </ThemedText>
               </TouchableOpacity>
             )}
-
-            {hasCurrentMarca && (role === 'OPERATIVO' || role === 'SUPERVISOR') && (
+            
+            {hasCurrentMarca && role === 'OPERATIVO' && division === 'Seguridad' && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
-                  isActiveRoute('AttendanceControl') && styles.activeMenuItem
+                  isActiveRoute('BitacoraVehiculosDetenidos') && styles.activeMenuItem
                 ]}
-                onPress={handleAttendanceControlPress}
+                onPress={handleBitacoraVehiculosDetenidosPress}
               >
                 <ThemedText
                   style={[
                     styles.menuItemText,
-                    isActiveRoute('AttendanceControl') && styles.activeMenuItemText
+                    isActiveRoute('BitacoraVehiculosDetenidos') && styles.activeMenuItemText
                   ]}
                 >
-                  {getActionIcon('attendance-control', isActiveRoute('AttendanceControl'))}
+                  {getActionIcon('bitacora-vehiculos-detenidos', isActiveRoute('BitacoraVehiculosDetenidos'))}
                 </ThemedText>
                 <ThemedText
                   style={[
                     styles.menuItemText,
-                    isActiveRoute('AttendanceControl') && styles.activeMenuItemText
+                    isActiveRoute('BitacoraVehiculosDetenidos') && styles.activeMenuItemText
                   ]}
                 >
-                  Control de Asistencia
+                  Revisión de vehículos
                 </ThemedText>
               </TouchableOpacity>
             )}
-
+            
             { /* Empezamos aquí */}
             {hasCurrentMarca && (
               <TouchableOpacity
@@ -1315,85 +1352,98 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && (
+            {hasCurrentMarca && hasLunchTime && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
-                  isActiveRoute('OpeningClosingPosition') && styles.activeMenuItem
+                  isActiveRoute('lunch-time') && styles.activeMenuItem
                 ]}
-                onPress={handleOpeningClosingPositionPress}
+                onPress={handleLunchTimePress}
               >
                 <ThemedText
                   style={[
                     styles.menuItemText,
-                    isActiveRoute('OpeningClosingPosition') && styles.activeMenuItemText
+                    isActiveRoute('lunch-time') && styles.activeMenuItemText
                   ]}
                 >
-                  {getActionIcon('opening-closing-position', isActiveRoute('OpeningClosingPosition'))}
+                  {getActionIcon('lunch-time', isActiveRoute('lunch-time'))}
                 </ThemedText>
                 <ThemedText
                   style={[
                     styles.menuItemText,
-                    isActiveRoute('OpeningClosingPosition') && styles.activeMenuItemText
+                    isActiveRoute('lunch-time') && styles.activeMenuItemText
                   ]}
                 >
-                  Apertura-Cierre de Puesto
-                </ThemedText>
-              </TouchableOpacity>
-            )}
-
-            {hasCurrentMarca && (role === 'ADMINISTRATIVO' || role === 'SUPERVISOR') && division === 'Aseo y Limpieza' && (
-              <TouchableOpacity
-                style={[
-                  styles.menuItem,
-                  isActiveRoute('ActaEntregaProductos') && styles.activeMenuItem
-                ]}
-                onPress={handleActaEntregaProductosPress}
-              >
-                <ThemedText
-                  style={[
-                    styles.menuItemText,
-                    isActiveRoute('ActaEntregaProductos') && styles.activeMenuItemText
-                  ]}
-                >
-                  {getActionIcon('acta-entrega-productos', isActiveRoute('ActaEntregaProductos'))}
-                </ThemedText>
-                <ThemedText
-                  style={[
-                    styles.menuItemText,
-                    isActiveRoute('ActaEntregaProductos') && styles.activeMenuItemText
-                  ]}
-                >
-                  Acta de entrega de productos
+                  Tiempo de Almuerzo
                 </ThemedText>
               </TouchableOpacity>
             )}
 
             {hasCurrentMarca && (role === 'ADMINISTRATIVO' || role === 'SUPERVISOR') && (
+                <TouchableOpacity
+                  style={[
+                    styles.menuItem,
+                    isActiveRoute('PuestoUbicacion') && styles.activeMenuItem
+                  ]}
+                  onPress={handlePuestoUbicacionPress}
+                >
+                  <ThemedText
+                    style={[
+                      styles.menuItemText,
+                      isActiveRoute('PuestoUbicacion') && styles.activeMenuItemText
+                    ]}
+                  >
+                    {getActionIcon('puesto-ubicacion', isActiveRoute('PuestoUbicacion'))}
+                  </ThemedText>
+                  <ThemedText
+                    style={[
+                      styles.menuItemText,
+                      isActiveRoute('PuestoUbicacion') && styles.activeMenuItemText
+                    ]}
+                  >
+                    Ubicación del puesto
+                  </ThemedText>
+                </TouchableOpacity>
+            )}
+
+            {hasCurrentMarca && ((role === 'OPERATIVO' || role === 'SUPERVISOR') && division === 'Seguridad') && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
-                  isActiveRoute('PuestoUbicacion') && styles.activeMenuItem
+                  isActiveRoute('Vehicles') && styles.activeMenuItem
                 ]}
-                onPress={handlePuestoUbicacionPress}
+                onPress={handleVehiclesPress}
               >
                 <ThemedText
                   style={[
                     styles.menuItemText,
-                    isActiveRoute('PuestoUbicacion') && styles.activeMenuItemText
+                    isActiveRoute('Vehicles') && styles.activeMenuItemText
                   ]}
                 >
-                  {getActionIcon('puesto-ubicacion', isActiveRoute('PuestoUbicacion'))}
+                  {getActionIcon('vehicles', isActiveRoute('Vehicles'))}
                 </ThemedText>
                 <ThemedText
                   style={[
                     styles.menuItemText,
-                    isActiveRoute('PuestoUbicacion') && styles.activeMenuItemText
+                    isActiveRoute('Vehicles') && styles.activeMenuItemText
                   ]}
                 >
-                  Ubicación del puesto
+                  Visitas de Vehículos
                 </ThemedText>
               </TouchableOpacity>
+            )}
+
+            {!hasCurrentMarca && (
+              <ThemedView style={styles.warningContainer}>
+                <ThemedText
+                  style={[
+                    styles.warningText,
+                  ]}
+                >
+                  {getActionIcon('warning', false)}
+                  Si desea ver las opciones de este menú, debe tener una marca activa.
+                </ThemedText>
+              </ThemedView>
             )}
 
             {false && (
@@ -1539,6 +1589,12 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '500',
   },
+  menuSeparator: {
+    height: 1,
+    backgroundColor: '#E0E0E0',
+    marginVertical: 8,
+    marginHorizontal: 20,
+  },
   collapsibleSection: {
     marginTop: 10,
   },
@@ -1632,5 +1688,19 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: '#333333',
     textAlign: 'center',
+  },
+  warningContainer: {
+    margin: 10,
+    padding: 20,
+    borderRadius: 8,
+    backgroundColor: '#FFF3CD',
+    borderWidth: 1,
+    borderColor: '#FFEEBA',
+  },
+  warningText: {
+    fontSize: 16,
+    color: '#FF3B30',
+    textAlign: 'center',
+    lineHeight: 24,
   },
 });

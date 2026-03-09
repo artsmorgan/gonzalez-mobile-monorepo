@@ -12,7 +12,6 @@ import {
 } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { Picker } from '@react-native-picker/picker';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import SignatureScreen from 'react-native-signature-canvas';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
@@ -32,8 +31,6 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useQRScanner } from '@/hooks/useQRScanner';
 import authedFetch from '@/hooks/authedFetch';
 import getHoraAccion from '@/hooks/getHoraAccion';
-import { listExecutives } from '@/hooks/incidentsFunctions';
-import type { ExecutiveOption } from '@/hooks/incidentsTypes';
 import type { MarcaDiaResumen, MutuoAcuerdo } from '@/hooks/mutuosAcuerdosTypes';
 import {
   acceptMutuoAcuerdo,
@@ -60,8 +57,8 @@ type EmployeeSectionState = {
   message: string;
 };
 
-const emptySection = (): EmployeeSectionState => ({
-  fecha: new Date(),
+const emptySection = ( horaAccion: number ): EmployeeSectionState => ({
+  fecha: new Date(horaAccion),
   showDatePicker: false,
   codigo: '',
   employeeId: null,
@@ -145,16 +142,14 @@ export default function MutuosAcuerdosScreen() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [records, setRecords] = useState<MutuoAcuerdo[]>([]);
-  const [executives, setExecutives] = useState<ExecutiveOption[]>([]);
 
   const [isCreating, setIsCreating] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [selectedEjecutivoCuenta, setSelectedEjecutivoCuenta] = useState<number | null>(null);
   const [motivo, setMotivo] = useState('');
   const [firmaResponsable, setFirmaResponsable] = useState('');
   const [isGeneratingFirmaResponsable, setIsGeneratingFirmaResponsable] = useState(false);
-  const [ausente, setAusente] = useState<EmployeeSectionState>(emptySection());
-  const [reemplaza, setReemplaza] = useState<EmployeeSectionState>(emptySection());
+  const [ausente, setAusente] = useState<EmployeeSectionState>(emptySection(new Date().getTime()));
+  const [reemplaza, setReemplaza] = useState<EmployeeSectionState>(emptySection(new Date().getTime()));
   const [attachedDocument, setAttachedDocument] = useState<AttachedDocument | null>(null);
 
   const [isSigning, setIsSigning] = useState(false);
@@ -180,13 +175,6 @@ export default function MutuosAcuerdosScreen() {
     else setReemplaza(updater);
   };
 
-  const fetchExecutives = useCallback(async () => {
-    const res = await listExecutives({ refreshAccessToken, logout });
-    if (res.status && Array.isArray((res as any).executives)) {
-      setExecutives((res as any).executives);
-    }
-  }, [refreshAccessToken, logout]);
-
   const fetchRecords = useCallback(async () => {
     try {
       setIsLoading(true);
@@ -199,7 +187,6 @@ export default function MutuosAcuerdosScreen() {
         return;
       }
 
-      await fetchExecutives();
       const res = await listMutuosAcuerdosMine({ refreshAccessToken, logout });
       if (!res.status) {
         setError(res.message || 'No se pudieron cargar los mutuos acuerdos');
@@ -213,7 +200,7 @@ export default function MutuosAcuerdosScreen() {
     } finally {
       setIsLoading(false);
     }
-  }, [fetchExecutives, refreshAccessToken, logout]);
+  }, [refreshAccessToken, logout]);
 
   useFocusEffect(
     useCallback(() => {
@@ -388,25 +375,25 @@ export default function MutuosAcuerdosScreen() {
     }
   };
 
-  const resetForm = () => {
-    setSelectedEjecutivoCuenta(null);
+  const resetForm = async () => {
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
     setMotivo('');
     setFirmaResponsable('');
-    setAusente(emptySection());
-    setReemplaza(emptySection());
+    setAusente(emptySection(horaAccion));
+    setReemplaza(emptySection(horaAccion));
     setAttachedDocument(null);
   };
 
-  const startCreate = () => {
-    resetForm();
+  const startCreate = async () => {
+    await resetForm();
     setIsCreating(true);
   };
 
   const handleSave = async () => {
-    if (!selectedEjecutivoCuenta) {
-      Alert.alert('Error', 'Debes seleccionar el ejecutivo de cuenta');
-      return;
-    }
     if (!motivo.trim()) {
       Alert.alert('Error', 'El motivo es obligatorio');
       return;
@@ -424,7 +411,6 @@ export default function MutuosAcuerdosScreen() {
     try {
       const response = await createMutuoAcuerdo({
         requestData: {
-          ejecutivo_cuenta: selectedEjecutivoCuenta,
           marcaDiaAusente_id: ausente.selectedMarcaId,
           marcaDiaReemplaza_id: reemplaza.selectedMarcaId,
           motivo: motivo.trim(),
@@ -448,7 +434,7 @@ export default function MutuosAcuerdosScreen() {
       }
       Alert.alert('Éxito', response.message || 'Mutuo acuerdo creado');
       setIsCreating(false);
-      resetForm();
+      await resetForm();
       await fetchRecords();
     } catch (e: any) {
       Alert.alert('Error', e?.message || 'No se pudo guardar');
@@ -728,20 +714,6 @@ export default function MutuosAcuerdosScreen() {
           {isCreating && (
             <ThemedView style={styles.formCard}>
               <ThemedText style={styles.formTitle}>Nuevo registro</ThemedText>
-
-              <ThemedText style={styles.label}>Ejecutivo de cuenta *</ThemedText>
-              <ThemedView style={styles.pickerWrapper}>
-                <Picker
-                  selectedValue={selectedEjecutivoCuenta ?? 0}
-                  onValueChange={(v) => setSelectedEjecutivoCuenta(Number(v) || null)}
-                  style={styles.picker}
-                >
-                  <Picker.Item label="Seleccione ejecutivo..." value={0} />
-                  {executives.map((e: any) => (
-                    <Picker.Item key={e.id} label={e.nombre} value={e.id} />
-                  ))}
-                </Picker>
-              </ThemedView>
 
               {renderEmployeeSection('ausente', 'Empleado ausente', ausente)}
               {renderEmployeeSection('reemplaza', 'Empleado reemplaza', reemplaza)}

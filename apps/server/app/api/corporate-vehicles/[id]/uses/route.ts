@@ -120,7 +120,10 @@ export async function POST(
           km_inicio: Number(km_inicio ?? 0),
           km_fin: Number(km_fin ?? 0),
           motivo: String(motivo ?? ""),
-          firma_conductor: String(firma_conductor ?? ""),
+          firma_conductor:
+            firma_conductor != null && String(firma_conductor).trim().length > 0
+              ? String(firma_conductor).trim()
+              : null,
           firma_responsable: String(firma_responsable ?? ""),
         },
       },
