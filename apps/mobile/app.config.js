@@ -1,6 +1,6 @@
 module.exports = {
   expo: {
-    name: "Gonzalez-Mobile-App",
+    name: "MonitoreApp",
     slug: "Gonzalez-Mobile-App",
     version: "1.0.0",
     platforms: [
@@ -10,12 +10,12 @@ module.exports = {
     ],
     orientation: "portrait",
     icon: "./assets/images/icon.png",
-    scheme: "gonzalezmobileapp",
+    scheme: "monitoreapp",
     userInterfaceStyle: "light",
     newArchEnabled: true,
     ios: {
       supportsTablet: true,
-      bundleIdentifier: "com.abrjpo98.GonzalezMobileApp"
+      bundleIdentifier: "com.abrjpo98.MonitoreApp"
     },
     android: {
       adaptiveIcon: {
@@ -28,7 +28,7 @@ module.exports = {
         "android.permission.RECORD_AUDIO",
         "android.permission.MODIFY_AUDIO_SETTINGS"
       ],
-      package: "com.abrjpo98.GonzalezMobileApp"
+      package: "com.abrjpo98.MonitoreApp"
     },
     web: {
       bundler: "metro",
@@ -70,7 +70,7 @@ module.exports = {
         process.env.API_SERVER ||
         process.env.NEXT_PUBLIC_API_SERVER ||
         // https://api-gonzalez-mobile-monorepo-production.up.railway.app
-        "https://barrett-nondelirious-denisha.ngrok-free.dev", // Local dev fallback
+        "https://api-gonzalez-mobile-monorepo-production.up.railway.app", // Local dev fallback
       MINUTES_LIFE_TIME_TOKEN: 15, // 15 minutes (default)
       APP_MODE: process.env.APP_MODE || process.env.NODE_ENV || "dev",
       router: {},

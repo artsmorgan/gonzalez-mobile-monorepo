@@ -442,8 +442,13 @@ export default function IncidentsScreen() {
     }
   };
 
-  const startCreating = () => {
-    const today = isoDateOnly(new Date());
+  const startCreating = async () => {
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
+    const today = isoDateOnly(new Date(horaAccion));
     setIsCreating(true);
     setEditingIncident(null);
     setTextFiles([]);
@@ -631,7 +636,6 @@ export default function IncidentsScreen() {
   };
 
   const validateCreate = () => {
-    if (!ejecutivoRef.current) return 'El ejecutivo de cuenta es obligatorio';
     if (!fechaIncidenteRef.current) return 'La fecha del incidente es obligatoria';
     if (!fechaReporteRef.current) return 'La fecha del reporte es obligatoria';
     if (!nombreResponsableRef.current.trim()) return 'El nombre de quien reporta es obligatorio';
@@ -1197,6 +1201,11 @@ export default function IncidentsScreen() {
     setIsSubmittingAporte(true);
 
     try {
+      const horaAccion = await getHoraAccion();
+      if (!horaAccion) {
+        Alert.alert('Error', 'No se pudo obtener la hora');
+        return;
+      }
       const incidentId = selectedIncidentForAportes.id;
       const role = normalizeRoleName(currentRoleName);
 
@@ -1320,7 +1329,7 @@ export default function IncidentsScreen() {
         nombre_aporte: nombreAporte || null,
         aporte: texto,
         rol_aporte: role || 'OPERATIVO',
-        created_at: new Date().toISOString(),
+        created_at: new Date(horaAccion).toISOString(),
         files: [...payloadFiles].map((f) => ({
           id: Date.now() + Math.random(),
           id_local: `lf_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
@@ -1610,39 +1619,11 @@ export default function IncidentsScreen() {
         <ThemedText style={styles.formTitle}>{isEdit ? 'Editar Incidente' : 'Nuevo Incidente'}</ThemedText>
 
         <ThemedView style={styles.formGroup}>
-          <ThemedText style={styles.formLabel}>Ejecutivo de cuenta:</ThemedText>
-          <ThemedView style={styles.pickerContainer}>
-            <Picker
-              enabled={!readOnly}
-              selectedValue={incident.ejecutivo_id ?? 0}
-              onValueChange={(val) => {
-                const id = Number(val) || null;
-                ejecutivoRef.current = id;
-                if (isCreating) setNewIncident(prev => ({ ...prev, ejecutivo_id: id }));
-                if (editingIncident) setEditingIncident(prev => prev ? ({ ...prev, ejecutivo_id: id }) : prev);
-
-                // Autofill responsable atención con el nombre del ejecutivo seleccionado (requerimiento)
-                const exec = executives.find(e => e.id === id);
-                if (exec?.nombre) {
-                  nombreResponsableAtencionRef.current = exec.nombre;
-                }
-              }}
-              style={styles.picker}
-            >
-              <Picker.Item label="Seleccionar..." value={0} />
-              {executives.map(e => (
-                <Picker.Item key={e.id} label={e.nombre} value={e.id} />
-              ))}
-            </Picker>
-          </ThemedView>
-        </ThemedView>
-
-        <ThemedView style={styles.formGroup}>
           <ThemedText style={styles.formLabel}>Fecha del incidente:</ThemedText>
           <TouchableOpacity
             disabled={readOnly}
             style={[styles.dateButton, readOnly && styles.disabledButton]}
-            onPress={() => { setPickerDateValue(new Date()); setShowFechaIncidentePicker(true); }}
+            onPress={ async () => { const horaAccion = await getHoraAccion(); if (!horaAccion) { Alert.alert('Error', 'No se pudo obtener la hora'); return; } setPickerDateValue(new Date(horaAccion)); setShowFechaIncidentePicker(true); }}
           >
             <ThemedText style={styles.dateButtonText}>{dateLabel(incident.fecha_incidente) || 'Seleccionar fecha'}</ThemedText>
             <Ionicons name="calendar" size={18} color="#007AFF" />
@@ -1659,7 +1640,7 @@ export default function IncidentsScreen() {
           <TouchableOpacity
             disabled={readOnly}
             style={[styles.dateButton, readOnly && styles.disabledButton]}
-            onPress={() => { setPickerDateValue(new Date()); setShowFechaReportePicker(true); }}
+            onPress={ async () => { const horaAccion = await getHoraAccion(); if (!horaAccion) { Alert.alert('Error', 'No se pudo obtener la hora'); return; } setPickerDateValue(new Date(horaAccion)); setShowFechaReportePicker(true); }}
           >
             <ThemedText style={styles.dateButtonText}>{dateLabel(incident.fecha_reporte) || 'Seleccionar fecha'}</ThemedText>
             <Ionicons name="calendar" size={18} color="#007AFF" />
@@ -1761,7 +1742,7 @@ export default function IncidentsScreen() {
           <TouchableOpacity
             disabled={readOnly}
             style={[styles.dateButton, readOnly && styles.disabledButton]}
-            onPress={() => { setPickerDateValue(new Date()); setShowLibroFechaPicker(true); }}
+            onPress={ async () => { const horaAccion = await getHoraAccion(); if (!horaAccion) { Alert.alert('Error', 'No se pudo obtener la hora'); return; } setPickerDateValue(new Date(horaAccion)); setShowLibroFechaPicker(true); }}
           >
             <ThemedText style={styles.dateButtonText}>{dateLabel(incident.libro_fecha) || 'Seleccionar fecha'}</ThemedText>
             <Ionicons name="calendar" size={18} color="#007AFF" />
@@ -1822,7 +1803,7 @@ export default function IncidentsScreen() {
               <ThemedText style={styles.formLabel}>Fecha de la solución propuesta:</ThemedText>
               <TouchableOpacity
                 style={styles.dateButton}
-                onPress={() => { setPickerDateValue(new Date()); setShowFechaSolucionPicker(true); }}
+                onPress={ async () => { const horaAccion = await getHoraAccion(); if (!horaAccion) { Alert.alert('Error', 'No se pudo obtener la hora'); return; } setPickerDateValue(new Date(horaAccion)); setShowFechaSolucionPicker(true); }}
               >
                 <ThemedText style={styles.dateButtonText}>{dateLabel(incident.fecha_solucion) || 'Seleccionar fecha'}</ThemedText>
                 <Ionicons name="calendar" size={18} color="#007AFF" />
@@ -1837,7 +1818,7 @@ export default function IncidentsScreen() {
               <ThemedText style={styles.formLabel}>Fecha real de la solución:</ThemedText>
               <TouchableOpacity
                 style={styles.dateButton}
-                onPress={() => { setPickerDateValue(new Date()); setShowFechaRealSolucionPicker(true); }}
+                onPress={ async () => { const horaAccion = await getHoraAccion(); if (!horaAccion) { Alert.alert('Error', 'No se pudo obtener la hora'); return; } setPickerDateValue(new Date(horaAccion)); setShowFechaRealSolucionPicker(true); }}
               >
                 <ThemedText style={styles.dateButtonText}>{dateLabel(incident.fecha_real_solucion) || 'Seleccionar fecha'}</ThemedText>
                 <Ionicons name="calendar" size={18} color="#007AFF" />
@@ -2000,10 +1981,7 @@ export default function IncidentsScreen() {
                   <ThemedText style={styles.filterLabel}>Fecha incidente:</ThemedText>
                   <TouchableOpacity
                     style={styles.dateButton}
-                    onPress={() => {
-                      setPickerDateValue(filterFechaIncidente ? new Date(filterFechaIncidente) : new Date());
-                      setShowFilterFechaIncidentePicker(true);
-                    }}
+                    onPress={ async () => { const horaAccion = await getHoraAccion(); if (!horaAccion) { Alert.alert('Error', 'No se pudo obtener la hora'); return; } setPickerDateValue(new Date(horaAccion)); setShowFilterFechaIncidentePicker(true); }}
                   >
                     <ThemedText style={styles.dateButtonText}>
                       {filterFechaIncidente || 'Todas'}
@@ -2019,10 +1997,7 @@ export default function IncidentsScreen() {
                   <ThemedText style={styles.filterLabel}>Fecha reporte:</ThemedText>
                   <TouchableOpacity
                     style={styles.dateButton}
-                    onPress={() => {
-                      setPickerDateValue(filterFechaReporte ? new Date(filterFechaReporte) : new Date());
-                      setShowFilterFechaReportePicker(true);
-                    }}
+                    onPress={ async () => { const horaAccion = await getHoraAccion(); if (!horaAccion) { Alert.alert('Error', 'No se pudo obtener la hora'); return; } setPickerDateValue(new Date(horaAccion)); setShowFilterFechaReportePicker(true); }}
                   >
                     <ThemedText style={styles.dateButtonText}>
                       {filterFechaReporte || 'Todas'}
@@ -2075,7 +2050,6 @@ export default function IncidentsScreen() {
                       <ThemedText style={styles.cardTitle}>Incidente #{i.id_local ? `LOCAL-${i.id_local}` : i.id}</ThemedText>
                       <ThemedText style={styles.badge}>{i.estado ? 'Activo' : 'Inactivo'}</ThemedText>
                     </ThemedView>
-                    <ThemedText style={styles.cardInfo}>Ejecutivo: {i.ejecutivo?.name || '-'}</ThemedText>
                     <ThemedText style={styles.cardInfo}>Clasificación: {i.clasificacion?.name || '-'}</ThemedText>
                     <ThemedText style={styles.cardInfo}>Fecha incidente: {dateLabel(i.fecha_incidente)}</ThemedText>
                     <ThemedText style={styles.cardInfo}>Fecha reporte: {dateLabel(i.fecha_reporte)}</ThemedText>

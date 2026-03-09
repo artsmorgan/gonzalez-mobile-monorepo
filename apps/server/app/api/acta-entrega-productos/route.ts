@@ -155,7 +155,7 @@ export async function POST(req: NextRequest) {
     });
     if (!marcaDia) return NextResponse.json({ status: false, message: 'Marca no encontrada' }, { status: 404 });
 
-    // Validaciones mínimas (campos NOT NULL en prisma)
+    // Validaciones mínimas (campos NOT NULL en prisma). firma_entrega y firma_recibe son opcionales.
     const required: Array<[string, any]> = [
       ['tipo_entrega', tipo_entrega],
       ['empresa_id', empresa_id],
@@ -169,11 +169,9 @@ export async function POST(req: NextRequest) {
       ['nombre_entrega', nombre_entrega],
       ['cedula_entrega', cedula_entrega],
       ['fecha_entrega', fecha_entrega],
-      ['firma_entrega', firma_entrega],
       ['nombre_recibe', nombre_recibe],
       ['cedula_recibe', cedula_recibe],
       ['fecha_recibe', fecha_recibe],
-      ['firma_recibe', firma_recibe],
       ['firma_responsable', firma_responsable],
     ];
     for (const [k, v] of required) {
@@ -208,11 +206,11 @@ export async function POST(req: NextRequest) {
           nombre_entrega: String(nombre_entrega),
           cedula_entrega: String(cedula_entrega),
           fecha_entrega: fechaEntregaDate.toISOString(),
-          firma_entrega: String(firma_entrega),
+          firma_entrega: (firma_entrega != null && String(firma_entrega).trim() !== '') ? String(firma_entrega) : null,
           nombre_recibe: String(nombre_recibe),
           cedula_recibe: String(cedula_recibe),
           fecha_recibe: fechaRecibeDate.toISOString(),
-          firma_recibe: String(firma_recibe),
+          firma_recibe: (firma_recibe != null && String(firma_recibe).trim() !== '') ? String(firma_recibe) : null,
           firma_responsable: String(firma_responsable),
         },
         include: { c_imagenes_acta_entrega_producto: true },
@@ -251,6 +249,9 @@ export async function POST(req: NextRequest) {
               nombre_recibe: newRecordObj.nombre_recibe,
               cedula_recibe: newRecordObj.cedula_recibe,
               fecha_recibe: fechaRecibeDate.toISOString(),
+              firma_entrega: newRecordObj.firma_entrega,
+              firma_recibe: newRecordObj.firma_recibe,
+              firma_responsable: newRecordObj.firma_responsable,
             },
           }]),
           created_at: createdAt.toISOString(),

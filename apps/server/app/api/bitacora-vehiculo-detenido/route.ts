@@ -142,6 +142,7 @@ export async function POST(req: NextRequest) {
       movimientos_vehiculos,
       observaciones,
       firma_responsable,
+      register_vehicle,
     } = body ?? {};
 
     // marca_id era requerido previamente. Ahora permitimos crear por estructura directa.
@@ -172,6 +173,61 @@ export async function POST(req: NextRequest) {
     }
 
     const createdAt = toZonedTime(new Date(), "America/Costa_Rica") as Date;
+    const createdBy = parseInt(String((payload as any)?.id ?? 0)) || 0;
+
+    // Si no hay vehiculo_id pero sí se solicitó registrar vehículo, crear primero el vehículo corporativo
+    let finalVehiculoId: number | null = vehiculo_id ? Number(vehiculo_id) : null;
+    if (!finalVehiculoId && register_vehicle) {
+      try {
+        const {
+          placa,
+          tipo: vehTipo,
+          tipo_autoria,
+          kilometraje,
+          prox_cambio_aceite,
+          modelo,
+          anno,
+          titulo_propiedad,
+          rtv,
+          marchamo,
+        } = register_vehicle as any;
+
+        const newVehicle = await callDynamicPrisma({
+          req,
+          data: {
+            action: "POST",
+            table: "c_vehiculos_corporativos",
+            operation: "create",
+            data: {
+              empresa_id: empresaId,
+              cliente_id: clienteId,
+              sucursal_id: sucursalId,
+              placa: String(placa ?? ""),
+              tipo: String(vehTipo ?? tipo ?? ""),
+              tipo_autoria: String(tipo_autoria ?? ""),
+              estado: "Activo",
+              kilometraje: Number(kilometraje ?? 0),
+              prox_cambio_aceite: Number(prox_cambio_aceite ?? 0),
+              modelo: String(modelo ?? ""),
+              anno: Number(anno ?? 0),
+              descripcion: "-",
+              titulo_propiedad: Boolean(titulo_propiedad ?? true),
+              rtv: Boolean(rtv ?? true),
+              marchamo: Boolean(marchamo ?? true),
+              firma_responsable: String(firma_responsable ?? ""),
+              created_by: createdBy,
+              created_at: createdAt.toISOString(),
+            },
+          },
+        });
+
+        if (newVehicle && (newVehicle as any).id) {
+          finalVehiculoId = Number((newVehicle as any).id);
+        }
+      } catch (vehError) {
+        console.error("Error creando vehículo corporativo desde bitácora:", vehError);
+      }
+    }
 
     const created = await callDynamicPrisma({
       req,
@@ -182,7 +238,7 @@ export async function POST(req: NextRequest) {
           empresa_id: empresaId,
           cliente_id: clienteId,
           sucursal_id: sucursalId,
-          vehiculo_id: vehiculo_id ? Number(vehiculo_id) : null,
+          vehiculo_id: finalVehiculoId,
           uso_id: uso_id ? Number(uso_id) : null,
           tipo: String(tipo),
           informacion_general: normalizeToStringifiedJson(informacion_general),
@@ -190,7 +246,7 @@ export async function POST(req: NextRequest) {
           movimientos_vehiculos: normalizeToStringifiedJson(movimientos_vehiculos),
           observaciones: String(observaciones),
           firma_responsable: String(firma_responsable),
-          created_by: parseInt(String((payload as any)?.id ?? 0)) || 0,
+          created_by: createdBy,
           created_at: createdAt.toISOString(),
         }
       }

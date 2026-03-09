@@ -32,8 +32,6 @@ import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import { useAuth } from '@/contexts/AuthContext';
 import authedFetch from '@/hooks/authedFetch';
-import { listExecutives } from '@/hooks/incidentsFunctions';
-import type { ExecutiveOption } from '@/hooks/incidentsTypes';
 import { useQRScanner } from '@/hooks/useQRScanner';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import { RootStackParamList } from '../App';
@@ -153,7 +151,6 @@ export default function PermitRequestScreenV2() {
   const [isOnline, setIsOnline] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
   const [records, setRecords] = useState<PermitRecord[]>([]);
-  const [executives, setExecutives] = useState<ExecutiveOption[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const [isCreating, setIsCreating] = useState(false);
@@ -165,7 +162,6 @@ export default function PermitRequestScreenV2() {
   const [fechaFin, setFechaFin] = useState(new Date());
   const [showDateInicio, setShowDateInicio] = useState(false);
   const [showDateFin, setShowDateFin] = useState(false);
-  const [ejecutivoCuenta, setEjecutivoCuenta] = useState<number | null>(null);
   const [comentarios, setComentarios] = useState('');
   const [turnosPreview, setTurnosPreview] = useState<Turno[]>([]);
   const [turnosMessage, setTurnosMessage] = useState('');
@@ -263,14 +259,6 @@ export default function PermitRequestScreenV2() {
         setRecords([]);
         return;
       }
-
-      const [execsResp] = await Promise.all([
-        listExecutives({ refreshAccessToken, logout }),
-      ]);
-      if (execsResp?.status) {
-        setExecutives(execsResp.executives || []);
-      }
-
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) throw new Error('Server URL not configured');
       const resp = await authedFetch({
@@ -426,12 +414,16 @@ export default function PermitRequestScreenV2() {
     }
   };
 
-  const resetCreateForm = () => {
+  const resetCreateForm = async () => {
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
     setSelectedPlazaId(null);
     setTipo('');
-    setFechaInicio(new Date());
-    setFechaFin(new Date());
-    setEjecutivoCuenta(null);
+    setFechaInicio(new Date(horaAccion));
+    setFechaFin(new Date(horaAccion));
     setComentarios('');
     setTurnosPreview([]);
     setTurnosMessage('');
@@ -449,7 +441,6 @@ export default function PermitRequestScreenV2() {
     if (!isOnline) return Alert.alert('Sin conexión', 'Este módulo funciona únicamente con internet');
     if (!selectedPlazaId) return Alert.alert('Error', 'Debes seleccionar una plaza');
     if (!tipo) return Alert.alert('Error', 'Debes seleccionar tipo de solicitud');
-    if (!ejecutivoCuenta) return Alert.alert('Error', 'Debes seleccionar ejecutivo de cuenta');
     if (!firmaResponsable) return Alert.alert('Error', 'Debes generar la firma responsable');
     if (!turnosPreview.length) return Alert.alert('Error', 'Debes consultar un rango con turnos disponibles');
 
@@ -462,7 +453,6 @@ export default function PermitRequestScreenV2() {
         tipo,
         fecha_inicio: formatDateYMD(fechaInicio),
         fecha_fin: formatDateYMD(fechaFin),
-        ejecutivo_cuenta: ejecutivoCuenta,
         comentarios: comentarios.trim() || undefined,
         firma_responsable: firmaResponsable,
       };
@@ -897,16 +887,6 @@ export default function PermitRequestScreenV2() {
                   ))}
                 </View>
               )}
-
-              <ThemedText style={styles.label}>Ejecutivo de cuenta *</ThemedText>
-              <View style={styles.pickerWrap}>
-                <Picker selectedValue={ejecutivoCuenta || 0} onValueChange={(v) => setEjecutivoCuenta(Number(v) || null)}>
-                  <Picker.Item label="Seleccionar" value={0} />
-                  {executives.map((e) => (
-                    <Picker.Item key={e.id} label={e.nombre} value={e.id} />
-                  ))}
-                </Picker>
-              </View>
 
               <ThemedText style={styles.label}>Comentarios</ThemedText>
               <TextInput

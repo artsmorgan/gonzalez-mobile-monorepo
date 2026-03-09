@@ -94,14 +94,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ status: false, message: "La firma del responsable es requerida" }, { status: 400 });
     }
 
-    if (!firma_persona_identifico_pnc || String(firma_persona_identifico_pnc).trim().length === 0) {
-      return NextResponse.json({ status: false, message: "La firma de la persona que identificó el PNC es requerida" }, { status: 400 });
-    }
-
-    if (!firma_persona_origino_pnc || String(firma_persona_origino_pnc).trim().length === 0) {
-      return NextResponse.json({ status: false, message: "La firma de la persona que originó el PNC es requerida" }, { status: 400 });
-    }
-
     const createdAt = toZonedTime(new Date(), "America/Costa_Rica");
 
     const newRecord = await callDynamicPrisma({
@@ -117,10 +109,16 @@ export async function POST(req: NextRequest) {
           responsable_cuenta: String(responsable_cuenta ?? ""),
           tipo_servicio_no_conforme: String(tipo_servicio_no_conforme ?? ""),
           persona_identifico_pnc: String(persona_identifico_pnc ?? ""),
-          firma_persona_identifico_pnc: String(firma_persona_identifico_pnc ?? ""),
+          firma_persona_identifico_pnc:
+            firma_persona_identifico_pnc != null && String(firma_persona_identifico_pnc).trim().length > 0
+              ? String(firma_persona_identifico_pnc).trim()
+              : null,
           descripcion: String(descripcion ?? ""),
           persona_origino_pnc: String(persona_origino_pnc ?? ""),
-          firma_persona_origino_pnc: String(firma_persona_origino_pnc ?? ""),
+          firma_persona_origino_pnc:
+            firma_persona_origino_pnc != null && String(firma_persona_origino_pnc).trim().length > 0
+              ? String(firma_persona_origino_pnc).trim()
+              : null,
           accion_implementada: String(accion_implementada ?? ""),
           fecha_solucion: fechaSol.toISOString(),
           responsable_aprobar: String(responsable_aprobar ?? ""),
@@ -247,11 +245,14 @@ export async function POST(req: NextRequest) {
               responsable_cuenta: newRecordObj.responsable_cuenta,
               tipo_servicio_no_conforme: newRecordObj.tipo_servicio_no_conforme,
               persona_identifico_pnc: newRecordObj.persona_identifico_pnc,
+              firma_persona_identifico_pnc: newRecordObj.firma_persona_identifico_pnc,
               descripcion: newRecordObj.descripcion,
               persona_origino_pnc: newRecordObj.persona_origino_pnc,
+              firma_persona_origino_pnc: newRecordObj.firma_persona_origino_pnc,
               accion_implementada: newRecordObj.accion_implementada,
               fecha_solucion: fechaSol.toISOString(),
               responsable_aprobar: newRecordObj.responsable_aprobar,
+              firma_responsable: newRecordObj.firma_responsable,
             },
           }]),
           created_at: createdAt.toISOString(),

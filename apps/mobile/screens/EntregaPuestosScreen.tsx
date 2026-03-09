@@ -545,7 +545,7 @@ export default function EntregaPuestosScreen() {
                   throw new Error(data.message || 'Error al guardar');
                 }
 
-                setSubmitResponse({ type: 'success', message: data.message || 'Registro de entrega de puesto guardado correctamente' });
+                Alert.alert('Éxito', data.message || 'Registro de entrega de puesto guardado correctamente');
                 setTimeout(() => {
                   navigation.goBack();
                 }, 2000);
@@ -562,14 +562,14 @@ export default function EntregaPuestosScreen() {
                 });
                 await AsyncStorage.setItem('entrega_puestos_actions', JSON.stringify(actions));
 
-                setSubmitResponse({ type: 'success', message: 'Registro guardado localmente. Se sincronizará cuando haya conexión.' });
+                Alert.alert('Éxito', 'Registro guardado localmente. Se sincronizará cuando haya conexión.');
                 setTimeout(() => {
                   navigation.goBack();
                 }, 2000);
               }
             } catch (err: any) {
               console.error('Error saving:', err);
-              setSubmitResponse({ type: 'error', message: err.message || 'No se pudo guardar el registro' });
+              Alert.alert('Error', err.message || 'No se pudo guardar el registro');
             } finally {
               setIsCreating(false);
               setIsSubmitting(false);

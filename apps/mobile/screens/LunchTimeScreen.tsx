@@ -703,8 +703,13 @@ export default function LunchTimeScreen() {
     }
   };
 
-  const openStartTimePicker = () => {
-    const baseDate = new Date();
+  const openStartTimePicker = async () => {
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
+    const baseDate = new Date(horaAccion);
     if (manualStartHour && manualStartMinute) {
       baseDate.setHours(parseInt(manualStartHour, 10), parseInt(manualStartMinute, 10), 0, 0);
     }
@@ -712,8 +717,13 @@ export default function LunchTimeScreen() {
     setShowStartTimePicker(true);
   };
 
-  const openInactivityPicker = (index: number, type: 'start' | 'end') => {
-    const baseDate = new Date();
+  const openInactivityPicker = async (index: number, type: 'start' | 'end') => {
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
+    const baseDate = new Date(horaAccion);
     const inactivity = manualInactivities[index];
 
     if (type === 'start') {
@@ -1127,7 +1137,7 @@ export default function LunchTimeScreen() {
                 {/* Start Time Input */}
                 <ThemedView style={styles.inputGroup}>
                   <ThemedText style={[styles.inputLabel, { color: '#000000' }]}>Hora de Inicio del Almuerzo:</ThemedText>
-                  <TouchableOpacity style={styles.timePickerButton} onPress={openStartTimePicker}>
+                  <TouchableOpacity style={styles.timePickerButton} onPress={() => openStartTimePicker()}>
                     <ThemedText style={styles.timePickerButtonText}>
                       {manualStartHour && manualStartMinute ? `${manualStartHour}:${manualStartMinute}` : 'Seleccionar hora'}
                     </ThemedText>

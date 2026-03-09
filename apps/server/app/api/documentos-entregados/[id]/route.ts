@@ -86,7 +86,11 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       tipo_documento: typeof tipo_documento === "string" ? tipo_documento : existing.tipo_documento,
       descripcion: typeof descripcion === "string" ? descripcion : existing.descripcion,
       firma_representante_cliente:
-        typeof firma_representante_cliente === "string" ? firma_representante_cliente : existing.firma_representante_cliente,
+        firma_representante_cliente !== undefined
+          ? (firma_representante_cliente != null && String(firma_representante_cliente).trim() !== ""
+            ? String(firma_representante_cliente)
+            : null)
+          : existing.firma_representante_cliente,
       firma_responsable: typeof firma_responsable === "string" ? firma_responsable : existing.firma_responsable,
     };
 
@@ -102,9 +106,6 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
     const cambiosArr: Array<{ prop: string; before: any; after: any }> = [];
     for (const [k, v] of Object.entries(updateData)) {
-      // Excluir firmas
-      if (k === "firma_representante_cliente" || k === "firma_responsable") continue;
-
       const before = (existing as any)[k];
       const after = v;
       if (!eq(before, after)) {

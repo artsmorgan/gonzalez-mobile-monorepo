@@ -49,6 +49,7 @@ export async function PUT(
       corpo_id,
       placa,
       tipo,
+      tipo_autoria,
       estado,
       kilometraje,
       prox_cambio_aceite,
@@ -83,6 +84,7 @@ export async function PUT(
     if (corpo_id !== undefined) updateData.sucursal_id = Number(corpo_id);
     if (placa !== undefined) updateData.placa = String(placa ?? "");
     if (tipo !== undefined) updateData.tipo = String(tipo ?? "");
+    if (tipo_autoria !== undefined) updateData.tipo_autoria = String(tipo_autoria ?? "");
     if (estado !== undefined) updateData.estado = String(estado ?? "");
     if (kilometraje !== undefined) updateData.kilometraje = Number(kilometraje ?? 0);
     if (prox_cambio_aceite !== undefined) updateData.prox_cambio_aceite = Number(prox_cambio_aceite ?? 0);
@@ -298,6 +300,7 @@ export async function DELETE(
               id: existingObj.id,
               placa: existingObj.placa,
               tipo: existingObj.tipo,
+              tipo_autoria: existingObj.tipo_autoria,
               modelo: existingObj.modelo,
               anno: existingObj.anno,
             },

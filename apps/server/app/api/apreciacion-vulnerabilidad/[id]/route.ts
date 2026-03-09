@@ -109,7 +109,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       firma_responsable: typeof firma_responsable === "string" ? firma_responsable : existingObj.firma_responsable,
     };
 
-    // Registrar cambios (solo campos actualizados, excluyendo firmas)
+    // Registrar cambios (solo campos actualizados, incluyendo firmas)
     const eq = (a: any, b: any) => {
       if (a === b) return true;
       if (a == null && b == null) return true;
@@ -121,9 +121,6 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
     const cambiosArr: Array<{ prop: string; before: any; after: any }> = [];
     for (const [k, v] of Object.entries(updateData)) {
-      // Excluir firmas
-      if (k === "firma_solicitante" || k === "firma_responsable") continue;
-
       const before = existingObj[k];
       const after = v;
       if (!eq(before, after)) {

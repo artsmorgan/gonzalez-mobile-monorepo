@@ -182,8 +182,13 @@ export default function VehiclesScreen() {
     );
   };
 
-  const buildDateFromParts = (hours: string, minutes: string) => {
-    const baseDate = new Date();
+  const buildDateFromParts = async (hours: string, minutes: string) => {
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
+    const baseDate = new Date(horaAccion);
     const h = parseInt(hours || '0', 10);
     const m = parseInt(minutes || '0', 10);
     baseDate.setHours(isNaN(h) ? 0 : h, isNaN(m) ? 0 : m, 0, 0);
@@ -230,8 +235,12 @@ export default function VehiclesScreen() {
     setFechaSalidaPickerValue(selectedDate);
   };
 
-  const openHoraEntradaPicker = () => {
-    const baseDate = buildDateFromParts(horaEntradaHRef.current, horaEntradaMRef.current);
+  const openHoraEntradaPicker = async () => {
+    const baseDate = await buildDateFromParts(horaEntradaHRef.current, horaEntradaMRef.current);
+    if (!baseDate) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
     setHoraEntradaPickerValue(baseDate);
     setShowHoraEntradaPicker(true);
   };
@@ -247,8 +256,12 @@ export default function VehiclesScreen() {
     syncTimeFields(hours, minutes, horaSalidaHRef.current, horaSalidaMRef.current);
   };
 
-  const openHoraSalidaPicker = () => {
-    const baseDate = buildDateFromParts(horaSalidaHRef.current, horaSalidaMRef.current);
+  const openHoraSalidaPicker = async () => {
+    const baseDate = await buildDateFromParts(horaSalidaHRef.current, horaSalidaMRef.current);
+    if (!baseDate) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
     setHoraSalidaPickerValue(baseDate);
     setShowHoraSalidaPicker(true);
   };
@@ -264,13 +277,23 @@ export default function VehiclesScreen() {
     syncTimeFields(horaEntradaHRef.current, horaEntradaMRef.current, hours, minutes);
   };
 
-  const clearHoraSalida = () => {
+  const clearHoraSalida = async () => {
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
     syncTimeFields(horaEntradaHRef.current, horaEntradaMRef.current, '', '');
-    setHoraSalidaPickerValue(buildDateFromParts('', ''));
+    const baseDate = await buildDateFromParts('', '');
+    if (!baseDate) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
+    setHoraSalidaPickerValue(baseDate);
     setShowHoraSalidaPicker(false);
     fechaSalidaRef.current = '';
     setFechaSalidaDisplay('');
-    setFechaSalidaPickerValue(new Date());
+    setFechaSalidaPickerValue(new Date(horaAccion));
     setShowFechaSalidaPicker(false);
   };
 
@@ -683,6 +706,18 @@ export default function VehiclesScreen() {
                   logout,
                 });
 
+                const horaAccion = await getHoraAccion();
+                if (!horaAccion) {
+                  Alert.alert('Error', 'No se pudo obtener la hora');
+                  return;
+                }
+
+                const baseDate = await buildDateFromParts('', '');
+                if (!baseDate) {
+                  Alert.alert('Error', 'No se pudo obtener la hora');
+                  return;
+                }
+
                 if (data.status) {
                   Alert.alert('Éxito', data.message || 'Visita de vehículo registrada correctamente');
                   setIsCreating(false);
@@ -709,12 +744,12 @@ export default function VehiclesScreen() {
                   fechaSalidaRef.current = '';
                   setFechaEntradaDisplay('');
                   setFechaSalidaDisplay('');
-                  setFechaEntradaPickerValue(new Date());
-                  setFechaSalidaPickerValue(new Date());
+                  setFechaEntradaPickerValue(new Date(horaAccion));
+                  setFechaSalidaPickerValue(new Date(horaAccion));
                   setShowFechaEntradaPicker(false);
                   setShowFechaSalidaPicker(false);
-                  setHoraEntradaPickerValue(buildDateFromParts('', ''));
-                  setHoraSalidaPickerValue(buildDateFromParts('', ''));
+                  setHoraEntradaPickerValue(baseDate);
+                  setHoraSalidaPickerValue(baseDate);
                   setShowHoraEntradaPicker(false);
                   setShowHoraSalidaPicker(false);
                   setVehicleImageBase64(null);
@@ -766,6 +801,13 @@ export default function VehiclesScreen() {
                 await AsyncStorage.setItem('vehicles_cache', JSON.stringify(cache));
 
                 Alert.alert('Modo Offline', 'Visita de vehículo registrada localmente. Se sincronizará cuando haya conexión.');
+                
+                const baseDate = await buildDateFromParts('', '');
+                if (!baseDate) {
+                  Alert.alert('Error', 'No se pudo obtener la hora');
+                  return;
+                }
+
                 setIsCreating(false);
                 setNewVehicle({
                   id: null,
@@ -790,12 +832,12 @@ export default function VehiclesScreen() {
                 fechaSalidaRef.current = '';
                 setFechaEntradaDisplay('');
                 setFechaSalidaDisplay('');
-                setFechaEntradaPickerValue(new Date());
-                setFechaSalidaPickerValue(new Date());
+                setFechaEntradaPickerValue(new Date(horaAccion));
+                setFechaSalidaPickerValue(new Date(horaAccion));
                 setShowFechaEntradaPicker(false);
                 setShowFechaSalidaPicker(false);
-                setHoraEntradaPickerValue(buildDateFromParts('', ''));
-                setHoraSalidaPickerValue(buildDateFromParts('', ''));
+                setHoraEntradaPickerValue(baseDate);
+                setHoraSalidaPickerValue(baseDate);
                 setShowHoraEntradaPicker(false);
                 setShowHoraSalidaPicker(false);
                 setVehicleImageBase64(null);
@@ -1192,7 +1234,7 @@ export default function VehiclesScreen() {
               />
             </View>
           )}
-          <TouchableOpacity style={styles.timePickerButton} onPress={openHoraEntradaPicker}>
+          <TouchableOpacity style={styles.timePickerButton} onPress={() => openHoraEntradaPicker()}>
             <ThemedText style={styles.timePickerButtonText}>
               {horaEntradaDisplay || 'Seleccionar hora'}
             </ThemedText>
@@ -1230,14 +1272,14 @@ export default function VehiclesScreen() {
             </View>
           )}
           <View style={styles.timePickerRow}>
-            <TouchableOpacity style={styles.timePickerButton} onPress={openHoraSalidaPicker}>
+            <TouchableOpacity style={styles.timePickerButton} onPress={() => openHoraSalidaPicker()}>
               <ThemedText style={styles.timePickerButtonText}>
                 {horaSalidaDisplay || 'Seleccionar hora'}
               </ThemedText>
               <Ionicons name="time-outline" size={20} color="#007AFF" />
             </TouchableOpacity>
             {horaSalidaDisplay !== '' && (
-              <TouchableOpacity style={styles.clearTimeButton} onPress={clearHoraSalida}>
+              <TouchableOpacity style={styles.clearTimeButton} onPress={() => clearHoraSalida()}>
                 <Ionicons name="close-circle" size={18} color="#FF3B30" />
                 <ThemedText style={styles.clearTimeText}>Limpiar</ThemedText>
               </TouchableOpacity>
@@ -1388,6 +1430,12 @@ export default function VehiclesScreen() {
       fechaSalida = salidaDate.toISOString().split('T')[0];
     }
 
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
+
     setEditingVehicle({
       id: vehicle.id,
       id_local: vehicle.id_local,
@@ -1412,11 +1460,24 @@ export default function VehiclesScreen() {
     setFechaEntradaDisplay(fechaEntrada);
     setFechaSalidaDisplay(fechaSalida);
     setFechaEntradaPickerValue(new Date(`${fechaEntrada}T00:00:00`));
-    setFechaSalidaPickerValue(fechaSalida ? new Date(`${fechaSalida}T00:00:00`) : new Date());
+    setFechaSalidaPickerValue(fechaSalida ? new Date(`${fechaSalida}T00:00:00`) : new Date(horaAccion));
     setShowFechaEntradaPicker(false);
     setShowFechaSalidaPicker(false);
-    setHoraEntradaPickerValue(buildDateFromParts(hours, minutes));
-    setHoraSalidaPickerValue(buildDateFromParts(exitHours, exitMinutes));
+
+    const baseDateEntrada = await buildDateFromParts('', '');
+    if (!baseDateEntrada) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
+
+    const baseDateSalida = await buildDateFromParts(exitHours, exitMinutes);
+    if (!baseDateSalida) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
+
+    setHoraEntradaPickerValue(baseDateEntrada);
+    setHoraSalidaPickerValue(baseDateSalida);
     setShowHoraEntradaPicker(false);
     setShowHoraSalidaPicker(false);
 
@@ -1526,18 +1587,28 @@ export default function VehiclesScreen() {
     tipoRef.current = 'Particular';
   };
 
-  const startCreating = () => {
+  const startCreating = async () => {
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
+    const baseDate = await buildDateFromParts('', '');
+    if (!baseDate) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
     syncTimeFields('', '', '', '');
     fechaEntradaRef.current = '';
     fechaSalidaRef.current = '';
     setFechaEntradaDisplay('');
     setFechaSalidaDisplay('');
-    setFechaEntradaPickerValue(new Date());
-    setFechaSalidaPickerValue(new Date());
+    setFechaEntradaPickerValue(new Date(horaAccion));
+    setFechaSalidaPickerValue(new Date(horaAccion));
     setShowFechaEntradaPicker(false);
     setShowFechaSalidaPicker(false);
-    setHoraEntradaPickerValue(buildDateFromParts('', ''));
-    setHoraSalidaPickerValue(buildDateFromParts('', ''));
+    setHoraEntradaPickerValue(baseDate);
+    setHoraSalidaPickerValue(baseDate);
     setShowHoraEntradaPicker(false);
     setShowHoraSalidaPicker(false);
     setIsCreating(true);
@@ -1769,7 +1840,7 @@ export default function VehiclesScreen() {
 
           {/* Create Button */}
           {!isCreating && !editingVehicle && !error && (
-            <TouchableOpacity style={styles.createButton} onPress={startCreating}>
+            <TouchableOpacity style={styles.createButton} onPress={() => startCreating()}>
               <ThemedText style={styles.createButtonText}>{getActionIcon('add')}</ThemedText>
             </TouchableOpacity>
           )}

@@ -284,12 +284,15 @@ export default function JobManualsScreen() {
         try {
           const cached = JSON.parse(cacheStr);
           if (Array.isArray(cached)) setStructure(cached);
+          else setStructure([]);
         } catch {
           // ignore cache parse errors
+          setStructure([]);
         }
       }
 
       // 2) Si hay internet, refrescar desde API y actualizar cache
+      /*
       const isConnected = await getConnectionStatus();
       if (!isConnected) return;
 
@@ -319,6 +322,7 @@ export default function JobManualsScreen() {
         setStructure(incoming);
         await AsyncStorage.setItem('main_structure_cache', JSON.stringify(incoming));
       }
+      */
     } catch (error) {
       console.error('Error fetching main structure for job manuals:', error);
     } finally {

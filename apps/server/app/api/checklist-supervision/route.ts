@@ -48,9 +48,31 @@ async function processEvaluationImages(req: NextRequest, evaluation: any, checkl
       files: photoInputs.map(({ value }) => ({ type: "image", extension: getExt(value), file_base64: value })),
     });
     const uploaded = Array.isArray(uploadResp?.files) ? uploadResp.files : [];
-    photoInputs.forEach(({ input }, i) => {
-      if (uploaded[i]) input.file_name = uploaded[i].name;
-    });
+
+    // Asociar nombres de archivo a los inputs y registrar en c_imagenes_checklist_supervision
+    for (let i = 0; i < photoInputs.length; i++) {
+      const { input } = photoInputs[i];
+      const file = uploaded[i];
+      if (!file) continue;
+
+      // Guardar referencia en el JSON de evaluación
+      input.file_name = file.name;
+
+      // Registrar en la tabla c_imagenes_checklist_supervision (nombre + checklist_id + original_name)
+      await callDynamicPrisma({
+        req,
+        data: {
+          action: "POST",
+          table: "c_imagenes_checklist_supervision",
+          operation: "create",
+          data: {
+            name: file.name,
+            checklist_id: checklistId,
+            original_name: file.original_name || file.name,
+          },
+        },
+      });
+    }
   }
   return evaluation;
 }
@@ -145,9 +167,7 @@ export async function POST(req: NextRequest) {
       !puesto_id ||
       !division ||
       !fecha ||
-      !ejecutivo_cuenta ||
       !evaluacion ||
-      !firma_supervisor ||
       !firma_responsable
     ) {
       return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 200 });
@@ -176,22 +196,36 @@ export async function POST(req: NextRequest) {
     countImages(evaluationParsed);
     console.log(`Total de imágenes encontradas en evaluación: ${imageCount}`);
 
+    const sucursal = await callDynamicPrisma({
+      req,
+      data: { action: "GET", table: "e_estructura_sucursal", operation: "findUnique", where: { id: parseInt(String(corpo_id)) } }
+    });
+
+    if (!sucursal) {
+      return NextResponse.json({ status: false, message: "Sucursal no encontrada" }, { status: 200 });
+    }
+
+
     // Crear el registro primero para obtener el ID
     const created = await callDynamicPrisma({
       req,
       data: {
         action: "POST",
         table: "c_checklist_supervision",
+        operation: "create",
         data: {
           cliente_id: parseInt(String(cliente_id)),
           division_id: parseInt(String(division_id)),
           corpo_id: parseInt(String(corpo_id)),
           puesto_id: parseInt(String(puesto_id)),
           fecha: fechaDate.toISOString(),
-          ejecutivo_cuenta: String(ejecutivo_cuenta),
-          evaluacion: JSON.stringify(evaluationParsed), // Temporal, se actualizará después
+          ejecutivo_cuenta: String(sucursal.ejecutivoCuenta_id ?? 0),
+          evaluacion: '[]', // Temporal, se actualizará después
           articulos_puesto: articulos_puesto ? String(articulos_puesto) : '',
-          firma_supervisor: String(firma_supervisor),
+          firma_supervisor:
+            firma_supervisor != null && typeof firma_supervisor === "string" && firma_supervisor.trim().length > 0
+              ? firma_supervisor.trim()
+              : null,
           firma_responsable: String(firma_responsable),
           created_by: parseInt(String((payload as any)?.id ?? 0)) || 0,
           created_at: createdAt.toISOString(),
@@ -200,10 +234,13 @@ export async function POST(req: NextRequest) {
     });
 
     // Procesar imágenes en la evaluación y actualizar
+    let processedEvaluation: any = null;
     try {
       console.log("Procesando imágenes para checklist ID:", created.id);
-      const processedEvaluation = await processEvaluationImages(req, evaluationParsed, created.id);
+      processedEvaluation = await processEvaluationImages(req, evaluationParsed, created.id);
       console.log("Evaluación procesada, guardando...");
+
+      console.log("Processed evaluation:", processedEvaluation);
 
       await callDynamicPrisma({
         req,
@@ -362,7 +399,7 @@ export async function POST(req: NextRequest) {
               puesto_id: created.puesto_id,
               fecha: created.fecha instanceof Date ? created.fecha.toISOString() : created.fecha,
               ejecutivo_cuenta: created.ejecutivo_cuenta,
-              evaluacion: created.evaluacion,
+              evaluacion: processedEvaluation ? JSON.stringify(processedEvaluation) : '[]',
               articulos_puesto: (created as any).articulos_puesto || null,
               firma_supervisor: created.firma_supervisor,
               firma_responsable: created.firma_responsable,

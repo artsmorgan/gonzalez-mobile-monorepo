@@ -198,7 +198,6 @@ export async function POST(req: NextRequest) {
 
         if (
             !marca_id ||
-            !empleado_id ||
             !fecha_incidente ||
             !fecha_reporte ||
             !nombre_responsable ||
@@ -227,6 +226,15 @@ export async function POST(req: NextRequest) {
 
         const createdAt = toZonedTime(new Date(), "America/Costa_Rica") as Date;
 
+        const sucursal = await callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "e_estructura_sucursal", operation: "findUnique", where: { id: marca.corpo_id } }
+        });
+
+        if (!sucursal) {
+            return NextResponse.json({ status: false, message: "Sucursal no encontrada" }, { status: 200 });
+        }
+
         const incident = await callDynamicPrisma({
             req,
             data: {
@@ -234,7 +242,7 @@ export async function POST(req: NextRequest) {
                 table: "c_incidente",
                 data: {
                     corpo_id: marca.corpo_id,
-                    ejecutivo_cuenta: parseInt(String(empleado_id)),
+                    ejecutivo_cuenta: sucursal.ejecutivoCuenta_id ?? 0,
                     fecha_incidente: new Date(fecha_incidente).toISOString(),
                     fecha_reporte: new Date(fecha_reporte).toISOString(),
                     nombre_responsable: String(nombre_responsable),
@@ -295,10 +303,6 @@ export async function POST(req: NextRequest) {
             req,
             data: { action: "GET", table: "n_clasificacion_incidente", operation: "findUnique", where: { id: parseInt(String(clasificacion_id)) } }
         });
-        const sucursal = await callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "e_estructura_sucursal", operation: "findUnique", where: { id: marca.corpo_id } }
-        });
         const cliente = await callDynamicPrisma({
             req,
             data: { action: "GET", table: "e_estructura_cliente", operation: "findUnique", where: { id: marca.cliente_id } }
@@ -309,11 +313,12 @@ export async function POST(req: NextRequest) {
             const description = `Se ha reportado un incidente de tipo ${clasificacion.nombre} en la sucursal ${sucursal.nombre} de la empresa ${cliente.nombre} el día ${fecha_string} a las ${hora_string}`;
             const supervisors = await callDynamicPrisma({
                 req,
-                data: { action: "GET", table: "c_empleado", operation: "findMany", where: { supervisor_id: empleado_id } }
+                data: { action: "GET", table: "c_empleado", operation: "findMany", where: { supervisor_id: sucursal.ejecutivoCuenta_id ?? 0 } }
             });
+            console.log("supervisors", supervisors.length);
             const supervisorIds = supervisors.map((s: any) => s.id);
             await sendNotificationByRole(req, marca.corpo_id, [marca.plaza_id], "Incidente reportado", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
-            await sendNotificationByEmployee(req, marca.corpo_id, [empleado_id], "Incidente reportado", description, supervisorIds);
+            await sendNotificationByEmployee(req, marca.corpo_id, [parseInt(String(payload?.id ?? "0"))], "Incidente reportado", description, supervisorIds);
         }
 
         return NextResponse.json(

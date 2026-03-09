@@ -62,7 +62,11 @@ export async function getActivities(req: NextRequest, id: number) {
                 ? actividad.fecha_inicio
                 : new Date(actividad.fecha_inicio);
 
-            is_today = validateDates(fechaInicio, fechaMarca, actividad.frecuencia);
+            const fechaFin = actividad.fecha_fin
+                ? (actividad.fecha_fin instanceof Date ? actividad.fecha_fin : new Date(actividad.fecha_fin))
+                : null;
+
+            is_today = validateDates(fechaInicio, fechaMarca, actividad.frecuencia, fechaFin);
 
             let pendiente = false;
             let registro: any = null;
@@ -236,15 +240,20 @@ async function buildArticlesFromPuesto(req: NextRequest, puestoId: number) {
         }
     }
 
+
     const planItems = await callDynamicPrisma({
         req,
         data: {
             action: "GET",
             table: "e_estructura_articulo_corpo_puesto_plan",
             operation: "findMany",
-            where: { puesto_id: puestoId, id: { notIn: articulos_return.map((a: any) => a.id) } },
+            where: { OR: [
+                { puesto_id: puestoId}, { corpo_id: puesto.corpo_id }  ],
+                id: { notIn: articulos_return.map((a: any) => a.id) }
+             },
         },
     });
+    
     for (const item of Array.isArray(planItems) ? planItems : []) {
         let art_bd = null;
         if (item.articuloCP_id) {
@@ -366,7 +375,12 @@ function validateJSON(jsonString: string) {
     }
 }
 
-function validateDates(startDate: Date, currentDate: Date, jsonString: string) {
+function validateDates(
+    startDate: Date,
+    currentDate: Date,
+    jsonString: string,
+    fechaFinActividad?: Date | null
+) {
 
     const jsonValidation = validateJSON(jsonString);
 
@@ -374,13 +388,13 @@ function validateDates(startDate: Date, currentDate: Date, jsonString: string) {
         return false;
     }
 
-    const isValid = isEventDate(startDate, currentDate, jsonValidation.config);
+    const isValid = isEventDate(startDate, currentDate, jsonValidation.config, fechaFinActividad);
 
     return isValid;
 }
 
 
-function isEventDate(start: Date, current: Date, config: any) {
+function isEventDate(start: Date, current: Date, config: any, fechaFinActividad?: Date | null) {
 
     // Si la fecha actual es anterior a la fecha de inicio, no es válida
     if (current < start) {
@@ -425,7 +439,7 @@ function isEventDate(start: Date, current: Date, config: any) {
 
     // Verificar condiciones de finalización
     if (result) {
-        const endConditionsValid = checkEndConditions(current, config);
+        const endConditionsValid = checkEndConditions(current, config, fechaFinActividad);
         if (!endConditionsValid) {
             console.log('Condiciones de finalización no cumplidas');
             result = false;
@@ -698,18 +712,45 @@ function isMonthlyDayMatch(start: Date, current: Date, config: any) {
 }
 
 
-function checkEndConditions(currentDate: Date, config: any) {
-    if (config.endType === 'date') {
-        const endDate = createLocalDate(config.endDate.toString());
-        const result = currentDate <= endDate;
+function checkEndConditions(currentDate: Date, config: any, fechaFinActividad?: Date | null) {
+    const normalizeDate = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    const parseFechaFin = (value: Date | null | undefined) => {
+        if (!value) return null;
+        if (value instanceof Date && !Number.isNaN(value.getTime())) return normalizeDate(value);
+        return null;
+    };
+
+    const current = normalizeDate(currentDate);
+    let endDate: Date | null = null;
+
+    // Si la configuración indica que nunca termina, ignoramos cualquier límite de fecha,
+    // incluyendo el campo fecha_fin de la actividad.
+    if (config.endType === 'never') {
+        return true;
+    }
+
+    // Límite proveniente de la configuración de frecuencia
+    if (config.endType === 'date' && config.endDate) {
+        endDate = createLocalDate(config.endDate.toString());
+    }
+
+    // Límite proveniente del campo fecha_fin de la actividad
+    const endDateActividad = parseFechaFin(fechaFinActividad);
+    if (endDateActividad) {
+        endDate = endDate ? new Date(Math.min(endDate.getTime(), endDateActividad.getTime())) : endDateActividad;
+    }
+
+    if (endDate) {
+        const result = current <= endDate;
         console.log('Verificación de fecha de finalización:', {
-            currentDate: currentDate.toDateString(),
+            currentDate: current.toDateString(),
             endDate: endDate.toDateString(),
             result: result
         });
         return result;
     }
-    return true; // 'never'
+
+    return true;
 }
 
 function createLocalDate(dateString: string) {

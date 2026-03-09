@@ -215,7 +215,6 @@ export async function POST(req: NextRequest) {
 
     const fechaInicio = `${body?.fecha_inicio}T00:00:00.000Z`;
     const fechaFin = `${body?.fecha_fin}T00:00:00.000Z`;
-    const ejecutivoCuenta = parseIntStrict(body?.ejecutivo_cuenta);
     const comentarios = String(body?.comentarios || "").trim();
     const firmaResponsable = String(body?.firma_responsable || "").trim();
 
@@ -234,14 +233,68 @@ export async function POST(req: NextRequest) {
     if (new Date(fechaInicio).getTime() > new Date(fechaFin).getTime()) {
       return NextResponse.json({ status: false, message: "fecha_inicio no puede ser mayor a fecha_fin" }, { status: 400 });
     }
-    if (!ejecutivoCuenta) {
-      return NextResponse.json({ status: false, message: "Debes seleccionar ejecutivo_cuenta" }, { status: 400 });
-    }
     if (!firmaResponsable || firmaResponsable.length < 10) {
       return NextResponse.json({ status: false, message: "La firma responsable es obligatoria" }, { status: 400 });
     }
     if (!plazaId) {
       return NextResponse.json({ status: false, message: "Debes seleccionar una plaza" }, { status: 400 });
+    }
+
+    // Resolver ejecutivo_cuenta a partir de la sucursal asociada a la plaza seleccionada
+    const plaza = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "e_estructura_plazas",
+        operation: "findFirst",
+        where: { id: plazaId },
+        select: { puesto_id: true },
+      },
+    });
+
+    const plazaPuestoId = parseIntStrict((plaza as any)?.puesto_id);
+    if (!plazaPuestoId) {
+      return NextResponse.json(
+        { status: false, message: "La plaza seleccionada no tiene un puesto asociado" },
+        { status: 400 }
+      );
+    }
+
+    const puesto = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "e_estructura_puesto",
+        operation: "findFirst",
+        where: { id: plazaPuestoId },
+        select: { sucursal_id: true },
+      },
+    });
+
+    const sucursalId = parseIntStrict((puesto as any)?.sucursal_id);
+    if (!sucursalId) {
+      return NextResponse.json(
+        { status: false, message: "El puesto asociado a la plaza no tiene una sucursal válida" },
+        { status: 400 }
+      );
+    }
+
+    const sucursal = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "e_estructura_sucursal",
+        operation: "findFirst",
+        where: { id: sucursalId },
+      },
+    });
+
+    const ejecutivoCuenta = parseIntStrict((sucursal as any)?.ejecutivoCuenta_id);
+    if (!ejecutivoCuenta) {
+      return NextResponse.json(
+        { status: false, message: "La sucursal seleccionada no tiene un ejecutivo de cuenta asignado" },
+        { status: 400 }
+      );
     }
 
     const turnos = await getTurnosFromRange(req, currentEmployeeId, new Date(fechaInicio), new Date(fechaFin), plazaId);

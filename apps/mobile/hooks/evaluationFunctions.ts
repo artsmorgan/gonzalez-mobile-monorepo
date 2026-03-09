@@ -1669,7 +1669,7 @@ export type CorporateVehicleUseRequest = {
   km_inicio: number;
   km_fin: number;
   motivo: string;
-  firma_conductor: string;
+  firma_conductor?: string | null;
   firma_responsable: string;
   // bitacora_id ignorado por solicitud
 };
@@ -2475,7 +2475,7 @@ export type CorporateVehicleMaintenanceRequest = {
   kilometraje_siguiente_revision: number;
   imagen_despues: string; // base64
   nombre_mecanico: string;
-  firma_mecanico: string; // base64 signature
+  firma_mecanico?: string | null; // base64 signature (opcional)
   firma_responsable: string; // base64 hash
 };
 

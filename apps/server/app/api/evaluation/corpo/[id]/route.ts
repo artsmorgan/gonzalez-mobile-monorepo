@@ -39,7 +39,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             evaluacion: string,
             comentarios: string,
             firma_evaluador: string,
-            firma_empleado: string,
+            firma_empleado: string | null,
             firma_empleado_manual: string | null,
             tipo: string,
             id_local: string
@@ -69,7 +69,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                 evaluacion: evaluacion.evaluacion,
                 comentarios: evaluacion.comentarios,
                 firma_evaluador: evaluacion.firma_evaluador,
-                firma_empleado: evaluacion.firma_empleado,
+                firma_empleado: evaluacion.firma_empleado ?? null,
                 firma_empleado_manual: evaluacion.firma_empleado_manual ?? null,
                 tipo: evaluacion.tipo,
                 id_local: ""

@@ -84,14 +84,14 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     if (nombre_entrega !== undefined) updateData.nombre_entrega = String(nombre_entrega ?? '');
     if (cedula_entrega !== undefined) updateData.cedula_entrega = String(cedula_entrega ?? '');
     if (fecha_entrega !== undefined) updateData.fecha_entrega = new Date(String(fecha_entrega)).toISOString();
-    if (firma_entrega !== undefined) updateData.firma_entrega = String(firma_entrega ?? '');
+    if (firma_entrega !== undefined) updateData.firma_entrega = (firma_entrega != null && String(firma_entrega).trim() !== '') ? String(firma_entrega) : null;
     if (nombre_recibe !== undefined) updateData.nombre_recibe = String(nombre_recibe ?? '');
     if (cedula_recibe !== undefined) updateData.cedula_recibe = String(cedula_recibe ?? '');
     if (fecha_recibe !== undefined) updateData.fecha_recibe = new Date(String(fecha_recibe)).toISOString();
-    if (firma_recibe !== undefined) updateData.firma_recibe = String(firma_recibe ?? '');
+    if (firma_recibe !== undefined) updateData.firma_recibe = (firma_recibe != null && String(firma_recibe).trim() !== '') ? String(firma_recibe) : null;
     if (firma_responsable !== undefined) updateData.firma_responsable = String(firma_responsable ?? '');
 
-    // Registrar cambios (solo campos actualizados, excluyendo firmas)
+    // Registrar cambios (solo campos actualizados, incluyendo firmas)
     const eq = (a: any, b: any) => {
       if (a === b) return true;
       if (a == null && b == null) return true;
@@ -103,8 +103,6 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
     const cambiosArr: Array<{ prop: string; before: any; after: any }> = [];
     for (const [k, v] of Object.entries(updateData)) {
-      if (k.startsWith("firma_")) continue; // Excluir firmas
-
       const before = existingObj[k];
       const after = v;
       if (!eq(before, after)) {

@@ -46,9 +46,34 @@ async function processEvaluationImages(req: NextRequest, evaluation: any, checkl
       files: photoInputs.map(({ value }) => ({ type: "image", extension: getExt(value), file_base64: value })),
     });
     const uploaded = Array.isArray(uploadResp?.files) ? uploadResp.files : [];
-    photoInputs.forEach(({ input }, i) => {
-      if (uploaded[i]) input.file_name = uploaded[i].name;
-    });
+
+    // Asociar nombres de archivo a los inputs y registrar en c_imagenes_checklist_supervision
+    for (let i = 0; i < photoInputs.length; i++) {
+      const { input } = photoInputs[i];
+      const file = uploaded[i];
+      if (!file) continue;
+
+      // Guardar referencia en el JSON de evaluación y limpiar el base64
+      input.file_name = file.name;
+      if (typeof input.value === "string" && input.value.startsWith("data:image/")) {
+        input.value = null;
+      }
+
+      // Registrar en la tabla c_imagenes_checklist_supervision
+      await callDynamicPrisma({
+        req,
+        data: {
+          action: "POST",
+          table: "c_imagenes_checklist_supervision",
+          operation: "create",
+          data: {
+            name: file.name,
+            checklist_id: checklistId,
+            original_name: file.original_name || file.name,
+          },
+        },
+      });
+    }
   }
   return evaluation;
 }
@@ -81,6 +106,9 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
           e_estructura_puesto: {
             select: { id: true, nombre: true, codigo: true },
           },
+          c_imagenes_checklist_supervision: {
+            select: { id: true, name: true, original_name: true },
+          },
         }
       }
     });
@@ -88,6 +116,17 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
     if (!row) {
       return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 200 });
     }
+
+    const baseUrl = req.nextUrl.origin;
+    const images =
+      Array.isArray((row as any).c_imagenes_checklist_supervision)
+        ? (row as any).c_imagenes_checklist_supervision.map((img: any) => ({
+            id: img.id,
+            name: img.name,
+            original_name: img.original_name,
+            url: baseUrl ? `${baseUrl}/api/checklist-supervision/${row.id}/get-image/${encodeURIComponent(img.name)}` : "",
+          }))
+        : [];
 
     const mapped = {
       id: row.id,
@@ -106,6 +145,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
       cliente: row.e_estructura_cliente,
       corpo: row.e_estructura_sucursal,
       puesto: row.e_estructura_puesto,
+      images,
     };
 
     return NextResponse.json({ status: true, data: mapped }, { status: 200 });
@@ -166,9 +206,14 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     if (corpo_id !== undefined) updateData.corpo_id = parseInt(String(corpo_id));
     if (puesto_id !== undefined) updateData.puesto_id = parseInt(String(puesto_id));
     if (fecha !== undefined) updateData.fecha = fecha instanceof Date ? fecha : new Date(fecha);
-    if (ejecutivo_cuenta !== undefined) updateData.ejecutivo_cuenta = String(ejecutivo_cuenta);
+    if (ejecutivo_cuenta !== undefined) updateData.ejecutivo_cuenta = updateData.ejecutivo_cuenta;
     if (articulos_puesto !== undefined) updateData.articulos_puesto = articulos_puesto ? String(articulos_puesto) : '';
-    if (firma_supervisor !== undefined) updateData.firma_supervisor = String(firma_supervisor);
+    if (firma_supervisor !== undefined) {
+      updateData.firma_supervisor =
+        firma_supervisor != null && typeof firma_supervisor === "string" && firma_supervisor.trim().length > 0
+          ? firma_supervisor.trim()
+          : null;
+    }
     if (firma_responsable !== undefined) updateData.firma_responsable = String(firma_responsable);
 
     // Procesar evaluación si se proporciona
@@ -178,7 +223,9 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       // Procesar imágenes en la evaluación
       try {
         const processedEvaluation = await processEvaluationImages(req, evaluationParsed, id);
+        console.log("processedEvaluation", processedEvaluation);
         updateData.evaluacion = JSON.stringify(processedEvaluation);
+
       } catch (error) {
         console.error("Error procesando imágenes en evaluación:", error);
         // Si falla, guardar sin procesar
@@ -186,9 +233,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       }
     }
 
-    // Comparar cambios (excluir firmas)
+    // Comparar cambios (incluir firmas)
     for (const [k, v] of Object.entries(updateData)) {
-      if (k === "firma_supervisor" || k === "firma_responsable") continue; // Excluir firmas
       const before = (existing as any)[k];
       const after = v;
       if (!eq(before, after)) {

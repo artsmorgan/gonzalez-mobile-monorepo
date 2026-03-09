@@ -197,7 +197,6 @@ export async function POST(req: NextRequest) {
     if (!valid) return NextResponse.json({ status: false, expired, message }, { status: expired ? 401 : 403 });
 
     const body = await req.json();
-    const ejecutivo_cuenta = parseIntStrict(body?.ejecutivo_cuenta);
     const marcaDiaAusente_id = parseIntStrict(body?.marcaDiaAusente_id);
     const marcaDiaReemplaza_id = parseIntStrict(body?.marcaDiaReemplaza_id);
     const motivo = String(body?.motivo || "").trim();
@@ -208,7 +207,7 @@ export async function POST(req: NextRequest) {
     const file_type = String(body?.type || "").trim().toLowerCase();
     const mime_type = String(body?.mimeType || "").trim();
 
-    if (!ejecutivo_cuenta || !marcaDiaAusente_id || !marcaDiaReemplaza_id || !motivo || !firma_responsable) {
+    if (!marcaDiaAusente_id || !marcaDiaReemplaza_id || !motivo || !firma_responsable) {
       return NextResponse.json({ status: false, message: "Datos incompletos para crear el mutuo acuerdo" }, { status: 400 });
     }
 
@@ -251,6 +250,25 @@ export async function POST(req: NextRequest) {
 
     if (Number(marcaAusente.cliente_id) !== Number(marcaReemplaza.cliente_id) || Number(marcaAusente.corpo_id) !== Number(marcaReemplaza.corpo_id)) {
       return NextResponse.json({ status: false, message: "Las marcas deben pertenecer al mismo cliente y sucursal" }, { status: 400 });
+    }
+
+    // Obtener ejecutivo_cuenta desde la sucursal (corpo_id) asociada a las marcas
+    const sucursal = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "e_estructura_sucursal",
+        operation: "findUnique",
+        where: { id: Number(marcaAusente.corpo_id) },
+        select: { ejecutivoCuenta_id: true },
+      },
+    });
+    const ejecutivo_cuenta = parseIntStrict((sucursal as any)?.ejecutivoCuenta_id ?? (sucursal as any)?.ejecutivo_cuenta_id);
+    if (!ejecutivo_cuenta) {
+      return NextResponse.json(
+        { status: false, message: "La sucursal de las marcas no tiene un ejecutivo de cuenta asignado" },
+        { status: 400 }
+      );
     }
 
     const alreadyUsed = await callDynamicPrisma({

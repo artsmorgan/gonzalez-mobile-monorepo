@@ -71,7 +71,8 @@ export async function POST(req: NextRequest) {
         }
         const marcaDiaObj = marcaDia as any;
 
-        // Validaciones mínimas (campos NOT NULL en prisma)
+        // Validaciones mínimas (campos NOT NULL en prisma).
+        // Las firmas de representantes son opcionales, por lo que no se incluyen aquí.
         const required: Array<[string, any]> = [
             ["cliente_id", cliente_id],
             ["corpo_id", corpo_id],
@@ -84,9 +85,6 @@ export async function POST(req: NextRequest) {
             ["nombre_representante_empresa_saliente", nombre_representante_empresa_saliente],
             ["actividades", actividades],
             ["inventario", inventario],
-            ["firma_representante_cliente", firma_representante_cliente],
-            ["firma_representante_empresa_entrante", firma_representante_empresa_entrante],
-            ["firma_representante_empresa_saliente", firma_representante_empresa_saliente],
             ["firma_responsable", firma_responsable],
         ];
         for (const [k, v] of required) {
@@ -118,9 +116,18 @@ export async function POST(req: NextRequest) {
                     actividades: String(actividades ?? "[]"),
                     inventario: String(inventario ?? "[]"),
                     otras_observaciones: otras_observaciones ? String(otras_observaciones) : null,
-                    firma_representante_cliente: String(firma_representante_cliente),
-                    firma_representante_empresa_entrante: String(firma_representante_empresa_entrante),
-                    firma_representante_empresa_saliente: String(firma_representante_empresa_saliente),
+                    firma_representante_cliente:
+                        firma_representante_cliente != null && String(firma_representante_cliente).trim().length > 0
+                            ? String(firma_representante_cliente)
+                            : null,
+                    firma_representante_empresa_entrante:
+                        firma_representante_empresa_entrante != null && String(firma_representante_empresa_entrante).trim().length > 0
+                            ? String(firma_representante_empresa_entrante)
+                            : null,
+                    firma_representante_empresa_saliente:
+                        firma_representante_empresa_saliente != null && String(firma_representante_empresa_saliente).trim().length > 0
+                            ? String(firma_representante_empresa_saliente)
+                            : null,
                     firma_responsable: String(firma_responsable),
                     created_at: createdAt.toISOString(),
                     created_by: createdByNum,
@@ -157,6 +164,10 @@ export async function POST(req: NextRequest) {
                             actividades: newRecordObj.actividades,
                             inventario: newRecordObj.inventario,
                             otras_observaciones: newRecordObj.otras_observaciones,
+                            firma_representante_cliente: newRecordObj.firma_representante_cliente,
+                            firma_representante_empresa_entrante: newRecordObj.firma_representante_empresa_entrante,
+                            firma_representante_empresa_saliente: newRecordObj.firma_representante_empresa_saliente,
+                            firma_responsable: newRecordObj.firma_responsable,
                         },
                     }]),
                     created_at: createdAt.toISOString(),

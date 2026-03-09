@@ -59,7 +59,9 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                 action: "GET",
                 table: "e_estructura_articulo_corpo_puesto_plan",
                 operation: "findMany",
-                where: { puesto_id: puestoId, id: { notIn: planRows.map((p: any) => p.id) } },
+                where: { OR: [{ puesto_id: puestoId }, { corpo_id: puesto.corpo_id }],
+                    id: { notIn: planRows.map((p: any) => p.id) }
+                },
                 include: { n_articulo_corpo_puesto: { select: { id: true, nombre: true } } },
                 orderBy: { id: "asc" }
             }
@@ -73,7 +75,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                 action: "GET",
                 table: "e_estructura_articulo_corpo_puesto_entrega",
                 operation: "findMany",
-                where: { puesto_id: puestoId },
+                where: { OR: [{ puesto_id: puestoId }, { corpo_id: puesto.corpo_id }] },
                 include: { n_articulo_corpo_puesto: { select: { id: true, nombre: true } } },
                 orderBy: { id: "asc" }
             }

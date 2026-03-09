@@ -13,10 +13,14 @@ function parseDateOnly(value: any): Date | null {
 
 function parseTimeOnly(value: any): Date | null {
   if (!value) return null;
-  const s = String(value);
-  const d = s.includes("T") ? new Date(s) : new Date(`1970-01-01T${s}`);
-  if (isNaN(d.getTime())) return null;
-  return d;
+  const s = String(value).trim();
+  if (s.includes("T")) return new Date(s);
+  const m = s.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (!m) return null;
+  const hh = Math.min(23, Math.max(0, Number(m[1])));
+  const mm = Math.min(59, Math.max(0, Number(m[2])));
+  const ss = m[3] != null ? Math.min(59, Math.max(0, Number(m[3]))) : 0;
+  return new Date(Date.UTC(1970, 0, 1, hh, mm, ss, 0));
 }
 
 async function getMarcaDiaOrFail(req: NextRequest, marcaId: number) {

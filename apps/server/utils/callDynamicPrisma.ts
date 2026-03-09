@@ -62,8 +62,6 @@ export async function callDynamicPrisma({
             break;
     }
 
-    console.log("ultimateUrl", ultimateUrl);
-
     try {
         const response = await axios.post(
             ultimateUrl,

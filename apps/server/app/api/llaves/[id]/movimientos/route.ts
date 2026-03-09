@@ -138,8 +138,6 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
       nombre_persona_entrega,
       departamento,
       telefono,
-      firma_entrega,
-      firma_recibe,
       firma_responsable,
     ];
     if (requiredStrings.some((v) => typeof v !== "string" || v.trim().length === 0)) {
@@ -159,8 +157,14 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
           telefono: String(telefono),
           fecha: fechaDate.toISOString(),
           hora: horaDate.toISOString(),
-          firma_entrega: String(firma_entrega),
-          firma_recibe: String(firma_recibe),
+          firma_entrega:
+            firma_entrega != null && typeof firma_entrega === "string" && firma_entrega.trim().length > 0
+              ? firma_entrega.trim()
+              : null,
+          firma_recibe:
+            firma_recibe != null && typeof firma_recibe === "string" && firma_recibe.trim().length > 0
+              ? firma_recibe.trim()
+              : null,
           firma_responsable: String(firma_responsable),
         }
       }
@@ -210,6 +214,9 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
               telefono: created.telefono,
               fecha: created.fecha instanceof Date ? created.fecha.toISOString() : created.fecha,
               hora: created.hora instanceof Date ? created.hora.toISOString() : created.hora,
+              firma_entrega: created.firma_entrega,
+              firma_recibe: created.firma_recibe,
+              firma_responsable: created.firma_responsable,
             },
           }]),
           created_at: createdAt.toISOString(),

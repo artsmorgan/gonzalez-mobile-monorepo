@@ -33,6 +33,7 @@ import { useQRScanner } from '@/hooks/useQRScanner';
 import authedFetch from '@/hooks/authedFetch';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import getHoraAccion from '@/hooks/getHoraAccion';
 import SignatureScreen from 'react-native-signature-canvas';
 import {
   createCorporateVehicle,
@@ -94,7 +95,7 @@ type VehicleUse = {
   km_inicio: number;
   km_fin: number;
   motivo: string;
-  firma_conductor: string;
+  firma_conductor?: string | null;
   firma_responsable: string;
   bitacora?: any | null; // ignorar por ahora en UI
   synced?: boolean;
@@ -112,7 +113,7 @@ type VehicleMaintenance = {
   kilometraje_siguiente_revision: number;
   imagen_despues: string; // base64 or file_name
   nombre_mecanico: string;
-  firma_mecanico: string; // base64 signature
+  firma_mecanico?: string | null; // base64 signature (opcional)
   firma_responsable: string; // base64 hash
   created_by?: number;
   created_at?: string;
@@ -131,6 +132,7 @@ type VehicleRecord = {
 
   placa: string;
   tipo: string;
+  tipo_autoria: string;
   estado?: string;
   kilometraje: number;
   prox_cambio_aceite: number;
@@ -693,6 +695,7 @@ export default function CorporateVehiclesScreen() {
   const [estado, setEstado] = useState<'Activo' | 'Inactivo'>('Activo');
   const [kilometraje, setKilometraje] = useState('');
   const [proxCambioAceite, setProxCambioAceite] = useState('');
+  const [tipoAutoria, setTipoAutoria] = useState('');
   const [modelo, setModelo] = useState('');
   const [anno, setAnno] = useState('');
   const [descripcion, setDescripcion] = useState('');
@@ -1123,7 +1126,7 @@ export default function CorporateVehiclesScreen() {
       );
     } catch (e: any) {
       console.error('Error fetching corporate vehicles:', e);
-      setError(e?.message || 'Error al cargar vehículos corporativos');
+      setError(e?.message || 'Error al cargar los vehículos');
     } finally {
       setIsLoading(false);
     }
@@ -1144,6 +1147,7 @@ export default function CorporateVehiclesScreen() {
     setEstado('Activo');
     setKilometraje('');
     setProxCambioAceite('');
+    setTipoAutoria('');
     setModelo('');
     setAnno('');
     setDescripcion('');
@@ -1173,17 +1177,27 @@ export default function CorporateVehiclesScreen() {
     setUsePickerKey(null);
   };
 
-  const openUseDatePicker = (key: 'inicio_fecha' | 'fin_fecha', current?: string) => {
+  const openUseDatePicker = async (key: 'inicio_fecha' | 'fin_fecha', current?: string) => {
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
     setUsePickerKey(key);
     const ymd = normalizeDateToYMD(current);
-    const base = ymd ? new Date(`${ymd}T00:00:00`) : new Date();
-    setUseDatePickerValue(Number.isNaN(base.getTime()) ? new Date() : base);
+    const base = ymd ? new Date(`${ymd}T00:00:00`) : new Date(horaAccion);
+    setUseDatePickerValue(Number.isNaN(base.getTime()) ? new Date(horaAccion) : base);
     setShowUseDatePicker(true);
   };
 
-  const openUseTimePicker = (key: 'inicio_hora' | 'fin_hora', current?: string) => {
+  const openUseTimePicker = async (key: 'inicio_hora' | 'fin_hora', current?: string) => {
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
     setUsePickerKey(key);
-    const base = new Date();
+    const base = new Date(horaAccion);
     if (current && /^\d{2}:\d{2}$/.test(current)) {
       const [hh, mm] = current.split(':').map((x) => parseInt(x, 10));
       if (!Number.isNaN(hh) && !Number.isNaN(mm)) {
@@ -1362,12 +1376,11 @@ export default function CorporateVehiclesScreen() {
     if (!useFinHora.trim()) return 'Hora de fin es requerida';
     if (!useCombInicio.trim()) return 'Combustible inicio es requerido';
     if (!useCombFin.trim()) return 'Combustible fin es requerido';
-    if (!useFirmaConductor.trim()) return 'Firma del conductor es requerida';
     if (!useFirmaResponsable) return 'Firma del responsable (QR o Generar) es requerida';
     return null;
   };
 
-  const buildUseRequestData = () => {
+  const buildUseRequestData = (horaAccion: number) => {
     const firmaHash = useFirmaResponsable
       ? btoa(
         `${useFirmaResponsable.sessionId}:${useFirmaResponsable.empleadoId}:${useFirmaResponsable.latitud}:${useFirmaResponsable.longitud}:${useFirmaResponsable.timestamp}`
@@ -1377,7 +1390,7 @@ export default function CorporateVehiclesScreen() {
     return {
       nombre_conductor: useNombreConductor.trim(),
       codigo_conductor: useCodigoConductor.trim(),
-      fecha: new Date().toISOString(),
+      fecha: new Date(horaAccion).toISOString(),
       inicio: toIsoFromDateAndTime(useInicioFecha, useInicioHora),
       fin: toIsoFromDateAndTime(useFinFecha, useFinHora),
       combustible_inicio: useCombInicio.trim(),
@@ -1385,7 +1398,7 @@ export default function CorporateVehiclesScreen() {
       km_inicio: Number(useKmInicio || 0),
       km_fin: Number(useKmFin || 0),
       motivo: useMotivo.trim(),
-      firma_conductor: getBase64Only(useFirmaConductor),
+      firma_conductor: getBase64Only(useFirmaConductor) || null,
       firma_responsable: firmaHash,
     };
   };
@@ -1404,12 +1417,12 @@ export default function CorporateVehiclesScreen() {
   const saveUseRecord = async () => {
     const errMsg = validateUseForm();
     if (errMsg) {
-      setSubmitResponseUse({ type: 'error', message: errMsg });
+      Alert.alert('Error', errMsg);
       return;
     }
 
     if (!usesVehicleKey) {
-      setSubmitResponseUse({ type: 'error', message: 'No se encontró el vehículo seleccionado' });
+      Alert.alert('Error', 'No se encontró el vehículo seleccionado');
       return;
     }
 
@@ -1419,12 +1432,22 @@ export default function CorporateVehiclesScreen() {
     try {
       const vehicle = records.find((r) => String(r.id || r.id_local) === usesVehicleKey);
       if (!vehicle) {
-        setSubmitResponseUse({ type: 'error', message: 'No se encontró el vehículo seleccionado' });
+        Alert.alert('Error', 'No se encontró el vehículo seleccionado');
         setIsSubmittingUse(false);
         return;
       }
 
-      const requestData = buildUseRequestData();
+      const horaAccion = await getHoraAccion();
+      if (!horaAccion) {
+        Alert.alert('Error', 'No se pudo obtener la hora');
+        return;
+      }
+
+      const requestData = buildUseRequestData(horaAccion);
+      if (!requestData) {
+        Alert.alert('Error', 'No se pudo obtener los datos del uso');
+        return;
+      }
       const isConnected = await getConnectionStatus();
       const vehicleIdForAction = String(vehicle.id_local || vehicle.id);
 
@@ -1471,7 +1494,7 @@ export default function CorporateVehiclesScreen() {
           await setUsesForVehicleKey(usesVehicleKey, updated);
         }
 
-        setSubmitResponseUse({ type: 'success', message: 'El uso se guardó en el dispositivo. Se sincronizará al reconectar.' });
+        Alert.alert('Éxito', 'El uso se guardó en el dispositivo. Se sincronizará al reconectar.');
         setTimeout(() => {
           setIsUseFormOpen(false);
           setUseEditing(null);
@@ -1483,7 +1506,7 @@ export default function CorporateVehiclesScreen() {
       const serverVehicleId = await resolveServerVehicleId(vehicle.id);
       const vehiculoId = serverVehicleId ?? (typeof vehicle.id === 'number' ? vehicle.id : null);
       if (!vehiculoId) {
-        setSubmitResponseUse({ type: 'error', message: 'Este vehículo aún no está sincronizado. Conéctate y sincroniza el vehículo primero.' });
+        Alert.alert('Error', 'Este vehículo aún no está sincronizado. Conéctate y sincroniza el vehículo primero.');
         setIsSubmittingUse(false);
         return;
       }
@@ -1496,11 +1519,11 @@ export default function CorporateVehiclesScreen() {
           logout,
         });
         if (!res.status) throw new Error(res.message || 'No se pudo crear el uso');
-        setSubmitResponseUse({ type: 'success', message: res.message || 'Uso guardado correctamente' });
+        Alert.alert('Éxito', res.message || 'Uso guardado correctamente');
       } else {
         const useId = String(useEditing.id);
         if (useId.startsWith('local-')) {
-          setSubmitResponseUse({ type: 'error', message: 'Este uso aún no está sincronizado. Se sincronizará automáticamente al reconectar.' });
+          Alert.alert('Error', 'Este uso aún no está sincronizado. Se sincronizará automáticamente al reconectar.');
           setIsSubmittingUse(false);
           return;
         }
@@ -1511,7 +1534,7 @@ export default function CorporateVehiclesScreen() {
           logout,
         });
         if (!res.status) throw new Error(res.message || 'No se pudo actualizar el uso');
-        setSubmitResponseUse({ type: 'success', message: res.message || 'Uso guardado correctamente' });
+        Alert.alert('Éxito', res.message || 'Uso guardado correctamente');
       }
 
       // refrescar desde servidor
@@ -1529,7 +1552,7 @@ export default function CorporateVehiclesScreen() {
       }, 2000);
     } catch (e: any) {
       console.error('Error saving use:', e);
-      setSubmitResponseUse({ type: 'error', message: e?.message || 'No se pudo guardar el uso' });
+      Alert.alert('Error', e?.message || 'No se pudo guardar el uso');
     } finally {
       setIsSubmittingUse(false);
     }
@@ -1776,7 +1799,6 @@ export default function CorporateVehiclesScreen() {
     if (!maintenanceTipo.trim()) return 'Tipo es requerido';
     if (!maintenanceMantenimiento.trim()) return 'Mantenimiento es requerido';
     if (!maintenanceNombreMecanico.trim()) return 'Nombre del mecánico es requerido';
-    if (!maintenanceFirmaMecanico) return 'Firma del mecánico es requerida';
     if (!maintenanceFirmaResponsable) return 'Firma del responsable (QR o Generar) es requerida';
     return null;
   };
@@ -1797,7 +1819,7 @@ export default function CorporateVehiclesScreen() {
       kilometraje_siguiente_revision: Number(maintenanceKmSiguiente || 0),
       imagen_despues: getBase64Only(maintenanceImagenDespues),
       nombre_mecanico: maintenanceNombreMecanico.trim(),
-      firma_mecanico: getBase64Only(maintenanceFirmaMecanico),
+      firma_mecanico: (getBase64Only(maintenanceFirmaMecanico) as string | null),
       firma_responsable: firmaHash,
     };
   };
@@ -1805,12 +1827,12 @@ export default function CorporateVehiclesScreen() {
   const saveMaintenanceRecord = async () => {
     const errMsg = validateMaintenanceForm();
     if (errMsg) {
-      setSubmitResponseMaintenance({ type: 'error', message: errMsg });
+      Alert.alert('Error', errMsg);
       return;
     }
 
     if (!maintenanceVehicleKey) {
-      setSubmitResponseMaintenance({ type: 'error', message: 'No se encontró el vehículo seleccionado' });
+      Alert.alert('Error', 'No se encontró el vehículo seleccionado');
       return;
     }
 
@@ -1820,7 +1842,7 @@ export default function CorporateVehiclesScreen() {
     try {
       const vehicle = records.find((r) => String(r.id || r.id_local) === maintenanceVehicleKey);
       if (!vehicle) {
-        setSubmitResponseMaintenance({ type: 'error', message: 'No se encontró el vehículo seleccionado' });
+        Alert.alert('Error', 'No se encontró el vehículo seleccionado');
         setIsSubmittingMaintenance(false);
         return;
       }
@@ -1874,7 +1896,7 @@ export default function CorporateVehiclesScreen() {
           await setMaintenancesForVehicleKey(maintenanceVehicleKey, updated);
         }
 
-        setSubmitResponseMaintenance({ type: 'success', message: 'El mantenimiento se guardó en el dispositivo. Se sincronizará al reconectar.' });
+        Alert.alert('Éxito', 'El mantenimiento se guardó en el dispositivo. Se sincronizará al reconectar.');
         setTimeout(() => {
           setIsMaintenanceFormOpen(false);
           setMaintenanceEditing(null);
@@ -1885,13 +1907,13 @@ export default function CorporateVehiclesScreen() {
 
       const vehicleIdForResolve = vehicle.id || vehicle.id_local;
       if (!vehicleIdForResolve) {
-        setSubmitResponseMaintenance({ type: 'error', message: 'No se pudo obtener el ID del vehículo' });
+        Alert.alert('Error', 'No se pudo obtener el ID del vehículo');
         setIsSubmittingMaintenance(false);
         return;
       }
       const serverVehicleId = await resolveServerVehicleId(vehicleIdForResolve);
       if (!serverVehicleId) {
-        setSubmitResponseMaintenance({ type: 'error', message: 'No se pudo obtener el ID del vehículo en el servidor' });
+        Alert.alert('Error', 'No se pudo obtener el ID del vehículo en el servidor');
         setIsSubmittingMaintenance(false);
         return;
       }
@@ -1904,14 +1926,14 @@ export default function CorporateVehiclesScreen() {
           logout,
         });
         if (!res.status) throw new Error(res.message || 'No se pudo crear');
-        setSubmitResponseMaintenance({ type: 'success', message: res.message || 'Mantenimiento guardado correctamente' });
+        Alert.alert('Éxito', res.message || 'Mantenimiento guardado correctamente');
       } else {
         const maintenanceId = String(maintenanceEditing.id);
         const serverMaintenanceId = maintenanceId.startsWith('local-')
           ? String(maintenanceEditing.id_local || '')
           : maintenanceId;
         if (!serverMaintenanceId || serverMaintenanceId.startsWith('local-')) {
-          setSubmitResponseMaintenance({ type: 'error', message: 'Este mantenimiento aún no está sincronizado' });
+          Alert.alert('Error', 'Este mantenimiento aún no está sincronizado');
           setIsSubmittingMaintenance(false);
           return;
         }
@@ -1922,7 +1944,7 @@ export default function CorporateVehiclesScreen() {
           logout,
         });
         if (!res.status) throw new Error(res.message || 'No se pudo actualizar');
-        setSubmitResponseMaintenance({ type: 'success', message: res.message || 'Mantenimiento guardado correctamente' });
+        Alert.alert('Éxito', res.message || 'Mantenimiento guardado correctamente');
       }
 
       // Refrescar desde servidor
@@ -1946,7 +1968,7 @@ export default function CorporateVehiclesScreen() {
       }, 2000);
     } catch (e: any) {
       console.error('Error saving maintenance:', e);
-      setSubmitResponseMaintenance({ type: 'error', message: e?.message || 'No se pudo guardar el mantenimiento' });
+      Alert.alert('Error', e?.message || 'No se pudo guardar el mantenimiento');
     } finally {
       setIsSubmittingMaintenance(false);
     }
@@ -2160,6 +2182,7 @@ export default function CorporateVehiclesScreen() {
     setEstado(allowedEstados.has(String((r as any)?.estado || '')) ? (String((r as any).estado) as any) : 'Activo');
     setKilometraje(String(r.kilometraje ?? ''));
     setProxCambioAceite(String(r.prox_cambio_aceite ?? ''));
+    setTipoAutoria(r.tipo_autoria || '');
     setModelo(r.modelo || '');
     setAnno(String(r.anno ?? ''));
     setDescripcion(r.descripcion || '');
@@ -2355,6 +2378,7 @@ export default function CorporateVehiclesScreen() {
       corpo_id: Number(selectedSucursalId),
       placa: placa.trim(),
       tipo: tipo.trim(),
+      tipo_autoria: tipoAutoria.trim(),
       estado: String(estado || 'Activo'),
       kilometraje: Number(kilometraje || 0),
       prox_cambio_aceite: Number(proxCambioAceite || 0),
@@ -2375,7 +2399,7 @@ export default function CorporateVehiclesScreen() {
   const saveRecord = async () => {
     const errMsg = validateForm();
     if (errMsg) {
-      setSubmitResponse({ type: 'error', message: errMsg });
+      Alert.alert('Error', errMsg);
       return;
     }
 
@@ -2402,6 +2426,12 @@ export default function CorporateVehiclesScreen() {
         const cacheStr = await AsyncStorage.getItem('evaluations_cache');
         const cache = cacheStr ? JSON.parse(cacheStr) : [];
 
+        const horaAccion = await getHoraAccion();
+        if (!horaAccion) {
+          Alert.alert('Error', 'No se pudo obtener la hora');
+          return;
+        }
+
         if (!editing) {
           const localItem: VehicleRecord = {
             id: localId,
@@ -2413,6 +2443,7 @@ export default function CorporateVehiclesScreen() {
             corpo_id: requestData.corpo_id,
             placa: requestData.placa,
             tipo: requestData.tipo,
+            tipo_autoria: requestData.tipo_autoria,
             estado: requestData.estado,
             kilometraje: requestData.kilometraje,
             prox_cambio_aceite: requestData.prox_cambio_aceite,
@@ -2423,7 +2454,7 @@ export default function CorporateVehiclesScreen() {
             rtv: requestData.rtv,
             marchamo: requestData.marchamo,
             firma_responsable: requestData.firma_responsable,
-            created_at: new Date().toISOString(),
+            created_at: new Date(horaAccion).toISOString(),
             images: imageFiles.map((f) => ({
               name: f.name,
               id_local: f.id,
@@ -2455,7 +2486,7 @@ export default function CorporateVehiclesScreen() {
         }
 
         await AsyncStorage.setItem('evaluations_cache', JSON.stringify(cache));
-        setSubmitResponse({ type: 'success', message: 'Se guardó el registro en el dispositivo. Se sincronizará al reconectar.' });
+        Alert.alert('Éxito', 'Se guardó el registro en el dispositivo. Se sincronizará al reconectar.');
         setTimeout(async () => {
           setIsCreating(false);
           setEditing(null);
@@ -2468,13 +2499,13 @@ export default function CorporateVehiclesScreen() {
       if (!editing) {
         const res = await createCorporateVehicle({ requestData, refreshAccessToken, logout });
         if (!res.status) throw new Error(res.message || 'No se pudo crear');
-        setSubmitResponse({ type: 'success', message: res.message || 'Registro guardado correctamente' });
+        Alert.alert('Éxito', res.message || 'Registro guardado correctamente');
       } else {
         const idToUpdate = String(editing.id);
         const serverId = idToUpdate.startsWith('local-') ? String(editing.id_local || '') : idToUpdate;
         const res = await updateCorporateVehicle({ id: serverId, requestData, refreshAccessToken, logout });
         if (!res.status) throw new Error(res.message || 'No se pudo actualizar');
-        setSubmitResponse({ type: 'success', message: res.message || 'Registro guardado correctamente' });
+        Alert.alert('Éxito', res.message || 'Registro guardado correctamente');
       }
 
       setTimeout(async () => {
@@ -2485,7 +2516,7 @@ export default function CorporateVehiclesScreen() {
       }, 2000);
     } catch (e: any) {
       console.error('Error saving corporate vehicle:', e);
-      setSubmitResponse({ type: 'error', message: e?.message || 'No se pudo guardar' });
+      Alert.alert('Error', e?.message || 'No se pudo guardar');
     } finally {
       setIsSubmitting(false);
     }
@@ -2555,7 +2586,7 @@ export default function CorporateVehiclesScreen() {
 
   return (
     <ThemedView style={styles.container}>
-      <AppHeader title="Vehículos corporativos" onMenuPress={() => setIsMenuVisible(true)} />
+      <AppHeader title="Registro de vehículos" onMenuPress={() => setIsMenuVisible(true)} />
 
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
         <ThemedView style={styles.content}>
@@ -2563,7 +2594,7 @@ export default function CorporateVehiclesScreen() {
 
           <ThemedView style={styles.titleContainer}>
             <ThemedText type="title" style={styles.title}>
-              <Ionicons name="car-sport" size={22} color="#000000" /> Vehículos corporativos
+              <Ionicons name="car-sport" size={22} color="#000000" /> Registro de vehículos
             </ThemedText>
             <ThemedText style={styles.subtitle}>Registro con firma e imágenes (offline + sync)</ThemedText>
           </ThemedView>
@@ -2752,6 +2783,15 @@ export default function CorporateVehiclesScreen() {
                   <Picker.Item label="Vehículo" value="Vehículo" />
                   <Picker.Item label="Bicicleta" value="Bicicleta" />
                   <Picker.Item label="Motocicleta" value="Motocicleta" />
+                </Picker>
+              </ThemedView>
+              
+              <ThemedText style={styles.label}>Tipo de autoria</ThemedText>
+              <ThemedView style={styles.pickerWrapper}>
+                <Picker selectedValue={tipoAutoria} style={styles.picker}>
+                  <Picker.Item label="Seleccione..." value="" />
+                  <Picker.Item label="Cliente" value="Cliente" />
+                  <Picker.Item label="Corporativo" value="Corporativo" />
                 </Picker>
               </ThemedView>
 
@@ -2947,6 +2987,10 @@ export default function CorporateVehiclesScreen() {
                     <ThemedText style={styles.cardLine}>
                       <ThemedText style={styles.cardLabel}>Tipo: </ThemedText>
                       <ThemedText style={styles.cardValue}>{r.tipo || '—'}</ThemedText>
+                    </ThemedText>
+                    <ThemedText style={styles.cardLine}>
+                      <ThemedText style={styles.cardLabel}>Tipo de autoria: </ThemedText>
+                      <ThemedText style={styles.cardValue}>{r.tipo_autoria || '—'}</ThemedText>
                     </ThemedText>
                     <ThemedText style={styles.cardLine}>
                       <ThemedText style={styles.cardLabel}>Estado: </ThemedText>

@@ -46,7 +46,7 @@ export async function POST(req: NextRequest) {
         console.log("firma_empleado_manual", firma_empleado_manual);
         console.log("comentarios", comentarios);
         console.log("--------------------------------");
-        if (!marca_id || !nombre_colaborador || !cedula_colaborador || !tipo || !empleado_id || !evaluador_id || !fecha_ingreso || !fecha_evaluacion || !evaluacion || !firma_evaluador || !firma_empleado) {
+        if (!marca_id || !nombre_colaborador || !cedula_colaborador || !tipo || !empleado_id || !evaluador_id || !fecha_ingreso || !fecha_evaluacion || !evaluacion || !firma_evaluador) {
             console.log("Datos incompletos");
             return NextResponse.json({ message: "Datos incompletos" }, { status: 400 });
         }
@@ -116,8 +116,8 @@ export async function POST(req: NextRequest) {
                     tipo: tipo,
                     comentarios: comentarios,
                     firma_evaluador: firma_evaluador,
-                    firma_empleado: firma_empleado,
-                    firma_empleado_manual: typeof firma_empleado_manual === "string" && firma_empleado_manual.trim().length > 0 ? firma_empleado_manual : null,
+                    firma_empleado: (firma_empleado != null && String(firma_empleado).trim().length > 0) ? String(firma_empleado) : null,
+                    firma_empleado_manual: (firma_empleado_manual != null && typeof firma_empleado_manual === "string" && firma_empleado_manual.trim().length > 0) ? firma_empleado_manual : null,
                     corpo_id: corpo.id,
                     puesto_id: puesto.id,
                     plaza_id: plaza.id,
@@ -133,14 +133,24 @@ export async function POST(req: NextRequest) {
             const description = `Se ha registrado tu evaluación realizada por ${nombre_colaborador} el día ${fecha_evaluacion} para la sucursal ${corpo.nombre} de la empresa ${cliente.nombre}`;
             await sendNotificationByEmployee(req, corpo.id, [empleado_id], "Evaluación realizada", description, [evaluador_id]);
             const evaluacion_json = JSON.parse(evaluacion);
-            const imagesToUpload: { question: any; file: string }[] = [];
+
+            const imagesToUpload: { question: any; file: string; index?: number; fromArray: boolean }[] = [];
             for (const item of evaluacion_json) {
                 for (const question of item.questions || []) {
-                    if (question.image && typeof question.image === "string" && question.image.startsWith("data:")) {
-                        imagesToUpload.push({ question, file: question.image });
+                    // Nuevo: múltiples imágenes en `images` (tiene prioridad)
+                    if (Array.isArray(question.images) && question.images.length > 0) {
+                        question.images.forEach((img: any, idx: number) => {
+                            if (typeof img === "string" && img.startsWith("data:")) {
+                                imagesToUpload.push({ question, file: img, index: idx, fromArray: true });
+                            }
+                        });
+                    } else if (question.image && typeof question.image === "string" && question.image.startsWith("data:")) {
+                        // Soporte legado: una sola imagen en `image`
+                        imagesToUpload.push({ question, file: question.image, fromArray: false });
                     }
                 }
             }
+
             if (imagesToUpload.length > 0) {
                 const getExt = (f: string) => {
                     const m = f.match(/^data:(.+);base64,/);
@@ -152,8 +162,30 @@ export async function POST(req: NextRequest) {
                     files: imagesToUpload.map(({ file }) => ({ type: "image", extension: getExt(file), file_base64: file })),
                 });
                 const uploaded = Array.isArray(uploadResp?.files) ? uploadResp.files : [];
-                imagesToUpload.forEach(({ question }, i) => {
-                    if (uploaded[i]) question.image = uploaded[i].name;
+                imagesToUpload.forEach(({ question, index, fromArray }, i) => {
+                    if (!uploaded[i]) return;
+                    const name = uploaded[i].name;
+                    if (fromArray) {
+                        if (!Array.isArray(question.images)) {
+                            question.images = [];
+                        }
+                        if (typeof index === "number") {
+                            question.images[index] = name;
+                        } else {
+                            question.images.push(name);
+                        }
+                        if (!question.image && question.images.length > 0) {
+                            question.image = question.images[0];
+                        }
+                    } else {
+                        question.image = name;
+                        if (!Array.isArray(question.images)) {
+                            question.images = [];
+                        }
+                        if (!question.images.includes(name)) {
+                            question.images.push(name);
+                        }
+                    }
                 });
             }
 

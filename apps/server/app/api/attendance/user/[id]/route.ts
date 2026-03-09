@@ -212,7 +212,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
         const estado = marcaDia.hora_entrada_digitada != null ? "Ingresado" : "No ingresado";
         if (marcaDia.hora_salida_digitada != null) {
-            return NextResponse.json({ status: false, message: "Ya has marcado la salida" }, { status: 200 });
+            return NextResponse.json({ status: false, message: "Ya has marcado la salida", marca_id: marcaDia.id }, { status: 200 });
         }
 
         let change_available = true;

@@ -78,14 +78,17 @@ export async function GET(req: NextRequest) {
     // 2) Plan directo del puesto (evitar duplicados por id)
     const directPlan = await callDynamicPrisma({
       req,
-      data: { action: "GET", table: "e_estructura_articulo_corpo_puesto_plan", operation: "findMany", where: { puesto_id: puestoId, id: { notIn: planRows.map((p) => p.id) } }, include: { n_articulo_corpo_puesto: { select: { id: true, nombre: true } } }, orderBy: { id: "asc" } }
+      data: { action: "GET", table: "e_estructura_articulo_corpo_puesto_plan", operation: "findMany", where: { OR: [
+        { puesto_id: puestoId },
+        { corpo_id: puesto.corpo_id }
+      ], id: { notIn: planRows.map((p) => p.id) } }, include: { n_articulo_corpo_puesto: { select: { id: true, nombre: true } } }, orderBy: { id: "asc" } }
     });
     planRows.push(...directPlan);
 
     // 3) Asignados del puesto (entrega)
     const asignadosRows = await callDynamicPrisma({
       req,
-      data: { action: "GET", table: "e_estructura_articulo_corpo_puesto_entrega", operation: "findMany", where: { puesto_id: puestoId }, include: { n_articulo_corpo_puesto: { select: { id: true, nombre: true } } }, orderBy: { id: "asc" } }
+      data: { action: "GET", table: "e_estructura_articulo_corpo_puesto_entrega", operation: "findMany", where: { OR: [{ puesto_id: puestoId }, { corpo_id: puesto.corpo_id }] }, include: { n_articulo_corpo_puesto: { select: { id: true, nombre: true } } }, orderBy: { id: "asc" } }
     });
 
     // Cargar tipos de mantenimiento por nomenclador (en bulk)

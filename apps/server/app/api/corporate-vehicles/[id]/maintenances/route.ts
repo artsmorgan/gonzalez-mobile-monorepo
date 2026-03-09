@@ -123,7 +123,10 @@ export async function POST(
                     kilometraje_siguiente_revision: Number(kilometraje_siguiente_revision ?? 0),
                     imagen_despues: imagenDespuesFileName || String(imagen_despues ?? ""),
                     nombre_mecanico: String(nombre_mecanico ?? ""),
-                    firma_mecanico: String(firma_mecanico ?? ""),
+                    firma_mecanico:
+                        firma_mecanico != null && String(firma_mecanico).trim().length > 0
+                            ? String(firma_mecanico).trim()
+                            : null,
                     firma_responsable: String(firma_responsable ?? ""),
                     created_by,
                     created_at: createdAt.toISOString(),

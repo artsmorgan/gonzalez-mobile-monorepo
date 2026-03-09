@@ -225,7 +225,7 @@ export async function POST(req: NextRequest) {
         console.log("observaciones", observaciones);
         console.log("--------------------------------");
 
-        if (!marca_id || !empresa_evaluada || !puesto_id || !fecha || !evaluaciones || !persona_evaluada || !cedula_persona_evaluada || !nombre_responsable || !cedula_responsable || !firma_responsable || !firma_persona_evaluada || !observaciones) {
+        if (!marca_id || !empresa_evaluada || !puesto_id || !fecha || !evaluaciones || !persona_evaluada || !cedula_persona_evaluada || !nombre_responsable || !cedula_responsable || !firma_responsable || !observaciones) {
             return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 200 });
         }
 
@@ -374,7 +374,7 @@ export async function POST(req: NextRequest) {
                     cedula_evaluado: cedula_persona_evaluada,
                     telefono_evaluado: telefono_persona_evaluada,
                     email_evaluado: email_persona_evaluada,
-                    firma_evaluado: firma_persona_evaluada,
+                    firma_evaluado: (firma_persona_evaluada != null && String(firma_persona_evaluada).trim() !== '') ? firma_persona_evaluada : null,
                     nombre_responsable: nombre_responsable,
                     cedula_responsable: cedula_responsable,
                     observaciones: observaciones

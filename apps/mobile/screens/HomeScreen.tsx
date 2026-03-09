@@ -346,7 +346,7 @@ export default function HomeScreen() {
           {/* Welcome message at the top */}
           <ThemedView style={styles.welcomeContainer}>
             <ThemedText type="title" style={styles.welcomeText}>
-              Bienvenido a la aplicación de Gonzalez
+              Bienvenido a MonitoreApp
             </ThemedText>
             {employee && (
               <ThemedText style={styles.userText}>
@@ -538,6 +538,8 @@ const styles = StyleSheet.create({
   welcomeText: {
     textAlign: 'center',
     marginBottom: 8,
+    fontSize: 24,
+    fontWeight: 'bold',
   },
   userText: {
     textAlign: 'center',

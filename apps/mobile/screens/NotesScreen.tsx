@@ -600,13 +600,13 @@ export default function NotesScreen() {
                 });
 
                 if (data.status) {
-                  setSubmitResponse({ type: 'success', message: data.message || 'Nota creada correctamente' });
+                  Alert.alert('Éxito', data.message || 'Nota creada correctamente');
                   setIsCreating(false);
                   setNewNote({ id: null, id_local: '', titulo: '', description: '', division: null, categoria_id: null, relevancia: 'Baja' });
                   setSelectedPuestos([]);
                   fetchNotes();
                 } else {
-                  setSubmitResponse({ type: 'error', message: data.message || 'Error al crear la nota' });
+                  Alert.alert('Error', data.message || 'Error al crear la nota');
                 }
               } else {
                 // Sin internet: modo offline
@@ -644,7 +644,7 @@ export default function NotesScreen() {
                 cache.notas.push(newNoteCache);
                 await AsyncStorage.setItem('notes_cache', JSON.stringify(cache));
 
-                setSubmitResponse({ type: 'success', message: 'Nota creada localmente. Se sincronizará cuando haya conexión.' });
+                Alert.alert('Éxito', 'Nota creada localmente. Se sincronizará cuando haya conexión.');
                 setIsCreating(false);
                 setNewNote({ id: null, id_local: '', titulo: '', description: '', division: null, categoria_id: null, relevancia: 'Baja' });
                 setSelectedPuestos([]);
@@ -652,7 +652,7 @@ export default function NotesScreen() {
               }
             } catch (err) {
               console.error('Error creating note:', err);
-              setSubmitResponse({ type: 'error', message: 'No se pudo crear la nota' });
+              Alert.alert('Error', 'No se pudo crear la nota');
             } finally {
               setIsSubmitting(false);
             }
@@ -710,11 +710,11 @@ export default function NotesScreen() {
                 });
 
                 if (data.status) {
-                  setSubmitResponse({ type: 'success', message: data.message || 'Nota actualizada correctamente' });
+                  Alert.alert('Éxito', data.message || 'Nota actualizada correctamente');
                   setEditingNote(null);
                   fetchNotes();
                 } else {
-                  setSubmitResponse({ type: 'error', message: data.message || 'Error al actualizar la nota' });
+                  Alert.alert('Error', data.message || 'Error al actualizar la nota');
                 }
               } else {
                 // Sin internet: modo offline
@@ -761,13 +761,13 @@ export default function NotesScreen() {
                   await AsyncStorage.setItem('notes_cache', JSON.stringify(cache));
                 }
 
-                setSubmitResponse({ type: 'success', message: 'Nota actualizada localmente. Se sincronizará cuando haya conexión.' });
+                Alert.alert('Éxito', 'Nota actualizada localmente. Se sincronizará cuando haya conexión.');
                 setEditingNote(null);
                 fetchNotes();
               }
             } catch (err) {
               console.error('Error updating note:', err);
-              setSubmitResponse({ type: 'error', message: 'No se pudo actualizar la nota' });
+              Alert.alert('Error', 'No se pudo actualizar la nota');
             } finally {
               setIsSubmitting(false);
             }

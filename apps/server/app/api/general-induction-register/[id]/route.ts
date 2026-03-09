@@ -98,7 +98,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     if (capacitadores !== undefined) updateData.capacitadores = ensureStringJson(capacitadores, "[]");
     if (firma_responsable !== undefined) updateData.firma_responsable = String(firma_responsable);
 
-    // Registrar cambios (solo campos actualizados, excluyendo firmas)
+    // Registrar cambios (solo campos actualizados, incluyendo firma_responsable)
     const eq = (a: any, b: any) => {
       if (a === b) return true;
       if (a == null && b == null) return true;
@@ -110,8 +110,6 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
     const cambiosArr: Array<{ prop: string; before: any; after: any }> = [];
     for (const [k, v] of Object.entries(updateData)) {
-      if (k === "firma_responsable") continue; // Excluir firmas
-
       const before = existingObj[k];
       const after = v;
       if (!eq(before, after)) {

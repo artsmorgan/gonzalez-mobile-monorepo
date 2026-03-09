@@ -89,12 +89,12 @@ type ActaEntregaProducto = {
   nombre_entrega: string;
   cedula_entrega: string;
   fecha_entrega: string; // ISO
-  firma_entrega: string; // dataURL
+  firma_entrega?: string | null; // dataURL, opcional
 
   nombre_recibe: string;
   cedula_recibe: string;
   fecha_recibe: string; // ISO
-  firma_recibe: string; // dataURL
+  firma_recibe?: string | null; // dataURL, opcional
 
   firma_responsable: string; // hash base64
 
@@ -109,6 +109,7 @@ const formatSignatureForDisplay = (value?: string | null) => {
 };
 
 const formatDateDMY = (date: Date) => {
+  const dateString = date.toISOString().split('T')[0];
   const day = String(date.getDate()).padStart(2, '0');
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const year = String(date.getFullYear());
@@ -357,18 +358,18 @@ export default function ActaEntregaProductosScreen() {
     }
   }, [isAuthenticated, isLoading, navigation]);
 
-  const resetForm = () => {
-    setFecha(new Date());
+  const resetForm = (horaAccion: number) => {
+    setFecha(new Date(horaAccion));
     setTipoEntrega('');
     setMensual('');
     setObservaciones('');
     setNombreEntrega('');
     setCedulaEntrega('');
-    setFechaEntrega(new Date());
+    setFechaEntrega(new Date(horaAccion));
     setFirmaEntrega('');
     setNombreRecibe('');
     setCedulaRecibe('');
-    setFechaRecibe(new Date());
+    setFechaRecibe(new Date(horaAccion));
     setFirmaRecibe('');
     setFirmaResponsableHash('');
     setDetalleItems([]);
@@ -922,20 +923,23 @@ export default function ActaEntregaProductosScreen() {
     }, [fetchRecords, fetchMainStructure, loadMarcaContext])
   );
 
-  const startCreating = () => {
-    resetForm();
+  const startCreating = async () => {
+    const horaAccion = await getHoraAccion();
+    resetForm(horaAccion);
     setIsCreating(true);
     setEditingRecord(null);
   };
 
-  const cancelCreating = () => {
+  const cancelCreating = async () => {
+    const horaAccion = await getHoraAccion();
     setIsCreating(false);
-    resetForm();
+    resetForm(horaAccion);
   };
 
-  const startEditing = (record: ActaEntregaProducto) => {
+  const startEditing = async (record: ActaEntregaProducto) => {
     setIsCreating(false);
     setEditingRecord(record);
+    const horaAccion = await getHoraAccion();
 
     // Cargar IDs jerárquicos del registro
     setFormEmpresaId(record.empresa_id ? Number(record.empresa_id) : null);
@@ -944,19 +948,19 @@ export default function ActaEntregaProductosScreen() {
     setFormContratoId(record.contrato_id ? Number(record.contrato_id) : null);
     setFormCorpoId(record.corpo_id ? Number(record.corpo_id) : null);
 
-    setFecha(record.fecha ? new Date(record.fecha) : new Date());
+    setFecha(record.fecha ? new Date(record.fecha) : new Date(horaAccion));
     setTipoEntrega(record.tipo_entrega || '');
     setMensual(record.mensual || '');
     setObservaciones(record.observaciones || '');
 
     setNombreEntrega(record.nombre_entrega || '');
     setCedulaEntrega(record.cedula_entrega || '');
-    setFechaEntrega(record.fecha_entrega ? new Date(record.fecha_entrega) : new Date());
+    setFechaEntrega(record.fecha_entrega ? new Date(record.fecha_entrega) : new Date(horaAccion));
     setFirmaEntrega(formatSignatureForDisplay(record.firma_entrega) || '');
 
     setNombreRecibe(record.nombre_recibe || '');
     setCedulaRecibe(record.cedula_recibe || '');
-    setFechaRecibe(record.fecha_recibe ? new Date(record.fecha_recibe) : new Date());
+    setFechaRecibe(record.fecha_recibe ? new Date(record.fecha_recibe) : new Date(horaAccion));
     setFirmaRecibe(formatSignatureForDisplay(record.firma_recibe) || '');
 
     setFirmaResponsableHash(record.firma_responsable || '');
@@ -987,9 +991,10 @@ export default function ActaEntregaProductosScreen() {
     preloadServerImagesForEdit(record);
   };
 
-  const cancelEditing = () => {
+  const cancelEditing = async () => {
     setEditingRecord(null);
-    resetForm();
+    const horaAccion = await getHoraAccion();
+    resetForm(horaAccion);
   };
 
   const validateForm = () => {
@@ -1003,10 +1008,8 @@ export default function ActaEntregaProductosScreen() {
     if (!observaciones.trim()) return 'Observaciones es obligatorio';
     if (!nombreEntrega.trim()) return 'Nombre (entrega) es obligatorio';
     if (!cedulaEntrega.trim()) return 'Cédula (entrega) es obligatorio';
-    if (!firmaEntrega.trim()) return 'Firma (entrega) es obligatoria';
     if (!nombreRecibe.trim()) return 'Nombre (recibe) es obligatorio';
     if (!cedulaRecibe.trim()) return 'Cédula (recibe) es obligatorio';
-    if (!firmaRecibe.trim()) return 'Firma (recibe) es obligatoria';
     if (!firmaResponsableHash.trim()) return 'Firma del responsable es obligatoria (QR/Generar)';
     if (detalleItems.length === 0) return 'Debe agregar al menos un detalle';
     return null;
@@ -1019,6 +1022,9 @@ export default function ActaEntregaProductosScreen() {
 
     const validation = validateForm();
     if (validation) return Alert.alert('Error', validation);
+
+    console.log(fechaEntrega);
+    console.log(fechaRecibe);
 
     Alert.alert('Confirmar', '¿Deseas guardar el acta?', [
       { text: 'Cancelar', style: 'cancel' },
@@ -1055,13 +1061,13 @@ export default function ActaEntregaProductosScreen() {
             if (isConnected) {
               const res = await createActaEntregaProducto({ requestData, refreshAccessToken, logout });
               if (res.status) {
-                setSubmitResponse({ type: 'success', message: res.message || 'Acta creada correctamente' });
+                Alert.alert('Éxito', res.message || 'Acta creada correctamente');
                 setTimeout(() => {
                   cancelCreating();
                   fetchRecords();
                 }, 2000);
               } else {
-                setSubmitResponse({ type: 'error', message: res.message || 'No se pudo crear el acta' });
+                Alert.alert('Error', res.message || 'No se pudo crear el acta');
               }
               return;
             }
@@ -1081,12 +1087,13 @@ export default function ActaEntregaProductosScreen() {
 
             const cacheStr = await AsyncStorage.getItem('evaluations_cache');
             const cache = cacheStr ? JSON.parse(cacheStr) : [];
+            const horaAccion = await getHoraAccion();
 
             const newCacheRecord: ActaEntregaProducto = {
               id: '',
               id_local: localId,
               synced: false,
-              fecha: new Date().toISOString(),
+              fecha: new Date(horaAccion).toISOString(),
               empresa_id: requestData.empresa_id,
               cliente_id: requestData.cliente_id,
               division_id: requestData.division_id,
@@ -1111,14 +1118,14 @@ export default function ActaEntregaProductosScreen() {
             cache.push({ ...newCacheRecord, type: 'acta_entrega_producto' });
             await AsyncStorage.setItem('evaluations_cache', JSON.stringify(cache));
 
-            setSubmitResponse({ type: 'success', message: 'Acta registrada localmente. Se sincronizará cuando haya conexión.' });
+            Alert.alert('Éxito', 'Acta registrada localmente. Se sincronizará cuando haya conexión.');
             setTimeout(() => {
               cancelCreating();
               fetchRecords();
             }, 2000);
           } catch (e) {
             console.error('Error saving acta:', e);
-            setSubmitResponse({ type: 'error', message: 'No se pudo guardar el acta' });
+            Alert.alert('Error', 'No se pudo guardar el acta');
           } finally {
             setIsSubmitting(false);
           }
@@ -1171,13 +1178,13 @@ export default function ActaEntregaProductosScreen() {
             if (isConnected && !isLocal && editingRecord.id) {
               const res = await updateActaEntregaProducto({ id: editingRecord.id, requestData, refreshAccessToken, logout });
               if (res.status) {
-                setSubmitResponse({ type: 'success', message: res.message || 'Acta actualizada correctamente' });
+                Alert.alert('Éxito', res.message || 'Acta actualizada correctamente');
                 setTimeout(() => {
                   cancelEditing();
                   fetchRecords();
                 }, 2000);
               } else {
-                setSubmitResponse({ type: 'error', message: res.message || 'No se pudo actualizar' });
+                Alert.alert('Error', res.message || 'No se pudo actualizar');
               }
               return;
             }
@@ -1212,14 +1219,14 @@ export default function ActaEntregaProductosScreen() {
             });
             await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
 
-            setSubmitResponse({ type: 'success', message: 'Cambios guardados localmente. Se sincronizarán al reconectar.' });
+            Alert.alert('Éxito', 'Cambios guardados localmente. Se sincronizarán al reconectar.');
             setTimeout(() => {
               cancelEditing();
               fetchRecords();
             }, 2000);
           } catch (e) {
             console.error('Error updating acta:', e);
-            setSubmitResponse({ type: 'error', message: 'No se pudo actualizar el acta' });
+            Alert.alert('Error', 'No se pudo actualizar el acta');
           } finally {
             setIsSubmitting(false);
           }
@@ -1856,7 +1863,7 @@ export default function ActaEntregaProductosScreen() {
                 )}
               </ThemedView>
               <ThemedView style={styles.formGroup}>
-                <ThemedText style={styles.formLabel}>Firma entrega *</ThemedText>
+                <ThemedText style={styles.formLabel}>Firma entrega (Opcional)</ThemedText>
                 {!firmaEntrega ? (
                   <TouchableOpacity style={styles.signatureDrawButton} onPress={() => openSignatureModal('entrega')}>
                     <Ionicons name="create-outline" size={22} color="#007AFF" />
@@ -1902,7 +1909,7 @@ export default function ActaEntregaProductosScreen() {
                 )}
               </ThemedView>
               <ThemedView style={styles.formGroup}>
-                <ThemedText style={styles.formLabel}>Firma recibe *</ThemedText>
+                <ThemedText style={styles.formLabel}>Firma recibe (Opcional)</ThemedText>
                 {!firmaRecibe ? (
                   <TouchableOpacity style={styles.signatureDrawButton} onPress={() => openSignatureModal('recibe')}>
                     <Ionicons name="create-outline" size={22} color="#007AFF" />
@@ -2137,12 +2144,102 @@ export default function ActaEntregaProductosScreen() {
                           {(Array.isArray(parsed) ? parsed : []).length > 0 && (
                             <ThemedView style={styles.filterGroupSearch}>
                               <ThemedText style={styles.filterLabel}>Cambios:</ThemedText>
-                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => (
-                                <ThemedText key={`c-${row.id}-${idx}`} style={styles.changeDescription}>
-                                  <ThemedText style={{ fontWeight: '800' }}>{String(c?.prop ?? '-')}: </ThemedText>
-                                  {formatChangeValue(c?.prop, c?.after)}
-                                </ThemedText>
-                              ))}
+                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => {
+                                const prop = String(c?.prop ?? '-');
+                                const value = c?.after;
+
+                                // Caso especial: registro creado (__created__)
+                                if (prop === '__created__' && value && typeof value === 'object') {
+                                  const created: any = value;
+                                  return (
+                                    <React.Fragment key={`c-${row.id}-${idx}-created`}>
+                                      <ThemedView style={styles.changeDescriptionContainer}>
+                                        <ThemedText style={styles.changeDescription}>
+                                          <ThemedText style={{ fontWeight: '800' }}>Registro creado</ThemedText>
+                                        </ThemedText>
+                                      </ThemedView>
+
+                                      {/* Campos no relacionados con firmas */}
+                                      {Object.entries(created).map(([k, v]) => {
+                                        if (k === 'firma_entrega' || k === 'firma_recibe' || k === 'firma_responsable') return null;
+                                        return (
+                                          <ThemedView key={`c-${row.id}-${idx}-${k}`} style={styles.changeDescriptionContainer}>
+                                            <ThemedText style={styles.changeDescription}>
+                                              <ThemedText style={{ fontWeight: '800' }}>{k}: </ThemedText>
+                                              {formatChangeValue(k, v)}
+                                            </ThemedText>
+                                          </ThemedView>
+                                        );
+                                      })}
+
+                                      {typeof created.firma_responsable === 'string' && created.firma_responsable.trim() && (
+                                        <ThemedView style={styles.changeDescriptionContainer}>
+                                          <ThemedText style={styles.changeDescription}>
+                                            <ThemedText style={{ fontWeight: '800' }}>firma_responsable: </ThemedText>
+                                            {(() => {
+                                              const info = decodeFirmaHash(created.firma_responsable);
+                                              return info
+                                                ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${info.timestamp || 'N/A'}`
+                                                : 'Firma responsable (formato no decodificable)';
+                                            })()}
+                                          </ThemedText>
+                                        </ThemedView>
+                                      )}
+
+                                      {typeof created.firma_entrega === 'string' && created.firma_entrega.trim() && (
+                                        <ThemedView style={styles.changeDescriptionContainer}>
+                                          <ThemedText style={styles.changeDescription}>
+                                            <ThemedText style={{ fontWeight: '800' }}>firma_entrega</ThemedText>
+                                          </ThemedText>
+                                          <Image
+                                            source={{ uri: formatSignatureForDisplay(created.firma_entrega) }}
+                                            style={styles.cambioSignatureImage}
+                                            resizeMode="contain"
+                                          />
+                                        </ThemedView>
+                                      )}
+
+                                      {typeof created.firma_recibe === 'string' && created.firma_recibe.trim() && (
+                                        <ThemedView style={styles.changeDescriptionContainer}>
+                                          <ThemedText style={styles.changeDescription}>
+                                            <ThemedText style={{ fontWeight: '800' }}>firma_recibe</ThemedText>
+                                          </ThemedText>
+                                          <Image
+                                            source={{ uri: formatSignatureForDisplay(created.firma_recibe) }}
+                                            style={styles.cambioSignatureImage}
+                                            resizeMode="contain"
+                                          />
+                                        </ThemedView>
+                                      )}
+                                    </React.Fragment>
+                                  );
+                                }
+
+                                const isManualSignatureField = prop === 'firma_entrega' || prop === 'firma_recibe';
+                                const isResponsableSignatureField = prop === 'firma_responsable';
+
+                                return (
+                                  <ThemedView key={`c-${row.id}-${idx}`} style={styles.changeDescriptionContainer}>
+                                    <ThemedText style={styles.changeDescription}>
+                                      <ThemedText style={{ fontWeight: '800' }}>{prop}: </ThemedText>
+                                      {!isManualSignatureField && !isResponsableSignatureField && formatChangeValue(prop, value)}
+                                      {isResponsableSignatureField && (() => {
+                                        const info = typeof value === 'string' ? decodeFirmaHash(value) : null;
+                                        if (!info) return 'Firma responsable (formato no decodificable)';
+                                        return `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${info.timestamp || 'N/A'}`;
+                                      })()}
+                                    </ThemedText>
+
+                                    {isManualSignatureField && typeof value === 'string' && value && (
+                                      <Image
+                                        source={{ uri: formatSignatureForDisplay(value) }}
+                                        style={styles.cambioSignatureImage}
+                                        resizeMode="contain"
+                                      />
+                                    )}
+                                  </ThemedView>
+                                );
+                              })}
                             </ThemedView>
                           )}
                         </ThemedView>
@@ -2489,7 +2586,16 @@ const styles = StyleSheet.create({
   cambioCollapsableHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, backgroundColor: '#F8F9FA' },
   cambioCollapsableTitle: { fontSize: 14, fontWeight: '600', color: '#007AFF', flex: 1 },
   cambioCollapsableContent: { padding: 12, gap: 8, backgroundColor: '#F8F9FA' },
-  changeDescription: { fontSize: 14, lineHeight: 20, color: '#666', marginBottom: 8 },
+  changeDescriptionContainer: { marginBottom: 8 },
+  changeDescription: { fontSize: 14, lineHeight: 20, color: '#666' },
+  cambioSignatureImage: {
+    marginTop: 6,
+    height: 80,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    backgroundColor: '#FFFFFF',
+  },
   filterGroupSearch: { marginBottom: 12 },
 });
 

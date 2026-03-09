@@ -158,7 +158,6 @@ export async function POST(req: NextRequest) {
       !nombre_oficial_recibe ||
       !tipo_documento ||
       !descripcion ||
-      !firma_representante_cliente ||
       !firma_responsable
     ) {
       return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 200 });
@@ -195,7 +194,10 @@ export async function POST(req: NextRequest) {
           nombre_oficial_recibe: String(nombre_oficial_recibe),
           tipo_documento: String(tipo_documento),
           descripcion: String(descripcion),
-          firma_representante_cliente: String(firma_representante_cliente),
+          firma_representante_cliente:
+            firma_representante_cliente != null && String(firma_representante_cliente).trim() !== ""
+              ? String(firma_representante_cliente)
+              : null,
           firma_responsable: String(firma_responsable),
         },
       },
@@ -276,6 +278,8 @@ export async function POST(req: NextRequest) {
               nombre_oficial_recibe: created.nombre_oficial_recibe,
               tipo_documento: created.tipo_documento,
               descripcion: created.descripcion,
+              firma_representante_cliente: created.firma_representante_cliente,
+              firma_responsable: created.firma_responsable,
             },
           }]),
           created_at: createdAt.toISOString(),

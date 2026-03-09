@@ -142,6 +142,11 @@ export default function DocumentosEntregadosScreen() {
     }
   };
 
+  const formatSignatureForDisplay = (value?: string | null): string => {
+    if (!value) return '';
+    return value.startsWith('data:') ? value : `data:image/png;base64,${value}`;
+  };
+
   const getConnectionStatus = async (): Promise<boolean> => {
     const state = await Network.getNetworkStateAsync();
     return !!(state.isConnected && state.isInternetReachable);
@@ -259,20 +264,23 @@ export default function DocumentosEntregadosScreen() {
         if (res.status) {
           const list = (res.data || []).map((it: any) => ({ ...it, id_local: it.id_local || '' }));
           setDocs(list);
+          console.log(1);
           await AsyncStorage.setItem('documentos_entregados_cache', JSON.stringify(list));
         } else {
           setError(res.message || 'Error al cargar documentos entregados');
           const cacheStr = await AsyncStorage.getItem('documentos_entregados_cache');
           if (cacheStr) setDocs(JSON.parse(cacheStr));
+          console.log(2);
         }
       } else {
         const cacheStr = await AsyncStorage.getItem('documentos_entregados_cache');
         if (cacheStr) setDocs(JSON.parse(cacheStr));
+        console.log(3);
       }
     } catch (e: any) {
       setError(e.message || 'Error al cargar documentos entregados');
-      const cacheStr = await AsyncStorage.getItem('documentos_entregados_cache');
-      if (cacheStr) setDocs(JSON.parse(cacheStr));
+      console.log(e);
+      console.log(4);
     } finally {
       setIsLoading(false);
     }
@@ -296,8 +304,13 @@ export default function DocumentosEntregadosScreen() {
     };
   }, []);
 
-  const resetForm = () => {
-    setFecha(dateToLocalString(new Date()));
+  const resetForm = async () => {
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora de acción');
+      return;
+    }
+    setFecha(dateToLocalString(new Date(horaAccion)));
     setNombreEntrega('');
     setNombreRecibe('');
     setTipoDocumento('');
@@ -312,10 +325,15 @@ export default function DocumentosEntregadosScreen() {
     setIsCreating(true);
   };
 
-  const startEditing = (it: DocUI) => {
+  const startEditing = async (it: DocUI) => {
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
     setEditing(it);
     setIsCreating(true);
-    setFecha(it.fecha ? String(it.fecha).split('T')[0] : dateToLocalString(new Date()));
+    setFecha(it.fecha ? String(it.fecha).split('T')[0] : dateToLocalString(new Date(horaAccion)));
     setNombreEntrega(it.nombre_oficial_entrega || '');
     setNombreRecibe(it.nombre_oficial_recibe || '');
     setTipoDocumento(it.tipo_documento || '');
@@ -385,10 +403,6 @@ export default function DocumentosEntregadosScreen() {
     const missing = required.find((x) => !x.v || String(x.v).trim().length === 0);
     if (missing) {
       Alert.alert('Error', `Campo requerido: ${missing.label}`);
-      return false;
-    }
-    if (!firmaCliente) {
-      Alert.alert('Error', 'Debes registrar la firma del representante del cliente');
       return false;
     }
     if (!firmaResponsable) {
@@ -463,12 +477,29 @@ export default function DocumentosEntregadosScreen() {
       if (!editing) {
         if (isConnected) {
           const res = await createDocumentoEntregado({ requestData: payload, refreshAccessToken, logout });
-          if (res.status) {
-            setSubmitResponse({ type: 'success', message: res.message || 'Documento entregado creado correctamente' });
+          if (res.status && res.id != null) {
+            const newItem: DocUI = {
+              id: Number(res.id),
+              id_local: '',
+              cliente_id: 0,
+              corpo_id: 0,
+              fecha: payload.fecha,
+              nombre_oficial_entrega: payload.nombre_oficial_entrega,
+              nombre_oficial_recibe: payload.nombre_oficial_recibe,
+              tipo_documento: payload.tipo_documento,
+              descripcion: payload.descripcion,
+              firma_representante_cliente: payload.firma_representante_cliente ?? '',
+              firma_responsable: payload.firma_responsable ?? '',
+            };
+            const nextList = [newItem, ...docs];
+            setDocs(nextList);
+            console.log(5);
+            await AsyncStorage.setItem('documentos_entregados_cache', JSON.stringify(nextList));
+            Alert.alert('Éxito', res.message || 'Documento entregado creado correctamente');
             setIsCreating(false);
             await fetchDocs();
           } else {
-            setSubmitResponse({ type: 'error', message: res.message || 'No se pudo crear el documento' });
+            Alert.alert('Error', res.message || 'No se pudo crear el documento');
           }
         } else {
           const localId = `local-doc-${Date.now()}`;
@@ -487,9 +518,10 @@ export default function DocumentosEntregadosScreen() {
           };
           const next = [localItem, ...docs];
           setDocs(next);
+          console.log(6);
           await AsyncStorage.setItem('documentos_entregados_cache', JSON.stringify(next));
           await upsertAction({ type: 'create', id: localId, requestData: payload });
-          setSubmitResponse({ type: 'success', message: 'Se sincronizará cuando vuelva la conexión.' });
+          Alert.alert('Éxito', 'Se sincronizará cuando vuelva la conexión.');
           setIsCreating(false);
         }
         return;
@@ -500,12 +532,12 @@ export default function DocumentosEntregadosScreen() {
       if (isConnected && !isLocal) {
         const res = await updateDocumentoEntregado({ id: editing.id, requestData: payload, refreshAccessToken, logout });
         if (res.status) {
-          setSubmitResponse({ type: 'success', message: res.message || 'Documento entregado actualizado correctamente' });
+          Alert.alert('Éxito', res.message || 'Documento entregado actualizado correctamente');
           setIsCreating(false);
           setEditing(null);
           await fetchDocs();
         } else {
-          setSubmitResponse({ type: 'error', message: res.message || 'No se pudo actualizar el documento' });
+          Alert.alert('Error', res.message || 'No se pudo actualizar el documento');
         }
       } else {
         const next = docs.map((it) => {
@@ -524,6 +556,7 @@ export default function DocumentosEntregadosScreen() {
           };
         });
         setDocs(next);
+        console.log(7);
         await AsyncStorage.setItem('documentos_entregados_cache', JSON.stringify(next));
 
         if (editing.id_local) {
@@ -533,13 +566,13 @@ export default function DocumentosEntregadosScreen() {
           await upsertAction({ type: 'update', id: editing.id, requestData: payload });
         }
 
-        setSubmitResponse({ type: 'success', message: 'Los cambios se sincronizarán cuando vuelva la conexión.' });
+        Alert.alert('Éxito', 'Los cambios se sincronizarán cuando vuelva la conexión.');
         setIsCreating(false);
         setEditing(null);
       }
     } catch (error) {
       console.error('Error saving documento:', error);
-      setSubmitResponse({ type: 'error', message: 'Error al guardar el documento' });
+      Alert.alert('Error', 'Error al guardar el documento');
     } finally {
       setIsSubmitting(false);
     }
@@ -561,6 +594,7 @@ export default function DocumentosEntregadosScreen() {
           if (it.id_local || it.id === 0) {
             const next = docs.filter((x) => x.id_local !== it.id_local);
             setDocs(next);
+            console.log(8);
             await AsyncStorage.setItem('documentos_entregados_cache', JSON.stringify(next));
             if (it.id_local) await removeActionsForLocalId(it.id_local);
             return;
@@ -577,6 +611,7 @@ export default function DocumentosEntregadosScreen() {
           } else {
             const next = docs.filter((x) => x.id !== it.id);
             setDocs(next);
+            console.log(9);
             await AsyncStorage.setItem('documentos_entregados_cache', JSON.stringify(next));
             await upsertAction({ type: 'delete', id: it.id, marcaId: current.id });
             Alert.alert('Eliminado (offline)', 'La eliminación se sincronizará cuando vuelva la conexión.');
@@ -759,8 +794,6 @@ export default function DocumentosEntregadosScreen() {
 
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
         <ThemedView style={styles.content}>
-          {error ? <ThemedText style={styles.errorText}>{error}</ThemedText> : null}
-
           <ThemedView style={styles.titleContainer}>
             <ThemedText type="title" style={styles.title}>
               <Ionicons name="document-text" size={22} color="#000000" /> Documentos entregados
@@ -854,7 +887,7 @@ export default function DocumentosEntregadosScreen() {
                 onChangeText={setDescripcion}
               />
 
-              <ThemedText style={styles.sectionTitle}>Firma representante cliente *</ThemedText>
+              <ThemedText style={styles.sectionTitle}>Firma representante cliente (opcional)</ThemedText>
               {firmaCliente ? (
                 <ThemedView style={styles.signaturePreviewContainer}>
                   <Image source={{ uri: firmaCliente }} style={styles.signaturePreview} resizeMode="contain" />
@@ -1147,12 +1180,76 @@ export default function DocumentosEntregadosScreen() {
                           {(Array.isArray(parsed) ? parsed : []).length > 0 && (
                             <ThemedView style={styles.filterGroupSearch}>
                               <ThemedText style={styles.filterLabel}>Cambios:</ThemedText>
-                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => (
-                                <ThemedText key={`c-${row.id}-${idx}`} style={styles.changeDescription}>
-                                  <ThemedText style={{ fontWeight: '800' }}>{String(c?.prop ?? '-')}: </ThemedText>
-                                  {formatChangeValue(c?.prop, c?.after)}
-                                </ThemedText>
-                              ))}
+                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => {
+                                const prop = String(c?.prop ?? '-');
+                                const value = c?.after;
+                                const isFirmaCliente = prop === 'firma_representante_cliente';
+                                const isFirmaResponsable = prop === 'firma_responsable';
+
+                                if (prop === '__created__' && value && typeof value === 'object') {
+                                  const created: any = value;
+                                  return (
+                                    <React.Fragment key={`c-${row.id}-${idx}-created`}>
+                                      <ThemedView style={styles.changeDescriptionContainer}>
+                                        <ThemedText style={styles.changeDescription}>
+                                          <ThemedText style={{ fontWeight: '800' }}>Registro creado</ThemedText>
+                                        </ThemedText>
+                                      </ThemedView>
+                                      {Object.entries(created).map(([k, v]) => {
+                                        if (k === 'firma_representante_cliente') {
+                                          return (
+                                            <ThemedView key={`c-${row.id}-${idx}-${k}`} style={styles.changeDescriptionContainer}>
+                                              <ThemedText style={styles.changeDescription}>
+                                                <ThemedText style={{ fontWeight: '800' }}>{k}: </ThemedText>
+                                              </ThemedText>
+                                              {v ? (
+                                                <Image source={{ uri: formatSignatureForDisplay(typeof v === 'string' ? v : String(v)) || '' }} style={styles.cambioSignatureImage} resizeMode="contain" />
+                                              ) : (
+                                                <ThemedText style={styles.changeDescription}>—</ThemedText>
+                                              )}
+                                            </ThemedView>
+                                          );
+                                        }
+                                        if (k === 'firma_responsable') {
+                                          const info = decodeFirmaHash(typeof v === 'string' ? v : v != null ? String(v) : null);
+                                          return (
+                                            <ThemedView key={`c-${row.id}-${idx}-${k}`} style={styles.changeDescriptionContainer}>
+                                              <ThemedText style={styles.changeDescription}>
+                                                <ThemedText style={{ fontWeight: '800' }}>{k}: </ThemedText>
+                                                {info ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${info.timestamp || 'N/A'}` : 'Firma (formato no decodificable)'}
+                                              </ThemedText>
+                                            </ThemedView>
+                                          );
+                                        }
+                                        return (
+                                          <ThemedView key={`c-${row.id}-${idx}-${k}`} style={styles.changeDescriptionContainer}>
+                                            <ThemedText style={styles.changeDescription}>
+                                              <ThemedText style={{ fontWeight: '800' }}>{k}: </ThemedText>
+                                              {formatChangeValue(k, v)}
+                                            </ThemedText>
+                                          </ThemedView>
+                                        );
+                                      })}
+                                    </React.Fragment>
+                                  );
+                                }
+
+                                return (
+                                  <ThemedView key={`c-${row.id}-${idx}`} style={styles.changeDescriptionContainer}>
+                                    <ThemedText style={styles.changeDescription}>
+                                      <ThemedText style={{ fontWeight: '800' }}>{prop}: </ThemedText>
+                                      {!isFirmaCliente && !isFirmaResponsable && formatChangeValue(prop, value)}
+                                      {isFirmaResponsable && typeof value === 'string' && value.trim() && (() => {
+                                        const info = decodeFirmaHash(value);
+                                        return info ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${info.timestamp || 'N/A'}` : 'Firma (formato no decodificable)';
+                                      })()}
+                                    </ThemedText>
+                                    {isFirmaCliente && value && (
+                                      <Image source={{ uri: formatSignatureForDisplay(value) || '' }} style={styles.cambioSignatureImage} resizeMode="contain" />
+                                    )}
+                                  </ThemedView>
+                                );
+                              })}
                             </ThemedView>
                           )}
                         </ThemedView>
@@ -1404,6 +1501,8 @@ const styles = StyleSheet.create({
   cambioCollapsableTitle: { fontSize: 14, fontWeight: '600', color: '#007AFF', flex: 1 },
   cambioCollapsableContent: { padding: 12, gap: 8, backgroundColor: '#F8F9FA' },
   changeDescription: { fontSize: 14, lineHeight: 20, color: '#666', marginBottom: 8 },
+  changeDescriptionContainer: { marginBottom: 8 },
+  cambioSignatureImage: { marginTop: 6, height: 80, width: 160, backgroundColor: '#f0f0f0', borderRadius: 4 },
   filterGroupSearch: { marginBottom: 12 },
   floatModalHeader: {
     flexDirection: 'row',

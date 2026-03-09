@@ -201,7 +201,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                 break;
             case "salida":
                 if (marcaDia.hora_salida_digitada != null) {
-                    return NextResponse.json({ status: false, message: "Ya has marcado la salida" }, { status: 200 });
+                    return NextResponse.json({ status: false, message: "Ya has marcado la salida", marca_id: marcaDia.id }, { status: 200 });
                 }
 
                 const response = await marcar_salida(req, marcaDia.id, horaAccion, reason);

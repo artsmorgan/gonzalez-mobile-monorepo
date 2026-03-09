@@ -543,8 +543,13 @@ export default function VisitorsScreen() {
     }
   };
 
-  const parseTimeToDate = (timeValue?: string) => {
-    const base = new Date();
+  const parseTimeToDate = async (timeValue?: string) => {
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
+    const base = new Date(horaAccion);
     const raw = String(timeValue || '').trim();
     if (/^\d{2}:\d{2}$/.test(raw)) {
       const [hh, mm] = raw.split(':').map((v) => parseInt(v, 10));
@@ -558,21 +563,36 @@ export default function VisitorsScreen() {
     return base;
   };
 
-  const parseDateToDate = (dateValue?: string) => {
+  const parseDateToDate = async (dateValue?: string) => {
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
     const ymd = normalizeDateToYMD(String(dateValue || ''));
-    const d = ymd ? new Date(`${ymd}T00:00:00`) : new Date();
-    return Number.isNaN(d.getTime()) ? new Date() : d;
+    const d = ymd ? new Date(`${ymd}T00:00:00`) : new Date(horaAccion);
+    return Number.isNaN(d.getTime()) ? new Date(horaAccion) : d;
   };
 
-  const openVisitorDatePicker = (field: 'entrada_fecha' | 'salida_fecha', current?: string) => {
+  const openVisitorDatePicker = async (field: 'entrada_fecha' | 'salida_fecha', current?: string) => {
     setVisitorPickerField(field);
-    setVisitorPickerValue(parseDateToDate(current));
+    const parseDate = await parseDateToDate(current);
+    if (!parseDate) {
+      Alert.alert('Error', 'No se pudo obtener la fecha');
+      return;
+    }
+    setVisitorPickerValue(parseDate);
     setShowVisitorDatePicker(true);
   };
 
-  const openVisitorTimePicker = (field: 'entrada_hora' | 'salida_hora', current?: string) => {
+  const openVisitorTimePicker = async (field: 'entrada_hora' | 'salida_hora', current?: string) => {
     setVisitorPickerField(field);
-    setVisitorPickerValue(parseTimeToDate(current));
+    const parseTime = await parseTimeToDate(current);
+    if (!parseTime) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
+    setVisitorPickerValue(parseTime);
     setShowVisitorTimePicker(true);
   };
 

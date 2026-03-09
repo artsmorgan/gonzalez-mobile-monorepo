@@ -31,10 +31,20 @@ function parseTimeInput(time: any): Date | undefined {
     const hh = Number(m[1]);
     const mm = Number(m[2]);
     if (Number.isNaN(hh) || Number.isNaN(mm) || hh < 0 || hh > 23 || mm < 0 || mm > 59) return undefined;
-    // Date placeholder; Prisma @db.Time cares about time component
-    return new Date(1970, 0, 1, hh, mm, 0, 0);
+    // UTC to avoid timezone shift: stored time = displayed time
+    return new Date(Date.UTC(1970, 0, 1, hh, mm, 0, 0));
   }
   return undefined;
+}
+
+/** Returns "HH:mm" from DB value (Date or ISO string) so client shows same time as saved. */
+function timeToHHmm(val: any): string | null {
+  if (val == null) return null;
+  const d = val instanceof Date ? val : (typeof val === "string" ? new Date(val) : null);
+  if (!d || Number.isNaN(d.getTime())) return null;
+  const hh = d.getUTCHours();
+  const mm = d.getUTCMinutes();
+  return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
 }
 
 function ensureStringJson(value: any, fallback: string) {
@@ -147,6 +157,8 @@ export async function GET(req: NextRequest) {
     const recordsWithNames = recordsArray.map((r: any) => ({
       ...r,
       id_local: "",
+      hora_inicio: timeToHHmm(r.hora_inicio) ?? r.hora_inicio,
+      hora_fin: timeToHHmm(r.hora_fin) ?? r.hora_fin,
       cliente_nombre: r.e_estructura_cliente?.nombre || null,
       corpo_nombre: r.e_estructura_sucursal ? `${r.e_estructura_sucursal.nro_sucursal ? `${r.e_estructura_sucursal.nro_sucursal} - ` : ''}${r.e_estructura_sucursal.nombre}` : null,
       puesto_nombre: r.e_estructura_puesto
@@ -337,6 +349,7 @@ export async function POST(req: NextRequest) {
               participantes: record.participantes,
               acuerdos: record.acuerdos,
               observaciones: record.observaciones,
+              firma_responsable: record.firma_responsable,
             },
           }]),
           created_at: createdAt.toISOString(),
@@ -345,6 +358,7 @@ export async function POST(req: NextRequest) {
       },
     });
 
+    const recordAny = record as any;
     return NextResponse.json(
       {
         status: true,
@@ -352,10 +366,12 @@ export async function POST(req: NextRequest) {
         data: {
           ...record,
           id_local: "",
-          cliente_nombre: (record as any).e_estructura_cliente?.nombre || null,
-          corpo_nombre: (record as any).e_estructura_sucursal ? `${(record as any).e_estructura_sucursal.nro_sucursal} - ${(record as any).e_estructura_sucursal.nombre}` : null,
-          puesto_nombre: (record as any).e_estructura_puesto
-            ? `${(record as any).e_estructura_puesto.codigo ? `${(record as any).e_estructura_puesto.codigo} - ` : ""}${(record as any).e_estructura_puesto.nombre}`
+          hora_inicio: timeToHHmm(recordAny.hora_inicio) ?? recordAny.hora_inicio,
+          hora_fin: timeToHHmm(recordAny.hora_fin) ?? recordAny.hora_fin,
+          cliente_nombre: recordAny.e_estructura_cliente?.nombre || null,
+          corpo_nombre: recordAny.e_estructura_sucursal ? `${recordAny.e_estructura_sucursal.nro_sucursal} - ${recordAny.e_estructura_sucursal.nombre}` : null,
+          puesto_nombre: recordAny.e_estructura_puesto
+            ? `${recordAny.e_estructura_puesto.codigo ? `${recordAny.e_estructura_puesto.codigo} - ` : ""}${recordAny.e_estructura_puesto.nombre}`
             : null,
         },
       },

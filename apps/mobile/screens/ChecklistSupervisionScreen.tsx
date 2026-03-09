@@ -765,6 +765,11 @@ function decodeFirmaHash(hash: string): { sessionId?: string; empleadoId?: strin
   }
 }
 
+function formatSignatureForDisplay(value?: string | null): string {
+  if (!value) return '';
+  return value.startsWith('data:') ? value : `data:image/png;base64,${value}`;
+}
+
 export default function ChecklistSupervisionScreen() {
   const navigation = useNavigation<any>();
   const { employee, refreshAccessToken, logout, accessToken } = useAuth();
@@ -812,7 +817,7 @@ export default function ChecklistSupervisionScreen() {
   const [submitResponse, setSubmitResponse] = useState<{ type: 'success' | 'error', message: string } | null>(null);
   const [fecha, setFecha] = useState<Date>(new Date());
   const [showFechaPicker, setShowFechaPicker] = useState(false);
-  const [ejecutivoCuenta, setEjecutivoCuenta] = useState('');
+  const [ejecutivoCuenta, setEjecutivoCuenta] = useState('-');
   const [evaluation, setEvaluation] = useState<EvaluationSection[]>([]);
   const [firmaSupervisor, setFirmaSupervisor] = useState('');
   const [firmaResponsable, setFirmaResponsable] = useState('');
@@ -916,7 +921,10 @@ export default function ChecklistSupervisionScreen() {
         const parsed = JSON.parse(cacheStr);
         if (Array.isArray(parsed)) setStructure(parsed);
       }
-
+      else {
+        setStructure([]);
+      }
+/*
       const isConnected = await getConnectionStatus();
       if (!isConnected) return;
 
@@ -942,6 +950,7 @@ export default function ChecklistSupervisionScreen() {
           await AsyncStorage.setItem('main_structure_cache', JSON.stringify(data.structure));
         }
       }
+      */
     } catch (error) {
       console.error('Error fetching main structure:', error);
     }
@@ -1011,7 +1020,7 @@ export default function ChecklistSupervisionScreen() {
     }
   };
 
-  const formatChangeValue = (value: any): string => {
+  const formatChangeValue = (prop: string, value: any): string => {
     if (value === null || value === undefined) return '-';
     if (typeof value === 'string') {
       // Si parece ser JSON, intentar parsearlo
@@ -1384,6 +1393,13 @@ export default function ChecklistSupervisionScreen() {
     field: 'value' | 'title' | 'imageOrientation',
     value: string | null
   ) => {
+    console.log('[ChecklistSupervision] updateInputField called with:', {
+      sectionId,
+      subsectionId,
+      inputId,
+      field,
+      valuePreview: typeof value === 'string' ? value.substring(0, 60) : value,
+    });
     setEvaluation((prev) => {
       const copy = prev.map((s) => ({
         ...s,
@@ -1393,12 +1409,49 @@ export default function ChecklistSupervisionScreen() {
         })),
       }));
       const section = copy.find((s) => s.id === sectionId);
-      if (!section) return prev;
-      const subsection = section.subsections.find((sub) => sub.id === subsectionId);
-      if (!subsection) return prev;
+      if (!section) {
+        console.warn('[ChecklistSupervision] updateInputField: section not found for id', sectionId);
+        return prev;
+      }
+      let subsection = section.subsections.find((sub) => sub.id === subsectionId);
+      if (!subsection) {
+        console.warn(
+          '[ChecklistSupervision] updateInputField: subsection not found for id',
+          subsectionId,
+          'trying to locate by inputId...'
+        );
+        // Fallback: localizar la subsección por el inputId (más robusto para datos antiguos)
+        subsection = section.subsections.find((sub) =>
+          sub.inputs?.some((inp) => inp.id === inputId)
+        );
+        if (!subsection) {
+          console.warn(
+            '[ChecklistSupervision] updateInputField: no subsection contains inputId',
+            inputId,
+            'available subsection ids:',
+            section.subsections.map((s) => s.id)
+          );
+          return prev;
+        }
+      }
       const input = subsection.inputs.find((inp) => inp.id === inputId);
-      if (!input) return prev;
+      if (!input) {
+        console.warn(
+          '[ChecklistSupervision] updateInputField: input not found for id',
+          inputId,
+          'available ids:',
+          subsection.inputs.map((i) => i.id)
+        );
+        return prev;
+      }
+      const before = (input as any)[field];
       (input as any)[field] = value;
+      console.log('[ChecklistSupervision] updateInputField updated input field:', {
+        inputId,
+        field,
+        beforePreview: typeof before === 'string' ? before.substring(0, 60) : before,
+        afterPreview: typeof value === 'string' ? value.substring(0, 60) : value,
+      });
       return copy;
     });
   };
@@ -1488,6 +1541,7 @@ export default function ChecklistSupervisionScreen() {
 
   // Funciones para cámara (siguiendo patrón de VehiclesScreen)
   const openCamera = async (target: string) => {
+    console.log('[ChecklistSupervision] openCamera called with target:', target);
     if (!permission) {
       const permissionResult = await requestPermission();
       if (!permissionResult.granted) {
@@ -1505,21 +1559,39 @@ export default function ChecklistSupervisionScreen() {
     }
 
     setCameraTarget(target);
+    console.log('[ChecklistSupervision] Camera permission granted. Setting cameraTarget and showing camera.');
     setIsCameraVisible(true);
   };
 
   // Función para obtener la URI de la imagen (como StaffEvaluationsScreen)
   const getImageUri = (input: EvaluationInput): string => {
+    console.log('[ChecklistSupervision] getImageUri called for input:', {
+      id: input.id,
+      hasValue: !!input.value,
+      valuePrefix: typeof input.value === 'string' ? input.value.substring(0, 30) : null,
+      file_name: input.file_name,
+    });
     // Si input.value es un data URI válido, usarlo directamente
-    if (input.value && typeof input.value === 'string' && input.value.startsWith('data:image/')) {
-      return input.value;
+    if (input.value && typeof input.value === 'string') {
+      if (input.value.startsWith('data:image/')) {
+        console.log('[ChecklistSupervision] getImageUri returning data URI for input:', input.id);
+        return input.value;
+      }
+      // Si parece base64 sin encabezado, envolverlo en un data URI (mejora robustez de la vista previa)
+      if (input.value.length > 100 && !input.value.startsWith('http')) {
+        const wrapped = `data:image/jpeg;base64,${input.value}`;
+        console.log('[ChecklistSupervision] getImageUri wrapping base64 without header for input:', input.id);
+        return wrapped;
+      }
     }
 
     // Para registros sincronizados, usar la API
     if (editing?.id && editing.id > 0 && input.file_name) {
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (apiUrl) {
-        return appendTokenToUrl(`${apiUrl}/api/checklist-supervision/${editing.id}/get-image/${encodeURIComponent(input.file_name)}`);
+        const uri = appendTokenToUrl(`${apiUrl}/api/checklist-supervision/${editing.id}/get-image/${encodeURIComponent(input.file_name)}`);
+        console.log('[ChecklistSupervision] getImageUri using file_name URL for input:', input.id, 'url:', uri);
+        return uri;
       }
     }
 
@@ -1527,21 +1599,28 @@ export default function ChecklistSupervisionScreen() {
     if (input.file_name && editing?.id && editing.id > 0) {
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (apiUrl) {
-        return appendTokenToUrl(`${apiUrl}/api/checklist-supervision/${editing.id}/get-image/${encodeURIComponent(input.file_name)}`);
+        const uri = appendTokenToUrl(`${apiUrl}/api/checklist-supervision/${editing.id}/get-image/${encodeURIComponent(input.file_name)}`);
+        console.log('[ChecklistSupervision] getImageUri using fallback file_name URL for input:', input.id, 'url:', uri);
+        return uri;
       }
     }
 
     // Fallback: usar input.value si existe
-    return (input.value && typeof input.value === 'string') ? input.value : '';
+    const fallback = (input.value && typeof input.value === 'string') ? input.value : '';
+    console.log('[ChecklistSupervision] getImageUri using fallback for input:', input.id, 'valuePrefix:', fallback.substring(0, 30));
+    return fallback;
   };
 
   const handleAddPhoto = async (target: string) => {
+    console.log('[ChecklistSupervision] handleAddPhoto called with target:', target);
     // Solo permitir tomar fotos con la cámara (como StaffEvaluationsScreen)
     await openCamera(target);
   };
 
   const takePicture = async () => {
+    console.log('[ChecklistSupervision] takePicture called. cameraTarget:', cameraTarget);
     if (!cameraRef.current || !cameraTarget) {
+      console.warn('[ChecklistSupervision] takePicture abort: no cameraRef or cameraTarget');
       setIsCameraVisible(false);
       return;
     }
@@ -1551,29 +1630,58 @@ export default function ChecklistSupervisionScreen() {
         quality: 0.7,
         skipProcessing: false,
       });
+      console.log('[ChecklistSupervision] takePicture received photo:', {
+        hasBase64: !!photo?.base64,
+        width: photo?.width,
+        height: photo?.height,
+      });
       setIsCameraVisible(false);
       if (!photo || !photo.base64) {
         Alert.alert('Error', 'No se pudo capturar la imagen');
         return;
       }
       const formattedBase64 = `data:image/jpeg;base64,${photo.base64}`;
-      const parts = cameraTarget.split('-');
-      if (parts.length >= 3) {
-        const sectionId = parts[0];
-        const subsectionId = parts[1];
-        const inputId = parts.slice(2).join('-');
+      console.log('[ChecklistSupervision] takePicture formattedBase64 length:', formattedBase64.length);
+
+      let sectionId: string | undefined;
+      let subsectionId: string | undefined;
+      let inputId: string | undefined;
+
+      if (cameraTarget.includes('|')) {
+        // Nuevo formato seguro: sectionId|subsectionId|inputId
+        const parts = cameraTarget.split('|');
+        [sectionId, subsectionId, inputId] = parts;
+        console.log('[ChecklistSupervision] takePicture target parsed from |:', { sectionId, subsectionId, inputId });
+      } else {
+        // Compatibilidad con formato antiguo basado en guiones
+        const parts = cameraTarget.split('-');
+        if (parts.length >= 3) {
+          sectionId = parts[0];
+          subsectionId = parts[1];
+          inputId = parts.slice(2).join('-');
+          console.log('[ChecklistSupervision] takePicture target parsed from - (legacy):', {
+            sectionId,
+            subsectionId,
+            inputId,
+          });
+        }
+      }
+
+      if (sectionId && subsectionId && inputId) {
 
         // Actualizar usando updateInputField (como StaffEvaluationsScreen)
+        console.log('[ChecklistSupervision] Updating inputField with captured image.');
         updateInputField(sectionId, subsectionId, inputId, 'value', formattedBase64);
 
         // Calcular orientación a partir de las dimensiones de la foto
         if (photo.width && photo.height) {
           const orientation: 'horizontal' | 'vertical' =
             photo.width >= photo.height ? 'horizontal' : 'vertical';
+          console.log('[ChecklistSupervision] Calculated image orientation:', orientation);
           updateInputField(sectionId, subsectionId, inputId, 'imageOrientation', orientation);
         }
       } else {
-        console.error('Error: cameraTarget no tiene el formato correcto:', cameraTarget);
+        console.error('[ChecklistSupervision] takePicture: cameraTarget no tiene el formato correcto:', cameraTarget);
         Alert.alert('Error', 'Error al procesar la imagen capturada');
       }
       setCameraTarget(null);
@@ -1585,8 +1693,13 @@ export default function ChecklistSupervisionScreen() {
   };
 
   // Funciones para CRUD
-  const resetForm = () => {
-    setFecha(new Date());
+  const resetForm = async () => {
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
+    setFecha(new Date(horaAccion));
     setEjecutivoCuenta('');
     setEvaluation([]);
     setFirmaSupervisor('');
@@ -1600,17 +1713,22 @@ export default function ChecklistSupervisionScreen() {
     setArticulos([]);
   };
 
-  const startCreating = () => {
-    resetForm();
+  const startCreating = async () => {
+    await resetForm();
     setEditing(null);
     setIsCreating(true);
   };
 
-  const startEditing = (it: ChecklistSupervisionUI) => {
+  const startEditing = async (it: ChecklistSupervisionUI) => {
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
     // Establecer editing PRIMERO para evitar que useEffect sobrescriba la evaluación
     setEditing(it);
     setIsCreating(true);
-    setFecha(it.fecha ? new Date(it.fecha) : new Date());
+    setFecha(it.fecha ? new Date(it.fecha) : new Date(horaAccion));
     setEjecutivoCuenta(it.ejecutivo_cuenta || '');
     setFirmaSupervisor(it.firma_supervisor || '');
     setFirmaResponsable(it.firma_responsable || '');
@@ -1686,10 +1804,10 @@ export default function ChecklistSupervisionScreen() {
     setSelectedPuestoId(it.puesto_id);
   };
 
-  const cancelCreating = () => {
+  const cancelCreating = async () => {
     setIsCreating(false);
     setEditing(null);
-    resetForm();
+    await resetForm();
   };
 
   const validateForm = () => {
@@ -1697,14 +1815,7 @@ export default function ChecklistSupervisionScreen() {
       Alert.alert('Error', 'Debes seleccionar todos los campos requeridos (Empresa, Cliente, División, Contrato, Sucursal y Puesto)');
       return false;
     }
-    if (!ejecutivoCuenta.trim()) {
-      Alert.alert('Error', 'Campo requerido: Ejecutivo de cuenta');
-      return false;
-    }
-    if (!firmaSupervisor) {
-      Alert.alert('Error', 'Debes registrar la firma del supervisor');
-      return false;
-    }
+    // firma_supervisor es opcional; solo se requiere la firma responsable.
     if (!firmaResponsable) {
       Alert.alert('Error', 'Debes registrar la firma responsable');
       return false;
@@ -1717,6 +1828,12 @@ export default function ChecklistSupervisionScreen() {
 
     setIsSubmitting(true);
     setSubmitResponse(null);
+
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
 
     try {
       // Verificar que las imágenes estén en la evaluación antes de enviar (como StaffEvaluationsScreen)
@@ -1776,13 +1893,13 @@ export default function ChecklistSupervisionScreen() {
             logout,
           });
           if (result.status) {
-            setSubmitResponse({ type: 'success', message: result.message || 'Checklist actualizado correctamente' });
+            Alert.alert('Éxito', result.message || 'Checklist actualizado correctamente');
             setTimeout(async () => {
               await fetchChecklists();
               cancelCreating();
             }, 2000);
           } else {
-            setSubmitResponse({ type: 'error', message: result.message || 'No se pudo actualizar' });
+            Alert.alert('Error', result.message || 'No se pudo actualizar');
           }
         } else {
           // Offline: guardar acción
@@ -1804,7 +1921,7 @@ export default function ChecklistSupervisionScreen() {
           setChecklists(updated);
           await AsyncStorage.setItem('checklist_supervision_cache', JSON.stringify(updated));
 
-          setSubmitResponse({ type: 'success', message: 'Checklist guardado localmente. Se sincronizará cuando haya conexión.' });
+          Alert.alert('Éxito', 'Checklist guardado localmente. Se sincronizará cuando haya conexión.');
           setTimeout(() => {
             cancelCreating();
           }, 2000);
@@ -1818,13 +1935,13 @@ export default function ChecklistSupervisionScreen() {
             logout,
           });
           if (result.status) {
-            setSubmitResponse({ type: 'success', message: result.message || 'Checklist creado correctamente' });
+            Alert.alert('Éxito', result.message || 'Checklist creado correctamente');
             setTimeout(async () => {
               await fetchChecklists();
               cancelCreating();
             }, 2000);
           } else {
-            setSubmitResponse({ type: 'error', message: result.message || 'No se pudo crear' });
+            Alert.alert('Error', result.message || 'No se pudo crear');
           }
         } else {
           // Offline: guardar acción
@@ -1840,7 +1957,7 @@ export default function ChecklistSupervisionScreen() {
 
           // Agregar a cache
           if (!selectedClienteId || !selectedDivisionId || !selectedCorpoId || !selectedPuestoId) {
-            setSubmitResponse({ type: 'error', message: 'Debes completar todos los campos requeridos' });
+            Alert.alert('Error', 'Debes completar todos los campos requeridos');
             setIsSubmitting(false);
             return;
           }
@@ -1857,20 +1974,20 @@ export default function ChecklistSupervisionScreen() {
             firma_supervisor: firmaSupervisor,
             firma_responsable: firmaResponsable,
             created_by: typeof employee?.id === 'number' ? employee.id : (employee?.id ? Number(employee.id) : 0),
-            created_at: new Date().toISOString(),
+            created_at: new Date(horaAccion).toISOString(),
           };
           const updated = [...checklists, newItem];
           setChecklists(updated);
           await AsyncStorage.setItem('checklist_supervision_cache', JSON.stringify(updated));
 
-          setSubmitResponse({ type: 'success', message: 'Checklist guardado localmente. Se sincronizará cuando haya conexión.' });
+          Alert.alert('Éxito', 'Checklist guardado localmente. Se sincronizará cuando haya conexión.');
           setTimeout(() => {
             cancelCreating();
           }, 2000);
         }
       }
     } catch (err: any) {
-      setSubmitResponse({ type: 'error', message: err.message || 'No se pudo guardar' });
+      Alert.alert('Error', err.message || 'No se pudo guardar');
     } finally {
       setIsSubmitting(false);
     }
@@ -2141,10 +2258,6 @@ export default function ChecklistSupervisionScreen() {
           <ThemedText style={styles.bitLabel}>Fecha: </ThemedText>
           <ThemedText style={styles.bitValue}>{fechaStr}</ThemedText>
         </ThemedText>
-        <ThemedText style={styles.bitLine}>
-          <ThemedText style={styles.bitLabel}>Ejecutivo: </ThemedText>
-          <ThemedText style={styles.bitValue}>{it.ejecutivo_cuenta || '-'}</ThemedText>
-        </ThemedText>
 
         {/* Botón para expandir/colapsar evaluación */}
         <TouchableOpacity
@@ -2285,12 +2398,12 @@ export default function ChecklistSupervisionScreen() {
     <ThemedView style={styles.container}>
       <AppHeader onMenuPress={handleMenuPress} title="Checklist de Supervisión" />
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
-        <ThemedView style={styles.content}>
-          {error ? <ThemedText style={styles.errorText}>{error}</ThemedText> : null}
-
+        <ThemedView style={styles.contentContainer}>
           <ThemedView style={styles.titleContainer}>
             <ThemedText type="title" style={styles.title}>
-              <Ionicons name="clipboard" size={22} color="#000000" /> Checklist de Supervisión
+              <Ionicons name="clipboard" size={22} color="#000000" />{' '}
+              <ThemedText style={styles.title}>Checklist de Supervisión</ThemedText>
+
             </ThemedText>
             <ThemedText style={styles.subtitle}>Gestiona los checklists de supervisión</ThemedText>
           </ThemedView>
@@ -2325,7 +2438,7 @@ export default function ChecklistSupervisionScreen() {
                       style={styles.searchInput}
                       value={filterSearch}
                       onChangeText={setFilterSearch}
-                      placeholder="Ejecutivo, Cliente, Sucursal, Puesto..."
+                      placeholder="Cliente, Sucursal, Puesto..."
                       placeholderTextColor="#999"
                     />
                   </ThemedView>
@@ -2633,15 +2746,6 @@ export default function ChecklistSupervisionScreen() {
                 <Ionicons name="calendar-outline" size={18} color="#007AFF" />
               </TouchableOpacity>
 
-              <ThemedText style={styles.label}>Ejecutivo de cuenta *</ThemedText>
-              <TextInput
-                style={styles.input}
-                placeholder="Nombre del ejecutivo"
-                placeholderTextColor="#999"
-                value={ejecutivoCuenta}
-                onChangeText={setEjecutivoCuenta}
-              />
-
               {/* Evaluación dinámica */}
               <ThemedView style={styles.formGroup}>
                 <ThemedText style={styles.formLabel}>Evaluación</ThemedText>
@@ -2725,7 +2829,7 @@ export default function ChecklistSupervisionScreen() {
                                   ) : null}
                                   <TouchableOpacity
                                     style={styles.cameraSmallButton}
-                                    onPress={() => handleAddPhoto(`${section.id}-${subsection.id}-${input.id}`)}
+                                    onPress={() => handleAddPhoto(`${section.id}|${subsection.id}|${input.id}`)}
                                   >
                                     <Ionicons name="camera" size={16} color="#000000" />
                                     <ThemedText style={styles.cameraSmallButtonText}>
@@ -2908,7 +3012,7 @@ export default function ChecklistSupervisionScreen() {
               )}
 
               {/* Firma supervisor */}
-              <ThemedText style={styles.sectionTitle}>Firma supervisor *</ThemedText>
+              <ThemedText style={styles.sectionTitle}>Firma supervisor (Opcional)</ThemedText>
               {firmaSupervisor ? (
                 <ThemedView style={styles.signaturePreviewContainer}>
                   <Image source={{ uri: firmaSupervisor }} style={styles.signaturePreview} resizeMode="contain" />
@@ -3108,16 +3212,103 @@ export default function ChecklistSupervisionScreen() {
                             <ThemedView style={styles.filterGroupSearch}>
                               <ThemedText style={styles.filterLabel}>Cambios:</ThemedText>
                               {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => {
-                                let displayValue = formatChangeValue(c?.after);
-                                // Si es el campo evaluacion, formatearlo especialmente
-                                if (c?.prop === 'evaluacion') {
-                                  displayValue = formatEvaluacionForDisplay(String(c?.after || ''));
+                                const prop = String(c?.prop ?? '-');
+                                const value = c?.after;
+
+                                // Caso especial: registro creado (__created__)
+                                if (prop === '__created__' && value && typeof value === 'object') {
+                                  const created: any = value;
+                                  return (
+                                    <React.Fragment key={`c-${row.id}-${idx}-created`}>
+                                      <ThemedView style={styles.changeDescriptionContainer}>
+                                        <ThemedText style={styles.changeDescription}>
+                                          <ThemedText style={{ fontWeight: '800' }}>Registro creado</ThemedText>
+                                        </ThemedText>
+                                      </ThemedView>
+
+                                      {/* Campos no relacionados con firmas ni evaluación */}
+                                      {Object.entries(created).map(([k, v]) => {
+                                        if (k === 'firma_supervisor' || k === 'firma_responsable' || k === 'evaluacion') return null;
+                                        const displayValue = formatChangeValue(k, v);
+                                        return (
+                                          <ThemedView key={`c-${row.id}-${idx}-${k}`} style={styles.changeDescriptionContainer}>
+                                            <ThemedText style={styles.changeDescription}>
+                                              <ThemedText style={{ fontWeight: '800' }}>{k}: </ThemedText>
+                                              {displayValue}
+                                            </ThemedText>
+                                          </ThemedView>
+                                        );
+                                      })}
+
+                                      {/* Evaluación completa (formato especial) */}
+                                      {typeof created.evaluacion === 'string' && created.evaluacion.trim() && (
+                                        <ThemedView style={styles.changeDescriptionContainer}>
+                                          <ThemedText style={styles.changeDescription}>
+                                            <ThemedText style={{ fontWeight: '800' }}>evaluacion: </ThemedText>
+                                            {formatEvaluacionForDisplay(String(created.evaluacion || ''))}
+                                          </ThemedText>
+                                        </ThemedView>
+                                      )}
+
+                                      {/* Firma supervisor (imagen) */}
+                                      {created.firma_supervisor && (
+                                        <ThemedView style={styles.changeDescriptionContainer}>
+                                          <ThemedText style={styles.changeDescription}>
+                                            <ThemedText style={{ fontWeight: '800' }}>firma_supervisor: </ThemedText>
+                                          </ThemedText>
+                                          <Image
+                                            source={{ uri: formatSignatureForDisplay(created.firma_supervisor) }}
+                                            style={styles.cambioSignatureImage}
+                                            resizeMode="contain"
+                                          />
+                                        </ThemedView>
+                                      )}
+
+                                      {/* Firma responsable (hash decodificado) */}
+                                      {typeof created.firma_responsable === 'string' && created.firma_responsable.trim() && (
+                                        <ThemedView style={styles.changeDescriptionContainer}>
+                                          <ThemedText style={styles.changeDescription}>
+                                            <ThemedText style={{ fontWeight: '800' }}>firma_responsable: </ThemedText>
+                                            {(() => {
+                                              const info = decodeFirmaHash(created.firma_responsable);
+                                              return info
+                                                ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${info.timestamp || 'N/A'}`
+                                                : 'Firma responsable (formato no decodificable)';
+                                            })()}
+                                          </ThemedText>
+                                        </ThemedView>
+                                      )}
+                                    </React.Fragment>
+                                  );
                                 }
+
+                                const isResponsableSignatureField = prop === 'firma_responsable';
+                                const isSupervisorSignatureField = prop === 'firma_supervisor';
+
+                                let displayValue = formatChangeValue(prop, value);
+                                if (prop === 'evaluacion') {
+                                  displayValue = formatEvaluacionForDisplay(String(value || ''));
+                                }
+
                                 return (
-                                  <ThemedText key={`c-${row.id}-${idx}`} style={styles.changeDescription}>
-                                    <ThemedText style={{ fontWeight: '800' }}>{String(c?.prop ?? '-')}: </ThemedText>
-                                    {displayValue}
-                                  </ThemedText>
+                                  <ThemedView key={`c-${row.id}-${idx}`} style={styles.changeDescriptionContainer}>
+                                    <ThemedText style={styles.changeDescription}>
+                                      <ThemedText style={{ fontWeight: '800' }}>{prop}: </ThemedText>
+                                      {!isResponsableSignatureField && !isSupervisorSignatureField && displayValue}
+                                      {isResponsableSignatureField && (() => {
+                                        const info = typeof value === 'string' ? decodeFirmaHash(value) : null;
+                                        if (!info) return 'Firma responsable (formato no decodificable)';
+                                        return `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${info.timestamp || 'N/A'}`;
+                                      })()}
+                                    </ThemedText>
+                                    {isSupervisorSignatureField && value && (
+                                      <Image
+                                        source={{ uri: formatSignatureForDisplay(value) }}
+                                        style={styles.cambioSignatureImage}
+                                        resizeMode="contain"
+                                      />
+                                    )}
+                                  </ThemedView>
                                 );
                               })}
                             </ThemedView>
@@ -3352,15 +3543,34 @@ export default function ChecklistSupervisionScreen() {
   );
 }
 
-// Estilos (copiados de LlavesScreen.tsx para mantener consistencia)
+// Estilos (alineados con StaffEvaluationsScreen: header y fondo)
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F8F9FA' },
+  container: { flex: 1 },
   scrollView: { flex: 1 },
-  scrollContent: { paddingBottom: 20 },
-  content: { padding: 16 },
-  titleContainer: { marginBottom: 20 },
-  title: { fontSize: 24, fontWeight: '800', color: '#000', marginBottom: 4, },
-  subtitle: { fontSize: 14, color: '#666', },
+  scrollContent: { padding: 16 },
+  contentContainer: {
+    width: '100%',
+    maxWidth: 700,
+    alignSelf: 'center',
+  },
+  titleContainer: {
+    alignItems: 'center',
+    marginBottom: 24,
+    paddingBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+  },
+  title: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  subtitle: {
+    fontSize: 14,
+    opacity: 0.7,
+    textAlign: 'center',
+  },
   errorText: { color: '#FF3B30', fontSize: 14, marginBottom: 12 },
   filtersMain: {
     backgroundColor: '#FFFFFF',
@@ -3589,7 +3799,9 @@ const styles = StyleSheet.create({
   cambioCollapsableHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, backgroundColor: '#F8F9FA' },
   cambioCollapsableTitle: { fontSize: 14, fontWeight: '600', color: '#007AFF', flex: 1 },
   cambioCollapsableContent: { padding: 12, gap: 8, backgroundColor: '#F8F9FA' },
-  changeDescription: { fontSize: 14, lineHeight: 20, color: '#666', marginBottom: 8 },
+  changeDescriptionContainer: { marginBottom: 8 },
+  changeDescription: { fontSize: 14, lineHeight: 20, color: '#666' },
+  cambioSignatureImage: { marginTop: 6, height: 80, width: 160, backgroundColor: '#f0f0f0', borderRadius: 4 },
   // Estilos para componente collapsable (como StaffEvaluationsScreen)
   collapseButton: {
     flexDirection: 'row',

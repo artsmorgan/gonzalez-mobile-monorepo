@@ -121,14 +121,23 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       telefono: typeof telefono === "string" ? telefono : own.mov!.telefono,
       fecha: fechaDate ?? own.mov!.fecha,
       hora: horaDate ?? own.mov!.hora,
-      firma_entrega: typeof firma_entrega === "string" ? firma_entrega : own.mov!.firma_entrega,
-      firma_recibe: typeof firma_recibe === "string" ? firma_recibe : own.mov!.firma_recibe,
+      firma_entrega:
+        firma_entrega !== undefined
+          ? (firma_entrega != null && String(firma_entrega).trim().length > 0
+              ? String(firma_entrega).trim()
+              : null)
+          : own.mov!.firma_entrega,
+      firma_recibe:
+        firma_recibe !== undefined
+          ? (firma_recibe != null && String(firma_recibe).trim().length > 0
+              ? String(firma_recibe).trim()
+              : null)
+          : own.mov!.firma_recibe,
       firma_responsable: typeof firma_responsable === "string" ? firma_responsable : own.mov!.firma_responsable,
     };
 
-    // Comparar cambios (excluir firmas)
+    // Comparar cambios (incluir firmas)
     for (const [k, v] of Object.entries(updateData)) {
-      if (k === "firma_entrega" || k === "firma_recibe" || k === "firma_responsable") continue; // Excluir firmas
       const before = (own.mov as any)[k];
       const after = v;
       if (!eq(before, after)) {
