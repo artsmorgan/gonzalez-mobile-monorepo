@@ -526,21 +526,8 @@ export default function MarcarIngresoSalidaScreen() {
       try {
         if (type === 'entrada') {
           if (attendanceData) {
-            const access_token = await AsyncStorage.getItem('access_token') || '';
-            const refresh_token = await AsyncStorage.getItem('refresh_token') || '';
-            const token_created_at = await AsyncStorage.getItem('token_created_at') || '';
-            const disconnected_info = await AsyncStorage.getItem('disconnected_info') || '';
-            const server_time = await AsyncStorage.getItem('server_time') || '';
+            await cleanAsyncStorage();
             const main_structure_cache = await AsyncStorage.getItem('main_structure_cache') || '';
-
-            await AsyncStorage.clear();
-            
-            await AsyncStorage.setItem('access_token', access_token);
-            await AsyncStorage.setItem('refresh_token', refresh_token);
-            await AsyncStorage.setItem('token_created_at', token_created_at);
-            await AsyncStorage.setItem('disconnected_info', disconnected_info);
-            await AsyncStorage.setItem('server_time', server_time);
-            await AsyncStorage.setItem('main_structure_cache', main_structure_cache);
 
             attendanceData.marca.hora_entrada_digitada = new Date(horaAccion).toISOString();
             await AsyncStorage.setItem('current_marca', JSON.stringify(attendanceData.marca));
@@ -602,6 +589,30 @@ export default function MarcarIngresoSalidaScreen() {
     setIsProcessingMark(false);
     setProcessingType(null);
   };
+
+  const cleanAsyncStorage = async () => { 
+    try {
+      const exceptions = [
+        'access_token',
+        'employee_data',
+        'refresh_token',
+        'token_created_at',
+        'disconnected_info',
+        'remembered_cedula',
+        'server_time',
+        'main_structure_cache',
+      ];
+      const keys = await AsyncStorage.getAllKeys();
+
+      const keysToDelete = keys.filter(
+        key => !exceptions.includes(key)
+      );
+
+      await AsyncStorage.multiRemove(keysToDelete);
+    } catch (error) {
+      console.error("Error limpiando AsyncStorage", error);
+    }
+  }
 
   const getJobManuals = async (marcaId: number) => {
     // Eliminar actions
