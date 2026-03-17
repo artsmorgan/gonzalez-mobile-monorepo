@@ -43,7 +43,17 @@ export async function GET(
     if (!record) {
       return NextResponse.json({ status: false, message: "Solicitud no encontrada" }, { status: 404 });
     }
-    if (!record.file_name) {
+    const mainFile = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "c_archivos_solicitud_permiso",
+        operation: "findFirst",
+        where: { solicitud_id: idNum },
+        orderBy: [{ is_main: "desc" }, { id: "asc" }],
+      },
+    });
+    if (!mainFile?.name) {
       return NextResponse.json({ status: false, message: "La solicitud no tiene archivo adjunto" }, { status: 404 });
     }
 
@@ -68,13 +78,13 @@ export async function GET(
     const fetched = await fetchDynamicFile({
       req,
       type: "file",
-      url: `permit-request/${idNum}/${record.file_name}`,
+      url: `permit-request/${idNum}/${mainFile.name}`,
     });
 
     const headers = new Headers();
     headers.set("Content-Type", fetched.headers.contentType || "application/octet-stream");
     headers.set("Cache-Control", fetched.headers.cacheControl || "private, max-age=0");
-    headers.set("Content-Disposition", `attachment; filename="${String(record.file_name).replace(/"/g, "")}"`);
+    headers.set("Content-Disposition", `attachment; filename="${String(mainFile.original_name || mainFile.name).replace(/"/g, "")}"`);
 
     return new NextResponse(fetched.buffer, { status: 200, headers });
   } catch (error: unknown) {

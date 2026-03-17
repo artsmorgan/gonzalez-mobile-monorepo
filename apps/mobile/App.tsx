@@ -320,6 +320,20 @@ function RootNavigator() {
   );
 }
 
+/**
+ * Una sola ejecución global de sync (no por instancia de AppContent).
+ * useRef dentro del componente falla con doble montaje / remount: el segundo mount ve lock en false.
+ */
+const SYNC_CACHES_GLOBAL_KEY = '__MONITOREAPP_SYNC_CACHES_SLOT__' as const;
+type SyncCachesSlot = { inFlight: Promise<void> | null };
+function getSyncCachesSlot(): SyncCachesSlot {
+  const g = globalThis as unknown as Record<string, SyncCachesSlot>;
+  if (!g[SYNC_CACHES_GLOBAL_KEY]) {
+    g[SYNC_CACHES_GLOBAL_KEY] = { inFlight: null };
+  }
+  return g[SYNC_CACHES_GLOBAL_KEY];
+}
+
 function AppContent() {
   const colorScheme = useColorScheme();
   const [loaded] = useFonts({
@@ -331,7 +345,6 @@ function AppContent() {
   const routeNameRef = useRef<string | undefined>(undefined);
   // 🆕 Variable de estado para conexión a internet
   const [isConnected, setIsConnected] = React.useState<boolean | null>(null);
-  const isSyncingActionsRef = useRef(false);
 
   const ACTION_STORAGE_KEYS = [
     'lunch_time_actions',
@@ -358,9 +371,10 @@ function AppContent() {
     'voice_notes_actions',
     'staff_evaluations_actions',
     'job_manuals_actions',
+    'checklist_supervision_actions',
   ];
 
-  const FORCE_OFFLINE = false;
+  const FORCE_OFFLINE = false; 
 
   const authedFetchCb = useCallback(
     async (args: { url: string; init: RequestInit }): Promise<Response | null> => {
@@ -368,29 +382,6 @@ function AppContent() {
     },
     [refreshAccessToken, logout]
   );
-
-  // 🆕 useEffect para escuchar el estado de conexión en tiempo real
-  useEffect(() => {
-    // Verificar conexión inicial
-    if (FORCE_OFFLINE) {
-      setIsConnected(false);
-      return;
-    }
-
-    const checkInitialConnection = async () => {
-      const state = await Network.getNetworkStateAsync();
-      setIsConnected(state.isConnected && state.isInternetReachable ? true : false);
-    };
-
-    checkInitialConnection();
-
-    // Suscribirse a cambios en la conexión
-    const subscription = Network.addNetworkStateListener(state => {
-      setIsConnected(state.isConnected && state.isInternetReachable ? true : false);
-    });
-
-    return () => subscription.remove();
-  }, []);
 
   const hasPendingActionsInStorage = useCallback(async (): Promise<boolean> => {
     const values = await Promise.all(ACTION_STORAGE_KEYS.map((key) => AsyncStorage.getItem(key)));
@@ -405,78 +396,191 @@ function AppContent() {
     });
   }, []);
 
-  const syncPendingActionsIfOnline = useCallback(async () => {
-    if (isConnected !== true) {
-      console.log('Sin conexión');
-      return;
+  /** Evento global: cualquier parte de la app puede hacer `eventBus.emit('syncCachesRequested')`. */
+  const SYNC_CACHES_EVENT = 'syncCachesRequested' as const;
+  const MOBILE_VERSION_EVENT = 'mobileVersionAvailabilityChanged' as const;
+
+  const compareSemver = (a: string, b: string): number => {
+    const pa = String(a || '0.0.0').split('.').map((x) => parseInt(x, 10) || 0);
+    const pb = String(b || '0.0.0').split('.').map((x) => parseInt(x, 10) || 0);
+    const len = Math.max(pa.length, pb.length);
+    for (let i = 0; i < len; i++) {
+      const av = pa[i] ?? 0;
+      const bv = pb[i] ?? 0;
+      if (av > bv) return 1;
+      if (av < bv) return -1;
     }
-    if (isSyncingActionsRef.current) return;
+    return 0;
+  };
 
+  const checkMobileVersionAvailability = useCallback(async () => {
     try {
-      isSyncingActionsRef.current = true;
-      console.log('Conectado');
-      console.log('Funciones que se ejecutarán cuando se recupera la conexión');
-
-      updateServerTime();
-      await Promise.all([
-        checkManualSignatureCache(),
-        checkMarcaCache(),
-        checkAbsentReasonCache(),
-      ]);
-
-      const hasPendingActions = await hasPendingActionsInStorage();
-      if (!hasPendingActions) return;
-
-      const validAccessToken = await getValidAccessTokenOrLogout({ refreshAccessToken, logout });
-      if (!validAccessToken) {
-        console.log('Sincronización cancelada: token inválido o expirado');
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const appVersionInfo = Constants.expoConfig?.extra?.APP_VERSION_INFO;
+      const appVersion = String(appVersionInfo?.version || '0.0.0');
+      if (!apiUrl || !appVersionInfo) {
+        eventBus.emit(MOBILE_VERSION_EVENT, { available: false, data: null, appVersion });
         return;
       }
 
-      await Promise.all([
-        checkLunchTimeActionsCache(),
-        checkVehiclesActionsCache(),
-        checkBitacoraVehiculoDetenidoActionsCache(),
-        checkLlavesActionsCache(),
-        checkMovimientosLlavesActionsCache(),
-        checkLlaverosActionsCache(),
-        checkMovimientosLlaverosActionsCache(),
-        checkArticuloMantenimientoActionsCache(),
-        checkMovimientosArticulosMantenimientoActionsCache(),
-        checkDocumentosEntregadosActionsCache(),
-        checkApreciacionVulnerabilidadActionsCache(),
-        checkNotificationsActionsCache(),
-        checkVisitorsActionsCache(),
-        checkNotesActionsCache(),
-        checkActivitiesActionsCache(),
-        checkEvaluationsActionsCache(),
-        checkSurveysActionsCache(),
-        checkTrainingsActionsCache(),
-        checkIncidentsActionsCache(),
-        checkMutuosAcuerdosActionsCache(),
-        checkIncidentContributionsActionsCache(),
-        checkVoiceNotesActionsCache(),
-        checkStaffEvaluationsActionsCache(),
-        checkJobManualsActionsCache(),
-      ]);
+      const response = await authedFetchCb({
+        url: `${apiUrl}/api/mobile-versions`,
+        init: {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            'ngrok-skip-browser-warning': '69420',
+          },
+        },
+      });
+      if (!response || !response.ok) {
+        eventBus.emit(MOBILE_VERSION_EVENT, { available: false, data: null, appVersion });
+        return;
+      }
 
-      eventBus.emit('connectionRestored');
-    } finally {
-      isSyncingActionsRef.current = false;
+      const versionData = await response.json().catch(() => null);
+      const serverVersion = String(versionData?.version || '0.0.0');
+      const isNewer = compareSemver(serverVersion, appVersion) === 1;
+
+      eventBus.emit(MOBILE_VERSION_EVENT, {
+        available: isNewer,
+        data: versionData,
+        appVersion,
+      });
+    } catch (error) {
+      console.error('Error checking mobile versions:', error);
+      const appVersionInfo = Constants.expoConfig?.extra?.APP_VERSION_INFO;
+      eventBus.emit(MOBILE_VERSION_EVENT, { available: false, data: null, appVersion: String(appVersionInfo?.version || '0.0.0') });
     }
-  }, [hasPendingActionsInStorage, isConnected, logout, refreshAccessToken]);
+  }, [authedFetchCb]);
 
-  // Ejecutar al cambiar estado de red y luego cada minuto si hay internet
+  const syncPendingActionsIfOnline = useCallback(() => {
+    if (FORCE_OFFLINE) return;
+    const slot = getSyncCachesSlot();
+    if (slot.inFlight != null) {
+      console.log('[syncCaches] Omitido: ya hay una ejecución en curso (global)');
+      return;
+    }
+    slot.inFlight = (async () => {
+      try {
+        const state = await Network.getNetworkStateAsync();
+        const connected = !!state.isConnected;
+        const reach = state.isInternetReachable;
+        const online = connected && (reach === true || reach === null);
+        setIsConnected(online);
+        if (!connected || reach === false) {
+          console.log('Sin conexión (verificación en vivo)', { connected, isInternetReachable: reach });
+          return;
+        }
+        if (!employee) {
+          console.log('[syncCaches] Esperando employee en memoria para ejecutar checks');
+          return;
+        }
+
+        console.log('Conectado — sync cachés (única instancia)');
+
+        await Promise.all([
+          updateServerTime(),
+          checkMobileVersionAvailability(),
+        ]);
+        await Promise.all([
+          checkManualSignatureCache(),
+          checkMarcaCache(),
+          checkAbsentReasonCache(),
+        ]);
+
+        const hasPendingActions = await hasPendingActionsInStorage();
+        if (!hasPendingActions) return;
+
+        const validAccessToken = await getValidAccessTokenOrLogout({ refreshAccessToken, logout });
+        if (!validAccessToken) {
+          console.log('Sincronización cancelada: token inválido o expirado');
+          return;
+        }
+
+        console.log(' -------------------------- sincronizando cachés');
+        await Promise.all([
+          checkLunchTimeActionsCache(),
+          checkActivitiesActionsCache(),
+          checkChecklistSupervisionActionsCache(),
+          checkVehiclesActionsCache(),
+          checkBitacoraVehiculoDetenidoActionsCache(),
+          checkLlavesActionsCache(),
+          checkMovimientosLlavesActionsCache(),
+          checkLlaverosActionsCache(),
+          checkMovimientosLlaverosActionsCache(),
+          checkArticuloMantenimientoActionsCache(),
+          checkMovimientosArticulosMantenimientoActionsCache(),
+          checkDocumentosEntregadosActionsCache(),
+          checkApreciacionVulnerabilidadActionsCache(),
+          checkNotificationsActionsCache(),
+          checkVisitorsActionsCache(),
+          checkNotesActionsCache(),
+          checkEvaluationsActionsCache(),
+          checkSurveysActionsCache(),
+          checkTrainingsActionsCache(),
+          checkIncidentsActionsCache(),
+          checkMutuosAcuerdosActionsCache(),
+          checkIncidentContributionsActionsCache(),
+          checkVoiceNotesActionsCache(),
+          checkStaffEvaluationsActionsCache(),
+          checkJobManualsActionsCache(),
+        ]);
+
+        eventBus.emit('connectionRestored');
+      } finally {
+        slot.inFlight = null;
+      }
+    })();
+  }, [checkMobileVersionAvailability, employee, hasPendingActionsInStorage, logout, refreshAccessToken]);
+
+  // eventBus + foco de app + reconexión → intentar sincronizar cachés (con comprobación de red dentro)
   useEffect(() => {
-    syncPendingActionsIfOnline();
-    if (isConnected !== true) return;
+    const onSyncRequested = () => {
+      syncPendingActionsIfOnline();
+    };
+    eventBus.on(SYNC_CACHES_EVENT, onSyncRequested);
+    // Al montar (inicio de sesión / arranque)
+    onSyncRequested();
+    return () => {
+      eventBus.off(SYNC_CACHES_EVENT, onSyncRequested);
+    };
+  }, [syncPendingActionsIfOnline]);
+
+  // Red: reconexión dispara sync; intervalo periódico (sync comprueba red dentro)
+  useEffect(() => {
+    if (FORCE_OFFLINE) {
+      setIsConnected(false);
+      return;
+    }
+
+    const wasOnlineRef = { current: false };
+
+    (async () => {
+      const s = await Network.getNetworkStateAsync();
+      const online = !!(s.isConnected && s.isInternetReachable);
+      wasOnlineRef.current = online;
+      setIsConnected(online);
+    })();
+
+    const subscription = Network.addNetworkStateListener((s) => {
+      const online = !!(s.isConnected && s.isInternetReachable);
+      setIsConnected(online);
+      if (online && !wasOnlineRef.current) {
+        eventBus.emit(SYNC_CACHES_EVENT);
+      }
+      wasOnlineRef.current = online;
+    });
 
     const intervalId = setInterval(() => {
-      syncPendingActionsIfOnline();
+      eventBus.emit(SYNC_CACHES_EVENT);
     }, 60 * 1000);
 
-    return () => clearInterval(intervalId);
-  }, [isConnected, syncPendingActionsIfOnline]);
+    return () => {
+      subscription.remove();
+      clearInterval(intervalId);
+    };
+  }, []);
 
   const checkManualSignatureCache = async () => {
     if (!employee) return;
@@ -1382,16 +1486,44 @@ function AppContent() {
 
     for (const action of actions) {
       try {
-        if (action.type !== 'update') continue;
+        console.log('action', action);
+        if (action.type !== 'update' && action.type !== 'create') continue;
+
+        const isCreate = action.type === 'create';
+        const url = isCreate
+          ? `${apiUrl}/api/articulo-mantenimiento`
+          : `${apiUrl}/api/articulo-mantenimiento/${action.id}`;
+        const method = isCreate ? 'POST' : 'PUT';
+
+        console.log('action.requestData', action.requestData);
+        const payload: any = { ...(action.requestData ?? {}) };
+        if (action.type === 'update' && action?.meta?.source && action?.meta?.estructuraId) {
+          const estructuraId = Number(action.meta.estructuraId);
+          if (Number.isFinite(estructuraId) && estructuraId > 0) {
+            if (String(action.meta.source) === 'plan') {
+              payload.articulo_plan_id = estructuraId;
+            } else if (String(action.meta.source) === 'asignado') {
+              payload.articulo_asignado_id = estructuraId;
+            }
+          }
+        }
+        if (!payload.hora_accion) {
+          try {
+            const horaAccion = await getHoraAccion();
+            if (horaAccion) payload.hora_accion = new Date(horaAccion).toISOString();
+          } catch {
+            // ignore
+          }
+        }
 
         const response = await authedFetchCb({
-          url: `${apiUrl}/api/articulo-mantenimiento/${action.id}`,
+          url,
           init: {
-            method: 'PUT',
+            method,
             headers: {
               'Content-Type': 'application/json',
             },
-            body: JSON.stringify(action.requestData ?? {}),
+            body: JSON.stringify(payload),
           },
         });
 
@@ -1402,9 +1534,26 @@ function AppContent() {
 
         if (response.ok) {
           const data = await response.json().catch(() => ({}));
+          console.log('data', data);
           if (data.status) {
-            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'update'));
+            const updatedActions = actions.filter((a: any) => {
+              if (isCreate) {
+                return !(a.type === 'create' && a.id_local === action.id_local);
+              }
+              return !(a.id === action.id && a.type === 'update');
+            });
             await AsyncStorage.setItem('articulo_mantenimiento_actions', JSON.stringify(updatedActions));
+          } else {
+            // Si el servidor rechaza por ser una acción más antigua (updated_at más reciente),
+            // eliminamos la acción local para evitar reintentos infinitos.
+            const msg = String(data?.message || '');
+            if (msg.toLowerCase().includes('más antiguo') || msg.toLowerCase().includes('updated_at')) {
+              const updatedActions = actions.filter((a: any) => {
+                if (isCreate) return !(a.type === 'create' && a.id_local === action.id_local);
+                return !(a.id === action.id && a.type === 'update');
+              });
+              await AsyncStorage.setItem('articulo_mantenimiento_actions', JSON.stringify(updatedActions));
+            }
           }
         }
       } catch (error) {
@@ -1686,6 +1835,85 @@ function AppContent() {
     }
   }
 
+  const checkChecklistSupervisionActionsCache = async () => {
+    if (!employee) return;
+
+    const actionsStr = await AsyncStorage.getItem('checklist_supervision_actions');
+    if (!actionsStr) return;
+
+    const actions = JSON.parse(actionsStr);
+    if (!actions || actions.length === 0) return;
+
+    console.log('Sincronizando acciones de checklist de supervisión:', actions.length);
+
+    for (const action of actions) {
+      try {
+        if (action.type === 'create') {
+          const { createChecklistSupervision } = await import('@/hooks/checklistSupervisionFunctions');
+          const result = await createChecklistSupervision({
+            requestData: action.requestData,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result.status) {
+            const updatedActions = actions.filter((a: any) => !(a.id_local === action.id_local && a.type === 'create'));
+            await AsyncStorage.setItem('checklist_supervision_actions', JSON.stringify(updatedActions));
+
+            // Actualizar cache: reemplazar item temporal (id_local) por el id real si lo devuelve
+            if (result.id) {
+              const cacheStr = await AsyncStorage.getItem('checklist_supervision_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((it: any) => {
+                  if (it.id_local && it.id_local === action.id_local) {
+                    return { ...it, id: result.id, id_local: '' };
+                  }
+                  return it;
+                });
+                await AsyncStorage.setItem('checklist_supervision_cache', JSON.stringify(updatedCache));
+              }
+            }
+          }
+        } else if (action.type === 'update') {
+          const { updateChecklistSupervision } = await import('@/hooks/checklistSupervisionFunctions');
+          const result = await updateChecklistSupervision({
+            id: action.id,
+            requestData: action.requestData,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result.status) {
+            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'update'));
+            await AsyncStorage.setItem('checklist_supervision_actions', JSON.stringify(updatedActions));
+          }
+        } else if (action.type === 'delete') {
+          const { deleteChecklistSupervision } = await import('@/hooks/checklistSupervisionFunctions');
+          const result = await deleteChecklistSupervision({
+            id: action.id,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result.status) {
+            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'delete'));
+            await AsyncStorage.setItem('checklist_supervision_actions', JSON.stringify(updatedActions));
+
+            const cacheStr = await AsyncStorage.getItem('checklist_supervision_cache');
+            if (cacheStr) {
+              const cache = JSON.parse(cacheStr);
+              const updatedCache = cache.filter((it: any) => it.id !== action.id && it.id_local !== action.id_local);
+              await AsyncStorage.setItem('checklist_supervision_cache', JSON.stringify(updatedCache));
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error procesando acción de checklist de supervisión:', error);
+      }
+    }
+  }
+
   const checkNotificationsActionsCache = async () => {
     if (!employee) return;
 
@@ -1818,74 +2046,73 @@ function AppContent() {
   const checkActivitiesActionsCache = async () => {
     if (!employee) return;
 
-    const actionsStr = await AsyncStorage.getItem('activities_actions');
+    let actionsStr = await AsyncStorage.getItem('activities_actions');
     if (!actionsStr) return;
 
-    const actions = JSON.parse(actionsStr);
-    if (!actions || actions.length === 0) return;
+    let actions: any[] = JSON.parse(actionsStr);
+    if (!Array.isArray(actions) || actions.length === 0) return;
 
     console.log('Sincronizando acciones de actividades:', actions.length);
 
-    for (const action of actions) {
+    // Procesar siempre sobre la cola actual; tras cada éxito se elimina ese registro
+    // y se reescribe AsyncStorage para no dejar acciones ya sincronizadas.
+    let i = 0;
+    while (i < actions.length) {
+      const action = actions[i];
       try {
+        let result: { status: boolean; message?: string } | null = null;
+
         if (action.type === 'create') {
           console.log('Creando actividad desde cache');
           const { createActivity } = await import('@/hooks/activitiesFunctions');
-          const result = await createActivity({
+          result = await createActivity({
             requestData: action.requestData,
             refreshAccessToken,
             logout,
           });
-
-          if (result.status) {
-            const updatedActions = actions.filter(
-              (a: any) => !(a.id === action.id && a.type === 'create')
-            );
-            await AsyncStorage.setItem('activities_actions', JSON.stringify(updatedActions));
-          }
         } else if (action.type === 'update') {
           console.log('Actualizando actividad:', action.activity_id);
           const { updateActivity } = await import('@/hooks/activitiesFunctions');
-          const result = await updateActivity({
+          result = await updateActivity({
             requestData: action.requestData,
             activityId: action.activity_id,
             refreshAccessToken,
             logout,
           });
-
-          if (result.status) {
-            console.log('Actividad actualizada correctamente');
-            const updatedActions = actions.filter(
-              (a: any) => !(a.activity_id === action.activity_id && a.type === 'update')
-            );
-            await AsyncStorage.setItem('activities_actions', JSON.stringify(updatedActions));
-          }
         } else if (action.type === 'update-equipo') {
           console.log('Actualizando revisión de equipo:', action.revisionEquipo_id);
           const { updateRevisionEquipo } = await import('@/hooks/activitiesFunctions');
-          const result = await updateRevisionEquipo({
+          result = await updateRevisionEquipo({
             requestData: action.requestData,
             revisionEquipoId: action.revisionEquipo_id,
             refreshAccessToken,
             logout,
           });
+        } else {
+          // Tipo desconocido: quitar para no bloquear el resto
+          console.warn('Acción de actividades desconocida, omitiendo:', action?.type);
+          actions.splice(i, 1);
+          await AsyncStorage.setItem('activities_actions', JSON.stringify(actions));
+          continue;
+        }
 
-          if (result.status) {
+        if (result && result.status) {
+          // Quitar solo la acción que acaba de sincronizarse (evita filtros ambiguos)
+          actions.splice(i, 1);
+          await AsyncStorage.setItem('activities_actions', JSON.stringify(actions));
+          if (action.type === 'update') {
+            console.log('Actividad actualizada correctamente');
+          } else if (action.type === 'update-equipo') {
             console.log('Revisión de equipo actualizada correctamente');
-            const updatedActions = actions.filter(
-              (a: any) =>
-                !(
-                  a.revisionEquipo_id === action.revisionEquipo_id &&
-                  a.inventory_id === action.inventory_id &&
-                  a.type === 'update-equipo'
-                )
-            );
-            await AsyncStorage.setItem('activities_actions', JSON.stringify(updatedActions));
           }
+          // No incrementar i: el siguiente elemento pasa a ser actions[i]
+          continue;
         }
       } catch (error) {
         console.error('Error procesando acción de actividad:', error);
       }
+      // Fallo o sin status: avanzar para no reprocesar en bucle infinito
+      i++;
     }
   }
 
@@ -5201,6 +5428,12 @@ function AppContent() {
     // Define la función de consulta (puedes personalizarla)
     const fetchData = async () => {
       console.log('Consultando estado del temporizador...');
+      const validAccessToken = await getValidAccessTokenOrLogout({ refreshAccessToken, logout });
+      if (!validAccessToken) {
+        console.log('Sincronización cancelada: token inválido o expirado');
+        return;
+      }
+      console.log(0);
       const temp_state_async = await AsyncStorage.getItem('temp_state');
       if (!temp_state_async) {
         return;
@@ -5430,16 +5663,16 @@ function AppContent() {
     const startTime = new Date(temp_state.startTime).getTime();
     const current = temp_state.currentTimestamp;
     const remainingSeconds = temp_state.remainingSeconds;
+    const firma_empleado = temp_state.firma_empleado;
 
     const requestData = {
       empleadoId: employeeId,
       inicio: new Date(startTime),
       fin: new Date(current + remainingSeconds),
       pausas: JSON.stringify(temp_state.inactivities),
-      es_manual: false
+      es_manual: false,
+      firma_empleado: firma_empleado,
     };
-
-    console.log('requestData', requestData);
 
     if (isConnected) {
       // Con internet: llamar a la función API
@@ -5520,22 +5753,41 @@ function AppContent() {
           const routes = state?.routes ?? [];
           if (!routes.length) return;
 
-          const filteredRoutes: typeof routes = [];
-          const seen = new Set<string>();
+          const currentIndex = (state as any).index ?? routes.length - 1;
+          const currentRoute = routes[currentIndex];
 
-          for (let i = routes.length - 1; i >= 0; i--) {
-            const route = routes[i];
-            if (!seen.has(route.name)) {
-              filteredRoutes.unshift(route);
-              seen.add(route.name);
-            }
+          // Mantener siempre exactamente una referencia a Home (si existe)
+          // y eliminar del stack cualquier pantalla que no esté enfocada.
+          const homeRouteIndex = routes.findIndex((r: typeof routes[number]) => r.name === 'Home');
+          const hasHome = homeRouteIndex !== -1;
+
+          const newRoutes: typeof routes = [];
+
+          if (hasHome) {
+            // Conservar la primera aparición de Home como base del stack
+            newRoutes.push(routes[homeRouteIndex]);
           }
 
-          if (filteredRoutes.length !== routes.length) {
+          if (!hasHome) {
+            // Si no hay Home en el stack (por ejemplo, en flujo de login),
+            // solo conservamos la ruta actual.
+            newRoutes.push(currentRoute);
+          } else if (currentRoute.name !== 'Home') {
+            // Si estamos en otra pantalla distinta de Home, la agregamos
+            // encima de Home, quedando como máximo [Home, PantallaActual].
+            newRoutes.push(currentRoute);
+          }
+
+          // Solo hacemos reset si el stack resultante cambia
+          const routesChanged =
+            newRoutes.length !== routes.length ||
+            newRoutes.some((r: typeof routes[number], idx: number) => r.key !== routes[idx]?.key);
+
+          if (routesChanged) {
             navigationRef.current?.dispatch(
               CommonActions.reset({
-                index: filteredRoutes.length - 1,
-                routes: filteredRoutes,
+                index: newRoutes.length - 1,
+                routes: newRoutes,
               })
             );
           }

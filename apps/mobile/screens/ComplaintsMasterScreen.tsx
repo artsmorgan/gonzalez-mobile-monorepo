@@ -39,6 +39,7 @@ import { eventBus } from '@/hooks/eventBus';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import authedFetch from '@/hooks/authedFetch';
 import getValidAccessTokenOrLogout from '@/hooks/getValidAccessTokenOrLogout';
+import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 
 type ComplaintsMasterScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'ComplaintsMaster'>;
 
@@ -1377,7 +1378,7 @@ export default function ComplaintsMasterScreen() {
             onPress={() => setShowDatePickerQueja(true)}
           >
             <ThemedText style={styles.dateButtonText}>
-              {fechaQueja ? formatYMDToDMY(fechaQueja) : 'Seleccionar fecha'}
+              {fechaQueja ? convertDateTimestampToLocalString(new Date(fechaQueja).toISOString(), false) : 'Seleccionar fecha'}
             </ThemedText>
             <Ionicons name="calendar" size={20} color="#007AFF" />
           </TouchableOpacity>
@@ -1426,7 +1427,7 @@ export default function ComplaintsMasterScreen() {
             onPress={() => setShowDatePickerInicio(true)}
           >
             <ThemedText style={styles.dateButtonText}>
-              {fechaInicio ? formatYMDToDMY(fechaInicio) : 'Seleccionar fecha'}
+              {fechaInicio ? convertDateTimestampToLocalString(new Date(fechaInicio).toISOString(), false) : 'Seleccionar fecha'}
             </ThemedText>
             <Ionicons name="calendar" size={20} color="#007AFF" />
           </TouchableOpacity>
@@ -1448,7 +1449,7 @@ export default function ComplaintsMasterScreen() {
             onPress={() => setShowDatePickerRevision(true)}
           >
             <ThemedText style={styles.dateButtonText}>
-              {fechaRevision ? formatYMDToDMY(fechaRevision) : 'Seleccionar fecha'}
+              {fechaRevision ? convertDateTimestampToLocalString(new Date(fechaRevision).toISOString(), false) : 'Seleccionar fecha'}
             </ThemedText>
             <Ionicons name="calendar" size={20} color="#007AFF" />
           </TouchableOpacity>
@@ -1626,7 +1627,7 @@ export default function ComplaintsMasterScreen() {
               )}
               <ThemedText style={styles.signatureInfoText}>Latitud: {firmaResponsable.latitud}</ThemedText>
               <ThemedText style={styles.signatureInfoText}>Longitud: {firmaResponsable.longitud}</ThemedText>
-              <ThemedText style={styles.signatureInfoText}>Timestamp: {firmaResponsable.timestamp}</ThemedText>
+              <ThemedText style={styles.signatureInfoText}>Hora: {convertDateTimestampToLocalString(new Date(Number(firmaResponsable.timestamp)).toISOString())}</ThemedText>
               <TouchableOpacity
                 style={styles.clearSignatureButton}
                 onPress={() => setFirmaResponsable(null)}
@@ -1697,37 +1698,55 @@ export default function ComplaintsMasterScreen() {
 
     return (
       <ThemedView style={styles.listContainer}>
-        {complaints.map((record) => {
-          const recordId = String(record.id || record.id_local);
+        {complaints.map((record, index) => {
+          const recordId = String(record.id || record.id_local || index);
           const isExpanded = expandedRecordIds.includes(recordId);
           const isOffline = !record.synced || record.id_local;
 
           return (
             <ThemedView key={recordId} style={styles.listItem}>
+              <ThemedText style={styles.listItemTitle}>
+                {record.nombre_realiza_queja || 'Sin nombre'}
+              </ThemedText>
+              <ThemedText style={styles.listItemSubtitle}>
+                <ThemedText style={styles.detailLabel}>Cliente: </ThemedText>
+                {record.cliente || 'Sin cliente'}
+              </ThemedText>
+              <ThemedText style={styles.listItemSubtitle}>
+                <ThemedText style={styles.detailLabel}>Tipo de queja: </ThemedText>
+                {record.tipo_queja || 'Sin tipo'}
+              </ThemedText>
+              <ThemedText style={styles.listItemSubtitle}>
+                <ThemedText style={styles.detailLabel}>Estado: </ThemedText>
+                {record.estado || 'No especificado'}
+              </ThemedText>
+              <ThemedText style={styles.listItemSubtitle}>
+                <ThemedText style={styles.detailLabel}>Fecha de queja: </ThemedText>
+                {record.fecha_queja
+                  ? convertDateTimestampToLocalString(new Date(record.fecha_queja).toISOString(), false)
+                  : 'No especificado'}
+              </ThemedText>
+
+              <ThemedView style={styles.listItemActions}>
+                {isOffline && (
+                  <ThemedView style={styles.offlineBadge}>
+                    <ThemedText style={styles.offlineBadgeText}>Offline</ThemedText>
+                  </ThemedView>
+                )}
+              </ThemedView>
+
               <TouchableOpacity
-                style={styles.listItemHeader}
+                style={styles.collapseButton}
                 onPress={() => toggleExpanded(recordId)}
               >
-                <ThemedView style={styles.listItemHeaderContent}>
-                  <ThemedText style={styles.listItemTitle}>
-                    {record.nombre_realiza_queja || 'Sin nombre'}
-                  </ThemedText>
-                  <ThemedText style={styles.listItemSubtitle}>
-                    {record.cliente || 'Sin cliente'} - {record.tipo_queja || 'Sin tipo'}
-                  </ThemedText>
-                </ThemedView>
-                <ThemedView style={styles.listItemActions}>
-                  {isOffline && (
-                    <ThemedView style={styles.offlineBadge}>
-                      <ThemedText style={styles.offlineBadgeText}>Offline</ThemedText>
-                    </ThemedView>
-                  )}
-                  <Ionicons
-                    name={isExpanded ? 'chevron-up' : 'chevron-down'}
-                    size={24}
-                    color="#000000"
-                  />
-                </ThemedView>
+                <ThemedText style={styles.collapseButtonText}>
+                  {isExpanded ? 'Ocultar detalles de la queja' : 'Ver detalles de la queja'}
+                </ThemedText>
+                <Ionicons
+                  name={isExpanded ? 'chevron-up' : 'chevron-down'}
+                  size={20}
+                  color="#007AFF"
+                />
               </TouchableOpacity>
 
               {isExpanded && (
@@ -1735,10 +1754,6 @@ export default function ComplaintsMasterScreen() {
                   <ThemedText style={styles.detailText}>
                     <ThemedText style={styles.detailLabel}>Sociedad: </ThemedText>
                     {record.sociedad || 'No especificado'}
-                  </ThemedText>
-                  <ThemedText style={styles.detailText}>
-                    <ThemedText style={styles.detailLabel}>Cliente: </ThemedText>
-                    {record.cliente || 'No especificado'}
                   </ThemedText>
                   <ThemedText style={styles.detailText}>
                     <ThemedText style={styles.detailLabel}>Empresa que presenta queja: </ThemedText>
@@ -1753,20 +1768,12 @@ export default function ComplaintsMasterScreen() {
                     {record.medio_recepcion_queja || 'No especificado'}
                   </ThemedText>
                   <ThemedText style={styles.detailText}>
-                    <ThemedText style={styles.detailLabel}>Tipo de queja: </ThemedText>
-                    {record.tipo_queja || 'No especificado'}
-                  </ThemedText>
-                  <ThemedText style={styles.detailText}>
                     <ThemedText style={styles.detailLabel}>Ubicacion: </ThemedText>
                     {record.ubicacion || 'No especificado'}
                   </ThemedText>
                   <ThemedText style={styles.detailText}>
                     <ThemedText style={styles.detailLabel}>Nivel Queja: </ThemedText>
                     {record.nivel_queja || 'No especificado'}
-                  </ThemedText>
-                  <ThemedText style={styles.detailText}>
-                    <ThemedText style={styles.detailLabel}>Fecha de queja: </ThemedText>
-                    {record.fecha_queja || 'No especificado'}
                   </ThemedText>
                   <ThemedText style={styles.detailText}>
                     <ThemedText style={styles.detailLabel}>Motivo de la queja: </ThemedText>
@@ -1780,11 +1787,15 @@ export default function ComplaintsMasterScreen() {
                   )}
                   <ThemedText style={styles.detailText}>
                     <ThemedText style={styles.detailLabel}>Fecha de inicio: </ThemedText>
-                    {record.fecha_inicio || 'No especificado'}
+                    {record.fecha_inicio
+                      ? convertDateTimestampToLocalString(new Date(record.fecha_inicio).toISOString(), false)
+                      : 'No especificado'}
                   </ThemedText>
                   <ThemedText style={styles.detailText}>
                     <ThemedText style={styles.detailLabel}>Fecha de resolución: </ThemedText>
-                    {record.fecha_revision || 'No especificado'}
+                    {record.fecha_revision
+                      ? convertDateTimestampToLocalString(new Date(record.fecha_revision).toISOString(), false)
+                      : 'No especificado'}
                   </ThemedText>
                   {record.resolucion_queja && (
                     <ThemedText style={styles.detailText}>
@@ -1792,10 +1803,6 @@ export default function ComplaintsMasterScreen() {
                       {record.resolucion_queja}
                     </ThemedText>
                   )}
-                  <ThemedText style={styles.detailText}>
-                    <ThemedText style={styles.detailLabel}>Estado: </ThemedText>
-                    {record.estado || 'No especificado'}
-                  </ThemedText>
                   {record.accion_correctiva_preventiva && (
                     <ThemedText style={styles.detailText}>
                       <ThemedText style={styles.detailLabel}>Accion correctiva/preventiva: </ThemedText>
@@ -1804,43 +1811,46 @@ export default function ComplaintsMasterScreen() {
                   )}
 
                   {Array.isArray(record.files) && record.files.length > 0 && (
-                    <ComplaintFilesViewer complaintId={record.id || record.id_local} files={record.files} accessToken={accessToken} />
+                    <ComplaintFilesViewer
+                      complaintId={record.id || record.id_local}
+                      files={record.files}
+                      accessToken={accessToken}
+                    />
                   )}
                   <ThemedText style={styles.detailText}>
-                    <ThemedText style={styles.detailLabel}>Fecha: </ThemedText>
+                    <ThemedText style={styles.detailLabel}>Fecha de registro: </ThemedText>
                     {new Date(record.created_at).toLocaleDateString('es-CR')}
                   </ThemedText>
-
-                  <ThemedView style={styles.listItemButtons}>
-                    <TouchableOpacity
-                      style={[styles.listItemButton, styles.editButton]}
-                      onPress={() => startEditing(record)}
-                    >
-                      <Ionicons name="pencil" size={20} color="#FFFFFF" />
-                      <ThemedText style={styles.listItemButtonText}>Editar</ThemedText>
-                    </TouchableOpacity>
-                    {!(record.id_local || String(record.id).startsWith('local-') || record.id === 0) && (
-                      <TouchableOpacity
-                        style={[styles.listItemButton, styles.changesButton]}
-                        onPress={() => {
-                          setCambiosTitle(`Cambios - Queja #${record.id}`);
-                          fetchCambios('c_maestro_quejas', Number(record.id));
-                        }}
-                      >
-                        <Ionicons name="list-outline" size={20} color="#FFFFFF" />
-                        <ThemedText style={styles.listItemButtonText}>Cambios</ThemedText>
-                      </TouchableOpacity>
-                    )}
-                    <TouchableOpacity
-                      style={[styles.listItemButton, styles.deleteButton]}
-                      onPress={() => deleteComplaintHandler(record)}
-                    >
-                      <Ionicons name="trash" size={20} color="#FFFFFF" />
-                      <ThemedText style={styles.listItemButtonText}>Eliminar</ThemedText>
-                    </TouchableOpacity>
-                  </ThemedView>
                 </ThemedView>
               )}
+              <ThemedView style={styles.listItemButtons}>
+                <TouchableOpacity
+                  style={[styles.listItemButton, styles.editButton]}
+                  onPress={() => startEditing(record)}
+                >
+                  <Ionicons name="pencil" size={20} color="#FFFFFF" />
+                  <ThemedText style={styles.listItemButtonText}>Editar</ThemedText>
+                </TouchableOpacity>
+                {!(record.id_local || String(record.id).startsWith('local-') || record.id === 0) && (
+                  <TouchableOpacity
+                    style={[styles.listItemButton, styles.changesButton]}
+                    onPress={() => {
+                      setCambiosTitle(`Cambios - Queja #${record.id}`);
+                      fetchCambios('c_maestro_quejas', Number(record.id));
+                    }}
+                  >
+                    <Ionicons name="list-outline" size={20} color="#FFFFFF" />
+                    <ThemedText style={styles.listItemButtonText}>Cambios</ThemedText>
+                  </TouchableOpacity>
+                )}
+                <TouchableOpacity
+                  style={[styles.listItemButton, styles.deleteButton]}
+                  onPress={() => deleteComplaintHandler(record)}
+                >
+                  <Ionicons name="trash" size={20} color="#FFFFFF" />
+                  <ThemedText style={styles.listItemButtonText}>Eliminar</ThemedText>
+                </TouchableOpacity>
+              </ThemedView>
             </ThemedView>
           );
         })}
@@ -1934,7 +1944,7 @@ export default function ComplaintsMasterScreen() {
                   } catch {
                     parsed = [];
                   }
-                  const createdAtLabel = formatCambioCreatedAt(row?.created_at);
+                  const createdAtLabel = convertDateTimestampToLocalString(new Date(row?.created_at).toISOString());
                   const isOpen = expandedCambioId === row.id;
 
                   return (
@@ -2221,6 +2231,24 @@ const styles = StyleSheet.create({
     borderTopColor: '#EEE',
     paddingTop: 12,
     marginTop: 8,
+  },
+  collapseButton: {
+    marginTop: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#007AFF',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  collapseButtonText: {
+    color: '#007AFF',
+    fontWeight: '700',
+    fontSize: 14,
+    flex: 1,
   },
   detailText: {
     fontSize: 14,

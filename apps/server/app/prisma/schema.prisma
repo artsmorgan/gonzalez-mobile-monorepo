@@ -892,7 +892,6 @@ model c_empleado {
   c_marca_dia_c_marca_dia_empleadoCDG_idToc_empleado           c_marca_dia[]                            @relation("c_marca_dia_empleadoCDG_idToc_empleado")
   c_marca_dia_c_marca_dia_empleadoReemplaza_idToc_empleado     c_marca_dia[]                            @relation("c_marca_dia_empleadoReemplaza_idToc_empleado")
   c_marca_dia_c_marca_dia_empleadoReemplaza2_idToc_empleado    c_marca_dia[]                            @relation("c_marca_dia_empleadoReemplaza2_idToc_empleado")
-  c_puesto_notas_bitacora_cambios                              c_puesto_notas_bitacora_cambios[]
   c_salida_anticipada                                          c_salida_anticipada[]
   c_solicitud_permiso                                          c_solicitud_permiso[]
   e_articulo_uniforme_empleado                                 e_articulo_uniforme_empleado[]
@@ -4097,6 +4096,8 @@ model c_articulo_mantenimiento {
   fecha_fin                                  DateTime?                                    @db.DateTime(0)
   reincidencia_treinta_dias                  Boolean?
   tipo_mant_art_reincid                      String?                                      @db.LongText
+  created_at                                 DateTime                                     @db.DateTime(0)
+  updated_at                                 DateTime                                     @db.DateTime(0)
   c_archivos_adjuntos_articulo_mantenimiento c_archivos_adjuntos_articulo_mantenimiento[]
   e_estructura_articulo_corpo_puesto_entrega e_estructura_articulo_corpo_puesto_entrega?  @relation(fields: [articulo_asignado_id], references: [id], onDelete: Cascade)
   e_estructura_articulo_corpo_puesto_plan    e_estructura_articulo_corpo_puesto_plan?     @relation(fields: [articulo_plan_id], references: [id], onDelete: Cascade)
@@ -4547,29 +4548,25 @@ model c_puesto_notas {
   description                     String                            @db.LongText
   categoria_id                    Int?
   puesto_id                       Int
+  firma_responsable               String                            @db.LongText
+  firma_manual_responsable        String?                           @db.LongText
+  is_modified                     Boolean                           @default(false)
   created_at                      DateTime                          @db.DateTime(0)
   updated_at                      DateTime                          @db.DateTime(0)
   relevancia                      String?                           @db.VarChar(16)
+  c_imagenes_puesto_notas         c_imagenes_puesto_notas[]
   e_estructura_puesto             e_estructura_puesto               @relation(fields: [puesto_id], references: [id], onDelete: Cascade)
-  c_puesto_notas_bitacora_cambios c_puesto_notas_bitacora_cambios[]
 
   @@index([puesto_id], map: "puesto_id_notas_fkey")
 }
 
-model c_puesto_notas_bitacora_cambios {
-  id             Int            @id @default(autoincrement())
-  nota_id        Int
-  empleado_id    Int
-  titulo         String         @db.VarChar(255)
-  description    String         @db.LongText
-  created_at     DateTime       @db.DateTime(0)
-  categoria      String         @default("-")
-  relevancia     String?        @db.VarChar(16)
-  c_empleado     c_empleado     @relation(fields: [empleado_id], references: [id], onDelete: Cascade)
+model c_imagenes_puesto_notas {
+  id                    Int                   @id @default(autoincrement())
+  name                  String                @db.LongText
+  nota_id               Int
   c_puesto_notas c_puesto_notas @relation(fields: [nota_id], references: [id], onDelete: Cascade)
 
-  @@index([empleado_id], map: "c_puesto_notas_bitacora_cambios_empleado_id_fkey")
-  @@index([nota_id], map: "c_puesto_notas_bitacora_cambios_nota_id_fkey")
+  @@index([nota_id], map: "c_imagenes_puesto_notas_id_fkey")
 }
 
 model c_registro_induccion_general {
@@ -4637,7 +4634,6 @@ model c_solicitud_permiso {
   fecha_fin                      DateTime @db.DateTime(0)
   ejecutivo_cuenta               Int
   comentarios                    String?  @db.LongText
-  file_name                      String?  @db.VarChar(255)
   reemplazo_obligatorio          Int?
   turnos                         String   @db.LongText
   firma_responsable              String   @db.LongText
@@ -4646,8 +4642,22 @@ model c_solicitud_permiso {
   accionPersonal_id              Int?
   created_at                     DateTime @default(now())
   created_by                     Int
+  c_archivos_solicitud_permiso   c_archivos_solicitud_permiso[]
 
   c_empleado                     c_empleado @relation(fields: [empleado_id], references: [id], onDelete: Cascade)
+}
+
+model c_archivos_solicitud_permiso {
+  id               Int             @id @default(autoincrement())
+  name             String          @db.LongText
+  type             String          @db.VarChar(25)
+  extension        String          @db.VarChar(25)
+  solicitud_id     Int
+  original_name    String          @db.LongText
+  is_main          Boolean         @default(false)
+  c_solicitud_permiso c_solicitud_permiso @relation(fields: [solicitud_id], references: [id], onDelete: Cascade)
+
+  @@index([solicitud_id], map: "e_archivos_solicitud_permiso_id_fkey")
 }
 
 model c_usos_vehiculos_corporativos {
@@ -4746,8 +4756,9 @@ model e_activo_visitante {
   id                    Int                   @id @default(autoincrement())
   visitante_id          Int
   tipo_id               Int
+  nombre                String                @db.VarChar(50)
   detalles              String                @db.LongText
-  numero_serie          String                @db.VarChar(50)
+  numero_id             String                @db.VarChar(50)
   numero_activo         String?               @db.VarChar(50)
   e_registro_personas   e_registro_personas   @relation(fields: [visitante_id], references: [id], onDelete: Cascade, map: "FK_BB503B25992BE739")
   n_tipo_activo_visitas n_tipo_activo_visitas @relation(fields: [tipo_id], references: [id], onDelete: NoAction, map: "FK_BB503B25993BE739")
@@ -5065,6 +5076,7 @@ model e_registro_personas {
   hora_entrada          DateTime              @db.DateTime(0)
   hora_salida           DateTime?             @db.DateTime(0)
   razon_visita          String                @db.VarChar(75)
+  dep_pers_visita       String?               @db.VarChar(75)
   responsable_id        Int
   es_funcionario        Boolean
   observaciones         String?               @db.VarChar(255)

@@ -36,6 +36,7 @@ import { eventBus } from '@/hooks/eventBus';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import { useQRScanner } from '@/hooks/useQRScanner';
 import authedFetch from '@/hooks/authedFetch';
+import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 import {
   createActaEntregaProducto,
   deleteActaEntregaProducto,
@@ -242,24 +243,6 @@ export default function ActaEntregaProductosScreen() {
     setIsCambiosModalVisible(false);
     setCambiosItems([]);
     setExpandedCambioId(null);
-  };
-
-  const formatCambioCreatedAt = (value: any) => {
-    if (!value) return '-';
-    try {
-      const date = new Date(value);
-      return date.toLocaleString('es-CR', {
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        hour12: true,
-      });
-    } catch {
-      return String(value);
-    }
   };
 
   const formatDetalleForDisplay = (detalleJson: string): string => {
@@ -1409,7 +1392,7 @@ export default function ActaEntregaProductosScreen() {
                 <ThemedText style={styles.listItemTitle}>{r.tipo_entrega || 'N/A'}</ThemedText>
                 <ThemedText style={styles.listItemSubtitle}>Mensual: {r.mensual || ''}</ThemedText>
                 <ThemedText style={styles.listItemSubtitle}>
-                  Fecha: {formatDateStringDMY(r.fecha || r.fecha_entrega)}
+                  Fecha: {convertDateTimestampToLocalString(new Date(r.fecha || r.fecha_entrega).toISOString())}
                 </ThemedText>
                 <ThemedText style={styles.listItemSubtitle}>Cantidad de productos: {r.detalle ? JSON.parse(r.detalle).length : 0}</ThemedText>
               </ThemedView>
@@ -1847,7 +1830,7 @@ export default function ActaEntregaProductosScreen() {
               <ThemedView style={styles.formGroup}>
                 <ThemedText style={styles.formLabel}>Fecha entrega *</ThemedText>
                 <TouchableOpacity style={styles.dateButton} onPress={() => setShowFechaEntregaPicker(true)}>
-                  <ThemedText style={styles.dateButtonText}>{formatDateDMY(fechaEntrega)}</ThemedText>
+                  <ThemedText style={styles.dateButtonText}>{convertDateTimestampToLocalString(new Date(Number(fechaEntrega)).toISOString())}</ThemedText>
                   <Ionicons name="calendar" size={18} color="#007AFF" />
                 </TouchableOpacity>
                 {showFechaEntregaPicker && (
@@ -1893,7 +1876,7 @@ export default function ActaEntregaProductosScreen() {
               <ThemedView style={styles.formGroup}>
                 <ThemedText style={styles.formLabel}>Fecha recibe *</ThemedText>
                 <TouchableOpacity style={styles.dateButton} onPress={() => setShowFechaRecibePicker(true)}>
-                  <ThemedText style={styles.dateButtonText}>{formatDateDMY(fechaRecibe)}</ThemedText>
+                  <ThemedText style={styles.dateButtonText}>{convertDateTimestampToLocalString(new Date(fechaRecibe).toISOString())}</ThemedText>
                   <Ionicons name="calendar" size={18} color="#007AFF" />
                 </TouchableOpacity>
                 {showFechaRecibePicker && (
@@ -1964,7 +1947,7 @@ export default function ActaEntregaProductosScreen() {
                             <ThemedText style={styles.signatureInfoValue}>Sesión: {info.sessionId || 'N/A'}</ThemedText>
                             <ThemedText style={styles.signatureInfoValue}>Empleado: {info.empleadoId || 'N/A'}</ThemedText>
                             <ThemedText style={styles.signatureInfoValue}>Lat: {info.latitud || 'N/A'} | Long: {info.longitud || 'N/A'}</ThemedText>
-                            <ThemedText style={styles.signatureInfoValue}>Hora: {info.timestamp || 'N/A'}</ThemedText>
+                            <ThemedText style={styles.signatureInfoValue}>Hora: {convertDateTimestampToLocalString(new Date(info.timestamp).toISOString()) || 'N/A'}</ThemedText>
                           </>
                         );
                       })()}
@@ -2111,7 +2094,7 @@ export default function ActaEntregaProductosScreen() {
                   } catch {
                     parsed = [];
                   }
-                  const createdAtLabel = formatCambioCreatedAt(row?.created_at);
+                  const createdAtLabel = convertDateTimestampToLocalString(row?.created_at.toISOString());
                   const isOpen = expandedCambioId === row.id;
 
                   return (

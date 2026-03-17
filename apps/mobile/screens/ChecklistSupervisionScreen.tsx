@@ -28,6 +28,7 @@ import {
   ChecklistSupervisionItem,
   updateChecklistSupervision,
 } from '../hooks/checklistSupervisionFunctions';
+import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 import Constants from 'expo-constants';
 
 type ChecklistSupervisionUI = ChecklistSupervisionItem & { id_local?: string };
@@ -728,6 +729,272 @@ function generateRandomId(): string {
   return `local-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 }
 
+function generateRandomMaintenanceId(): number {
+  const ts = Date.now();
+  const rand = Math.floor(Math.random() * 1000000);
+  return Number(`${ts}${rand}`);
+}
+
+function normalizeCantidadNecesaria(value: any): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 1;
+  return Math.max(1, Math.floor(n));
+}
+
+/**
+ * Actualiza en main_structure_cache el último mantenimiento de los artículos del puesto
+ * supervisado usando el estado actual del formulario de checklist.
+ * Solo actualiza caché local; no encola acciones de articulo_mantenimiento_actions.
+ */
+async function updateMainStructureCacheWithChecklist(
+  selectedPuestoId: number | null,
+  articulos: ArticuloForm[],
+  options?: { horaAccion?: number }
+) {
+  try {
+    if (!selectedPuestoId || !Array.isArray(articulos) || articulos.length === 0) return;
+    const cacheStr = await AsyncStorage.getItem('main_structure_cache');
+    if (!cacheStr) return;
+    const parsed: any = JSON.parse(cacheStr);
+    if (!Array.isArray(parsed)) return;
+
+    const horaAccionValue = options?.horaAccion ?? Date.now();
+    const horaAccionIso = new Date(horaAccionValue).toISOString();
+
+    const articulosById = new Map<number, ArticuloForm>(
+      articulos.map((a) => [a.id, a] as [number, ArticuloForm])
+    );
+
+    const updated = parsed.map((empresa: any) => {
+      if (!empresa?.clientes) return empresa;
+      return {
+        ...empresa,
+        clientes: empresa.clientes.map((cliente: any) => {
+          if (!cliente?.division) return cliente;
+          return {
+            ...cliente,
+            division: cliente.division.map((division: any) => {
+              if (!division?.contratos) return division;
+              return {
+                ...division,
+                contratos: division.contratos.map((contrato: any) => {
+                  if (!contrato?.sucursales) return contrato;
+                  return {
+                    ...contrato,
+                    sucursales: contrato.sucursales.map((sucursal: any) => {
+                      if (!sucursal?.puestos) return sucursal;
+                      return {
+                        ...sucursal,
+                        puestos: sucursal.puestos.map((puesto: any) => {
+                          if (!puesto || puesto.id !== selectedPuestoId || !Array.isArray(puesto.articulos)) {
+                            return puesto;
+                          }
+
+                          const updatedArticulos = puesto.articulos.map((art: any) => {
+                            const form = articulosById.get(Number(art.id));
+                            if (!form) return art;
+
+                            const existingUltimo =
+                              art.ultimo_mantenimiento && typeof art.ultimo_mantenimiento === 'object'
+                                ? { ...art.ultimo_mantenimiento }
+                                : null;
+                            const existingMaints = Array.isArray(art.mantenimientos) ? [...art.mantenimientos] : [];
+
+                            const isPlan = String(form.tipo || art.tipo || '').toLowerCase() === 'plan';
+                            const articuloEstructuraId = Number(form.id || art.id || 0) || null;
+
+                            const estadoActual = form.estado;
+                            const lastEstado = String(existingUltimo?.estado || 'Bueno');
+                            const shouldCreate =
+                              estadoActual !== 'Bueno' && (existingUltimo == null || lastEstado === 'Bueno');
+                            const shouldUpdate =
+                              !shouldCreate &&
+                              existingUltimo != null &&
+                              ((estadoActual === 'Bueno' && lastEstado !== 'Bueno') || estadoActual !== lastEstado);
+
+                            const newBasic = {
+                              id: generateRandomMaintenanceId(),
+                              articulo_plan_id: isPlan ? articuloEstructuraId : null,
+                              articulo_asignado_id: isPlan ? null : articuloEstructuraId,
+                              estado: estadoActual,
+                              cantidad_necesaria: normalizeCantidadNecesaria(form.cantidad_requerida),
+                              cantidad_real: Number(form.cantidad_real || 0),
+                              observaciones: form.observaciones || '',
+                              fecha_solucion: null,
+                              accion: null,
+                              fecha_inicio: null,
+                              numero_boleta_proveeduria: null,
+                              tipo: null,
+                              marca: null,
+                              modelo: null,
+                              serie_placa: null,
+                              marca_nuevo: null,
+                              modelo_nuevo: null,
+                              serie_placa_nuevo: null,
+                              categoria: null,
+                              tipo_mantenimiento_art: null,
+                              fecha_salida: null,
+                              fecha_entrada: null,
+                              kilometraje: null,
+                              mant_armas_form: null,
+                              categoria_mantenimiento: null,
+                              detalle: null,
+                              numero_fc: null,
+                              proveedor: null,
+                              costo_mo: null,
+                              costo_i: null,
+                              iva: null,
+                              costo_total: null,
+                              fecha_fin: null,
+                              reincidencia_treinta_dias: null,
+                              tipo_mant_art_reincid: null,
+                              c_archivos_adjuntos_articulo_mantenimiento: [],
+                              created_at: horaAccionIso,
+                              updated_at: horaAccionIso,
+                              /** Opcional: indica que el registro se creó/actualizó desde Checklist de supervisión */
+                              evaluacion_mantenimiento_origen: 'checklist_supervision' as const,
+                            };
+
+                            let nextUltimo: any = existingUltimo ? { ...existingUltimo } : { ...newBasic };
+                            let nextMantenimientos: any[] = [...existingMaints];
+
+                            if (shouldCreate) {
+                              nextUltimo = { ...newBasic };
+                              nextMantenimientos = [nextUltimo, ...nextMantenimientos];
+                            } else {
+                              nextUltimo = {
+                                ...(existingUltimo ?? newBasic),
+                                articulo_plan_id: isPlan ? articuloEstructuraId : null,
+                                articulo_asignado_id: isPlan ? null : articuloEstructuraId,
+                                estado: estadoActual,
+                                cantidad_necesaria:
+                                  existingUltimo?.cantidad_necesaria != null
+                                    ? existingUltimo.cantidad_necesaria
+                                    : normalizeCantidadNecesaria(form.cantidad_requerida),
+                                cantidad_real: Number(form.cantidad_real || 0),
+                                observaciones: form.observaciones || '',
+                                fecha_solucion: estadoActual === 'Bueno' ? horaAccionIso : null,
+                                updated_at: horaAccionIso,
+                                evaluacion_mantenimiento_origen: 'checklist_supervision' as const,
+                              };
+
+                              if (existingUltimo?.id) {
+                                let replaced = false;
+                                nextMantenimientos = nextMantenimientos.map((m: any) => {
+                                  if (Number(m?.id) !== Number(existingUltimo.id)) return m;
+                                  replaced = true;
+                                  return { ...m, ...nextUltimo };
+                                });
+                                if (!replaced) nextMantenimientos = [nextUltimo, ...nextMantenimientos];
+                              } else {
+                                nextMantenimientos = [nextUltimo, ...nextMantenimientos];
+                              }
+
+                            }
+
+                            const nuevoUltimo = {
+                              ...nextUltimo,
+                            };
+
+                            return {
+                              ...art,
+                              mantenimientos: nextMantenimientos,
+                              ultimo_mantenimiento: nuevoUltimo,
+                              ultimo_registro_mantenimiento: nuevoUltimo,
+                            };
+                          });
+
+                          return {
+                            ...puesto,
+                            articulos: updatedArticulos,
+                          };
+                        }),
+                      };
+                    }),
+                  };
+                }),
+              };
+            }),
+          };
+        }),
+      };
+    });
+
+    await AsyncStorage.setItem('main_structure_cache', JSON.stringify(updated));
+  } catch (e) {
+    console.error('Error updating main_structure_cache from checklist:', e);
+  }
+}
+
+/**
+ * Actualiza activities_cache con el estado de artículos del checklist
+ * solo si el puesto supervisado coincide con el puesto de current_marca.
+ */
+async function updateActivitiesCacheWithChecklist(
+  selectedPuestoId: number | null,
+  articulos: ArticuloForm[]
+) {
+  try {
+    if (!selectedPuestoId || !Array.isArray(articulos) || articulos.length === 0) return;
+
+    const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+    if (!currentMarcaStr) return;
+    const currentMarca = JSON.parse(currentMarcaStr);
+    const currentPuestoId = currentMarca?.puesto?.id;
+    if (!currentPuestoId || currentPuestoId !== selectedPuestoId) {
+      return;
+    }
+
+    const cacheStr = await AsyncStorage.getItem('activities_cache');
+    if (!cacheStr) return;
+    const parsed: any = JSON.parse(cacheStr);
+    if (!Array.isArray(parsed)) return;
+
+    const articulosById = new Map<number, ArticuloForm>(
+      articulos.map((a) => [a.id, a] as [number, ArticuloForm])
+    );
+
+    const updatedActivities = parsed.map((act: any) => {
+      if (!act?.is_revision_equipo || !Array.isArray(act.inventario)) return act;
+
+      const updatedInventario = act.inventario.map((inv: any) => {
+        const form = articulosById.get(Number(inv.id));
+        if (!form) return inv;
+
+        const estado = form.estado;
+        const cantidad_real = form.cantidad_real;
+        const observaciones = form.observaciones || '';
+        const rev = inv.revision_equipo || {};
+
+        return {
+          ...inv,
+          cantidad_requerida:
+            inv.cantidad_requerida != null
+              ? normalizeCantidadNecesaria(inv.cantidad_requerida)
+              : normalizeCantidadNecesaria(form.cantidad_requerida),
+          cantidad_real,
+          estado,
+          observaciones,
+          revision_equipo: {
+            ...rev,
+            es_correcto: estado === 'Bueno',
+            motivo_incorrecto: estado === 'Bueno' ? '-' : (observaciones || '-'),
+          },
+        };
+      });
+
+      return {
+        ...act,
+        inventario: updatedInventario,
+      };
+    });
+
+    await AsyncStorage.setItem('activities_cache', JSON.stringify(updatedActivities));
+  } catch (e) {
+    console.error('Error updating activities_cache from checklist:', e);
+  }
+}
+
 function dateToLocalString(d: Date): string {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
@@ -809,6 +1076,9 @@ export default function ChecklistSupervisionScreen() {
   const [filterContratoId, setFilterContratoId] = useState<number | null>(null);
   const [filterCorpoId, setFilterCorpoId] = useState<number | null>(null);
   const [filterPuestoId, setFilterPuestoId] = useState<number | null>(null);
+
+  // Mensaje informativo jerarquía (cerrable)
+  const [isHierarchyHintVisible, setIsHierarchyHintVisible] = useState(true);
 
   // Estados para formulario
   const [isCreating, setIsCreating] = useState(false);
@@ -957,6 +1227,7 @@ export default function ChecklistSupervisionScreen() {
   }, [refreshAccessToken, logout]);
 
   const getConnectionStatus = async (): Promise<boolean> => {
+    //return false;
     const networkState = await Network.getNetworkStateAsync();
     return networkState.isConnected && networkState.isInternetReachable ? true : false;
   };
@@ -1213,7 +1484,9 @@ export default function ChecklistSupervisionScreen() {
             id: art.id,
             nombre: art.nombre || 'Desconocido',
             tipo: art.tipo || '',
-            cantidad_requerida: typeof art?.cantidad === 'number' ? art.cantidad : Number(art?.cantidad) || 0,
+            cantidad_requerida: normalizeCantidadNecesaria(
+              typeof art?.cantidad === 'number' ? art.cantidad : Number(art?.cantidad)
+            ),
             cantidad_real,
             estado,
             observaciones: art.observaciones || '',
@@ -1759,6 +2032,7 @@ export default function ChecklistSupervisionScreen() {
           // Asegurar que cada artículo tenga observaciones inicializadas
           const articulosConObservaciones = parsedArticulos.map((art: any) => ({
             ...art,
+            cantidad_requerida: normalizeCantidadNecesaria(art?.cantidad_requerida ?? art?.cantidad),
             observaciones: art.observaciones || '',
           }));
           setArticulos(articulosConObservaciones);
@@ -1867,6 +2141,7 @@ export default function ChecklistSupervisionScreen() {
 
       const articulosPuesto = articulos && articulos.length > 0 ? JSON.stringify(articulos) : '[]';
 
+      const horaAccionIso = new Date(horaAccion).toISOString();
       const requestData = {
         cliente_id: selectedClienteId,
         division_id: selectedDivisionId,
@@ -1879,6 +2154,8 @@ export default function ChecklistSupervisionScreen() {
         articulos_puesto: articulosPuesto,
         firma_supervisor: firmaSupervisor,
         firma_responsable: firmaResponsable,
+        created_at: horaAccionIso,
+        hora_accion: horaAccionIso,
       };
 
       const isConnected = await getConnectionStatus();
@@ -1893,6 +2170,12 @@ export default function ChecklistSupervisionScreen() {
             logout,
           });
           if (result.status) {
+            // Online: actualizar caches sin encolar acciones de mantenimiento (ya se sincronizan por API)
+            await updateMainStructureCacheWithChecklist(selectedPuestoId || null, articulos, {
+              horaAccion,
+            });
+            await updateActivitiesCacheWithChecklist(selectedPuestoId || null, articulos);
+
             Alert.alert('Éxito', result.message || 'Checklist actualizado correctamente');
             setTimeout(async () => {
               await fetchChecklists();
@@ -1921,12 +2204,18 @@ export default function ChecklistSupervisionScreen() {
           setChecklists(updated);
           await AsyncStorage.setItem('checklist_supervision_cache', JSON.stringify(updated));
 
+          // Offline: actualizar solo caches locales (sin encolar acciones de mantenimiento)
+          await updateMainStructureCacheWithChecklist(selectedPuestoId || null, articulos, {
+            horaAccion,
+          });
+          await updateActivitiesCacheWithChecklist(selectedPuestoId || null, articulos);
+
           Alert.alert('Éxito', 'Checklist guardado localmente. Se sincronizará cuando haya conexión.');
           setTimeout(() => {
             cancelCreating();
           }, 2000);
         }
-      } else {
+        } else {
         // Crear
         if (isConnected) {
           const result = await createChecklistSupervision({
@@ -1935,6 +2224,12 @@ export default function ChecklistSupervisionScreen() {
             logout,
           });
           if (result.status) {
+            // Online: actualizar caches sin encolar acciones de mantenimiento
+            await updateMainStructureCacheWithChecklist(selectedPuestoId || null, articulos, {
+              horaAccion,
+            });
+            await updateActivitiesCacheWithChecklist(selectedPuestoId || null, articulos);
+
             Alert.alert('Éxito', result.message || 'Checklist creado correctamente');
             setTimeout(async () => {
               await fetchChecklists();
@@ -1979,6 +2274,12 @@ export default function ChecklistSupervisionScreen() {
           const updated = [...checklists, newItem];
           setChecklists(updated);
           await AsyncStorage.setItem('checklist_supervision_cache', JSON.stringify(updated));
+
+          // Offline: actualizar solo caches locales (sin encolar acciones de mantenimiento)
+          await updateMainStructureCacheWithChecklist(selectedPuestoId || null, articulos, {
+            horaAccion,
+          });
+          await updateActivitiesCacheWithChecklist(selectedPuestoId || null, articulos);
 
           Alert.alert('Éxito', 'Checklist guardado localmente. Se sincronizará cuando haya conexión.');
           setTimeout(() => {
@@ -2138,7 +2439,7 @@ export default function ChecklistSupervisionScreen() {
               }}
             >
               <ThemedText style={styles.dateButtonText}>
-                {input.value ? formatYMDToDMY(input.value) : 'Seleccionar fecha'}
+                {input.value ? convertDateTimestampToLocalString(new Date(input.value).toISOString(), false) : 'Seleccionar fecha'}
               </ThemedText>
               <Ionicons name="calendar-outline" size={18} color="#007AFF" />
             </TouchableOpacity>
@@ -2587,6 +2888,37 @@ export default function ChecklistSupervisionScreen() {
             </TouchableOpacity>
           )}
 
+          {!isCreating && !isLoading && isHierarchyHintVisible && (
+            <ThemedView style={[styles.hierarchyHintBox, styles.hierarchyHintBoxColumn]}>
+              <ThemedView style={styles.hierarchyHintTopRow}>
+                <Ionicons name="information-circle-outline" size={22} color="#007AFF" style={{ marginRight: 10 }} />
+                <ThemedView style={styles.hierarchyHintTextRow}>
+                  <ThemedText style={[styles.hierarchyHintText, { flex: 1 }]}>
+                    Algunos datos podrían estar desactualizados. Para mayor precisión, vaya a la sección de jerarquía y actualice la información.
+                  </ThemedText>
+                  <TouchableOpacity
+                    onPress={() => setIsHierarchyHintVisible(false)}
+                    style={styles.hierarchyHintClose}
+                    accessibilityLabel="Cerrar aviso"
+                  >
+                    <ThemedText style={styles.hierarchyHintCloseText}>Cerrar</ThemedText>
+                  </TouchableOpacity>
+                </ThemedView>
+              </ThemedView>
+              <TouchableOpacity
+                style={[styles.goEntregaButton, styles.hierarchyHintGoButton]}
+                onPress={() => navigation.navigate('Jerarquia')}
+                activeOpacity={0.85}
+                accessibilityLabel="Abrir Jerarquía para actualizar"
+              >
+                <Ionicons name="open-outline" size={16} color="#007AFF" />
+                <ThemedText style={styles.goEntregaButtonText}>
+                  Actualiza los datos en Jerarquía
+                </ThemedText>
+              </TouchableOpacity>
+            </ThemedView>
+          )}
+
           {isCreating && (
             <ThemedView style={styles.formCard}>
               <ThemedText style={styles.formTitle}>{editing ? 'Editar registro' : 'Nuevo registro'}</ThemedText>
@@ -2741,7 +3073,7 @@ export default function ChecklistSupervisionScreen() {
               <ThemedText style={styles.label}>Fecha *</ThemedText>
               <TouchableOpacity style={styles.dateButton} onPress={() => setShowFechaPicker(true)}>
                 <ThemedText style={styles.dateButtonText}>
-                  {formatYMDToDMY(dateToLocalString(fecha))}
+                  {convertDateTimestampToLocalString(new Date(fecha).toISOString(), false)}
                 </ThemedText>
                 <Ionicons name="calendar-outline" size={18} color="#007AFF" />
               </TouchableOpacity>
@@ -3069,7 +3401,7 @@ export default function ChecklistSupervisionScreen() {
                           <ThemedText style={styles.firmaInfoValue}>
                             Lat: {info.latitud || 'N/A'} | Long: {info.longitud || 'N/A'}
                           </ThemedText>
-                          <ThemedText style={styles.firmaInfoValue}>Hora: {info.timestamp || 'N/A'}</ThemedText>
+                          <ThemedText style={styles.firmaInfoValue}>Hora: { convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}</ThemedText>
                         </>
                       );
                     })()}
@@ -3178,7 +3510,7 @@ export default function ChecklistSupervisionScreen() {
                   } catch {
                     parsed = [];
                   }
-                  const createdAtLabel = formatCambioCreatedAt(row?.created_at);
+                  const createdAtLabel = convertDateTimestampToLocalString(new Date(row?.created_at).toISOString());
                   const isOpen = expandedCambioId === row.id;
 
                   return (
@@ -3272,7 +3604,7 @@ export default function ChecklistSupervisionScreen() {
                                             {(() => {
                                               const info = decodeFirmaHash(created.firma_responsable);
                                               return info
-                                                ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${info.timestamp || 'N/A'}`
+                                                ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${ convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}`
                                                 : 'Firma responsable (formato no decodificable)';
                                             })()}
                                           </ThemedText>
@@ -3298,7 +3630,7 @@ export default function ChecklistSupervisionScreen() {
                                       {isResponsableSignatureField && (() => {
                                         const info = typeof value === 'string' ? decodeFirmaHash(value) : null;
                                         if (!info) return 'Firma responsable (formato no decodificable)';
-                                        return `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${info.timestamp || 'N/A'}`;
+                                        return `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${ convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}`;
                                       })()}
                                     </ThemedText>
                                     {isSupervisorSignatureField && value && (
@@ -3630,6 +3962,89 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '700',
+  },
+  hierarchyHintBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#E8F4FF',
+    borderWidth: 1,
+    borderColor: '#B8DAF8',
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    marginBottom: 16,
+  },
+  hierarchyHintBoxColumn: {
+    flexDirection: 'column',
+    alignItems: 'stretch',
+  },
+  hierarchyHintTopRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    width: '100%',
+    backgroundColor: '#E8F4FF',
+  },
+  hierarchyHintTextRow: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    minWidth: 0,
+    backgroundColor: '#E8F4FF',
+  },
+  hierarchyHintGoButton: {
+    width: '100%',
+    marginTop: 10,
+    marginBottom: 0,
+  },
+  hierarchyHintText: {
+    fontSize: 14,
+    color: '#1a1a1a',
+    lineHeight: 20,
+    backgroundColor: '#E8F4FF',
+  },
+  hierarchyHintClose: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    backgroundColor: '#E8F4FF',
+    borderWidth: 1,
+    borderColor: '#007AFF',
+    flexShrink: 0,
+    alignSelf: 'flex-start',
+  },
+  hierarchyHintCloseText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#007AFF',
+  },
+  /** Misma apariencia que el acceso a Entrega de puestos en ActivitiesScreen */
+  goEntregaButton: {
+    borderWidth: 1,
+    borderColor: '#007AFF',
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#F4F9FF',
+    marginTop: 10,
+    marginBottom: 4,
+    alignSelf: 'stretch',
+  },
+  goEntregaButtonText: {
+    color: '#007AFF',
+    fontWeight: '700',
+    fontSize: 12,
+    flex: 1,
+  },
+  hierarchyHintActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 8,
+    width: '100%',
+    justifyContent: 'flex-end',
   },
   formCard: {
     backgroundColor: '#FFFFFF',

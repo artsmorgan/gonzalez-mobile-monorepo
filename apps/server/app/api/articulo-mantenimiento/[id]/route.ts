@@ -20,6 +20,12 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
     const body = await req.json();
     const {
+      articulo_plan_id,
+      articulo_asignado_id,
+      estado,
+      cantidad_necesaria,
+      cantidad_real,
+      observaciones,
       fecha_solucion,
       accion,
       fecha_inicio,
@@ -49,16 +55,129 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       reincidencia_treinta_dias,
       tipo_mant_art_reincid,
       marcar_como_resuelto,
+      hora_accion,
       files,
     } = body ?? {};
+
+    console.log("body", body);
 
     const existing = await callDynamicPrisma({
       req,
       data: { action: "GET", table: "c_articulo_mantenimiento", operation: "findUnique", where: { id } }
     });
-    if (!existing) return NextResponse.json({ status: false, message: "Registro de mantenimiento no encontrado" }, { status: 200 });
+
+    // Hora de acción enviada por la app (getHoraAccion)
+    let actionTime: Date | null = null;
+    if (hora_accion) {
+      const parsed = new Date(hora_accion);
+      if (isNaN(parsed.getTime())) {
+        return NextResponse.json({ status: false, message: "hora_accion inválida" }, { status: 200 });
+      }
+      actionTime = parsed;
+    }
+
+    const planId = articulo_plan_id != null ? Number(articulo_plan_id) : null;
+    const asignadoId = articulo_asignado_id != null ? Number(articulo_asignado_id) : null;
+    const baseNow = actionTime ?? new Date();
+
+    // Si el registro no existe, crear uno nuevo (upsert por UPDATE), salvo que el último updated_at sea más reciente.
+    if (!existing) {
+      if (!planId && !asignadoId) {
+        return NextResponse.json({
+          status: true,
+          message: "Registro omitido: no se pudo determinar articulo_plan_id/articulo_asignado_id para crear",
+        }, { status: 200 });
+      }
+
+      const whereLatest: any = planId ? { articulo_plan_id: planId } : { articulo_asignado_id: asignadoId };
+      const latest = await callDynamicPrisma({
+        req,
+        data: {
+          action: "GET",
+          table: "c_articulo_mantenimiento",
+          operation: "findFirst",
+          where: whereLatest,
+          orderBy: { id: "desc" },
+        },
+      });
+      if (latest?.updated_at) {
+        const latestUpdated = new Date(latest.updated_at);
+        if (!isNaN(latestUpdated.getTime()) && baseNow.getTime() < latestUpdated.getTime()) {
+          return NextResponse.json({
+            status: true,
+            message: "Registro omitido: updated_at más reciente en último mantenimiento",
+          }, { status: 200 });
+        }
+      }
+
+      const createData: any = {
+        estado: String(estado || "Bueno"),
+        cantidad_necesaria: Math.max(0, Number(cantidad_necesaria) || 0),
+        cantidad_real: Math.max(0, Number(cantidad_real) || 0),
+        observaciones: String(observaciones || ""),
+        fecha_solucion: fecha_solucion ? new Date(fecha_solucion).toISOString() : null,
+        accion: accion || null,
+        fecha_inicio: fecha_inicio ? new Date(fecha_inicio).toISOString() : null,
+        numero_boleta_proveeduria: numero_boleta_proveeduria || null,
+        tipo: tipo || null,
+        marca: marca || null,
+        modelo: modelo || null,
+        serie_placa: serie_placa || null,
+        marca_nuevo: marca_nuevo || null,
+        modelo_nuevo: modelo_nuevo || null,
+        serie_placa_nuevo: serie_placa_nuevo || null,
+        categoria: categoria || null,
+        tipo_mantenimiento_art: tipo_mantenimiento_art || null,
+        fecha_salida: fecha_salida ? new Date(fecha_salida).toISOString() : null,
+        fecha_entrada: fecha_entrada ? new Date(fecha_entrada).toISOString() : null,
+        kilometraje: kilometraje !== null && kilometraje !== undefined ? parseInt(String(kilometraje)) : null,
+        mant_armas_form: mant_armas_form || null,
+        categoria_mantinimiento: categoria_mantinimiento || null,
+        detalle: detalle || null,
+        numero_fc: numero_fc || null,
+        proveedor: proveedor || null,
+        costo_mo: costo_mo !== null && costo_mo !== undefined ? parseInt(String(costo_mo)) : null,
+        costo_i: costo_i !== null && costo_i !== undefined ? parseInt(String(costo_i)) : null,
+        iva: iva !== null && iva !== undefined ? parseInt(String(iva)) : null,
+        costo_total: costo_total !== null && costo_total !== undefined ? parseInt(String(costo_total)) : null,
+        fecha_fin: fecha_fin ? new Date(fecha_fin).toISOString() : null,
+        reincidencia_treinta_dias: reincidencia_treinta_dias === true || reincidencia_treinta_dias === "true",
+        tipo_mant_art_reincid: tipo_mant_art_reincid || null,
+        created_at: toZonedTime(baseNow, "America/Costa_Rica"),
+        updated_at: toZonedTime(baseNow, "America/Costa_Rica"),
+      };
+      if (planId) createData.e_estructura_articulo_corpo_puesto_plan = { connect: { id: planId } };
+      if (asignadoId) createData.e_estructura_articulo_corpo_puesto_entrega = { connect: { id: asignadoId } };
+
+      await callDynamicPrisma({
+        req,
+        data: {
+          action: "POST",
+          table: "c_articulo_mantenimiento",
+          operation: "create",
+          data: createData,
+        }
+      });
+      return NextResponse.json({ status: true, message: "Registro de mantenimiento creado correctamente" }, { status: 200 });
+    }
+
+    // Evitar sobrescribir con acciones más antiguas que el último update del registro existente
+    if (actionTime) {
+      const updatedAt = existing.updated_at ? new Date(existing.updated_at) : null;
+      if (updatedAt && !isNaN(updatedAt.getTime()) && actionTime.getTime() < updatedAt.getTime()) {
+        return NextResponse.json({
+          status: true,
+          message: "Registro omitido: la acción es más antigua que updated_at del registro",
+        }, { status: 200 });
+      }
+    }
 
     const updateData: any = {};
+
+    if (estado !== undefined) updateData.estado = String(estado || "Bueno");
+    if (cantidad_necesaria !== undefined) updateData.cantidad_necesaria = Math.max(0, Number(cantidad_necesaria) || 0);
+    if (cantidad_real !== undefined) updateData.cantidad_real = Math.max(0, Number(cantidad_real) || 0);
+    if (observaciones !== undefined) updateData.observaciones = String(observaciones || "");
 
     // Si marcar_como_resuelto es true, establecer fecha_solucion (preferir la enviada por el cliente)
     // y actualizar estado a "Bueno" y cantidad_real = cantidad_necesaria
@@ -101,6 +220,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     if (fecha_fin !== undefined) updateData.fecha_fin = fecha_fin ? new Date(fecha_fin) : null;
     if (reincidencia_treinta_dias !== undefined) updateData.reincidencia_treinta_dias = reincidencia_treinta_dias === true || reincidencia_treinta_dias === "true";
     if (tipo_mant_art_reincid !== undefined) updateData.tipo_mant_art_reincid = tipo_mant_art_reincid || null;
+    updateData.updated_at = toZonedTime(baseNow, "America/Costa_Rica");
 
     // Registrar cambios (solo campos actualizados)
     const eq = (a: any, b: any) => {

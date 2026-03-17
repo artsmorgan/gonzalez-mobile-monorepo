@@ -70,7 +70,22 @@ module.exports = {
         process.env.API_SERVER ||
         process.env.NEXT_PUBLIC_API_SERVER ||
         // https://api-gonzalez-mobile-monorepo-production.up.railway.app
-        "https://api-gonzalez-mobile-monorepo-production.up.railway.app", // Local dev fallback
+        "https://barrett-nondelirious-denisha.ngrok-free.dev", // Local dev fallback
+      APP_VERSION_INFO: {
+        "version": "1.0.0",
+        "id": "34cd939c-893f-4a98-9279-d76c82cbca3c",
+        "name": "MonitoreApp",
+        "created_at": "2026-03-16T00:00:00Z",
+        "title": "MonitoreApp versión inicial",
+        "description": "Versión inicial de la aplicación MonitoreApp",
+        "notas": [
+          "Módulo de navegación principal y menú lateral para acceso a todas las funciones.",
+          "Módulo de operación diaria: asistencia, control de presencia, minutas físicas y mutuos acuerdos.",
+          "Módulo de seguridad y calidad: gestión de incidentes, matrices de riesgo, no conformidades y acciones de mejora.",
+          "Módulo de recursos: gestión de vehículos, llaves, equipos de mantenimiento y documentos entregados.",
+          "Módulo de personas: visitas, rutas, capacitaciones, evaluaciones de personal y encuestas de satisfacción."
+        ]
+      },
       MINUTES_LIFE_TIME_TOKEN: 15, // 15 minutes (default)
       APP_MODE: process.env.APP_MODE || process.env.NODE_ENV || "dev",
       router: {},

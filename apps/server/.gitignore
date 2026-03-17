@@ -13,6 +13,9 @@
 # testing
 /coverage
 
+# apks
+/mobile-apks
+
 # next.js
 /.next/
 /out/

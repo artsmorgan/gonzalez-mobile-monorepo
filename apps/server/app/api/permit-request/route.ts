@@ -99,6 +99,15 @@ const safeParseTurnos = (raw: unknown) => {
   }
 };
 
+type PermitFileInput = {
+  type: string;
+  extension: string;
+  original_name?: string;
+  file_base64: string;
+  mimeType?: string;
+  is_main?: boolean;
+};
+
 export async function GET(req: NextRequest) {
   try {
     const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
@@ -168,6 +177,36 @@ export async function GET(req: NextRequest) {
       return [e.nombre, e.primer_apellido, e.segundo_apellido].filter(Boolean).join(" ").trim() || null;
     };
 
+    const recordIds = rows.map((r: any) => parseIntStrict(r?.id)).filter(Boolean) as number[];
+    const files = recordIds.length
+      ? await callDynamicPrisma({
+          req,
+          data: {
+            action: "GET",
+            table: "c_archivos_solicitud_permiso",
+            operation: "findMany",
+            where: { solicitud_id: { in: recordIds } },
+            orderBy: [{ is_main: "desc" }, { id: "asc" }],
+          },
+        })
+      : [];
+    const filesArray = Array.isArray(files) ? files : [];
+    const filesBySolicitud = new Map<number, any[]>();
+    for (const f of filesArray) {
+      const solicitudId = parseIntStrict((f as any)?.solicitud_id);
+      if (!solicitudId) continue;
+      const prev = filesBySolicitud.get(solicitudId) || [];
+      prev.push({
+        id: f.id,
+        name: f.name,
+        original_name: f.original_name,
+        type: f.type,
+        extension: f.extension,
+        is_main: Boolean(f.is_main),
+      });
+      filesBySolicitud.set(solicitudId, prev);
+    }
+
     const mapped = rows.map((r: any) => {
       const turnos = safeParseTurnos(r.turnos).map((t: any) => ({
         ...t,
@@ -184,6 +223,7 @@ export async function GET(req: NextRequest) {
       return {
         ...r,
         turnos,
+        archivos: filesBySolicitud.get(Number(r.id)) || [],
         empleado_nombre: empleadoNombre(parseIntStrict(r.empleado_id)),
         reemplazo_obligatorio_nombre: empleadoNombre(parseIntStrict(r.reemplazo_obligatorio)),
         is_own_record: isOwn,
@@ -218,11 +258,43 @@ export async function POST(req: NextRequest) {
     const comentarios = String(body?.comentarios || "").trim();
     const firmaResponsable = String(body?.firma_responsable || "").trim();
 
-    const fileBase64 = String(body?.file_base64 || "").trim();
-    const extension = String(body?.extension || "").replace(".", "").trim();
-    const originalName = String(body?.original_name || "").trim();
-    const fileType = String(body?.type || "file").trim();
-    const mimeType = String(body?.mimeType || "").trim();
+    const rawFiles = Array.isArray(body?.files) ? body.files : [];
+    const legacyFileBase64 = String(body?.file_base64 || "").trim();
+    const legacyExtension = String(body?.extension || "").replace(".", "").trim();
+    const legacyOriginalName = String(body?.original_name || "").trim();
+    const legacyFileType = String(body?.type || "file").trim();
+    const legacyMimeType = String(body?.mimeType || "").trim();
+
+    const normalizedFilesRaw: PermitFileInput[] = [
+      ...rawFiles,
+      ...(legacyFileBase64 && legacyExtension
+        ? [
+            {
+              type: legacyFileType || "file",
+              extension: legacyExtension,
+              original_name: legacyOriginalName || `solicitud-permiso.${legacyExtension}`,
+              file_base64: legacyFileBase64,
+              mimeType: legacyMimeType || undefined,
+              is_main: true,
+            } as PermitFileInput,
+          ]
+        : []),
+    ]
+      .map((f: any) => ({
+        type: String(f?.type || "file").trim() || "file",
+        extension: String(f?.extension || "").replace(".", "").trim(),
+        original_name: String(f?.original_name || "").trim(),
+        file_base64: String(f?.file_base64 || "").trim(),
+        mimeType: String(f?.mimeType || "").trim() || undefined,
+        is_main: Boolean(f?.is_main),
+      }))
+      .filter((f) => f.extension && f.file_base64);
+
+    const mainMarkedIndex = normalizedFilesRaw.findIndex((f) => f.is_main);
+    const normalizedFiles = normalizedFilesRaw.map((f, idx) => ({
+      ...f,
+      is_main: mainMarkedIndex >= 0 ? idx === mainMarkedIndex : idx === 0,
+    }));
 
     if (!tipo || (tipo !== "Con goce" && tipo !== "Sin goce")) {
       return NextResponse.json({ status: false, message: "Tipo inválido. Debe ser Con goce o Sin goce" }, { status: 400 });
@@ -320,7 +392,6 @@ export async function POST(req: NextRequest) {
           fecha_fin: fechaFin,
           ejecutivo_cuenta: ejecutivoCuenta,
           comentarios: comentarios || null,
-          file_name: null,
           reemplazo_obligatorio: null,
           turnos: JSON.stringify(turnos),
           firma_responsable: firmaResponsable,
@@ -332,34 +403,43 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    let finalFileName: string | null = null;
-    if (fileBase64 && extension) {
-      const documentName = originalName || `solicitud-permiso.${extension}`;
-      await uploadDynamicFiles({
+    const uploadedFiles: any[] = [];
+    for (const file of normalizedFiles) {
+      const uploadResp = await uploadDynamicFiles({
         req,
         folderPath: `permit-request/${created.id}`,
         files: [
           {
-            type: fileType || "file",
-            extension,
-            name: documentName,
-            original_name: documentName,
-            mime_type: mimeType || undefined,
-            file_base64: fileBase64,
+            type: file.type,
+            extension: file.extension,
+            original_name: file.original_name || `adjunto.${file.extension}`,
+            mime_type: file.mimeType || undefined,
+            file_base64: file.file_base64,
           },
         ],
       });
-      finalFileName = documentName;
-      await callDynamicPrisma({
+      const uploaded = Array.isArray(uploadResp?.files) ? uploadResp.files : [];
+      const uploadedFile = uploaded[0];
+      const storedName = String(uploadedFile?.name || "").trim();
+      if (!storedName) continue;
+
+      const createdFile = await callDynamicPrisma({
         req,
         data: {
-          action: "UPDATE",
-          table: "c_solicitud_permiso",
-          operation: "update",
-          where: { id: created.id },
-          data: { file_name: finalFileName },
+          action: "POST",
+          table: "c_archivos_solicitud_permiso",
+          operation: "create",
+          data: {
+            solicitud_id: created.id,
+            name: storedName,
+            type: file.type,
+            extension: file.extension,
+            original_name: file.original_name || storedName,
+            is_main: Boolean(file.is_main),
+          },
         },
       });
+      uploadedFiles.push(createdFile);
     }
 
     await callDynamicPrisma({
@@ -408,7 +488,7 @@ export async function POST(req: NextRequest) {
       {
         status: true,
         message: "Solicitud de permiso creada correctamente",
-        data: { ...created, file_name: finalFileName, turnos },
+        data: { ...created, turnos, archivos: uploadedFiles },
       },
       { status: 200 }
     );

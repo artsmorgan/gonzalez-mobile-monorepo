@@ -3,6 +3,7 @@ import { toZonedTime, format } from "date-fns-tz";
 import { sendNotificationByPlaza } from "../../../../../utils/sendNotification";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
+import { uploadDynamicFiles } from "../../../../../utils/callDynamicFilesApi";
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
@@ -12,61 +13,48 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
         const resolvedParams = await context.params;
         const id = parseInt(resolvedParams.id);
+        const puestoIdParam = req.nextUrl.searchParams.get("puesto_id");
+        const puestoIdFromQuery = puestoIdParam ? parseInt(puestoIdParam, 10) : null;
 
-        if (!id) {
-            return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
-        }
+        let puestoIdToUse: number | null = null;
+        let marcaDia: any = null;
 
-        const marcaDia = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "c_marca_dia",
-                operation: "findUnique",
-                where: { id }
+        if (puestoIdFromQuery && !Number.isNaN(puestoIdFromQuery) && puestoIdFromQuery > 0) {
+            puestoIdToUse = puestoIdFromQuery;
+        } else {
+            if (!id) {
+                return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
             }
-        });
-        if (!marcaDia) {
-            return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
-        }
 
-        if (!marcaDia.empleadoFijo_id) {
-            return NextResponse.json(
-                { status: false, message: "Empleado no encontrado" },
-                { status: 200 }
-            );
-        }
-
-        const now = toZonedTime(new Date(), "America/Costa_Rica");
-        const nowPlus15 = new Date(now.getTime() + 15 * 60 * 1000);
-        const currentDate = new Date(now.toISOString().split("T")[0]);
-        const currentTime = new Date("1970-01-01 " + now.toTimeString().slice(0, 8));
-
-        const proximo = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "c_marca_dia",
-                operation: "findFirst",
-                where: {
-                    empleadoFijo_id: marcaDia.empleadoFijo_id,
-                    OR: [
-                        { fecha: { gt: now } },
-                        { fecha: { equals: currentDate }, hora_inicio: { gte: currentTime } },
-                    ],
-                },
-                orderBy: [{ fecha: "asc" }, { hora_inicio: "asc" }],
+            marcaDia = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "c_marca_dia",
+                    operation: "findUnique",
+                    where: { id }
+                }
+            });
+            if (!marcaDia) {
+                return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
             }
-        });
-        let last_marca = null;
-        if (proximo) {
-            const proximoDateTime = new Date(`${proximo.fecha}T${proximo.hora_inicio}`);
-            if (proximoDateTime <= nowPlus15) {
-                last_marca = proximo;
+
+            if (!marcaDia.empleadoFijo_id) {
+                return NextResponse.json(
+                    { status: false, message: "Empleado no encontrado" },
+                    { status: 200 }
+                );
             }
+            puestoIdToUse = Number(marcaDia.puesto_id);
         }
-        if (!last_marca) {
-            last_marca = await callDynamicPrisma({
+
+        if (marcaDia) {
+            const now = toZonedTime(new Date(), "America/Costa_Rica");
+            const nowPlus15 = new Date(now.getTime() + 15 * 60 * 1000);
+            const currentDate = new Date(now.toISOString().split("T")[0]);
+            const currentTime = new Date("1970-01-01 " + now.toTimeString().slice(0, 8));
+
+            const proximo = await callDynamicPrisma({
                 req,
                 data: {
                     action: "GET",
@@ -75,16 +63,41 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                     where: {
                         empleadoFijo_id: marcaDia.empleadoFijo_id,
                         OR: [
-                            { fecha: { lt: now } },
-                            { fecha: { equals: currentDate }, hora_inicio: { lt: currentTime } },
+                            { fecha: { gt: now } },
+                            { fecha: { equals: currentDate }, hora_inicio: { gte: currentTime } },
                         ],
                     },
-                    orderBy: [{ fecha: "desc" }, { hora_inicio: "desc" }],
+                    orderBy: [{ fecha: "asc" }, { hora_inicio: "asc" }],
                 }
             });
+            let last_marca = null;
+            if (proximo) {
+                const proximoDateTime = new Date(`${proximo.fecha}T${proximo.hora_inicio}`);
+                if (proximoDateTime <= nowPlus15) {
+                    last_marca = proximo;
+                }
+            }
+            if (!last_marca) {
+                last_marca = await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "GET",
+                        table: "c_marca_dia",
+                        operation: "findFirst",
+                        where: {
+                            empleadoFijo_id: marcaDia.empleadoFijo_id,
+                            OR: [
+                                { fecha: { lt: now } },
+                                { fecha: { equals: currentDate }, hora_inicio: { lt: currentTime } },
+                            ],
+                        },
+                        orderBy: [{ fecha: "desc" }, { hora_inicio: "desc" }],
+                    }
+                });
+            }
+            if (!last_marca) return NextResponse.json({ message: "No se encontró la última marca" }, { status: 404 });
+            if (marcaDia.id !== last_marca.id) return NextResponse.json({ message: "Hay una nueva marca más reciente" }, { status: 400 });
         }
-        if (!last_marca) return NextResponse.json({ message: "No se encontró la última marca" }, { status: 404 });
-        if (marcaDia.id !== last_marca.id) return NextResponse.json({ message: "Hay una nueva marca más reciente" }, { status: 400 });
 
         const puesto = await callDynamicPrisma({
             req,
@@ -92,7 +105,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                 action: "GET",
                 table: "e_estructura_puesto",
                 operation: "findUnique",
-                where: { id: marcaDia.puesto_id }
+                where: { id: puestoIdToUse }
             }
         });
         if (!puesto) {
@@ -105,25 +118,57 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                 action: "GET",
                 table: "c_puesto_notas",
                 operation: "findMany",
-                where: { puesto_id: puesto.id }
+                where: { puesto_id: puesto.id },
+                orderBy: { updated_at: "desc" }
             }
         });
-
-        const notas_return: { id: number, titulo: string, description: string, categoria_id: number | null, relevancia: string | null, puesto_id: number, empleado: string, created_at: Date, updated_at: Date, id_local: string }[] = [];
+        const baseUrl = req.nextUrl.origin;
+        const notas_return: {
+            id: number,
+            titulo: string,
+            description: string,
+            categoria_id: number | null,
+            relevancia: string | null,
+            puesto_id: number,
+            empleado: string,
+            creador: string,
+            is_modified: boolean,
+            firma_responsable: string,
+            firma_manual_responsable: string | null,
+            images: Array<{ id: number; name: string; url: string }>,
+            created_at: Date,
+            updated_at: Date,
+            id_local: string
+        }[] = [];
 
         for (const nota of notas) {
 
             let empleado_name = "-";
+            let creador_name = "-";
+
             const lastChange = await callDynamicPrisma({
                 req,
                 data: {
                     action: "GET",
-                    table: "c_puesto_notas_bitacora_cambios",
+                    table: "c_cambios_apps_modules",
                     operation: "findFirst",
-                    where: { nota_id: nota.id },
-                    orderBy: { created_at: "desc" }
+                    where: { nombre_tabla: "c_puesto_notas", registro_id: nota.id },
+                    orderBy: { id: "desc" }
                 }
             });
+
+            const firstChange = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "c_cambios_apps_modules",
+                    operation: "findFirst",
+                    where: { nombre_tabla: "c_puesto_notas", registro_id: nota.id },
+                    orderBy: { id: "asc" }
+                }
+            });
+
+
             if (lastChange) {
                 const empleado = await callDynamicPrisma({
                     req,
@@ -131,13 +176,37 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                         action: "GET",
                         table: "c_empleado",
                         operation: "findUnique",
-                        where: { id: lastChange.empleado_id }
+                        where: { id: lastChange.created_by }
                     }
                 });
                 if (empleado) {
                     empleado_name = empleado.nombre + " " + empleado.primer_apellido + " " + empleado.segundo_apellido;
                 }
             }
+            if (firstChange) {
+                const empleadoCreador = await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "GET",
+                        table: "c_empleado",
+                        operation: "findUnique",
+                        where: { id: firstChange.created_by }
+                    }
+                });
+                if (empleadoCreador) {
+                    creador_name = empleadoCreador.nombre + " " + empleadoCreador.primer_apellido + " " + empleadoCreador.segundo_apellido;
+                }
+            }
+
+            const notaImages = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "c_imagenes_puesto_notas",
+                    operation: "findMany",
+                    where: { nota_id: nota.id }
+                }
+            });
 
             notas_return.push({
                 id: nota.id,
@@ -146,6 +215,15 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                 categoria_id: nota.categoria_id ?? null,
                 relevancia: nota.relevancia ?? null,
                 empleado: empleado_name,
+                creador: creador_name,
+                is_modified: Boolean(nota.is_modified),
+                firma_responsable: nota.firma_responsable || "",
+                firma_manual_responsable: nota.firma_manual_responsable || null,
+                images: (Array.isArray(notaImages) ? notaImages : []).map((img: any) => ({
+                    id: Number(img.id),
+                    name: String(img.name || ""),
+                    url: baseUrl ? `${baseUrl}/api/puestos/${nota.puesto_id}/notas/${nota.id}/get-image/${encodeURIComponent(String(img.name || ""))}` : "",
+                })),
                 puesto_id: nota.puesto_id,
                 created_at: nota.created_at,
                 updated_at: nota.updated_at,
@@ -168,7 +246,18 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
         const resolvedParams = await context.params;
         const id = parseInt(resolvedParams.id);
 
-        const { marca_id, empleado_id, titulo, description, categoria_id, relevancia, puestos } = await req.json();
+        const {
+            marca_id,
+            empleado_id,
+            titulo,
+            description,
+            categoria_id,
+            relevancia,
+            puestos,
+            firma_responsable,
+            firma_manual_responsable,
+            imagenes
+        } = await req.json();
 
         const created_at = toZonedTime(new Date(), "America/Costa_Rica");
         const updated_at = toZonedTime(new Date(), "America/Costa_Rica");
@@ -183,6 +272,10 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
             }
         });
         if (!categoriaData) return NextResponse.json({ status: false, message: "Categoría no encontrada" }, { status: 200 });
+
+        if (!firma_responsable || String(firma_responsable).trim().length === 0) {
+            return NextResponse.json({ status: false, message: "Firma responsable requerida" }, { status: 200 });
+        }
 
         const puestos_parse: number[] = JSON.parse(puestos);
 
@@ -217,18 +310,59 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
                 data: {
                     action: "POST",
                     table: "c_puesto_notas",
-                    data: { titulo, description, categoria_id: categoria_id, relevancia: relevanciaValue, puesto_id, created_at: created_at.toISOString(), updated_at: updated_at.toISOString() }
+                    data: {
+                        titulo,
+                        description,
+                        categoria_id: categoria_id,
+                        relevancia: relevanciaValue,
+                        puesto_id,
+                        firma_responsable: String(firma_responsable),
+                        firma_manual_responsable: (firma_manual_responsable && String(firma_manual_responsable).trim().length > 0) ? String(firma_manual_responsable) : null,
+                        is_modified: false,
+                        created_at: created_at.toISOString(),
+                        updated_at: updated_at.toISOString()
+                    }
                 }
             });
 
-            const bitacora = await callDynamicPrisma({
-                req,
-                data: {
-                    action: "POST",
-                    table: "c_puesto_notas_bitacora_cambios",
-                    data: { nota_id: newNote.id, titulo, description, relevancia: relevanciaValue, created_at: created_at.toISOString(), empleado_id, categoria: categoriaData.nombre }
+            let imagesParsed: Array<{ file_base64: string; extension?: string; original_name?: string }> = [];
+            if (imagenes) {
+                try {
+                    imagesParsed = typeof imagenes === "string" ? JSON.parse(imagenes) : imagenes;
+                } catch {
+                    imagesParsed = [];
                 }
-            });
+            }
+            if (Array.isArray(imagesParsed) && imagesParsed.length > 0) {
+                const uploadResp = await uploadDynamicFiles({
+                    req,
+                    folderPath: `puesto-notas/${newNote.id}`,
+                    files: imagesParsed
+                        .filter((img) => img?.file_base64)
+                        .map((img) => ({
+                            type: "image",
+                            extension: String(img.extension || "jpg").replace(".", "").trim() || "jpg",
+                            original_name: img.original_name,
+                            file_base64: img.file_base64,
+                        })),
+                });
+
+                const uploadedFiles = Array.isArray(uploadResp?.files) ? uploadResp.files : [];
+                for (const uploaded of uploadedFiles) {
+                    await callDynamicPrisma({
+                        req,
+                        data: {
+                            action: "POST",
+                            table: "c_imagenes_puesto_notas",
+                            operation: "create",
+                            data: {
+                                name: uploaded.name,
+                                nota_id: newNote.id,
+                            },
+                        },
+                    });
+                }
+            }
 
             // Registro de cambios (nueva modalidad) - create
             await callDynamicPrisma({
@@ -246,6 +380,9 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
                             { prop: "categoria_id", before: null, after: categoria_id ?? null },
                             { prop: "relevancia", before: null, after: relevanciaValue ?? null },
                             { prop: "puesto_id", before: null, after: puesto_id },
+                            { prop: "firma_responsable", before: null, after: String(firma_responsable) },
+                            { prop: "firma_manual_responsable", before: null, after: (firma_manual_responsable && String(firma_manual_responsable).trim().length > 0) ? String(firma_manual_responsable) : null },
+                            { prop: "is_modified", before: null, after: false },
                         ]),
                         created_at: created_at.toISOString(),
                         created_by: empleado_id,
@@ -254,18 +391,17 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
                 },
             });
 
-            if (bitacora) {
-                const plazaIds = await callDynamicPrisma({
-                    req,
-                    data: {
-                        action: "GET",
-                        table: "e_estructura_plazas",
-                        operation: "findMany",
-                        where: { puesto_id: puesto.id }
-                    }
-                });
-                await sendNotificationByPlaza(req, marca_id, "Bitácora creada", `${empleado.nombre} ${empleado.primer_apellido} ha creado una nota llamada ${newNote.titulo} de tipo ${categoriaData.nombre}`, plazaIds.map((plaza: { id: number }) => plaza.id));
-            }
+            const plazaIds = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "e_estructura_plazas",
+                    operation: "findMany",
+                    where: { puesto_id: puesto.id }
+                }
+            });
+            await sendNotificationByPlaza(req, marca_id, "Bitácora creada", `${empleado.nombre} ${empleado.primer_apellido} ha creado una nota llamada ${newNote.titulo} de tipo ${categoriaData.nombre}`, plazaIds.map((plaza: { id: number }) => plaza.id));
+
         }
         return NextResponse.json({ status: true, message: "Nota creada con éxito" }, { status: 200 });
     } catch (error: unknown) {

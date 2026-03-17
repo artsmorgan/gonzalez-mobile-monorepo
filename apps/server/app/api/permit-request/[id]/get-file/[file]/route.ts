@@ -63,14 +63,18 @@ export async function GET(
         { status: 404 }
       );
     }
-    if (!record.file_name) {
-      return NextResponse.json(
-        { status: false, message: 'La solicitud no tiene archivo adjunto' },
-        { status: 404 }
-      );
-    }
     const decodedFileName = decodeURIComponent(String(fileNameParam).trim());
-    if (String(record.file_name).trim() !== decodedFileName) {
+    const fileRecord = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "c_archivos_solicitud_permiso",
+        operation: "findFirst",
+        where: { solicitud_id: idNum, name: decodedFileName },
+      },
+      token: accessToken || undefined,
+    });
+    if (!fileRecord) {
       return NextResponse.json(
         { status: false, message: 'Archivo no encontrado' },
         { status: 404 }

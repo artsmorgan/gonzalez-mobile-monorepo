@@ -3,7 +3,7 @@ import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenBy
 import { toZonedTime } from "date-fns-tz";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { uploadDynamicFiles } from "../../../../../utils/callDynamicFilesApi";
-import { createReport } from "../../../../../utils/createReporteArticuloMantenimiento";
+import { createReport, updateReport } from "../../../../../utils/createReporteArticuloMantenimiento";
 import { sendNotificationByRole } from "../../../../../utils/sendNotification";
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
@@ -15,7 +15,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         const resolvedParams = await context.params;
         const id = parseInt(resolvedParams.id);
 
-        const { e, es_correcto, motivo_incorrecto, file, articulo_id, estado: estadoBody, cantidad_real: cantidadRealBody } = await req.json();
+        const { e, es_correcto, motivo_incorrecto, file, articulo_id, estado: estadoBody, cantidad_real: cantidadRealBody, hora_accion } = await req.json();
 
         const empleado = await callDynamicPrisma({
             req,
@@ -90,7 +90,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         }
 
         articles[articleIndex] = selected;
-        const nowIso = toZonedTime(new Date(), "America/Costa_Rica").toISOString();
+        const nowIso = new Date(hora_accion || toZonedTime(new Date(), "America/Costa_Rica")).toISOString();
         await callDynamicPrisma({
             req,
             data: {
@@ -119,8 +119,9 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             });
         }
 
-        await evaluateAndNotify(req, selected, actividad_marcada.plaza_id, actividad?.nombre_actividad || "actividad");
-
+        console.log("Llegamos a la evaluación y notificación");
+        await evaluateAndNotify(req, selected, actividad_marcada.plaza_id, actividad?.nombre_actividad || "actividad", nowIso);
+        console.log("Evaluación y notificación completada");
         if (allReviewed) {
             const relatedActividadPuestos = await callDynamicPrisma({
                 req,
@@ -144,39 +145,122 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         return NextResponse.json({ status: true, message: "Revision de equipo actualizada correctamente" }, { status: 200 });
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        console.error(errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }
 
-async function evaluateAndNotify(req: NextRequest, articulo: any, corpoId: number, actividadNombre: string) {
-    const tipo = String(articulo?.tipo || "");
+/**
+ * Misma lógica que el bucle de artículos en checklist-supervision/route.ts (POST):
+ * - Concurrencia: si last_mantenimiento.updated_at > momento de la acción, no crear ni actualizar.
+ * - Sin registro previo se asume last_estado = "Bueno".
+ * - Bueno: si antes no era Bueno, updateReport al último (fecha_solucion = actionTime).
+ * - Malo / No está: Bueno→no Bueno → createReport + notificación; otro cambio → updateReport.
+ */
+async function evaluateAndNotify(req: NextRequest, articulo: any, corpoId: number, actividadNombre: string, nowIso: string) {
     const id = Number(articulo?.id || 0);
+    const tipo = String(articulo?.tipo || "");
     if (!id || (tipo !== "Plan" && tipo !== "Asignado")) return;
-    const last = await callDynamicPrisma({
-        req,
-        data: {
-            action: "GET",
-            table: "c_articulo_mantenimiento",
-            operation: "findFirst",
-            where: tipo === "Plan" ? { articulo_plan_id: id } : { articulo_asignado_id: id },
-            orderBy: { fecha_solucion: "desc" },
-        },
-    });
-    const wasGood = Boolean(last && last.id && last.estado === "Bueno");
-    const estado = String(articulo?.estado || "Bueno");
-    if (wasGood && estado !== "Bueno") {
-        const reporte = [{
-            id,
-            nombre: articulo?.nombre || "Artículo",
-            tipo,
-            marca: articulo?.marca || "",
-            serie: articulo?.serie || "",
-            cantidad_requerida: Number(articulo?.cantidad_requerida || 0),
-            cantidad_real: Number(articulo?.cantidad_real || 0),
-            estado,
-            observaciones: String(articulo?.observaciones || ""),
-        }];
-        await createReport(req, reporte);
-        await sendNotificationByRole(req, corpoId, [], "Revisión de equipo en actividades", `La actividad "${actividadNombre}" detectó cambios de estado en artículos.`, ["ADMINISTRATIVO", "SUPERVISOR"]);
+
+    const createdAt = new Date(nowIso);
+    if (isNaN(createdAt.getTime())) return;
+
+    let last_mantenimiento: any = null;
+    if (tipo === "Plan") {
+        last_mantenimiento = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_articulo_mantenimiento",
+                operation: "findFirst",
+                where: { articulo_plan_id: id },
+                orderBy: { fecha_solucion: "desc" },
+            },
+        });
+    } else {
+        last_mantenimiento = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_articulo_mantenimiento",
+                operation: "findFirst",
+                where: { articulo_asignado_id: id },
+                orderBy: { fecha_solucion: "desc" },
+            },
+        });
+    }
+
+    let last_estado: string | null = null;
+    if (last_mantenimiento && last_mantenimiento.id) {
+        last_estado = String(last_mantenimiento.estado || "");
+        if (last_mantenimiento.updated_at) {
+            const lastUpdated = new Date(last_mantenimiento.updated_at);
+            if (!isNaN(lastUpdated.getTime()) && lastUpdated.getTime() > createdAt.getTime()) {
+                return;
+            }
+        }
+    } else {
+        last_estado = "Bueno";
+    }
+
+    const estado_actual = String(articulo.estado || "");
+    const articulos_reporte: any[] = [];
+    const articulos_reporte_update: any[] = [];
+    let send_notification = false;
+
+    switch (estado_actual) {
+        case "Bueno":
+            if (last_estado !== "Bueno" && last_mantenimiento && last_mantenimiento.id) {
+                articulos_reporte_update.push({
+                    id: last_mantenimiento.id,
+                    estado: "Bueno",
+                    cantidad_real: articulo.cantidad_requerida,
+                    fecha_solucion: createdAt,
+                });
+            }
+            break;
+        default:
+            if (last_estado === "Bueno") {
+                send_notification = true;
+                articulos_reporte.push({
+                    id: articulo.id,
+                    nombre: articulo.nombre,
+                    tipo: articulo.tipo,
+                    marca: articulo.marca,
+                    serie: articulo.serie,
+                    cantidad_requerida: articulo.cantidad_requerida,
+                    cantidad_real: articulo.cantidad_real,
+                    estado: articulo.estado,
+                    observaciones: articulo.observaciones,
+                    created_at: createdAt,
+                    updated_at: createdAt,
+                });
+            } else if (last_estado !== estado_actual && last_mantenimiento && last_mantenimiento.id) {
+                articulos_reporte_update.push({
+                    id: last_mantenimiento.id,
+                    estado: estado_actual,
+                    cantidad_real: articulo.cantidad_real,
+                    fecha_solucion: null,
+                    updated_at: createdAt,
+                });
+            }
+            break;
+    }
+
+    if (articulos_reporte.length > 0) {
+        await createReport(req, articulos_reporte);
+    }
+    if (articulos_reporte_update.length > 0) {
+        await updateReport(req, articulos_reporte_update);
+    }
+    if (send_notification) {
+        await sendNotificationByRole(
+            req,
+            corpoId,
+            [],
+            "Revisión de equipo en actividades",
+            `La actividad "${actividadNombre}" detectó cambios de estado en artículos.`,
+            ["ADMINISTRATIVO", "SUPERVISOR"]
+        );
     }
 }

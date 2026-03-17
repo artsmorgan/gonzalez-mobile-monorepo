@@ -20,7 +20,6 @@ import { useAuth } from '@/contexts/AuthContext';
 import AppHeader from '@/components/AppHeader';
 import AppFooter from '@/components/AppFooter';
 import SlideMenu from '@/components/SlideMenu';
-import { formatDateDMY } from '@/utils/formatDate';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../App';
@@ -41,6 +40,7 @@ import {
   deleteAttendanceControl,
   listAttendanceControl,
 } from '@/hooks/evaluationFunctions';
+import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 import { eventBus } from '@/hooks/eventBus';
 
 type AttendanceControlScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'AttendanceControl'>;
@@ -360,11 +360,6 @@ export default function AttendanceControlScreen() {
     const month = (date.getMonth() + 1).toString().padStart(2, '0');
     const day = date.getDate().toString().padStart(2, '0');
     return `${year}-${month}-${day}`;
-  };
-
-  const formatDateForDisplay = (date: Date): string => {
-    const [year, month, day] = formatDate(date).split('-');
-    return `${day}-${month}-${year}`;
   };
 
   const normalizeControl = (raw: any): AttendanceControl => {
@@ -1596,7 +1591,7 @@ export default function AttendanceControlScreen() {
               <ThemedView style={styles.listItemHeader}>
                 <ThemedView style={styles.listItemContent}>
                   <ThemedText style={styles.listItemTitle}>
-                    {formatDateDMY(record.fecha)}
+                    {convertDateTimestampToLocalString(new Date(record.fecha || new Date()).toISOString(), false)}
                   </ThemedText>
                   <ThemedText style={styles.listItemSubtitle}>
                     Sucursal: {record.sucursal_nombre || 'N/A'}
@@ -1996,7 +1991,7 @@ export default function AttendanceControlScreen() {
                   onPress={() => setShowDatePicker(true)}
                 >
                   <ThemedText style={styles.dateButtonText}>
-                    {formatDateForDisplay(fecha)}
+                    {convertDateTimestampToLocalString(new Date(fecha).toISOString(), false)}
                   </ThemedText>
                   <Ionicons name="calendar" size={20} color="#007AFF" />
                 </TouchableOpacity>
@@ -2154,7 +2149,7 @@ export default function AttendanceControlScreen() {
                         )}
                         <ThemedText style={styles.qrInfoText}>Latitud: {firmaResponsable.latitud}</ThemedText>
                         <ThemedText style={styles.qrInfoText}>Longitud: {firmaResponsable.longitud}</ThemedText>
-                        <ThemedText style={styles.qrInfoText}>Timestamp: {new Date(parseInt(firmaResponsable.timestamp)).toLocaleString()}</ThemedText>
+                        <ThemedText style={styles.qrInfoText}>Timestamp: {convertDateTimestampToLocalString(new Date(Number(firmaResponsable.timestamp)).toISOString())}</ThemedText>
                       </>
                     )}
 
@@ -2249,7 +2244,7 @@ export default function AttendanceControlScreen() {
                   } catch {
                     parsed = [];
                   }
-                  const createdAtLabel = formatCambioCreatedAt(row?.created_at);
+                  const createdAtLabel = convertDateTimestampToLocalString(new Date(row?.created_at).toISOString());
                   const isOpen = expandedCambioId === row.id;
 
                   return (

@@ -40,8 +40,9 @@ interface ActivoDetalle {
 
 interface Activo {
   tipo: TipoActivo;
+  nombre?: string;
   detalles: ActivoDetalle[];
-  numero_serie: string;
+  numero_id: string;
   numero_activo: string;
 }
 
@@ -52,6 +53,7 @@ interface Visitor {
   hora_entrada: string;
   hora_salida: string | null;
   razon_visita: string;
+  dep_pers_visita?: string | null;
   responsable: Responsable;
   es_funcionario: boolean;
   observaciones: string | null;
@@ -76,6 +78,7 @@ interface EditingVisitor {
   hora_salida_h: string;
   hora_salida_m: string;
   razon_visita: string;
+  dep_pers_visita: string;
   es_funcionario: boolean;
   observaciones: string;
   tipo_accion: string;
@@ -87,8 +90,9 @@ interface EditingVisitor {
 
 interface EditingActivo {
   tipo_id: number | null;
+  nombre: string;
   detalles: EditingDetalle[];
-  numero_serie: string;
+  numero_id: string;
   numero_activo: string;
 }
 
@@ -143,6 +147,7 @@ export default function VisitorsScreen() {
     hora_salida_h: '',
     hora_salida_m: '',
     razon_visita: '',
+    dep_pers_visita: '',
     es_funcionario: false,
     observaciones: '',
     tipo_accion: '',
@@ -162,6 +167,7 @@ export default function VisitorsScreen() {
   const horaSalidaHRef = useRef('');
   const horaSalidaMRef = useRef('');
   const razonVisitaRef = useRef('');
+  const depPersVisitaRef = useRef('');
   const observacionesRef = useRef('');
   const persAutorizaSalidaRef = useRef('');
 
@@ -170,6 +176,9 @@ export default function VisitorsScreen() {
   const [selectedTipoVisitante, setSelectedTipoVisitante] = useState<string>('all');
   const [filterDesde, setFilterDesde] = useState('');
   const [filterHasta, setFilterHasta] = useState('');
+  const [filterNombreActivo, setFilterNombreActivo] = useState('');
+  const [filterSinHoraSalida, setFilterSinHoraSalida] = useState(false);
+  const [filterSinActivos, setFilterSinActivos] = useState(false);
   const [isFiltersExpanded, setIsFiltersExpanded] = useState(false);
 
   // Expanded details state
@@ -261,9 +270,10 @@ export default function VisitorsScreen() {
       return activosArray.map((activo: any, idx: number) => {
         const partes: string[] = [];
         partes.push(`Activo ${idx + 1}`);
-
-        if (activo.tipo_id) partes.push(`Tipo ID: ${activo.tipo_id}`);
-        if (activo.numero_serie) partes.push(`Serie: ${activo.numero_serie}`);
+        if (activo.tipo?.nombre) partes.push(`Tipo: ${activo.tipo.nombre}`);
+        if (activo.tipo_id && !activo.tipo?.nombre) partes.push(`Tipo ID: ${activo.tipo_id}`);
+        if (activo.nombre) partes.push(`Nombre: ${activo.nombre}`);
+        if (activo.numero_id) partes.push(`Nº identificador: ${activo.numero_id}`);
         if (activo.numero_activo) partes.push(`N° Activo: ${activo.numero_activo}`);
 
         if (activo.detalles && Array.isArray(activo.detalles) && activo.detalles.length > 0) {
@@ -279,6 +289,11 @@ export default function VisitorsScreen() {
     } catch {
       return String(activos);
     }
+  };
+
+  const formatCambioLabel = (prop: string): string => {
+    if (prop === 'dep_pers_visita') return 'Persona/Departamento que visita';
+    return prop;
   };
 
   const formatChangeValue = (prop: string, value: any): string => {
@@ -613,6 +628,7 @@ export default function VisitorsScreen() {
       hora_salida_h: '',
       hora_salida_m: '',
       razon_visita: '',
+      dep_pers_visita: '',
       es_funcionario: false,
       observaciones: '',
       tipo_accion: '',
@@ -631,6 +647,7 @@ export default function VisitorsScreen() {
     horaSalidaHRef.current = '';
     horaSalidaMRef.current = '';
     razonVisitaRef.current = '';
+    depPersVisitaRef.current = '';
     observacionesRef.current = '';
     persAutorizaSalidaRef.current = '';
   };
@@ -652,6 +669,7 @@ export default function VisitorsScreen() {
       hora_salida_h: '',
       hora_salida_m: '',
       razon_visita: '',
+      dep_pers_visita: '',
       es_funcionario: false,
       observaciones: '',
       tipo_accion: '',
@@ -691,6 +709,7 @@ export default function VisitorsScreen() {
         hora_salida_h: horaSalida.hour,
         hora_salida_m: horaSalida.minute,
         razon_visita: visitor.razon_visita,
+        dep_pers_visita: visitor.dep_pers_visita || '',
         es_funcionario: visitor.es_funcionario,
         observaciones: visitor.observaciones || '',
         tipo_accion: visitor.tipo_accion || '',
@@ -699,9 +718,10 @@ export default function VisitorsScreen() {
         foto_cedula_nueva: null,
         activos: visitor.activos.map(activo => ({
           tipo_id: activo.tipo.id,
+          nombre: activo.nombre ?? '',
           detalles: mapActivos(activo.detalles),
-          numero_serie: activo.numero_serie,
-          numero_activo: activo.numero_activo,
+          numero_id: activo.numero_id ?? '',
+          numero_activo: activo.numero_activo ?? '',
         })),
       });
 
@@ -770,6 +790,7 @@ export default function VisitorsScreen() {
       horaSalidaHRef.current = horaSalida.hour;
       horaSalidaMRef.current = horaSalida.minute;
       razonVisitaRef.current = visitor.razon_visita;
+      depPersVisitaRef.current = visitor.dep_pers_visita || '';
       observacionesRef.current = visitor.observaciones || '';
       persAutorizaSalidaRef.current = visitor.pers_autoriza_salida || '';
     } catch (error) {
@@ -828,8 +849,8 @@ export default function VisitorsScreen() {
         Alert.alert('Error', 'Todos los activos deben tener un tipo');
         return;
       }
-      if (!activo.numero_serie.trim()) {
-        Alert.alert('Error', 'Todos los activos deben tener número de serie');
+      if (!activo.numero_id.trim()) {
+        Alert.alert('Error', 'Todos los activos deben tener número de identificador');
         return;
       }
       if (newVisitor.es_funcionario && !activo.numero_activo.trim()) {
@@ -885,6 +906,7 @@ export default function VisitorsScreen() {
                 hora_entrada: converted_hora_entrada,
                 hora_salida: converted_hora_salida,
                 razon_visita: razonVisitaRef.current,
+                dep_pers_visita: depPersVisitaRef.current.trim() || null,
                 es_funcionario: newVisitor.es_funcionario,
                 observaciones: newVisitor.es_funcionario ? observacionesRef.current : null,
                 tipo_accion: newVisitor.es_funcionario && newVisitor.tipo_accion ? newVisitor.tipo_accion : null,
@@ -892,8 +914,9 @@ export default function VisitorsScreen() {
                 foto_cedula: newVisitor.foto_cedula_nueva || newVisitor.foto_cedula,
                 activos: newVisitor.activos.map(activo => ({
                   tipo_id: activo.tipo_id,
+                  nombre: activo.nombre ?? '',
                   detalles: activo.detalles,
-                  numero_serie: activo.numero_serie,
+                  numero_id: activo.numero_id,
                   numero_activo: activo.numero_activo,
                 })),
               };
@@ -948,6 +971,7 @@ export default function VisitorsScreen() {
                   hora_entrada: converted_hora_entrada.toString(),
                   hora_salida: converted_hora_salida ? converted_hora_salida.toString() : null,
                   razon_visita: razonVisitaRef.current,
+                  dep_pers_visita: depPersVisitaRef.current.trim() || null,
                   responsable: {
                     id: parseInt(employee?.id || '0'),
                     nombre: employee?.name || 'Desconocido',
@@ -959,8 +983,9 @@ export default function VisitorsScreen() {
                   foto_cedula: newVisitor.foto_cedula_nueva || newVisitor.foto_cedula,
                   activos: newVisitor.activos.map(activo => ({
                     tipo: tipoActivos.find(t => t.id === activo.tipo_id) || { id: activo.tipo_id || 0, nombre: 'Desconocido' },
+                    nombre: activo.nombre ?? '',
                     detalles: activo.detalles,
-                    numero_serie: activo.numero_serie,
+                    numero_id: activo.numero_id,
                     numero_activo: activo.numero_activo,
                   })),
                   updated_at: new Date(horaAccion).toISOString(),
@@ -1029,8 +1054,8 @@ export default function VisitorsScreen() {
         Alert.alert('Error', 'Todos los activos deben tener un tipo');
         return;
       }
-      if (!activo.numero_serie.trim()) {
-        Alert.alert('Error', 'Todos los activos deben tener número de serie');
+      if (!activo.numero_id.trim()) {
+        Alert.alert('Error', 'Todos los activos deben tener número de identificador');
         return;
       }
       if (editingVisitor.es_funcionario && !activo.numero_activo.trim()) {
@@ -1084,6 +1109,7 @@ export default function VisitorsScreen() {
                 hora_entrada: converted_hora_entrada,
                 hora_salida: converted_hora_salida,
                 razon_visita: razonVisitaRef.current,
+                dep_pers_visita: depPersVisitaRef.current.trim() || null,
                 es_funcionario: editingVisitor.es_funcionario,
                 observaciones: editingVisitor.es_funcionario ? observacionesRef.current : null,
                 tipo_accion: editingVisitor.es_funcionario && editingVisitor.tipo_accion ? editingVisitor.tipo_accion : null,
@@ -1091,8 +1117,9 @@ export default function VisitorsScreen() {
                 foto_cedula: editingVisitor.foto_cedula_nueva || null,
                 activos: editingVisitor.activos.map(activo => ({
                   tipo_id: activo.tipo_id,
+                  nombre: activo.nombre ?? '',
                   detalles: activo.detalles,
-                  numero_serie: activo.numero_serie,
+                  numero_id: activo.numero_id,
                   numero_activo: activo.numero_activo,
                 })),
               };
@@ -1134,14 +1161,16 @@ export default function VisitorsScreen() {
                       hora_entrada: converted_hora_entrada,
                       hora_salida: converted_hora_salida,
                       razon_visita: razonVisitaRef.current,
+                      dep_pers_visita: depPersVisitaRef.current.trim() || null,
                       es_funcionario: editingVisitor.es_funcionario,
                       observaciones: editingVisitor.es_funcionario ? observacionesRef.current : null,
                       tipo_accion: editingVisitor.es_funcionario && editingVisitor.tipo_accion ? editingVisitor.tipo_accion : null,
                       pers_autoriza_salida: editingVisitor.es_funcionario && persAutorizaSalidaRef.current ? persAutorizaSalidaRef.current : null,
                       activos: editingVisitor.activos.map(activo => ({
                         tipo_id: activo.tipo_id,
+                        nombre: activo.nombre ?? '',
                         detalles: activo.detalles,
-                        numero_serie: activo.numero_serie,
+                        numero_id: activo.numero_id,
                         numero_activo: activo.numero_activo,
                       })),
                     };
@@ -1166,6 +1195,7 @@ export default function VisitorsScreen() {
                       hora_entrada: converted_hora_entrada,
                       hora_salida: converted_hora_salida,
                       razon_visita: razonVisitaRef.current,
+                      dep_pers_visita: depPersVisitaRef.current.trim() || null,
                       es_funcionario: editingVisitor.es_funcionario,
                       observaciones: editingVisitor.es_funcionario ? observacionesRef.current : null,
                       tipo_accion: editingVisitor.es_funcionario && editingVisitor.tipo_accion ? editingVisitor.tipo_accion : null,
@@ -1173,8 +1203,9 @@ export default function VisitorsScreen() {
                       foto_cedula: editingVisitor.foto_cedula_nueva || null,
                       activos: editingVisitor.activos.map(activo => ({
                         tipo_id: activo.tipo_id,
+                        nombre: activo.nombre ?? '',
                         detalles: activo.detalles,
-                        numero_serie: activo.numero_serie,
+                        numero_id: activo.numero_id,
                         numero_activo: activo.numero_activo,
                       })),
                     };
@@ -1211,6 +1242,7 @@ export default function VisitorsScreen() {
                     hora_entrada: converted_hora_entrada.toString(),
                     hora_salida: converted_hora_salida ? converted_hora_salida.toString() : null,
                     razon_visita: razonVisitaRef.current,
+                    dep_pers_visita: depPersVisitaRef.current.trim() || null,
                     es_funcionario: editingVisitor.es_funcionario,
                     observaciones: editingVisitor.es_funcionario ? observacionesRef.current : null,
                     tipo_accion: editingVisitor.es_funcionario && editingVisitor.tipo_accion ? editingVisitor.tipo_accion : null,
@@ -1219,8 +1251,9 @@ export default function VisitorsScreen() {
                     foto_cedula: editingVisitor.foto_cedula_nueva || cache[visitorIndex].foto_cedula,
                     activos: editingVisitor.activos.map(activo => ({
                       tipo: tipoActivos.find(t => t.id === activo.tipo_id) || { id: activo.tipo_id || 0, nombre: 'Desconocido' },
+                      nombre: activo.nombre ?? '',
                       detalles: activo.detalles,
-                      numero_serie: activo.numero_serie,
+                      numero_id: activo.numero_id,
                       numero_activo: activo.numero_activo,
                     })),
                   };
@@ -1318,6 +1351,9 @@ export default function VisitorsScreen() {
     setSelectedTipoVisitante('all');
     setFilterDesde('');
     setFilterHasta('');
+    setFilterNombreActivo('');
+    setFilterSinHoraSalida(false);
+    setFilterSinActivos(false);
   };
 
   const toggleVisitorDetails = (visitorId: number) => {
@@ -1459,8 +1495,9 @@ export default function VisitorsScreen() {
   const addActivo = (isEditing: boolean) => {
     const newActivo: EditingActivo = {
       tipo_id: null,
+      nombre: '',
       detalles: [],
-      numero_serie: '',
+      numero_id: '',
       numero_activo: '',
     };
 
@@ -1590,6 +1627,17 @@ export default function VisitorsScreen() {
       (selectedTipoVisitante === 'visitante' && !visitor.es_funcionario) ||
       (selectedTipoVisitante === 'funcionario' && visitor.es_funcionario);
 
+    const nombreActivoTrim = (filterNombreActivo || '').trim().toLowerCase();
+    const matchesNombreActivo = !nombreActivoTrim || (visitor.activos && visitor.activos.some((a: Activo) => {
+      const nombreActivo = (a.nombre ?? '').trim().toLowerCase();
+      const tipoNombre = (a.tipo?.nombre ?? '').trim().toLowerCase();
+      return nombreActivo.includes(nombreActivoTrim) || tipoNombre.includes(nombreActivoTrim);
+    }));
+
+    const matchesSinHoraSalida = !filterSinHoraSalida || !visitor.hora_salida || String(visitor.hora_salida).trim() === '';
+
+    const matchesSinActivos = !filterSinActivos || !visitor.activos || visitor.activos.length === 0;
+
     const desdeYmd = normalizeDateToYMD(filterDesde);
     const hastaYmd = normalizeDateToYMD(filterHasta);
     const entradaYmd = dateOnlyFromIso(visitor.hora_entrada);
@@ -1602,7 +1650,7 @@ export default function VisitorsScreen() {
           (!hastaYmd || d <= hastaYmd)
         );
 
-    return matchesSearch && matchesTipoVisitante && matchesDateRange;
+    return matchesSearch && matchesTipoVisitante && matchesNombreActivo && matchesSinHoraSalida && matchesSinActivos && matchesDateRange;
   });
 
   const renderVisitorForm = (visitor: EditingVisitor, isEditing: boolean) => {
@@ -1796,6 +1844,19 @@ export default function VisitorsScreen() {
           />
         </ThemedView>
 
+        {/* Persona/Departamento que visita (opcional) */}
+        <ThemedView style={styles.formGroup}>
+          <ThemedText style={styles.label}>Persona/Departamento que visita (Opcional)</ThemedText>
+          <TextInput
+            style={styles.input}
+            defaultValue={visitor.dep_pers_visita}
+            onChangeText={(text) => { depPersVisitaRef.current = text; }}
+            placeholder="Persona o departamento que visita"
+            placeholderTextColor="#999"
+            key={`dep-pers-visita-${isEditing ? 'edit' : 'create'}-${isEditing ? visitor.id : 'new'}`}
+          />
+        </ThemedView>
+
         {/* Tipo de visitante */}
         <ThemedView style={styles.formGroup}>
           <ThemedText style={styles.label}>Tipo de Visitante</ThemedText>
@@ -1914,14 +1975,26 @@ export default function VisitorsScreen() {
                 </View>
               </ThemedView>
 
-              {/* Número de serie */}
+              {/* Nombre activo */}
               <ThemedView style={styles.formGroup}>
-                <ThemedText style={styles.label}>Número de Serie *</ThemedText>
+                <ThemedText style={styles.label}>Nombre activo (Opcional)</ThemedText>
                 <TextInput
                   style={styles.input}
-                  value={activo.numero_serie}
-                  onChangeText={(text) => updateActivo(activoIndex, 'numero_serie', text, isEditing)}
-                  placeholder="Número de serie"
+                  value={activo.nombre}
+                  onChangeText={(text) => updateActivo(activoIndex, 'nombre', text, isEditing)}
+                  placeholder="Nombre del activo"
+                  placeholderTextColor="#999"
+                />
+              </ThemedView>
+
+              {/* Número de identificador */}
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.label}>Número de identificador *</ThemedText>
+                <TextInput
+                  style={styles.input}
+                  value={activo.numero_id}
+                  onChangeText={(text) => updateActivo(activoIndex, 'numero_id', text, isEditing)}
+                  placeholder="Número de identificador"
                   placeholderTextColor="#999"
                 />
               </ThemedView>
@@ -2072,6 +2145,13 @@ export default function VisitorsScreen() {
           <ThemedText style={styles.visitorValueMain}>{visitor.razon_visita}</ThemedText>
         </ThemedView>
 
+        {visitor.dep_pers_visita && (
+          <ThemedView style={styles.visitorDetailMain}>
+            <ThemedText style={styles.visitorLabelMain}>Persona/Departamento que visita:</ThemedText>
+            <ThemedText style={styles.visitorValueMain}>{visitor.dep_pers_visita}</ThemedText>
+          </ThemedView>
+        )}
+
         <ThemedView style={styles.visitorDetailMain}>
           <ThemedText style={styles.visitorLabelMain}>Responsable:</ThemedText>
           <ThemedText style={styles.visitorValueMain}>{visitor.responsable.nombre}</ThemedText>
@@ -2139,6 +2219,13 @@ export default function VisitorsScreen() {
                         <ThemedText style={styles.visitorValueMain}>{activo.tipo.nombre}</ThemedText>
                       </ThemedView>
 
+                      {activo.nombre ? (
+                        <ThemedView style={styles.visitorDetailMain}>
+                          <ThemedText style={styles.visitorLabelMain}>Nombre activo:</ThemedText>
+                          <ThemedText style={styles.visitorValueMain}>{activo.nombre}</ThemedText>
+                        </ThemedView>
+                      ) : null}
+
                       {detallesArray.length > 0 && (
                         <ThemedView style={styles.detallesSection}>
                           <ThemedText style={styles.visitorLabelMain}>Detalles:</ThemedText>
@@ -2153,8 +2240,8 @@ export default function VisitorsScreen() {
                       )}
 
                       <ThemedView style={styles.visitorDetailMain}>
-                        <ThemedText style={styles.visitorLabelMain}>Número de Serie:</ThemedText>
-                        <ThemedText style={styles.visitorValueMain}>{activo.numero_serie}</ThemedText>
+                        <ThemedText style={styles.visitorLabelMain}>Número de identificador:</ThemedText>
+                        <ThemedText style={styles.visitorValueMain}>{activo.numero_id}</ThemedText>
                       </ThemedView>
 
                       {activo.numero_activo && (
@@ -2301,7 +2388,7 @@ export default function VisitorsScreen() {
               {isFiltersExpanded ? (
                 <ThemedView style={styles.filtersContent}>
                   <ThemedView style={styles.filterGroupSearch}>
-                    <ThemedText style={styles.filterLabel}>Buscar por nombre, cédula, razón, autorización u observaciones:</ThemedText>
+                    <ThemedText style={styles.filterLabel}>Buscar por nombre, cédula, razón, persona que autoriza u observaciones:</ThemedText>
                     <TextInput
                       style={styles.searchInput}
                       value={searchText}
@@ -2346,6 +2433,37 @@ export default function VisitorsScreen() {
                       placeholder="DD-MM-YYYY"
                       placeholderTextColor="#999"
                     />
+                  </ThemedView>
+
+                  <ThemedView style={styles.filterGroupSearch}>
+                    <ThemedText style={styles.filterLabel}>Filtrar por nombre de activo:</ThemedText>
+                    <TextInput
+                      style={styles.searchInput}
+                      value={filterNombreActivo}
+                      onChangeText={setFilterNombreActivo}
+                      placeholder="Nombre del activo..."
+                      placeholderTextColor="#999"
+                    />
+                  </ThemedView>
+
+                  <ThemedView style={[styles.filterGroupSearch, { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }]}>
+                    <ThemedText style={styles.filterLabel}>Solo sin hora de salida</ThemedText>
+                    <TouchableOpacity
+                      style={[styles.checkboxButton, filterSinHoraSalida && styles.checkboxButtonActive]}
+                      onPress={() => setFilterSinHoraSalida(prev => !prev)}
+                    >
+                      <ThemedText style={[styles.checkboxButtonText, filterSinHoraSalida && { color: '#FFFFFF' }]}>{filterSinHoraSalida ? 'Sí' : 'No'}</ThemedText>
+                    </TouchableOpacity>
+                  </ThemedView>
+
+                  <ThemedView style={[styles.filterGroupSearch, { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }]}>
+                    <ThemedText style={styles.filterLabel}>Solo sin activos</ThemedText>
+                    <TouchableOpacity
+                      style={[styles.checkboxButton, filterSinActivos && styles.checkboxButtonActive]}
+                      onPress={() => setFilterSinActivos(prev => !prev)}
+                    >
+                      <ThemedText style={[styles.checkboxButtonText, filterSinActivos && { color: '#FFFFFF' }]}>{filterSinActivos ? 'Sí' : 'No'}</ThemedText>
+                    </TouchableOpacity>
                   </ThemedView>
                 </ThemedView>
               ) : null}
@@ -2478,6 +2596,7 @@ export default function VisitorsScreen() {
                               <ThemedText style={styles.filterLabel}>Cambios:</ThemedText>
                               {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => {
                                 const propName = String(c?.prop ?? '-');
+                                const propLabel = formatCambioLabel(propName);
                                 const value = formatChangeValue(propName, c?.after);
 
                                 // Si el valor tiene múltiples líneas (como activos), dividirlo
@@ -2486,7 +2605,7 @@ export default function VisitorsScreen() {
                                 return (
                                   <ThemedView key={`c-${row.id}-${idx}`} style={{ marginBottom: 8 }}>
                                     <ThemedText style={styles.changeDescription}>
-                                      <ThemedText style={{ fontWeight: '800' }}>{propName}: </ThemedText>
+                                      <ThemedText style={{ fontWeight: '800' }}>{propLabel}: </ThemedText>
                                       {valueLines.length > 1 ? (
                                         <ThemedView style={{ marginLeft: 8 }}>
                                           {valueLines.map((line: string, lineIdx: number) => (
@@ -2651,6 +2770,22 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginBottom: 8,
     color: '#333',
+  },
+  checkboxButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#007AFF',
+    backgroundColor: 'transparent',
+  },
+  checkboxButtonActive: {
+    backgroundColor: '#007AFF',
+  },
+  checkboxButtonText: {
+    fontSize: 14,
+    color: '#007AFF',
+    fontWeight: '600',
   },
   searchInput: {
     width: '100%',

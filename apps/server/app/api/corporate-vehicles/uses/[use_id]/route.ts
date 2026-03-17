@@ -5,6 +5,48 @@ import { toZonedTime } from "date-fns-tz";
 
 export const runtime = "nodejs";
 
+const normalizeHora = (raw?: any): string | null => {
+  if (raw == null) return null;
+  const v = String(raw).trim();
+  if (!v) return null;
+  if (/^\d{2}:\d{2}(:\d{2})?$/.test(v)) {
+    const parts = v.split(":");
+    const hh = parts[0].padStart(2, "0");
+    const mm = (parts[1] || "00").padStart(2, "0");
+    const ss = (parts[2] || "00").padStart(2, "0");
+    return `${hh}:${mm}:${ss}`;
+  }
+  if (v.includes("T")) {
+    const timePart = v.split("T")[1] || "";
+    return timePart.substring(0, 8);
+  }
+  return null;
+};
+
+const toIsoSafe = (value: any): string => {
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === "string" && value.trim()) {
+    const d = new Date(value);
+    if (!Number.isNaN(d.getTime())) return d.toISOString();
+  }
+  return new Date().toISOString();
+};
+
+const useToApiShape = (u: any) => {
+  const inicioIso = toIsoSafe(u?.inicio || u?.hora_inicio);
+  const finIso = toIsoSafe(u?.fin || u?.hora_fin);
+  const fechaIso = toIsoSafe(u?.fecha || u?.fecha_inicio || inicioIso);
+  const fechaInicioIso = toIsoSafe(u?.fecha_inicio || fechaIso);
+  const fechaFinIso = toIsoSafe(u?.fecha_fin || fechaIso);
+  return {
+    ...u,
+    fecha_inicio: fechaInicioIso,
+    fecha_fin: fechaFinIso,
+    hora_inicio: inicioIso,
+    hora_fin: finIso,
+  };
+};
+
 export async function GET(
   req: NextRequest,
   context: { params: Promise<{ use_id: string }> }
@@ -50,7 +92,7 @@ export async function GET(
     return NextResponse.json({
       status: true,
       data: {
-        ...usoObj,
+        ...useToApiShape(usoObj),
         bitacora: bitacora,
       },
     }, { status: 200 });
@@ -96,6 +138,8 @@ export async function PUT(
       fecha,
       inicio,
       fin,
+      fecha_inicio,
+      fecha_fin,
       hora_inicio,
       hora_fin,
       combustible_inicio,
@@ -108,28 +152,48 @@ export async function PUT(
       // bitacora_id: ignorado por solicitud
     } = body || {};
 
-    const fechaExisting = existingObj.fecha instanceof Date ? existingObj.fecha : (typeof existingObj.fecha === 'string' ? new Date(existingObj.fecha) : new Date());
-    const inicioExisting = existingObj.inicio instanceof Date
-      ? existingObj.inicio
-      : (typeof existingObj.inicio === 'string'
-          ? new Date(existingObj.inicio)
-          : (typeof existingObj.hora_inicio === 'string' ? new Date(existingObj.hora_inicio) : new Date()));
-    const finExisting = existingObj.fin instanceof Date
-      ? existingObj.fin
-      : (typeof existingObj.fin === 'string'
-          ? new Date(existingObj.fin)
-          : (typeof existingObj.hora_fin === 'string' ? new Date(existingObj.hora_fin) : new Date()));
+    console.log('body', body);
+
+    const fechaExisting = existingObj.fecha instanceof Date
+      ? existingObj.fecha
+      : (typeof existingObj.fecha === 'string' ? new Date(existingObj.fecha) : new Date());
+
+    const horaInicioExisting = normalizeHora(existingObj.hora_inicio || existingObj.inicio);
+    const horaFinExisting = normalizeHora(existingObj.hora_fin || existingObj.fin);
+    const horaInicioNorm =
+      hora_inicio !== undefined || inicio !== undefined
+        ? normalizeHora(hora_inicio || inicio)
+        : horaInicioExisting;
+    const horaFinNorm =
+      hora_fin !== undefined || fin !== undefined
+        ? normalizeHora(hora_fin || fin)
+        : horaFinExisting;
+
+    const buildDateTimeFromFechaAndHora = (fechaBase: Date, horaNorm: string | null): Date => {
+      const base = fechaBase instanceof Date ? new Date(fechaBase) : new Date(fechaBase || new Date());
+      if (!horaNorm) return base;
+      const [hh, mm, ss] = horaNorm.split(':');
+      base.setHours(Number(hh) || 0, Number(mm) || 0, Number(ss) || 0, 0);
+      return base;
+    };
+
+    const inicioExisting = buildDateTimeFromFechaAndHora(fechaExisting, horaInicioExisting);
+    const finExisting = buildDateTimeFromFechaAndHora(fechaExisting, horaFinExisting);
+
+    const fechaValue = fecha !== undefined
+      ? (fecha ? new Date(fecha) : new Date())
+      : (fecha_inicio !== undefined
+          ? (fecha_inicio ? new Date(fecha_inicio) : new Date())
+          : (fecha_fin !== undefined ? (fecha_fin ? new Date(fecha_fin) : new Date()) : fechaExisting));
+    const inicioValue = fecha_inicio.split('T')[0] + 'T' + hora_inicio.split('T')[1];
+    const finValue = fecha_fin.split('T')[0] + 'T' + hora_fin.split('T')[1];
 
     const updateData: any = {
       nombre_conductor: nombre_conductor !== undefined ? String(nombre_conductor ?? "") : existingObj.nombre_conductor,
       codigo_conductor: codigo_conductor !== undefined ? String(codigo_conductor ?? "") : existingObj.codigo_conductor,
-      fecha: fecha !== undefined ? (fecha ? new Date(fecha) : new Date()) : fechaExisting,
-      inicio: inicio !== undefined
-        ? (inicio ? new Date(inicio) : new Date())
-        : (hora_inicio !== undefined ? (hora_inicio ? new Date(hora_inicio) : new Date()) : inicioExisting),
-      fin: fin !== undefined
-        ? (fin ? new Date(fin) : new Date())
-        : (hora_fin !== undefined ? (hora_fin ? new Date(hora_fin) : new Date()) : finExisting),
+      fecha: fechaValue,
+      inicio: inicioValue,
+      fin: finValue,
       combustible_inicio:
         combustible_inicio !== undefined ? String(combustible_inicio ?? "") : existingObj.combustible_inicio,
       combustible_fin: combustible_fin !== undefined ? String(combustible_fin ?? "") : existingObj.combustible_fin,
@@ -214,7 +278,7 @@ export async function PUT(
       });
     }
 
-    return NextResponse.json({ status: true, data: updated }, { status: 200 });
+    return NextResponse.json({ status: true, data: useToApiShape(updated) }, { status: 200 });
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in PUT /api/corporate-vehicles/uses/[use_id]:", errorMessage);

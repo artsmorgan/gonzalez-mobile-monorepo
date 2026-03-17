@@ -41,6 +41,7 @@ import {
 } from '@/hooks/evaluationFunctions';
 import { eventBus } from '@/hooks/eventBus';
 import { useQRScanner } from '@/hooks/useQRScanner';
+import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 
 type InductionTourRecordScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'InductionTourRecord'>;
 
@@ -177,7 +178,6 @@ export default function InductionTourRecordScreen() {
   const [filterContratoId, setFilterContratoId] = useState<number | null>(null);
   const [filterCorpoId, setFilterCorpoId] = useState<number | null>(null);
   const [filterPuestoId, setFilterPuestoId] = useState<number | null>(null);
-  const [filterPlazaId, setFilterPlazaId] = useState<number | null>(null);
   const [isHierarchyFiltersExpanded, setIsHierarchyFiltersExpanded] = useState(false);
   const hasFetchedStructureRef = useRef<boolean>(false);
 
@@ -201,7 +201,6 @@ export default function InductionTourRecordScreen() {
   const [marcaContratoId, setMarcaContratoId] = useState<number | null>(null);
   const [marcaCorpoId, setMarcaCorpoId] = useState<number | null>(null);
   const [marcaPuestoId, setMarcaPuestoId] = useState<number | null>(null);
-  const [marcaPlazaId, setMarcaPlazaId] = useState<number | null>(null);
 
   // Editing state
   const [editingRecord, setEditingRecord] = useState<EditingInductionTourRecord | null>(null);
@@ -450,10 +449,7 @@ export default function InductionTourRecordScreen() {
   };
 
   const formatDate = (date: Date): string => {
-    const day = date.getDate().toString().padStart(2, '0');
-    const month = (date.getMonth() + 1).toString().padStart(2, '0');
-    const year = date.getFullYear();
-    return `${day}-${month}-${year}`;
+    return convertDateTimestampToLocalString(date.toISOString(), false);
   };
 
   const formatDateForRequest = (date: Date): string => {
@@ -722,7 +718,6 @@ export default function InductionTourRecordScreen() {
       setMarcaContratoId(null);
       setMarcaCorpoId(null);
       setMarcaPuestoId(null);
-      setMarcaPlazaId(null);
       return null;
     }
     try {
@@ -737,13 +732,11 @@ export default function InductionTourRecordScreen() {
       const contratoIdRaw = current?.contrato?.id ?? current?.contrato_id;
       const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
       const puestoIdRaw = current?.puesto?.id ?? current?.puesto_id;
-      const plazaIdRaw = current?.plaza?.id ?? current?.plaza_id;
       setMarcaEmpresaId(empresaIdRaw !== undefined && empresaIdRaw !== null ? Number(empresaIdRaw) : null);
       setMarcaClienteId(clienteIdRaw !== undefined && clienteIdRaw !== null ? Number(clienteIdRaw) : null);
       setMarcaContratoId(contratoIdRaw !== undefined && contratoIdRaw !== null ? Number(contratoIdRaw) : null);
       setMarcaCorpoId(corpoIdRaw !== undefined && corpoIdRaw !== null ? Number(corpoIdRaw) : null);
       setMarcaPuestoId(puestoIdRaw !== undefined && puestoIdRaw !== null ? Number(puestoIdRaw) : null);
-      setMarcaPlazaId(plazaIdRaw !== undefined && plazaIdRaw !== null ? Number(plazaIdRaw) : null);
       return current;
     } catch {
       setHasCurrentMarca(false);
@@ -752,7 +745,6 @@ export default function InductionTourRecordScreen() {
       setMarcaContratoId(null);
       setMarcaCorpoId(null);
       setMarcaPuestoId(null);
-      setMarcaPlazaId(null);
       return null;
     }
   };
@@ -874,11 +866,6 @@ export default function InductionTourRecordScreen() {
     return sucursal?.puestos || [];
   }, [filterSucursales, filterCorpoId]);
 
-  const filterPlazas = useMemo(() => {
-    const puesto = filterPuestos.find((p: any) => p.id === filterPuestoId);
-    return puesto?.plazas || [];
-  }, [filterPuestos, filterPuestoId]);
-
   // Nodos computados para jerarquía del formulario
   const formEmpresas = useMemo(() => (Array.isArray(structure) ? structure : []), [structure]);
 
@@ -954,7 +941,6 @@ export default function InductionTourRecordScreen() {
       const contratoId = filterContratoId ?? marcaContratoId ?? Number(current?.contrato?.id ?? current?.contrato_id ?? 0);
       const corpoId = filterCorpoId ?? marcaCorpoId ?? Number(current?.corpo?.id ?? current?.corpo_id ?? 0);
       const puestoId = filterPuestoId ?? marcaPuestoId ?? Number(current?.puesto?.id ?? current?.puesto_id ?? 0);
-      const plazaId = filterPlazaId ?? marcaPlazaId ?? Number(current?.plaza?.id ?? current?.plaza_id ?? 0);
 
       if (!corpoId) {
         setError('No se encontró el ID del corpo');
@@ -976,7 +962,6 @@ export default function InductionTourRecordScreen() {
           contrato_id: contratoId || undefined,
           corpo_id: corpoId || undefined,
           puesto_id: puestoId || undefined,
-          plaza_id: plazaId || undefined,
           refreshAccessToken,
           logout,
         });
@@ -1010,7 +995,7 @@ export default function InductionTourRecordScreen() {
     } finally {
       setIsLoading(false);
     }
-  }, [refreshAccessToken, logout, filterEmpresaId, filterClienteId, filterDivisionId, filterContratoId, filterCorpoId, filterPuestoId, filterPlazaId, marcaEmpresaId, marcaClienteId, marcaContratoId, marcaCorpoId, marcaPuestoId, marcaPlazaId]);
+  }, [refreshAccessToken, logout, filterEmpresaId, filterClienteId, filterDivisionId, filterContratoId, filterCorpoId, filterPuestoId, marcaEmpresaId, marcaClienteId, marcaContratoId, marcaCorpoId, marcaPuestoId]);
 
   // Inicializar filtros jerárquicos con current_marca
   useEffect(() => {
@@ -1020,16 +1005,15 @@ export default function InductionTourRecordScreen() {
     if (marcaContratoId && !filterContratoId) setFilterContratoId(marcaContratoId);
     if (marcaCorpoId && !filterCorpoId) setFilterCorpoId(marcaCorpoId);
     if (marcaPuestoId && !filterPuestoId) setFilterPuestoId(marcaPuestoId);
-    if (marcaPlazaId && !filterPlazaId) setFilterPlazaId(marcaPlazaId);
-  }, [structure, marcaEmpresaId, marcaClienteId, marcaContratoId, marcaCorpoId, marcaPuestoId, marcaPlazaId]);
+  }, [structure, marcaEmpresaId, marcaClienteId, marcaContratoId, marcaCorpoId, marcaPuestoId]);
 
 
-  // Trigger fetch cuando cambien los filtros jerárquicos
+  // Trigger fetch solo cuando se seleccione Sucursal o Puesto
   useEffect(() => {
-    if (structure && structure.length > 0 && (filterEmpresaId || filterClienteId || filterDivisionId || filterContratoId || filterCorpoId || filterPuestoId || filterPlazaId)) {
+    if (structure && structure.length > 0 && (filterCorpoId || filterPuestoId)) {
       fetchRecords();
     }
-  }, [filterEmpresaId, filterClienteId, filterDivisionId, filterContratoId, filterCorpoId, filterPuestoId, filterPlazaId]);
+  }, [filterCorpoId, filterPuestoId]);
 
   useFocusEffect(
     useCallback(() => {
@@ -1918,7 +1902,7 @@ export default function InductionTourRecordScreen() {
                   <ThemedText style={styles.signatureInfoValue}>Sesión: {info.sessionId || 'N/A'}</ThemedText>
                   <ThemedText style={styles.signatureInfoValue}>Empleado: {info.empleadoId || 'N/A'}</ThemedText>
                   <ThemedText style={styles.signatureInfoValue}>Lat: {info.latitud || 'N/A'} | Long: {info.longitud || 'N/A'}</ThemedText>
-                  <ThemedText style={styles.signatureInfoValue}>Hora: {info.timestamp || 'N/A'}</ThemedText>
+                  <ThemedText style={styles.signatureInfoValue}>Hora: { convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}</ThemedText>
                 </>
               );
             })()}
@@ -2011,7 +1995,7 @@ export default function InductionTourRecordScreen() {
                     Supervisor (Corporación): {record.supervisor_corporacion || 'N/A'}
                   </ThemedText>
                   <ThemedText style={styles.listItemSubtitle}>
-                    Fecha: {formatDateForDisplay(record.fecha)}
+                    Fecha: {convertDateTimestampToLocalString(new Date((record as any).fecha).toISOString(), false)}
                   </ThemedText>
                 </ThemedView>
                 <ThemedView style={styles.listItemActions}>
@@ -2747,7 +2731,7 @@ export default function InductionTourRecordScreen() {
                             <ThemedText style={styles.signatureInfoValue}>Sesión: {info.sessionId || 'N/A'}</ThemedText>
                             <ThemedText style={styles.signatureInfoValue}>Empleado: {info.empleadoId || 'N/A'}</ThemedText>
                             <ThemedText style={styles.signatureInfoValue}>Lat: {info.latitud || 'N/A'} | Long: {info.longitud || 'N/A'}</ThemedText>
-                            <ThemedText style={styles.signatureInfoValue}>Hora: {info.timestamp || 'N/A'}</ThemedText>
+                            <ThemedText style={styles.signatureInfoValue}>Hora: { convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}</ThemedText>
                           </>
                         );
                       })()}
@@ -2791,8 +2775,7 @@ export default function InductionTourRecordScreen() {
           ) : (
             <ThemedView style={styles.listSection}>
               {/* Filtros Jerárquicos */}
-              {!isLoading && (
-                <ThemedView style={styles.filtersContainer}>
+              <ThemedView style={styles.filtersContainer}>
                   <ThemedView style={styles.filtersHeader}>
                     <TouchableOpacity
                       style={styles.filterToggleButton}
@@ -2816,7 +2799,6 @@ export default function InductionTourRecordScreen() {
                           setFilterContratoId(null);
                           setFilterCorpoId(null);
                           setFilterPuestoId(null);
-                          setFilterPlazaId(null);
                         }}
                       >
                         <Ionicons name="refresh" size={16} color="#FF3B30" />
@@ -2838,7 +2820,6 @@ export default function InductionTourRecordScreen() {
                               setFilterContratoId(null);
                               setFilterCorpoId(null);
                               setFilterPuestoId(null);
-                              setFilterPlazaId(null);
                             }}
                             style={styles.picker}
                           >
@@ -2862,7 +2843,6 @@ export default function InductionTourRecordScreen() {
                                 setFilterContratoId(null);
                                 setFilterCorpoId(null);
                                 setFilterPuestoId(null);
-                                setFilterPlazaId(null);
                               }}
                               style={styles.picker}
                             >
@@ -2887,7 +2867,6 @@ export default function InductionTourRecordScreen() {
                                 setFilterContratoId(null);
                                 setFilterCorpoId(null);
                                 setFilterPuestoId(null);
-                                setFilterPlazaId(null);
                               }}
                               style={styles.picker}
                             >
@@ -2910,7 +2889,6 @@ export default function InductionTourRecordScreen() {
                                 setFilterContratoId(value && value !== '' ? Number(value) : null);
                                 setFilterCorpoId(null);
                                 setFilterPuestoId(null);
-                                setFilterPlazaId(null);
                               }}
                               style={styles.picker}
                             >
@@ -2932,7 +2910,6 @@ export default function InductionTourRecordScreen() {
                               onValueChange={(value) => {
                                 setFilterCorpoId(value && value !== '' ? Number(value) : null);
                                 setFilterPuestoId(null);
-                                setFilterPlazaId(null);
                               }}
                               style={styles.picker}
                             >
@@ -2953,7 +2930,6 @@ export default function InductionTourRecordScreen() {
                               selectedValue={filterPuestoId || ''}
                               onValueChange={(value) => {
                                 setFilterPuestoId(value && value !== '' ? Number(value) : null);
-                                setFilterPlazaId(null);
                               }}
                               style={styles.picker}
                             >
@@ -2966,29 +2942,9 @@ export default function InductionTourRecordScreen() {
                         </ThemedView>
                       )}
 
-                      {filterPuestoId && (
-                        <ThemedView style={styles.filterGroup}>
-                          <ThemedText style={styles.filterLabel}>Plaza:</ThemedText>
-                          <View style={styles.pickerWrapper}>
-                            <Picker
-                              selectedValue={filterPlazaId || ''}
-                              onValueChange={(value) => {
-                                setFilterPlazaId(value && value !== '' ? Number(value) : null);
-                              }}
-                              style={styles.picker}
-                            >
-                              <Picker.Item label="Seleccionar..." value="" />
-                              {filterPlazas.map((p: any) => (
-                                <Picker.Item key={p.id} label={p.nombre} value={p.id} />
-                              ))}
-                            </Picker>
-                          </View>
-                        </ThemedView>
-                      )}
                     </ThemedView>
                   )}
                 </ThemedView>
-              )}
 
               {!isLoading && (
                 <TouchableOpacity style={styles.createButton} onPress={startCreating}>
@@ -3078,7 +3034,7 @@ export default function InductionTourRecordScreen() {
                   } catch {
                     parsed = [];
                   }
-                  const createdAtLabel = formatCambioCreatedAt(row?.created_at);
+                  const createdAtLabel = convertDateTimestampToLocalString(new Date(row?.created_at).toISOString());
                   const isOpen = expandedCambioId === row.id;
 
                   return (
@@ -3167,7 +3123,7 @@ export default function InductionTourRecordScreen() {
                                                 {info
                                                   ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${
                                                       info.empleadoId || 'N/A'
-                                                    } - Hora: ${info.timestamp || 'N/A'}`
+                                                    } - Hora: ${ convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}`
                                                   : 'Firma (formato no decodificable)'}
                                               </ThemedText>
                                             </ThemedView>
@@ -3324,7 +3280,7 @@ export default function InductionTourRecordScreen() {
                                             return info
                                               ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${
                                                   info.empleadoId || 'N/A'
-                                                } - Hora: ${info.timestamp || 'N/A'}`
+                                                } - Hora: ${ convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}`
                                               : 'Firma (formato no decodificable)';
                                           })()
                                         : !isFirmaResponsable
@@ -4152,30 +4108,37 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontWeight: '600',
   },
-  // Filtros jerárquicos
+  // Filtros jerárquicos (mismo diseño que VisitorsScreen)
   filtersContainer: {
+    width: '100%',
+    marginBottom: 20,
     backgroundColor: '#FFFFFF',
     borderRadius: 8,
-    padding: 16,
-    marginBottom: 16,
     borderWidth: 1,
     borderColor: '#E0E0E0',
+    overflow: 'hidden',
   },
   filtersHeader: {
     flexDirection: 'row',
-    alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 12,
+    alignItems: 'center',
+    padding: 16,
+    backgroundColor: '#F8F9FA',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
   },
   filterToggleButton: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+    padding: 8,
+    borderRadius: 6,
+    backgroundColor: '#F8F9FA',
   },
   filtersTitle: {
     fontSize: 16,
-    fontWeight: 'bold',
-    color: '#000000',
+    fontWeight: '600',
+    color: '#007AFF',
   },
   resetFiltersButton: {
     flexDirection: 'row',
@@ -4190,7 +4153,9 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   filtersContent: {
+    padding: 16,
     gap: 12,
+    backgroundColor: '#F8F9FA',
   },
   filterGroup: {
     marginBottom: 12,

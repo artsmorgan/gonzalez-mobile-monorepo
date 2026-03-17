@@ -3,7 +3,7 @@ import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { toZonedTime, format } from "date-fns-tz";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
-import { createReport } from "../../../utils/createReporteArticuloMantenimiento";
+import { createReport, updateReport } from "../../../utils/createReporteArticuloMantenimiento";
 
 // Función auxiliar para convertir hora a formato Time
 function parseTimeValue(timeValue: any): Date | null {
@@ -54,7 +54,86 @@ export async function GET(req: NextRequest) {
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         const params = req.nextUrl.searchParams;
+        const puestoIdParam = params.get("puesto_id");
+        const empleadoIdParam = params.get("empleado_id");
         const marcaId = params.get("m");
+
+        // Listado de registros de entrega de puesto por puesto (y opcionalmente por empleado)
+        // Este flujo se usa desde la app móvil para consultar el historial de entregas.
+        if (puestoIdParam) {
+            const puestoId = parseInt(puestoIdParam, 10);
+            if (isNaN(puestoId)) {
+                return NextResponse.json({ status: false, message: "puesto_id inválido" }, { status: 400 });
+            }
+
+            const where: any = {
+                puesto_id: puestoId,
+            };
+
+            if (empleadoIdParam) {
+                const empleadoId = parseInt(empleadoIdParam, 10);
+                if (!isNaN(empleadoId)) {
+                    where.created_by = empleadoId;
+                }
+            }
+
+            const registros = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "e_registro_entrega_puesto",
+                    operation: "findMany",
+                    where,
+                    orderBy: {
+                        created_at: "desc",
+                    },
+                },
+            });
+
+            const registrosArray = Array.isArray(registros) ? registros : (registros ? [registros] : []);
+
+            const registros_return = registrosArray.map((reg: any) => {
+                let articulosParsed: any[] = [];
+                try {
+                    if (reg.articulos_puesto) {
+                        const parsed = typeof reg.articulos_puesto === "string" ? JSON.parse(reg.articulos_puesto) : reg.articulos_puesto;
+                        if (Array.isArray(parsed)) {
+                            articulosParsed = parsed;
+                        }
+                    }
+                } catch {
+                    articulosParsed = [];
+                }
+
+                return {
+                    id: reg.id,
+                    oficial_entrega: reg.oficial_entrega,
+                    fecha_entrada_entrega: reg.fecha_entrada_entrega,
+                    fecha_salida_entrega: reg.fecha_salida_entrega,
+                    hora_entrada_entrega: reg.hora_entrada_entrega,
+                    hora_salida_entrega: reg.hora_salida_entrega,
+                    turno_entrega: reg.turno_entrega,
+                    oficial_recibe: reg.oficial_recibe,
+                    fecha_entrada_recibe: reg.fecha_entrada_recibe,
+                    fecha_salida_recibe: reg.fecha_salida_recibe,
+                    hora_entrada_recibe: reg.hora_entrada_recibe,
+                    hora_salida_recibe: reg.hora_salida_recibe,
+                    turno_recibe: reg.turno_recibe,
+                    articulos_puesto: articulosParsed,
+                    observaciones: reg.observaciones,
+                    firma_recibe: reg.firma_recibe,
+                    firma_entrega: reg.firma_entrega,
+                    firma_responsable: reg.firma_responsable,
+                    created_at: reg.created_at,
+                    created_by: reg.created_by,
+                };
+            });
+
+            return NextResponse.json({
+                status: true,
+                registros: registros_return,
+            }, { status: 200 });
+        }
 
         if (!marcaId) {
             return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
@@ -682,12 +761,17 @@ export async function POST(req: NextRequest) {
         // Parsear fechas y horas del body
         const fechaEntradaEntregaParsed = parseDateValue(fecha_entrada_entrega);
         const fechaSalidaEntregaParsed = parseDateValue(fecha_salida_entrega);
-        const horaEntradaEntregaParsed = parseTimeValue(hora_entrada_entrega);
-        const horaSalidaEntregaParsed = parseTimeValue(hora_salida_entrega);
+        const horaEntradaEntregaParsed = `${hora_entrada_entrega}:00.000Z`;
+        const horaSalidaEntregaParsed = `${hora_salida_entrega}:00.000Z`;
         const fechaEntradaRecibeParsed = parseDateValue(fecha_entrada_recibe);
         const fechaSalidaRecibeParsed = parseDateValue(fecha_salida_recibe);
-        const horaEntradaRecibeParsed = parseTimeValue(hora_entrada_recibe);
-        const horaSalidaRecibeParsed = parseTimeValue(hora_salida_recibe);
+        const horaEntradaRecibeParsed = `${hora_entrada_recibe}:00.000Z`;
+        const horaSalidaRecibeParsed = `${hora_salida_recibe}:00.000Z`;
+
+        console.log('horaEntradaEntregaParsed', horaEntradaEntregaParsed);
+        console.log('horaSalidaEntregaParsed', horaSalidaEntregaParsed);
+        console.log('horaEntradaRecibeParsed', horaEntradaRecibeParsed);
+        console.log('horaSalidaRecibeParsed', horaSalidaRecibeParsed);
 
         // Validar que todas las fechas y horas sean válidas
         if (!fechaEntradaEntregaParsed || !fechaSalidaEntregaParsed || !horaEntradaEntregaParsed || !horaSalidaEntregaParsed ||
@@ -701,12 +785,12 @@ export async function POST(req: NextRequest) {
         // Convertir a ISO strings
         const fechaEntradaEntregaISO = fechaEntradaEntregaParsed.toISOString();
         const fechaSalidaEntregaISO = fechaSalidaEntregaParsed.toISOString();
-        const horaEntradaEntregaISO = horaEntradaEntregaParsed.toISOString();
-        const horaSalidaEntregaISO = horaSalidaEntregaParsed.toISOString();
+        const horaEntradaEntregaISO = new Date(horaEntradaEntregaParsed).toISOString();
+        const horaSalidaEntregaISO = new Date(horaSalidaEntregaParsed).toISOString();
         const fechaEntradaRecibeISO = fechaEntradaRecibeParsed.toISOString();
         const fechaSalidaRecibeISO = fechaSalidaRecibeParsed.toISOString();
-        const horaEntradaRecibeISO = horaEntradaRecibeParsed.toISOString();
-        const horaSalidaRecibeISO = horaSalidaRecibeParsed.toISOString();
+        const horaEntradaRecibeISO = new Date(horaEntradaRecibeParsed).toISOString();
+        const horaSalidaRecibeISO = new Date(horaSalidaRecibeParsed).toISOString();
 
         // Validar que todas las fechas y horas sean válidas
         if (!fechaEntradaEntregaISO || !fechaSalidaEntregaISO || !horaEntradaEntregaISO || !horaSalidaEntregaISO ||
@@ -863,6 +947,7 @@ export async function POST(req: NextRequest) {
             let articulos_desc = ".";
             let send_notification = false;
             let articulos_reporte = [];
+            let articulos_reporte_update = [];
             if (JSON.parse(articulos_puesto).length > 0) {
                 const articulos_puesto_array = JSON.parse(articulos_puesto);
                 let init_desc = false;
@@ -873,9 +958,10 @@ export async function POST(req: NextRequest) {
                         add_desc = true;
                     }
 
-                    let was_good = false;
+                    let last_estado = null;
+                    let last_mantenimiento = null;
                     if (articulo.tipo == "Plan") {
-                        const last_mantenimiento = await callDynamicPrisma({
+                        last_mantenimiento = await callDynamicPrisma({
                             req,
                             data: {
                                 action: "GET",
@@ -885,14 +971,15 @@ export async function POST(req: NextRequest) {
                                 orderBy: { fecha_solucion: "desc" },
                             },
                         });
-                        if (last_mantenimiento && last_mantenimiento.id) {
-                            if (last_mantenimiento.estado == "Bueno") {
-                                was_good = true;
-                            }
+                        if (last_mantenimiento) {
+                            last_estado = last_mantenimiento.estado;
+                        }
+                        else {
+                            last_estado = "Bueno";
                         }
                     }
                     else {
-                        const last_mantenimiento = await callDynamicPrisma({
+                        last_mantenimiento = await callDynamicPrisma({
                             req,
                             data: {
                                 action: "GET",
@@ -902,45 +989,77 @@ export async function POST(req: NextRequest) {
                                 orderBy: { fecha_solucion: "desc" },
                             },
                         });
-                        if (last_mantenimiento && last_mantenimiento.id) {
-                            if (last_mantenimiento.estado == "Bueno") {
-                                was_good = true;
+                        if (last_mantenimiento) {
+                            last_estado = last_mantenimiento.estado;
+                        }
+                        else {
+                            last_estado = "Bueno";
+                        }
+                    }
+
+                    // Si el último mantenimiento tiene un updated_at más reciente que now, no crear/editar para este artículo
+                    if (last_mantenimiento && last_mantenimiento.updated_at) {
+                        const lastUpdated = new Date(last_mantenimiento.updated_at);
+                        const nowDate = new Date(now);
+                        if (!isNaN(lastUpdated.getTime()) && !isNaN(nowDate.getTime()) && lastUpdated.getTime() > nowDate.getTime()) {
+                            continue;
+                        }
+                    }
+
+                    switch (articulo.estado) {
+                        case "Bueno":
+                            if (last_estado != "Bueno") {
+                                articulos_reporte_update.push({
+                                    id: last_mantenimiento.id,
+                                    estado: "Bueno",
+                                    cantidad_real: articulo.cantidad_requerida,
+                                    fecha_solucion: now,
+                                })
                             }
-                        }
-                    }
-
-                    if (articulo.estado != "Bueno" && was_good) {
-                        add_desc = true;
-                    }
-
-                    if (add_desc) {
-                        send_notification = true;
-                        if (!init_desc) {
-                            articulos_desc = ". Sin embargo, los artículos registrados presentan los siguientes detalles:\n";
-                            init_desc = true;
-                        }
-                        articulos_desc += articulo_desc;
-                        articulos_reporte.push({
-                            id: articulo.id,
-                            nombre: articulo.nombre,
-                            tipo: articulo.tipo,
-                            marca: articulo.marca,
-                            serie: articulo.serie,
-                            cantidad_requerida: articulo.cantidad_requerida,
-                            cantidad_real: articulo.cantidad_real,
-                            estado: articulo.estado,
-                            observaciones: articulo.observaciones,
-                        });
+                            break;
+                        default:
+                            if (last_estado == "Bueno") {
+                                send_notification = true;
+                                if (!init_desc) {
+                                    articulos_desc = ". Sin embargo, los artículos registrados presentan los siguientes detalles:\n";
+                                    init_desc = true;
+                                }
+                                articulos_desc += articulo_desc;
+                                articulos_reporte.push({
+                                    id: articulo.id,
+                                    nombre: articulo.nombre,
+                                    tipo: articulo.tipo,
+                                    marca: articulo.marca,
+                                    serie: articulo.serie,
+                                    cantidad_requerida: articulo.cantidad_requerida,
+                                    cantidad_real: articulo.cantidad_real,
+                                    estado: articulo.estado,
+                                    observaciones: articulo.observaciones,
+                                    created_at: now,
+                                    updated_at: now,
+                                });
+                            } else if (articulo.estado != last_estado) {
+                                articulos_reporte_update.push({
+                                    id: last_mantenimiento.id,
+                                    estado: articulo.estado,
+                                    cantidad_real: articulo.cantidad_real,
+                                    fecha_solucion: null,
+                                    updated_at: now,
+                                });
+                            }
+                            break;
                     }
                 }
             }
+
+            await createReport(req, articulos_reporte);
+            await updateReport(req, articulos_reporte_update);
 
             if (send_notification) {
                 const fechaEntradaFormatted = fecha_entrada_entrega.includes("T") ? fecha_entrada_entrega.split("T")[0] : fecha_entrada_entrega;
                 const horaEntradaFormatted = hora_entrada_entrega.includes("T") ? hora_entrada_entrega.split("T")[1].split(".")[0] : hora_entrada_entrega;
                 const description = `El usuario ${employee} ha registrado una entrega de puesto${location} (Ocupado anteriormente por ${oficial_entrega}) el día ${fechaEntradaFormatted} a las ${horaEntradaFormatted}${articulos_desc}`;
                 await sendNotificationByRole(req, nuevoRegistro.corpo_id, [], "Registro de entrega de puesto creado", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
-                await createReport(req, articulos_reporte);
             }
         }
 

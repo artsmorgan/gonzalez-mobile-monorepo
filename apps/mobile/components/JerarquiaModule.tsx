@@ -146,6 +146,7 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
           style: 'destructive',
           onPress: async () => {
             try {
+              Alert.alert('Actualizando jerarquía', 'Actualizando jerarquía, por favor no cierre la ventana');
               setIsRefreshing(true);
               resetSelection();
 
@@ -175,6 +176,7 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
 
               setStructure(data.structure);
               await AsyncStorage.setItem('main_structure_cache', JSON.stringify(data.structure));
+              Alert.alert('Éxito', 'Se ha actualizado la jerarquía');
             } catch (e) {
               Alert.alert(
                 'Error',
@@ -663,7 +665,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   scroll: {
-    maxHeight: 420,
+    // Permitir que el contenido crezca según los selects e información
   },
   scrollContent: {
     paddingBottom: 8,

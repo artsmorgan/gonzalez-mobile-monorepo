@@ -35,6 +35,7 @@ export async function POST(req: NextRequest) {
             : parseInt(String(empleadoId), 10);
 
         if (!empleadoIdToUse || !inicio || !fin || !firma_empleado) {
+            console.log('Faltan datos requeridos', { empleadoIdToUse, inicio, fin, firma_empleado });
             return NextResponse.json({ status: false, message: "Faltan datos requeridos" }, { status: 400 });
         }
 

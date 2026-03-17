@@ -4,11 +4,6 @@ import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 
 export async function GET(req: NextRequest) {
     try {
-        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
-        if (!valid) {
-            return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
-        }
-
         // Extraer el token JWT real del header Authorization
         const authHeader = req.headers.get("authorization") || "";
         const token = authHeader.startsWith("Bearer ") ? authHeader.split(" ")[1] : "";

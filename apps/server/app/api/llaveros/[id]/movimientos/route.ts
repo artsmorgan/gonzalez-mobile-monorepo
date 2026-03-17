@@ -133,6 +133,9 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
         const horaDate = parseTimeOnly(hora);
         if (!fechaDate || !horaDate) return NextResponse.json({ status: false, message: "Fecha u hora inválida" }, { status: 200 });
 
+        const horaRaw = String(hora ?? "").trim();
+        const horaNormalized = '1970-01-01T' + horaRaw + '.000Z';
+
         const requiredStrings = [
             nombre_persona_recibe,
             nombre_persona_entrega,
@@ -156,7 +159,8 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
                     departamento: String(departamento),
                     telefono: String(telefono),
                     fecha: fechaDate.toISOString(),
-                    hora: horaDate.toISOString(),
+                    // Guardar la hora como cadena HH:mm:ss sin desplazamiento por zona horaria
+                    hora: horaNormalized,
                     firma_entrega:
                         firma_entrega != null && typeof firma_entrega === "string" && firma_entrega.trim().length > 0
                             ? firma_entrega.trim()
@@ -173,7 +177,7 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
         if (created) {
             let sucursalNombre = "Desconocida";
             let fechaRegistro = fechaDate.toISOString().split("T")[0];
-            let horaRegistro = horaDate.toISOString().split("T")[1].split(".")[0];
+            let horaRegistro = horaNormalized;
 
             if (llavero.corpo_id) {
                 const sucursal = await callDynamicPrisma({

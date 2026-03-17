@@ -21,6 +21,7 @@ import SignatureScreen from "react-native-signature-canvas";
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import { formatDateDMY } from '@/utils/formatDate';
+import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 import { useAuth } from '@/contexts/AuthContext';
 import AppHeader from '@/components/AppHeader';
 import AppFooter from '@/components/AppFooter';
@@ -42,6 +43,7 @@ import { eventBus } from '@/hooks/eventBus';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import { useQRScanner } from '@/hooks/useQRScanner';
 import authedFetch from '@/hooks/authedFetch';
+import { Collapsible } from '@/components/Collapsible';
 
 type OpeningClosingPositionScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'OpeningClosingPosition'>;
 
@@ -175,6 +177,7 @@ export default function OpeningClosingPositionScreen() {
   const [marcaDivisionId, setMarcaDivisionId] = useState<number | null>(null); // current_marca.roleDivision.division.id
 
   // Estructura principal (árbol) + loading + selección
+  const [mainStructureFetched, setMainStructureFetched] = useState(false);
   const [structure, setStructure] = useState<MainStructureTree>([]);
   const [isStructureLoading, setIsStructureLoading] = useState(false);
   const [selectedEmpresaId, setSelectedEmpresaId] = useState<number | null>(null);
@@ -183,6 +186,15 @@ export default function OpeningClosingPositionScreen() {
   const [selectedContratoId, setSelectedContratoId] = useState<number | null>(null);
   const [selectedSucursalId, setSelectedSucursalId] = useState<number | null>(null);
   const [selectedPuestoId, setSelectedPuestoId] = useState<number | null>(null); // solo 1 puesto
+
+  // Filtros jerárquicos de la lista principal (Empresa -> Sucursal)
+  const [filterEmpresaId, setFilterEmpresaId] = useState<number | null>(null);
+  const [filterClienteId, setFilterClienteId] = useState<number | null>(null);
+  const [filterDivisionId, setFilterDivisionId] = useState<number | null>(null);
+  const [filterContratoId, setFilterContratoId] = useState<number | null>(null);
+  const [filterCorpoId, setFilterCorpoId] = useState<number | null>(null);
+
+  const [isConnected, setIsConnected] = useState<boolean>(true);
 
   // Catálogo artículos (inventario - solo Seguridad)
   const [articulosCatalog, setArticulosCatalog] = useState<ArticuloCatalogItem[]>([]);
@@ -521,6 +533,7 @@ export default function OpeningClosingPositionScreen() {
   };
 
   const fetchMainStructure = useCallback(async () => {
+    if (mainStructureFetched) return;
     setIsStructureLoading(true);
     try {
       // cache-first
@@ -567,6 +580,7 @@ export default function OpeningClosingPositionScreen() {
         await AsyncStorage.setItem('main_structure_cache', JSON.stringify(incoming));
       }
       */
+     setMainStructureFetched(true);
     } catch (e) {
       console.error('Error fetching main structure for opening-closing-position:', e);
     } finally {
@@ -620,7 +634,7 @@ export default function OpeningClosingPositionScreen() {
     }
   }, [refreshAccessToken, logout]);
 
-  const fetchPositions = useCallback(async () => {
+  const fetchPositions = useCallback(async (corpoIdOverride?: string | null) => {
     try {
       setIsLoading(true);
       setError(null);
@@ -634,33 +648,37 @@ export default function OpeningClosingPositionScreen() {
 
       setHasCurrentMarca(true);
       const currentMarcaData = JSON.parse(currentMarca);
-      const corpoId = currentMarcaData.corpo?.id?.toString();
+      const corpoIdFromMarca = currentMarcaData?.corpo?.id != null ? String(currentMarcaData.corpo.id) : null;
+      const effectiveCorpoId = (corpoIdOverride !== undefined && corpoIdOverride !== null ? corpoIdOverride : null) ?? corpoIdFromMarca;
 
       setMarcaId(typeof currentMarcaData?.id === 'number' ? currentMarcaData.id : (currentMarcaData?.id ? Number(currentMarcaData.id) : null));
       const divIdRaw = currentMarcaData?.roleDivision?.division?.id;
       setMarcaDivisionId(divIdRaw !== undefined && divIdRaw !== null ? Number(divIdRaw) : null);
 
-      // Preselección del árbol con marca actual (si existe)
+      // Preselección solo empresa y cliente; división, contrato, sucursal y puesto se eligen manualmente
       setSelectedEmpresaId(currentMarcaData?.empresa?.id ?? null);
       setSelectedClienteId(currentMarcaData?.cliente?.id ?? null);
-      setSelectedContratoId(currentMarcaData?.contrato?.id ?? null);
-      setSelectedSucursalId(currentMarcaData?.corpo?.id ?? null);
-      setSelectedPuestoId(currentMarcaData?.puesto?.id ?? null);
+      setSelectedDivisionId(null);
+      setSelectedContratoId(null);
+      setSelectedSucursalId(null);
+      setSelectedPuestoId(null);
 
       // Estructura principal (cache-first + refresh online)
       await fetchMainStructure();
 
-      if (!corpoId) {
+      if (!effectiveCorpoId) {
         setError('No se encontró el ID del corpo');
         setIsLoading(false);
         return;
       }
 
-      const isConnected = await getConnectionStatus();
+      const connected = await getConnectionStatus();
+      setIsConnected(connected);
 
-      if (isConnected) {
+      if (connected) {
+        console.log('Buscando aperturas-cierres de puesto por corpo:', effectiveCorpoId);
         const result = await listOpeningClosingPositionByCorpo({
-          corpo_id: corpoId,
+          corpo_id: effectiveCorpoId,
           refreshAccessToken,
           logout,
         });
@@ -700,10 +718,18 @@ export default function OpeningClosingPositionScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      (async () => {
+        const connected = await getConnectionStatus();
+        setIsConnected(connected);
+      })();
       fetchPositions();
-      eventBus.on('connectionRestored', fetchPositions);
+      const onRestored = () => {
+        setIsConnected(true);
+        fetchPositions();
+      };
+      eventBus.on('connectionRestored', onRestored);
       return () => {
-        eventBus.off('connectionRestored', fetchPositions);
+        eventBus.off('connectionRestored', onRestored);
       };
     }, [fetchPositions])
   );
@@ -733,25 +759,9 @@ export default function OpeningClosingPositionScreen() {
     return (selectedContratoNode.sucursales || []).find((s) => s.id === selectedSucursalId) ?? null;
   }, [selectedContratoNode, selectedSucursalId]);
 
-  // Auto-selección de división por marca cuando se selecciona cliente
-  useEffect(() => {
-    if (editingRecord) return; // en edición respetar la división del registro
-    if (!selectedClienteNode || !marcaDivisionId) {
-      setSelectedDivisionId(null);
-      return;
-    }
+  // La división se selecciona manualmente; no se preselecciona desde la marca.
 
-    const found = (selectedClienteNode.division || []).find((d) => d.id === marcaDivisionId) ?? null;
-    if (!found) {
-      setSelectedDivisionId(null);
-      return;
-    }
-
-    // Set (y bloquear) la división
-    setSelectedDivisionId(found.id);
-  }, [selectedClienteNode, marcaDivisionId, editingRecord]);
-
-  // Cuando la división (auto) cambia, validar/limpiar selecciones inferiores si ya no pertenecen
+  // Cuando la división cambia, validar/limpiar selecciones inferiores si ya no pertenecen
   useEffect(() => {
     if (!selectedDivisionNode) {
       setSelectedContratoId(null);
@@ -794,6 +804,57 @@ export default function OpeningClosingPositionScreen() {
   const contratoOptions = useMemo(() => (selectedDivisionNode?.contratos || []).map((c) => ({ id: c.id, nombre: c.nombre })), [selectedDivisionNode]);
   const sucursalOptions = useMemo(() => (selectedContratoNode?.sucursales || []).map((s) => ({ id: s.id, nombre: s.nombre })), [selectedContratoNode]);
   const puestoOptions = useMemo(() => (selectedSucursalNode?.puestos || []).map((p) => ({ id: p.id, nombre: p.nombre })), [selectedSucursalNode]);
+
+  const filterEmpresaNode = useMemo(() => {
+    if (filterEmpresaId === null) return null;
+    return structure.find((e) => e.id === filterEmpresaId) ?? null;
+  }, [structure, filterEmpresaId]);
+
+  const filterClienteNode = useMemo(() => {
+    if (!filterEmpresaNode || filterClienteId === null) return null;
+    return filterEmpresaNode.clientes.find((c) => c.id === filterClienteId) ?? null;
+  }, [filterEmpresaNode, filterClienteId]);
+
+  const filterDivisionNode = useMemo(() => {
+    if (!filterClienteNode || filterDivisionId === null) return null;
+    return (filterClienteNode.division || []).find((d) => d.id === filterDivisionId) ?? null;
+  }, [filterClienteNode, filterDivisionId]);
+
+  const filterContratoNode = useMemo(() => {
+    if (!filterDivisionNode || filterContratoId === null) return null;
+    return (filterDivisionNode.contratos || []).find((c) => c.id === filterContratoId) ?? null;
+  }, [filterDivisionNode, filterContratoId]);
+
+  const filterEmpresas = useMemo(() => structure.map((e) => ({ id: e.id, nombre: e.nombre })), [structure]);
+  const filterClientes = useMemo(() => (filterEmpresaNode?.clientes || []).map((c) => ({ id: c.id, nombre: c.nombre })), [filterEmpresaNode]);
+  const filterDivisiones = useMemo(() => (filterClienteNode?.division || []).map((d) => ({ id: d.id, nombre: d.nombre })), [filterClienteNode]);
+  const filterContratos = useMemo(() => (filterDivisionNode?.contratos || []).map((c) => ({ id: c.id, nombre: c.nombre })), [filterDivisionNode]);
+  const filterSucursales = useMemo(() => (filterContratoNode?.sucursales || []).map((s) => ({ id: s.id, nombre: s.nombre })), [filterContratoNode]);
+
+  const filteredPositions = useMemo(() => {
+    return (positions || []).filter((record) => {
+      const recordClienteId = Number(record.cliente_id);
+      const recordDivisionId = Number(record.division_id);
+      const recordCorpoId = Number(record.corpo_id);
+
+      if (filterEmpresaId !== null) {
+        const empresa = structure.find((e) => e.id === filterEmpresaId);
+        const clientesIds = new Set((empresa?.clientes || []).map((c) => Number(c.id)));
+        if (!clientesIds.has(recordClienteId)) return false;
+      }
+
+      if (filterClienteId !== null && recordClienteId !== Number(filterClienteId)) return false;
+      if (filterDivisionId !== null && recordDivisionId !== Number(filterDivisionId)) return false;
+
+      if (filterContratoId !== null) {
+        const contratoSucursales = new Set((filterContratoNode?.sucursales || []).map((s) => Number(s.id)));
+        if (!contratoSucursales.has(recordCorpoId)) return false;
+      }
+
+      if (filterCorpoId !== null && recordCorpoId !== Number(filterCorpoId)) return false;
+      return true;
+    });
+  }, [positions, structure, filterEmpresaId, filterClienteId, filterDivisionId, filterContratoId, filterCorpoId, filterContratoNode]);
 
   const isSeguridadDivision = selectedDivisionId === 4;
 
@@ -1527,17 +1588,17 @@ export default function OpeningClosingPositionScreen() {
       );
     }
 
-    if (positions.length === 0) {
+    if (filteredPositions.length === 0) {
       return (
         <ThemedView style={styles.emptyContainer}>
-          <ThemedText style={styles.emptyText}>No hay aperturas-cierres de puesto registrados.</ThemedText>
+          <ThemedText style={styles.emptyText}>No hay aperturas-cierres de puesto para los filtros seleccionados.</ThemedText>
         </ThemedView>
       );
     }
 
     return (
       <ThemedView style={styles.listContainer}>
-        {positions.map((record) => {
+        {filteredPositions.map((record) => {
           const itemKey = String((record.id ?? record.id_local) || '');
           let actividadesArr: any[] = [];
           let inventarioArr: any[] = [];
@@ -1580,7 +1641,7 @@ export default function OpeningClosingPositionScreen() {
                     Corpo: {record.corpo_nombre || 'N/A'}
                   </ThemedText>
                   <ThemedText style={styles.listItemSubtitle}>
-                    Fecha: {formatDateDMY(record.fecha)}
+                    Fecha: {convertDateTimestampToLocalString(new Date(record.fecha).toISOString(), false)}
                   </ThemedText>
                 </ThemedView>
               </ThemedView>
@@ -2061,28 +2122,31 @@ export default function OpeningClosingPositionScreen() {
                     </ThemedView>
 
                     <ThemedView style={styles.formGroup}>
-                      <ThemedText style={styles.formLabel}>División (automática)</ThemedText>
+                      <ThemedText style={styles.formLabel}>División *</ThemedText>
                       <ThemedView style={styles.pickerWrapper}>
                         <Picker
                           selectedValue={selectedDivisionId ?? 0}
-                          onValueChange={() => { }}
-                          enabled={false}
+                          onValueChange={(v) => {
+                            const next = Number(v) || null;
+                            setSelectedDivisionId(next);
+                            setSelectedContratoId(null);
+                            setSelectedSucursalId(null);
+                            setSelectedPuestoId(null);
+                          }}
+                          enabled={selectedClienteId !== null && divisionOptions.length > 0}
                           style={styles.picker}
                         >
                           <Picker.Item
-                            label={
-                              selectedClienteId
-                                ? (selectedDivisionId ? (divisionOptions.find((d) => d.id === selectedDivisionId)?.nombre || 'División') : 'No disponible para su marca')
-                                : 'Seleccione cliente primero'
-                            }
+                            label={selectedClienteId ? 'Seleccione división...' : 'Seleccione cliente primero'}
                             value={0}
                           />
+                          {divisionOptions.map((d) => (
+                            <Picker.Item key={d.id} label={d.nombre} value={d.id} />
+                          ))}
                         </Picker>
                       </ThemedView>
-                      {selectedClienteId && !selectedDivisionId && (
-                        <ThemedText style={styles.hintText}>
-                          La división de su marca no existe para el cliente seleccionado.
-                        </ThemedText>
+                      {selectedClienteId !== null && divisionOptions.length === 0 && (
+                        <ThemedText style={styles.hintText}>No hay divisiones disponibles para este cliente.</ThemedText>
                       )}
                     </ThemedView>
 
@@ -2175,7 +2239,7 @@ export default function OpeningClosingPositionScreen() {
                   onPress={() => setShowDatePicker(true)}
                 >
                   <ThemedText style={styles.dateButtonText}>
-                    {formatDateForDisplay(fechaRealizado)}
+                    {convertDateTimestampToLocalString(new Date(fechaRealizado).toISOString(), false)}
                   </ThemedText>
                   <Ionicons name="calendar" size={20} color="#007AFF" />
                 </TouchableOpacity>
@@ -2413,7 +2477,7 @@ export default function OpeningClosingPositionScreen() {
                             <ThemedText style={styles.firmaInfoText}>Sesión: {info.sessionId}</ThemedText>
                             <ThemedText style={styles.firmaInfoText}>Empleado: {info.empleadoId}</ThemedText>
                             <ThemedText style={styles.firmaInfoText}>Lat/Lng: {info.latitud}, {info.longitud}</ThemedText>
-                            <ThemedText style={styles.firmaInfoText}>Hora: {info.timestamp}</ThemedText>
+                            <ThemedText style={styles.firmaInfoText}>Hora: {convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString())}</ThemedText>
                           </>
                         );
                       })()}
@@ -2458,6 +2522,141 @@ export default function OpeningClosingPositionScreen() {
             </ThemedView>
           ) : (
             <ThemedView style={styles.listSection}>
+              {isConnected && (
+                <Collapsible title="Filtros jerárquicos">
+                  <ThemedView style={styles.hierarchyFiltersContainer}>
+                    <ThemedView style={styles.hierarchyFiltersHeader}>
+                      <TouchableOpacity
+                        style={styles.hierarchyResetButton}
+                        onPress={() => {
+                          setFilterEmpresaId(null);
+                          setFilterClienteId(null);
+                          setFilterDivisionId(null);
+                          setFilterContratoId(null);
+                          setFilterCorpoId(null);
+                          fetchPositions();
+                        }}
+                      >
+                        <Ionicons name="refresh" size={16} color="#FF3B30" />
+                        <ThemedText style={styles.hierarchyResetText}>Reiniciar</ThemedText>
+                      </TouchableOpacity>
+                    </ThemedView>
+
+                    <ThemedView style={styles.hierarchyFiltersContent}>
+                  <ThemedView style={styles.formGroup}>
+                    <ThemedText style={styles.formLabel}>Empresa</ThemedText>
+                    <ThemedView style={styles.pickerWrapper}>
+                      <Picker
+                        selectedValue={filterEmpresaId ?? 0}
+                        onValueChange={(v) => {
+                          const next = Number(v) || null;
+                          setFilterEmpresaId(next);
+                          setFilterClienteId(null);
+                          setFilterDivisionId(null);
+                          setFilterContratoId(null);
+                          setFilterCorpoId(null);
+                        }}
+                        style={styles.picker}
+                      >
+                        <Picker.Item label="Todas" value={0} />
+                        {filterEmpresas.map((e) => (
+                          <Picker.Item key={e.id} label={e.nombre} value={e.id} />
+                        ))}
+                      </Picker>
+                    </ThemedView>
+                  </ThemedView>
+
+                  <ThemedView style={styles.formGroup}>
+                    <ThemedText style={styles.formLabel}>Cliente</ThemedText>
+                    <ThemedView style={styles.pickerWrapper}>
+                      <Picker
+                        selectedValue={filterClienteId ?? 0}
+                        onValueChange={(v) => {
+                          const next = Number(v) || null;
+                          setFilterClienteId(next);
+                          setFilterDivisionId(null);
+                          setFilterContratoId(null);
+                          setFilterCorpoId(null);
+                        }}
+                        enabled={filterEmpresaId !== null && filterClientes.length > 0}
+                        style={styles.picker}
+                      >
+                        <Picker.Item label={filterEmpresaId !== null ? 'Todos' : 'Seleccione empresa primero'} value={0} />
+                        {filterClientes.map((c) => (
+                          <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                        ))}
+                      </Picker>
+                    </ThemedView>
+                  </ThemedView>
+
+                  <ThemedView style={styles.formGroup}>
+                    <ThemedText style={styles.formLabel}>División</ThemedText>
+                    <ThemedView style={styles.pickerWrapper}>
+                      <Picker
+                        selectedValue={filterDivisionId ?? 0}
+                        onValueChange={(v) => {
+                          const next = Number(v) || null;
+                          setFilterDivisionId(next);
+                          setFilterContratoId(null);
+                          setFilterCorpoId(null);
+                        }}
+                        enabled={filterClienteId !== null && filterDivisiones.length > 0}
+                        style={styles.picker}
+                      >
+                        <Picker.Item label={filterClienteId !== null ? 'Todas' : 'Seleccione cliente primero'} value={0} />
+                        {filterDivisiones.map((d) => (
+                          <Picker.Item key={d.id} label={d.nombre} value={d.id} />
+                        ))}
+                      </Picker>
+                    </ThemedView>
+                  </ThemedView>
+
+                  <ThemedView style={styles.formGroup}>
+                    <ThemedText style={styles.formLabel}>Contrato</ThemedText>
+                    <ThemedView style={styles.pickerWrapper}>
+                      <Picker
+                        selectedValue={filterContratoId ?? 0}
+                        onValueChange={(v) => {
+                          const next = Number(v) || null;
+                          setFilterContratoId(next);
+                          setFilterCorpoId(null);
+                        }}
+                        enabled={filterDivisionId !== null && filterContratos.length > 0}
+                        style={styles.picker}
+                      >
+                        <Picker.Item label={filterDivisionId !== null ? 'Todos' : 'Seleccione división primero'} value={0} />
+                        {filterContratos.map((c) => (
+                          <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                        ))}
+                      </Picker>
+                    </ThemedView>
+                  </ThemedView>
+
+                  <ThemedView style={styles.formGroup}>
+                    <ThemedText style={styles.formLabel}>Sucursal</ThemedText>
+                    <ThemedView style={styles.pickerWrapper}>
+                      <Picker
+                        selectedValue={filterCorpoId ?? 0}
+                        onValueChange={(v) => {
+                          const next = Number(v) || null;
+                          setFilterCorpoId(next);
+                          fetchPositions(next != null ? String(next) : undefined);
+                        }}
+                        enabled={filterContratoId !== null && filterSucursales.length > 0}
+                        style={styles.picker}
+                      >
+                        <Picker.Item label={filterContratoId !== null ? 'Todas' : 'Seleccione contrato primero'} value={0} />
+                        {filterSucursales.map((s) => (
+                          <Picker.Item key={s.id} label={s.nombre} value={s.id} />
+                        ))}
+                      </Picker>
+                    </ThemedView>
+                  </ThemedView>
+                </ThemedView>
+              </ThemedView>
+                </Collapsible>
+              )}
+
               {!isLoading && (
                 <TouchableOpacity style={styles.createButton} onPress={startCreating}>
                   <Ionicons name="add" size={24} color="#FFFFFF" />
@@ -2578,7 +2777,7 @@ export default function OpeningClosingPositionScreen() {
                   } catch {
                     parsed = [];
                   }
-                  const createdAtLabel = formatCambioCreatedAt(row?.created_at);
+                  const createdAtLabel = convertDateTimestampToLocalString(new Date(row?.created_at).toISOString());
                   const isOpen = expandedCambioId === row.id;
 
                   return (
@@ -2643,7 +2842,7 @@ export default function OpeningClosingPositionScreen() {
                                             {(() => {
                                               const info = decodeFirmaHash(created.firma_responsable);
                                               return info
-                                                ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${info.timestamp || 'N/A'}`
+                                                ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${ convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}`
                                                 : 'Firma responsable (formato no decodificable)';
                                             })()}
                                           </ThemedText>
@@ -2671,7 +2870,7 @@ export default function OpeningClosingPositionScreen() {
                                       {isResponsable && (() => {
                                         const info = typeof value === 'string' ? decodeFirmaHash(value) : null;
                                         if (!info) return 'Firma responsable (formato no decodificable)';
-                                        return `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${info.timestamp || 'N/A'}`;
+                                        return `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${ convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}`;
                                       })()}
                                     </ThemedText>
                                     {isManualSignature && value && (
@@ -3142,6 +3341,50 @@ const styles = StyleSheet.create({
   },
   listSection: {
     width: '100%',
+  },
+  hierarchyFiltersContainer: {
+    width: '100%',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E5E5EA',
+    borderRadius: 12,
+    overflow: 'hidden',
+    marginBottom: 10,
+  },
+  hierarchyFiltersHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 12,
+    backgroundColor: '#F8F9FA',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E5EA',
+  },
+  hierarchyFiltersTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#007AFF',
+  },
+  hierarchyResetButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#FF3B30',
+    backgroundColor: '#FFF5F5',
+  },
+  hierarchyResetText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#FF3B30',
+  },
+  hierarchyFiltersContent: {
+    padding: 12,
+    gap: 8,
+    backgroundColor: '#F8F9FA',
   },
   listContainer: {
     width: '100%',

@@ -28,7 +28,12 @@ export async function GET(req: NextRequest) {
     const corpoIdStr = req.nextUrl.searchParams.get("corpo_id");
     const turnoStr = req.nextUrl.searchParams.get("turno");
 
-    const fecha = parseDateInput(fechaStr);
+    console.log('fechaStr', fechaStr);
+    console.log('corpoIdStr', corpoIdStr);
+    console.log('turnoStr', turnoStr);
+
+    const fecha = new Date(fechaStr + 'T00:00:00.000Z');
+    console.log('fecha', fecha);
     const corpo_id = corpoIdStr ? parseInt(String(corpoIdStr), 10) : 0;
     const turno = String(turnoStr || "").trim();
 

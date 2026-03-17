@@ -42,6 +42,7 @@ import {
   updateApreciacionVulnerabilidad,
 } from '../hooks/apreciacionVulnerabilidadFunctions';
 import Constants from 'expo-constants';
+import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 
 type VulnUI = ApreciacionVulnerabilidadItem & { id_local?: string };
 
@@ -1201,7 +1202,7 @@ export default function ApreciacionVulnerabilidadScreen() {
 
         <ThemedText style={styles.line}>
           <ThemedText style={styles.labelInline}>Fecha: </ThemedText>
-          <ThemedText style={styles.valueInline}>{formatDate(it.fecha)}</ThemedText>
+          <ThemedText style={styles.valueInline}>{convertDateTimestampToLocalString(new Date(it.fecha).toISOString(), false)}</ThemedText>
         </ThemedText>
         <ThemedText style={styles.line}>
           <ThemedText style={styles.labelInline}>Solicitante: </ThemedText>
@@ -1555,7 +1556,7 @@ export default function ApreciacionVulnerabilidadScreen() {
 
               <ThemedText style={styles.label}>Fecha *</ThemedText>
               <TouchableOpacity style={styles.dateButton} onPress={() => setShowFechaPicker(true)}>
-                <ThemedText style={styles.dateButtonText}>{formatDateDMY(fecha)}</ThemedText>
+                <ThemedText style={styles.dateButtonText}>{convertDateTimestampToLocalString(new Date(fecha).toISOString(), false)}</ThemedText>
                 <Ionicons name="calendar-outline" size={18} color="#007AFF" />
               </TouchableOpacity>
 
@@ -2035,7 +2036,7 @@ export default function ApreciacionVulnerabilidadScreen() {
                   } catch {
                     parsed = [];
                   }
-                  const createdAtLabel = formatCambioCreatedAt(row?.created_at);
+                  const createdAtLabel = convertDateTimestampToLocalString(new Date(row?.created_at).toISOString());
                   const isOpen = expandedCambioId === row.id;
 
                   return (
@@ -2104,7 +2105,7 @@ export default function ApreciacionVulnerabilidadScreen() {
                                             {(() => {
                                               const info = decodeFirmaHash(created.firma_responsable);
                                               return info
-                                                ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${info.timestamp || 'N/A'}`
+                                                ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${ convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}`
                                                 : 'Firma responsable (formato no decodificable)';
                                             })()}
                                           </ThemedText>

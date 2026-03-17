@@ -44,6 +44,7 @@ import {
   updateGeneralInductionRegister,
 } from '@/hooks/evaluationFunctions';
 import { RootStackParamList } from '../App';
+import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 
 type GeneralInductionRegisterScreenNavigationProp = NativeStackNavigationProp<
   RootStackParamList,
@@ -1799,7 +1800,7 @@ export default function GeneralInductionRegisterScreen() {
           const meta = parseMetaFromTemas(r.temas_a_tratar);
           const contratoNombre = meta?.contrato_nombre || 'N/A';
           const sucursalNombre = meta?.sucursal_nombre || 'N/A';
-          const fechaTxt = formatDateDMYValue(r.fecha, 'N/A');
+          const fechaTxt = r.fecha ? convertDateTimestampToLocalString(r.fecha, false) : 'N/A';
 
           const temasObj = safeJsonParse<any>(r.temas_a_tratar, null);
           const temasSelected = Array.isArray(temasObj?.selected) ? temasObj.selected : [];
@@ -1987,7 +1988,7 @@ export default function GeneralInductionRegisterScreen() {
                           <ThemedText style={styles.detailLine}>Sesión: {info.sessionId}</ThemedText>
                           <ThemedText style={styles.detailLine}>Empleado: {info.empleadoId}</ThemedText>
                           <ThemedText style={styles.detailLine}>Lat/Lng: {info.latitud}, {info.longitud}</ThemedText>
-                          <ThemedText style={styles.detailLine}>Hora: {info.timestamp}</ThemedText>
+                          <ThemedText style={styles.detailLine}>Hora: { convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}</ThemedText>
                         </>
                       );
                     })()}
@@ -2299,15 +2300,20 @@ export default function GeneralInductionRegisterScreen() {
             <>
           {!isLoading && !isStructureLoading && Array.isArray(structure) && structure.length > 0 && (
             <ThemedView style={styles.filtersContainer}>
-              <TouchableOpacity
-                style={styles.filtersHeader}
-                onPress={() => setIsHierarchyFiltersExpanded((prev) => !prev)}
-                activeOpacity={0.85}
-              >
-                <ThemedView style={styles.filterToggleButton}>
+              <ThemedView style={styles.filtersHeader}>
+                <TouchableOpacity
+                  style={styles.filterToggleButton}
+                  onPress={() => setIsHierarchyFiltersExpanded((prev) => !prev)}
+                  activeOpacity={0.85}
+                >
                   <ThemedText style={styles.filtersTitle}>Filtros jerárquicos</ThemedText>
-                </ThemedView>
-                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  <Ionicons
+                    name={isHierarchyFiltersExpanded ? 'chevron-up' : 'chevron-down'}
+                    size={18}
+                    color="#007AFF"
+                  />
+                </TouchableOpacity>
+                {isHierarchyFiltersExpanded && (
                   <TouchableOpacity
                     style={styles.resetFiltersButton}
                     onPress={() => {
@@ -2320,14 +2326,8 @@ export default function GeneralInductionRegisterScreen() {
                     <Ionicons name="refresh" size={16} color="#FF3B30" />
                     <ThemedText style={styles.resetFiltersText}>Reiniciar</ThemedText>
                   </TouchableOpacity>
-                  <Ionicons
-                    name={isHierarchyFiltersExpanded ? 'chevron-up' : 'chevron-down'}
-                    size={18}
-                    color="#007AFF"
-                    style={{ marginLeft: 8 }}
-                  />
-                </View>
-              </TouchableOpacity>
+                )}
+              </ThemedView>
               {isHierarchyFiltersExpanded && (
                 <ThemedView style={styles.filtersContent}>
                   <ThemedView style={styles.filterGroup}>
@@ -2415,7 +2415,7 @@ export default function GeneralInductionRegisterScreen() {
               <ThemedView style={styles.formGroup}>
                 <ThemedText style={styles.formLabel}>Fecha</ThemedText>
                 <TouchableOpacity style={styles.dateButton} onPress={() => setShowDatePicker(true)} activeOpacity={0.85}>
-                  <ThemedText style={styles.dateButtonText}>{formatDateDMY(fecha)}</ThemedText>
+                  <ThemedText style={styles.dateButtonText}>{convertDateTimestampToLocalString(fecha.toISOString(), false)}</ThemedText>
                   <Ionicons name="calendar" size={20} color="#007AFF" />
                 </TouchableOpacity>
                 {showDatePicker && (
@@ -2664,7 +2664,7 @@ export default function GeneralInductionRegisterScreen() {
                             <ThemedText style={styles.firmaInfoText}>Sesión: {info.sessionId}</ThemedText>
                             <ThemedText style={styles.firmaInfoText}>Empleado: {info.empleadoId}</ThemedText>
                             <ThemedText style={styles.firmaInfoText}>Lat/Lng: {info.latitud}, {info.longitud}</ThemedText>
-                            <ThemedText style={styles.firmaInfoText}>Hora: {info.timestamp}</ThemedText>
+                            <ThemedText style={styles.firmaInfoText}>Hora: { convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}</ThemedText>
                           </>
                         );
                       })()}
@@ -2813,7 +2813,7 @@ export default function GeneralInductionRegisterScreen() {
                   } catch {
                     parsed = [];
                   }
-                  const createdAtLabel = formatCambioCreatedAt(row?.created_at);
+                  const createdAtLabel = convertDateTimestampToLocalString(String(row?.created_at || ''));
                   const isOpen = expandedCambioId === row.id;
 
                   return (
@@ -2868,7 +2868,7 @@ export default function GeneralInductionRegisterScreen() {
                                               <ThemedText style={styles.changeDescription}>
                                                 <ThemedText style={{ fontWeight: '800' }}>{k}: </ThemedText>
                                                 {info
-                                                  ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${info.timestamp || 'N/A'}`
+                                                  ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${ convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}`
                                                   : 'Firma (formato no decodificable)'}
                                               </ThemedText>
                                             </ThemedView>
@@ -2974,7 +2974,7 @@ export default function GeneralInductionRegisterScreen() {
                                         ? (() => {
                                             const info = decodeFirmaHash(value);
                                             return info
-                                              ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${info.timestamp || 'N/A'}`
+                                              ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${ convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}`
                                               : 'Firma (formato no decodificable)';
                                           })()
                                         : !isFirmaResponsable
@@ -3273,28 +3273,35 @@ const styles = StyleSheet.create({
   listItemDetails: { borderTopWidth: 1, borderTopColor: '#EEE', padding: 16 },
   // Filtros jerárquicos
   filtersContainer: {
+    width: '100%',
+    marginBottom: 20,
     backgroundColor: '#FFFFFF',
     borderRadius: 8,
-    padding: 16,
-    marginBottom: 16,
     borderWidth: 1,
     borderColor: '#E0E0E0',
+    overflow: 'hidden',
   },
   filtersHeader: {
     flexDirection: 'row',
-    alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 12,
+    alignItems: 'center',
+    padding: 16,
+    backgroundColor: '#F8F9FA',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
   },
   filterToggleButton: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+    padding: 8,
+    borderRadius: 6,
+    backgroundColor: '#F8F9FA',
   },
   filtersTitle: {
     fontSize: 16,
-    fontWeight: 'bold',
-    color: '#000000',
+    fontWeight: '600',
+    color: '#007AFF',
   },
   resetFiltersButton: {
     flexDirection: 'row',
@@ -3309,7 +3316,9 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   filtersContent: {
+    padding: 16,
     gap: 12,
+    backgroundColor: '#F8F9FA',
   },
   filterGroup: {
     marginBottom: 12,

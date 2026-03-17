@@ -144,6 +144,7 @@ export default function TrainingsScreen() {
   const [isGeneratingFirma, setIsGeneratingFirma] = useState(false);
   const [selectedTipo, setSelectedTipo] = useState<'Prescencial' | 'Virtual'>('Prescencial');
   const [selectedEmpleados, setSelectedEmpleados] = useState<Empleado[]>([]);
+  const [codigoEmpleadoBusqueda, setCodigoEmpleadoBusqueda] = useState<string>('');
   const [selectedPuestos, setSelectedPuestos] = useState<Puesto[]>([]);
   const [trainingImageBase64, setTrainingImageBase64] = useState<string | null>(null);
   const [decodedFirmas, setDecodedFirmas] = useState<Map<number, FirmaData>>(new Map());
@@ -217,6 +218,40 @@ export default function TrainingsScreen() {
       msg.includes('timeout') ||
       msg.includes('timed out')
     );
+  };
+
+  const getEmpleadoByCodigo = async (codigo: string) => {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+    const response = await authedFetch({
+      url: `${apiUrl}/api/empleados/codigo/${encodeURIComponent(String(codigo).trim())}`,
+      init: {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      },
+      refreshAccessToken,
+      logout,
+    });
+
+    if (!response) {
+      throw new Error('Sesión expirada');
+    }
+
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      throw new Error(errData?.message || 'No se pudo obtener el empleado por código');
+    }
+
+    const data = await response.json();
+    if (!data?.status || !data?.data) {
+      throw new Error(data?.message || 'Empleado no encontrado');
+    }
+
+    return data.data;
   };
 
   const fetchData = async () => {
@@ -1366,8 +1401,61 @@ export default function TrainingsScreen() {
             </ThemedView>
 
             {/* Empleados en la capacitación */}
-            <ThemedView style={styles.formGroup}>
+            <ThemedView style={[styles.formGroup]}>
               <ThemedText style={styles.formLabel}>Empleados en la capacitación:</ThemedText>
+              <ThemedView style={[styles.inlineInputsRow, { marginBottom: 16 }]}>
+                <TextInput
+                  style={[styles.formInput, { flex: 1 }]}
+                  value={codigoEmpleadoBusqueda}
+                  onChangeText={setCodigoEmpleadoBusqueda}
+                  placeholder="Código de empleado"
+                  placeholderTextColor="#999"
+                  keyboardType="numeric"
+                />
+                <TouchableOpacity
+                  style={[styles.primaryButton, { marginLeft: 8 }]}
+                  onPress={async () => {
+                    const code = String(codigoEmpleadoBusqueda || '').trim();
+                    if (!code) {
+                      Alert.alert('Error', 'Debes ingresar un código');
+                      return;
+                    }
+                    try {
+                      const empleadoData = await getEmpleadoByCodigo(code);
+                      const empleadoId = Number(empleadoData?.id || 0);
+                      const nombreEmpleado = String(empleadoData?.nombre || '').trim();
+                      const cedulaEmpleado = String(empleadoData?.cedula || '').trim();
+                      if (!empleadoId || !nombreEmpleado) {
+                        throw new Error('Empleado inválido');
+                      }
+                      // Evitar duplicados
+                      if (!empleados.find(e => e.id === empleadoId)) {
+                        const nuevoEmpleado: Empleado = {
+                          id: empleadoId,
+                          nombre: nombreEmpleado,
+                          cedula: cedulaEmpleado,
+                          fecha_contratacion: String(empleadoData?.fecha_contratacion || ''),
+                        };
+                        setEmpleados(prev => [...prev, nuevoEmpleado]);
+                      }
+                      if (!selectedEmpleados.find(e => e.id === empleadoId)) {
+                        const empleadoSeleccionado: Empleado = {
+                          id: empleadoId,
+                          nombre: nombreEmpleado,
+                          cedula: cedulaEmpleado,
+                          fecha_contratacion: String(empleadoData?.fecha_contratacion || ''),
+                        };
+                        setSelectedEmpleados(prev => [...prev, empleadoSeleccionado]);
+                      }
+                      setCodigoEmpleadoBusqueda('');
+                    } catch (e: any) {
+                      Alert.alert('Error', e?.message || 'No se pudo buscar el empleado por código');
+                    }
+                  }}
+                >
+                  <ThemedText style={styles.primaryButtonText}>Buscar</ThemedText>
+                </TouchableOpacity>
+              </ThemedView>
               <ThemedView style={styles.pickerContainer}>
                 <Picker
                   selectedValue={undefined}
@@ -2166,6 +2254,23 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 14,
     fontWeight: '600',
+  },
+  inlineInputsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  primaryButton: {
+    backgroundColor: '#007AFF',
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  primaryButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
   },
   formActions: {
     flexDirection: 'row',

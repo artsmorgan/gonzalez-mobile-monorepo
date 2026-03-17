@@ -20,8 +20,10 @@ import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import { RootStackParamList } from '../App';
 import { useAuth } from '@/contexts/AuthContext';
+import authedFetch from '@/hooks/authedFetch';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import { eventBus } from '@/hooks/eventBus';
+import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 
 import type { ExecutiveOption, Incident, IncidentClassificationOption, IncidentContribution, IncidentContributionFileInput, IncidentFileInput } from '@/hooks/incidentsTypes';
 import { createIncident, createIncidentContribution, deleteIncident, deleteIncidentContribution, deleteIncidentContributionFile, listExecutives, listIncidentClassifications, listIncidentContributions, listIncidentsByMarca, updateIncident, updateIncidentContribution } from '@/hooks/incidentsFunctions';
@@ -272,6 +274,7 @@ export default function IncidentsScreen() {
   const [filterFechaIncidente, setFilterFechaIncidente] = useState('');
   const [filterFechaReporte, setFilterFechaReporte] = useState('');
   const [isFiltersExpanded, setIsFiltersExpanded] = useState(false);
+  const [codigoInvolucradoBusqueda, setCodigoInvolucradoBusqueda] = useState('');
 
   const getConnectionStatus = async (): Promise<boolean> => {
     const networkState = await Network.getNetworkStateAsync();
@@ -384,8 +387,8 @@ export default function IncidentsScreen() {
         ejecutivo.toLowerCase().includes(s) ||
         clasif.toLowerCase().includes(s)
       );
-      const incidentDate = dateLabel(i.fecha_incidente);
-      const reportDate = dateLabel(i.fecha_reporte);
+      const incidentDate = convertDateTimestampToLocalString(new Date(i.fecha_incidente).toISOString() || '', false);
+      const reportDate = convertDateTimestampToLocalString(new Date(i.fecha_reporte).toISOString() || '', false);
       const matchesFechaIncidente = !filterFechaIncidente || incidentDate === filterFechaIncidente;
       const matchesFechaReporte = !filterFechaReporte || reportDate === filterFechaReporte;
       return matchesText && matchesFechaIncidente && matchesFechaReporte;
@@ -550,6 +553,50 @@ export default function IncidentsScreen() {
     const update = (list: InvolucradoForm[]) => list.filter((_, i) => i !== idx);
     if (isCreating) setNewIncident(prev => ({ ...prev, involucrados: update(prev.involucrados).length ? update(prev.involucrados) : [{ codigo: '', nombre: '' }] }));
     else if (editingIncident) setEditingIncident(prev => (prev ? { ...prev, involucrados: update(prev.involucrados).length ? update(prev.involucrados) : [{ codigo: '', nombre: '' }] } : prev));
+  };
+
+  const getEmpleadoByCodigo = async (codigo: string) => {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) throw new Error('Server URL not configured');
+    const response = await authedFetch({
+      url: `${apiUrl}/api/empleados/codigo/${encodeURIComponent(String(codigo).trim())}`,
+      init: {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+      },
+      refreshAccessToken,
+      logout,
+    });
+    if (!response) throw new Error('Sesión expirada');
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      throw new Error(errData?.message || 'No se pudo obtener el empleado por código');
+    }
+    const data = await response.json();
+    if (!data?.status || !data?.data) throw new Error(data?.message || 'Empleado no encontrado');
+    return data.data;
+  };
+
+  const handleSearchInvolucradoByCode = async () => {
+    const codigo = codigoInvolucradoBusqueda.trim();
+    if (!codigo) {
+      Alert.alert('Aviso', 'Ingresa el código del empleado');
+      return;
+    }
+    try {
+      const empleado = await getEmpleadoByCodigo(codigo);
+      const nombre = empleado?.nombre_completo || empleado?.nombre || '';
+      const cod = codigo;
+      const nuevo = { codigo: cod, nombre: nombre || cod || codigo };
+      if (isCreating) {
+        setNewIncident(prev => ({ ...prev, involucrados: [...prev.involucrados, nuevo] }));
+      } else if (editingIncident) {
+        setEditingIncident(prev => prev ? ({ ...prev, involucrados: [...prev.involucrados, nuevo] }) : prev);
+      }
+      setCodigoInvolucradoBusqueda('');
+    } catch (e: unknown) {
+      Alert.alert('Error', (e as Error)?.message || 'No se pudo buscar el empleado por código');
+    }
   };
 
   const handleAddFile = async (type: ManualFileLocal['type']) => {
@@ -1625,7 +1672,7 @@ export default function IncidentsScreen() {
             style={[styles.dateButton, readOnly && styles.disabledButton]}
             onPress={ async () => { const horaAccion = await getHoraAccion(); if (!horaAccion) { Alert.alert('Error', 'No se pudo obtener la hora'); return; } setPickerDateValue(new Date(horaAccion)); setShowFechaIncidentePicker(true); }}
           >
-            <ThemedText style={styles.dateButtonText}>{dateLabel(incident.fecha_incidente) || 'Seleccionar fecha'}</ThemedText>
+            <ThemedText style={styles.dateButtonText}>{convertDateTimestampToLocalString(new Date(incident.fecha_incidente).toISOString() || '', false) || 'Seleccionar fecha'}</ThemedText>
             <Ionicons name="calendar" size={18} color="#007AFF" />
           </TouchableOpacity>
           {renderDatePicker(showFechaIncidentePicker, () => setShowFechaIncidentePicker(false), (iso) => {
@@ -1642,7 +1689,7 @@ export default function IncidentsScreen() {
             style={[styles.dateButton, readOnly && styles.disabledButton]}
             onPress={ async () => { const horaAccion = await getHoraAccion(); if (!horaAccion) { Alert.alert('Error', 'No se pudo obtener la hora'); return; } setPickerDateValue(new Date(horaAccion)); setShowFechaReportePicker(true); }}
           >
-            <ThemedText style={styles.dateButtonText}>{dateLabel(incident.fecha_reporte) || 'Seleccionar fecha'}</ThemedText>
+            <ThemedText style={styles.dateButtonText}>{convertDateTimestampToLocalString(new Date(incident.fecha_reporte).toISOString() || '', false) || 'Seleccionar fecha'}</ThemedText>
             <Ionicons name="calendar" size={18} color="#007AFF" />
           </TouchableOpacity>
           {renderDatePicker(showFechaReportePicker, () => setShowFechaReportePicker(false), (iso) => {
@@ -1704,6 +1751,20 @@ export default function IncidentsScreen() {
 
         <ThemedView style={styles.formGroup}>
           <ThemedText style={styles.formLabel}>Involucrados:</ThemedText>
+          {!readOnly && (
+            <View style={styles.codeRow}>
+              <TextInput
+                style={styles.codeInput}
+                value={codigoInvolucradoBusqueda}
+                onChangeText={setCodigoInvolucradoBusqueda}
+                placeholder="Buscar empleado por código"
+                placeholderTextColor="#999"
+              />
+              <TouchableOpacity style={styles.codeActionButton} onPress={handleSearchInvolucradoByCode} activeOpacity={0.85}>
+                <ThemedText style={styles.codeActionButtonText}>Buscar</ThemedText>
+              </TouchableOpacity>
+            </View>
+          )}
           {(isCreating ? newIncident.involucrados : (editingIncident?.involucrados || [])).map((inv, idx) => (
             <ThemedView key={`${mode}-inv-${idx}`} style={styles.involucradoRow}>
               <TextInput
@@ -1744,7 +1805,7 @@ export default function IncidentsScreen() {
             style={[styles.dateButton, readOnly && styles.disabledButton]}
             onPress={ async () => { const horaAccion = await getHoraAccion(); if (!horaAccion) { Alert.alert('Error', 'No se pudo obtener la hora'); return; } setPickerDateValue(new Date(horaAccion)); setShowLibroFechaPicker(true); }}
           >
-            <ThemedText style={styles.dateButtonText}>{dateLabel(incident.libro_fecha) || 'Seleccionar fecha'}</ThemedText>
+            <ThemedText style={styles.dateButtonText}>{convertDateTimestampToLocalString(new Date(incident.libro_fecha).toISOString() || '', false) || 'Seleccionar fecha'}</ThemedText>
             <Ionicons name="calendar" size={18} color="#007AFF" />
           </TouchableOpacity>
           {renderDatePicker(showLibroFechaPicker, () => setShowLibroFechaPicker(false), (iso) => {
@@ -1805,7 +1866,7 @@ export default function IncidentsScreen() {
                 style={styles.dateButton}
                 onPress={ async () => { const horaAccion = await getHoraAccion(); if (!horaAccion) { Alert.alert('Error', 'No se pudo obtener la hora'); return; } setPickerDateValue(new Date(horaAccion)); setShowFechaSolucionPicker(true); }}
               >
-                <ThemedText style={styles.dateButtonText}>{dateLabel(incident.fecha_solucion) || 'Seleccionar fecha'}</ThemedText>
+                <ThemedText style={styles.dateButtonText}>{convertDateTimestampToLocalString(new Date(incident.fecha_solucion).toISOString() || '', false) || 'Seleccionar fecha'}</ThemedText>
                 <Ionicons name="calendar" size={18} color="#007AFF" />
               </TouchableOpacity>
               {renderDatePicker(showFechaSolucionPicker, () => setShowFechaSolucionPicker(false), (iso) => {
@@ -1820,7 +1881,7 @@ export default function IncidentsScreen() {
                 style={styles.dateButton}
                 onPress={ async () => { const horaAccion = await getHoraAccion(); if (!horaAccion) { Alert.alert('Error', 'No se pudo obtener la hora'); return; } setPickerDateValue(new Date(horaAccion)); setShowFechaRealSolucionPicker(true); }}
               >
-                <ThemedText style={styles.dateButtonText}>{dateLabel(incident.fecha_real_solucion) || 'Seleccionar fecha'}</ThemedText>
+                <ThemedText style={styles.dateButtonText}>{convertDateTimestampToLocalString(new Date(incident.fecha_real_solucion).toISOString() || '', false) || 'Seleccionar fecha'}</ThemedText>
                 <Ionicons name="calendar" size={18} color="#007AFF" />
               </TouchableOpacity>
               {renderDatePicker(showFechaRealSolucionPicker, () => setShowFechaRealSolucionPicker(false), (iso) => {
@@ -2051,8 +2112,8 @@ export default function IncidentsScreen() {
                       <ThemedText style={styles.badge}>{i.estado ? 'Activo' : 'Inactivo'}</ThemedText>
                     </ThemedView>
                     <ThemedText style={styles.cardInfo}>Clasificación: {i.clasificacion?.name || '-'}</ThemedText>
-                    <ThemedText style={styles.cardInfo}>Fecha incidente: {dateLabel(i.fecha_incidente)}</ThemedText>
-                    <ThemedText style={styles.cardInfo}>Fecha reporte: {dateLabel(i.fecha_reporte)}</ThemedText>
+                    <ThemedText style={styles.cardInfo}>Fecha incidente: {convertDateTimestampToLocalString(new Date(i.fecha_incidente).toISOString() || '', false)}</ThemedText>
+                    <ThemedText style={styles.cardInfo}>Fecha reporte: {convertDateTimestampToLocalString(new Date(i.fecha_reporte).toISOString() || '', false)}</ThemedText>
                     <ThemedText style={styles.cardInfo}>Reporta: {i.nombre_responsable || '-'}</ThemedText>
                     <ThemedText style={styles.cardInfo}>Atención: {i.nombre_responsable_atencion || '-'}</ThemedText>
                     <ThemedText style={styles.cardInfo} numberOfLines={3}>Descripción: {i.descripcion || '-'}</ThemedText>
@@ -2216,7 +2277,7 @@ export default function IncidentsScreen() {
                         )}
                       </ThemedView>
                       <ThemedText style={styles.aporteDate}>
-                        {a.created_at ? new Date(a.created_at).toLocaleString() : ''}
+                        {a.created_at ? convertDateTimestampToLocalString(String(a.created_at || '')) : ''}
                       </ThemedText>
                       <ThemedText style={styles.aporteText}>{a.aporte}</ThemedText>
                       {selectedIncidentForAportes && !!getContributionSignatureUri(selectedIncidentForAportes.id, a) && (
@@ -2390,6 +2451,11 @@ const styles = StyleSheet.create({
   flexInput: { flex: 1 },
   addSmallButton: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8 },
   addSmallButtonText: { color: '#007AFF', fontWeight: '600' },
+
+  codeRow: { flexDirection: 'row', gap: 10, alignItems: 'center', marginBottom: 8 },
+  codeInput: { flex: 1, borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 10, backgroundColor: '#fff', color: '#000' },
+  codeActionButton: { backgroundColor: '#007AFF', borderRadius: 8, paddingHorizontal: 14, paddingVertical: 11 },
+  codeActionButtonText: { color: '#FFF', fontWeight: '700' },
 
   addFileButton: {
     flexDirection: 'row',

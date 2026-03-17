@@ -103,6 +103,11 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             return NextResponse.json({ status: false, message: "Fecha u hora inválida" }, { status: 200 });
         }
 
+        const horaRaw = hora !== undefined ? String(hora ?? "").trim() : null;
+        const horaNormalized = '1970-01-01T' + horaRaw + '.000Z';
+
+    console.log('horaNormalized', horaNormalized);
+
         // Registrar cambios (solo campos actualizados, excluyendo firmas)
         const eq = (a: any, b: any) => {
             if (a === b) return true;
@@ -120,7 +125,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             departamento: typeof departamento === "string" ? departamento : own.mov!.departamento,
             telefono: typeof telefono === "string" ? telefono : own.mov!.telefono,
             fecha: fechaDate ?? own.mov!.fecha,
-            hora: horaDate ?? own.mov!.hora,
+            // si viene hora en el body, guardamos solo HH:mm:ss como string; si no, dejamos la anterior
+            hora: horaNormalized !== null ? horaNormalized : own.mov!.hora,
             firma_entrega:
                 firma_entrega !== undefined
                     ? (firma_entrega != null && String(firma_entrega).trim().length > 0

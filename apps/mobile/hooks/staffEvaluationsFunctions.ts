@@ -59,7 +59,8 @@ export const createStaffEvaluation = async ({
     }
 
     if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
+      const data: ApiResponse = await response.json();
+      throw new Error(data.message || `HTTP error! status: ${response.status}`);
     }
 
     const data: ApiResponse = await response.json();
@@ -68,7 +69,7 @@ export const createStaffEvaluation = async ({
     console.error('Error creating staff evaluation:', error);
     return {
       status: false,
-      message: 'Error al crear la evaluación de personal',
+      message: error instanceof Error ? error.message : 'Error al crear la evaluación de personal',
     };
   }
 };
@@ -146,11 +147,12 @@ export const updateStaffEvaluationSignature = async ({
       throw new Error('Sesión expirada');
     }
 
-    const data: ApiResponse = await response.json();
-
-    if (!response.ok || !data.status) {
+    if (!response.ok) {
+      const data: ApiResponse = await response.json();
       throw new Error(data.message || `HTTP error! status: ${response.status}`);
     }
+    
+    const data: ApiResponse = await response.json();
 
     return data;
   } catch (error) {

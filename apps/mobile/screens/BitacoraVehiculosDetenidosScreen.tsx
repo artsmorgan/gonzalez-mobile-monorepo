@@ -120,9 +120,27 @@ const parseDateStringToDate = (value?: string): Date => {
 };
 
 const timeToHHmm = (d: Date): string => {
-  const h = String(d.getHours()).padStart(2, '0');
-  const m = String(d.getMinutes()).padStart(2, '0');
-  return `${h}:${m}`;
+  // Ajuste por timezone: usamos toISOString() de una fecha ajustada
+  // para que la hora visual seleccionada sea exactamente la que se guarda.
+  const adjusted = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
+  const iso = adjusted.toISOString(); // YYYY-MM-DDTHH:mm:ss.sssZ
+  return iso.substring(11, 16); // HH:mm
+};
+
+const normalizeTimeHHmm = (value?: string): string => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (raw.includes('T')) return (raw.split('T')[1] || '').substring(0, 5);
+  return raw.length >= 5 ? raw.substring(0, 5) : raw;
+};
+
+const timeHHmmToPickerDate = (value?: string): Date => {
+  const normalized = normalizeTimeHHmm(value);
+  if (!normalized) return new Date();
+  const [h, m] = normalized.split(':');
+  const date = new Date();
+  date.setHours(Number(h) || 0, Number(m) || 0, 0, 0);
+  return date;
 };
 
 const safeParse = <T,>(value: any, fallback: T): T => {
@@ -146,7 +164,7 @@ const buildGeneralConfig = (tipo: TipoBitacora): GeneralEntry[] => {
       { key: 'cliente', label: 'Cliente', kind: 'readonly' },
       { key: 'corpo', label: 'Sucursal', kind: 'readonly' },
       { key: 'nombre_oficial_corporacion', label: 'Nombre oficial de corporación', kind: 'text', required: true },
-      { key: 'firma_oficial_corporacion', label: 'Firma (oficial corporación)', kind: 'signature', required: true },
+      { key: 'firma_oficial_corporacion', label: 'Firma (oficial corporación)', kind: 'signature', required: false },
       { key: 'fecha', label: 'Fecha', kind: 'date', required: true },
       { key: 'hora', label: 'Hora', kind: 'time', required: true },
       { key: 'codigo', label: 'Código', kind: 'text', required: true },
@@ -154,7 +172,21 @@ const buildGeneralConfig = (tipo: TipoBitacora): GeneralEntry[] => {
       { key: 'marca', label: 'Marca', kind: 'text', required: true },
       { key: 'color', label: 'Color', kind: 'text', required: true },
       { key: 'nombre_oficial_transito', label: 'Nombre oficial de tránsito', kind: 'text', required: true },
-      { key: 'firma_oficial_transito', label: 'Firma (oficial tránsito)', kind: 'signature', required: true },
+      { key: 'firma_oficial_transito', label: 'Firma (oficial tránsito)', kind: 'signature', required: false },
+      { key: 'km', label: 'KM que marca', kind: 'text', required: false },
+      { key: 'numero_motor', label: 'Número de motor', kind: 'text', required: false },
+      { key: 'tipo_vehiculo', label: 'Tipo', kind: 'text', required: false },
+      { key: 'vin', label: 'Número de Vin o chases', kind: 'text', required: false },
+      {
+        key: 'combustible',
+        label: 'Combustible',
+        kind: 'select',
+        required: false,
+        options: ['Lleno', '3/4', '1/2', '1/4', 'Marcador malo'],
+      },
+      { key: 'encargado_deposito', label: 'Encargado de depósito', kind: 'text', required: false },
+      { key: 'codigo_encargado', label: 'Código del encargado', kind: 'text', required: false },
+      { key: 'firma_encargado', label: 'Firma del encargado', kind: 'signature', required: false },
     ];
   }
 
@@ -164,7 +196,7 @@ const buildGeneralConfig = (tipo: TipoBitacora): GeneralEntry[] => {
       { key: 'cliente', label: 'Cliente', kind: 'readonly' },
       { key: 'corpo', label: 'Sucursal', kind: 'readonly' },
       { key: 'nombre_oficial_corporacion', label: 'Nombre oficial de corporación', kind: 'text', required: true },
-      { key: 'firma_oficial_corporacion', label: 'Firma del oficial', kind: 'signature', required: true },
+      { key: 'firma_oficial_corporacion', label: 'Firma del oficial', kind: 'signature', required: false },
       { key: 'fecha', label: 'Fecha', kind: 'date', required: true },
       { key: 'hora', label: 'Hora', kind: 'time', required: true },
       { key: 'codigo', label: 'Código', kind: 'text', required: true },
@@ -172,7 +204,9 @@ const buildGeneralConfig = (tipo: TipoBitacora): GeneralEntry[] => {
       { key: 'marca', label: 'Marca', kind: 'text', required: true },
       { key: 'color', label: 'Color', kind: 'text', required: true },
       { key: 'nombre_oficial_transito', label: 'Nombre de oficial de tránsito', kind: 'text', required: true },
-      { key: 'firma_oficial_transito', label: 'Firma (tránsito)', kind: 'signature', required: true },
+      { key: 'firma_oficial_transito', label: 'Firma (tránsito)', kind: 'signature', required: false },
+      { key: 'codigo_encargado', label: 'Código del encargado', kind: 'text', required: false },
+      { key: 'firma_encargado', label: 'Firma del encargado', kind: 'signature', required: false }
     ];
   }
 
@@ -1297,11 +1331,12 @@ export default function BitacoraVehiculosDetenidosScreen() {
 
     const baseGeneral: Record<string, any> = {};
     // empresa/cliente/corpo para display (readonly en config actual)
+    const now = new Date(horaAccion);
     baseGeneral.empresa = current?.empresa?.nombre ?? empresaNombre ?? '';
     baseGeneral.cliente = current?.cliente?.nombre ?? clienteNombre ?? '';
     baseGeneral.corpo = current?.corpo?.nombre ?? corpoNombre ?? '';
-    baseGeneral.fecha = dateToLocalString(new Date(horaAccion));
-    baseGeneral.hora = timeToHHmm(new Date(horaAccion));
+    baseGeneral.fecha = dateToLocalString(now);
+    baseGeneral.hora = timeToHHmm(now);
     setGeneralValues(baseGeneral);
 
     const baseRev: Record<string, any> = {};
@@ -1315,7 +1350,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
     setRevisionObs(baseObs);
 
     setMovimientos([
-      { movimiento: '', fecha: dateToLocalString(new Date(horaAccion)), hora: timeToHHmm(new Date(horaAccion)), realizado_por: '', autorizado_por: '', _expanded: true },
+      { movimiento: '', fecha: dateToLocalString(now), hora: timeToHHmm(now), realizado_por: '', autorizado_por: '', _expanded: true },
     ]);
     setObservaciones('');
     setFirmaResponsable('');
