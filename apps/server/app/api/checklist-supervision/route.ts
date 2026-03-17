@@ -4,7 +4,7 @@ import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
-import { createReport } from "../../../utils/createReporteArticuloMantenimiento";
+import { createReport, updateReport } from "../../../utils/createReporteArticuloMantenimiento";
 import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
 
 function safeParseJson<T>(value: any, fallback: T): T {
@@ -158,6 +158,8 @@ export async function POST(req: NextRequest) {
       articulos_puesto,
       firma_supervisor,
       firma_responsable,
+      created_at,
+      hora_accion,
     } = body ?? {};
 
     if (
@@ -168,12 +170,29 @@ export async function POST(req: NextRequest) {
       !division ||
       !fecha ||
       !evaluacion ||
-      !firma_responsable
+      !firma_responsable ||
+      !created_at
     ) {
-      return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 200 });
+      const errorMessage = "Datos incompletos: " +
+        (!cliente_id ? "cliente_id, " : "") +
+        (!division_id ? "division_id, " : "") +
+        (!corpo_id ? "corpo_id, " : "") +
+        (!puesto_id ? "puesto_id, " : "") +
+        (!division ? "division, " : "") +
+        (!fecha ? "fecha, " : "") +
+        (!evaluacion ? "evaluacion, " : "") +
+        (!firma_responsable ? "firma_responsable, " : "") +
+        (!created_at ? "created_at" : "");
+      return NextResponse.json({ status: false, message: errorMessage }, { status: 200 });
     }
 
-    const createdAt = toZonedTime(new Date(), "America/Costa_Rica") as Date;
+    const createdAt = new Date(created_at);
+    /** Instante de la acción en el cliente; si no viene, coincide con created_at del checklist. */
+    const accionAt =
+      hora_accion != null && String(hora_accion).trim()
+        ? new Date(hora_accion)
+        : createdAt;
+    const accionAtMs = accionAt.getTime();
     const fechaDate = fecha instanceof Date ? fecha : new Date(fecha);
 
     // Parsear evaluación para procesar imágenes
@@ -289,92 +308,139 @@ export async function POST(req: NextRequest) {
       let fechaRegistro = createdAt.toISOString().split("T")[0];
       let horaRegistro = createdAt.toISOString().split("T")[1].split(".")[0];
 
-      // Verificar si hay problemas con los artículos (similar a entrega-puestos)
+      // Verificar artículos del puesto y generar/actualizar reportes de mantenimiento
       let articulos_desc = ".";
       let send_notification = false;
-      let articulos_reporte = [];
+      const articulos_reporte: any[] = [];
+      const articulos_reporte_update: any[] = [];
       if (articulos_puesto) {
         try {
-          const articulos_puesto_array = typeof articulos_puesto === 'string' ? JSON.parse(articulos_puesto) : articulos_puesto;
+          const articulos_puesto_array = typeof articulos_puesto === "string" ? JSON.parse(articulos_puesto) : articulos_puesto;
           if (Array.isArray(articulos_puesto_array) && articulos_puesto_array.length > 0) {
             let init_desc = false;
             for (const articulo of articulos_puesto_array) {
               let articulo_desc = `- ${articulo.cantidad_real} de ${articulo.cantidad_requerida} unidades de "${articulo.nombre}" (Estado: ${articulo.estado})\n`;
-              let add_desc = false;
-              if (articulo.cantidad_requerida > articulo.cantidad_real) {
-                add_desc = true;
-              }
 
-              let was_good = false;
-              if (articulo.tipo == "Plan") {
-                const last_mantenimiento = await callDynamicPrisma({
+              let last_estado: string | null = null;
+              let last_mantenimiento: any = null;
+              if (articulo.tipo === "Plan") {
+                last_mantenimiento = await callDynamicPrisma({
                   req,
                   data: {
                     action: "GET",
                     table: "c_articulo_mantenimiento",
                     operation: "findFirst",
                     where: { articulo_plan_id: articulo.id },
-                    orderBy: { fecha_solucion: "desc" }
-                  }
+                    orderBy: { fecha_solucion: "desc" },
+                  },
                 });
-                if (last_mantenimiento) {
-                  if (last_mantenimiento.estado == "Bueno") {
-                    was_good = true;
-                  }
-                }
-              }
-              else {
-                const last_mantenimiento = await callDynamicPrisma({
+              } else {
+                last_mantenimiento = await callDynamicPrisma({
                   req,
                   data: {
                     action: "GET",
                     table: "c_articulo_mantenimiento",
                     operation: "findFirst",
                     where: { articulo_asignado_id: articulo.id },
-                    orderBy: { fecha_solucion: "desc" }
-                  }
+                    orderBy: { fecha_solucion: "desc" },
+                  },
                 });
-                if (last_mantenimiento) {
-                  if (last_mantenimiento.estado == "Bueno") {
-                    was_good = true;
-                  }
-                }
               }
 
-              if (articulo.estado != "Bueno" && was_good) {
-                add_desc = true;
+              if (last_mantenimiento && last_mantenimiento.id) {
+                last_estado = String(last_mantenimiento.estado || "");
+                // Validar que el último mantenimiento no tenga un updated_at más reciente que el momento del checklist
+                if (last_mantenimiento.updated_at) {
+                  const lastUpdated = new Date(last_mantenimiento.updated_at);
+                  if (!isNaN(lastUpdated.getTime()) && lastUpdated.getTime() > accionAtMs) {
+                    // Mantenimiento actualizado después de hora_accion/created_at → no crear ni evaluar
+                    continue;
+                  }
+                }
+              } else {
+                // Si no hay registros previos asumimos que el estado base era Bueno
+                last_estado = "Bueno";
               }
 
-              if (add_desc) {
-                send_notification = true;
-                if (!init_desc) {
-                  articulos_desc = ". Sin embargo, los artículos registrados presentan los siguientes detalles:\n";
-                  init_desc = true;
-                }
-                articulos_desc += articulo_desc;
-                articulos_reporte.push({
-                  id: articulo.id,
-                  nombre: articulo.nombre,
-                  tipo: articulo.tipo,
-                  marca: articulo.marca,
-                  serie: articulo.serie,
-                  cantidad_requerida: articulo.cantidad_requerida,
-                  cantidad_real: articulo.cantidad_real,
-                  estado: articulo.estado,
-                  observaciones: articulo.observaciones,
-                });
+              const estado_actual = String(articulo.estado || "");
+
+              switch (estado_actual) {
+                case "Bueno":
+                  // Si antes no era Bueno y ahora sí, se actualiza el último reporte a Bueno
+                  if (last_estado !== "Bueno" && last_mantenimiento && last_mantenimiento.id) {
+                    articulos_reporte_update.push({
+                      id: last_mantenimiento.id,
+                      estado: "Bueno",
+                      cantidad_real: articulo.cantidad_requerida,
+                      fecha_solucion: createdAt,
+                    });
+                  }
+                  break;
+                default:
+                  if (last_estado === "Bueno") {
+                    // Transición Bueno -> no Bueno: notificar y crear nuevo reporte
+                    send_notification = true;
+                    if (!init_desc) {
+                      articulos_desc = ". Sin embargo, los artículos registrados presentan los siguientes detalles:\n";
+                      init_desc = true;
+                    }
+                    articulos_desc += articulo_desc;
+                    articulos_reporte.push({
+                      id: articulo.id,
+                      nombre: articulo.nombre,
+                      tipo: articulo.tipo,
+                      marca: articulo.marca,
+                      serie: articulo.serie,
+                      cantidad_requerida: articulo.cantidad_requerida,
+                      cantidad_real: articulo.cantidad_real,
+                      estado: articulo.estado,
+                      observaciones: articulo.observaciones,
+                      created_at: createdAt,
+                      updated_at: createdAt,
+                    });
+                  } else if (last_estado !== estado_actual && last_mantenimiento && last_mantenimiento.id) {
+                    // Cambio entre estados no Buenos: actualizar reporte existente
+                    articulos_reporte_update.push({
+                      id: last_mantenimiento.id,
+                      estado: estado_actual,
+                      cantidad_real: articulo.cantidad_real,
+                      fecha_solucion: null,
+                      updated_at: createdAt,
+                    });
+                  }
+                  break;
               }
             }
           }
         } catch (error) {
-          console.error("Error procesando artículos para notificación:", error);
+          console.error("Error procesando artículos para notificación y reportes:", error);
         }
       }
 
-      if (send_notification) {
-        const description = "El empleado " + empNombre + " ha registrado un checklist de supervisión en el puesto " + puestoNombre + " en la sucursal " + sucursalNombre + " el día " + fechaRegistro + " a las " + horaRegistro + articulos_desc;
-        await sendNotificationByRole(req, corpo_id, [created.created_by], "Checklist de supervisión registrado", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+      if (articulos_reporte.length > 0) {
         await createReport(req, articulos_reporte);
+      }
+      if (articulos_reporte_update.length > 0) {
+        await updateReport(req, articulos_reporte_update);
+      }
+
+      if (send_notification) {
+        const description =
+          "El empleado " +
+          empNombre +
+          " ha registrado un checklist de supervisión en el puesto " +
+          puestoNombre +
+          " en la sucursal " +
+          sucursalNombre +
+          " el día " +
+          fechaRegistro +
+          " a las " +
+          horaRegistro +
+          articulos_desc;
+        await sendNotificationByRole(req, corpo_id, [created.created_by], "Checklist de supervisión registrado", description, [
+          "ADMINISTRATIVO",
+          "SUPERVISOR",
+        ]);
       }
     }
 

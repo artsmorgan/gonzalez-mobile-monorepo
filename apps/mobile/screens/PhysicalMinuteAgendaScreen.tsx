@@ -20,7 +20,6 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Network from 'expo-network';
 import * as Location from 'expo-location';
 import { jwtDecode } from 'jwt-decode';
-
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import { formatDateDMY } from '@/utils/formatDate';
@@ -38,6 +37,7 @@ import getHoraAccion from '@/hooks/getHoraAccion';
 import { useQRScanner } from '@/hooks/useQRScanner';
 import { createAgendaMinuta, deleteAgendaMinuta, listAgendaMinutaByCorpo, updateAgendaMinuta } from '@/hooks/evaluationFunctions';
 import authedFetch from '@/hooks/authedFetch';
+import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 
 type PhysicalMinuteAgendaScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'PhysicalMinuteAgenda'>;
 
@@ -285,6 +285,7 @@ export default function PhysicalMinuteAgendaScreen() {
 
   // UI collapsables in list items
   const [expandedParticipantesById, setExpandedParticipantesById] = useState<Record<string, boolean>>({});
+  const [codigoParticipante, setCodigoParticipante] = useState<string>('');
   const [expandedAcuerdosById, setExpandedAcuerdosById] = useState<Record<string, boolean>>({});
   const [expandedTemasById, setExpandedTemasById] = useState<Record<string, boolean>>({});
   const [expandedFirmaById, setExpandedFirmaById] = useState<Record<string, boolean>>({});
@@ -879,6 +880,53 @@ export default function PhysicalMinuteAgendaScreen() {
     setTemasATratar((prev) => prev.map((t) => (t.id_local === id_local ? { ...t, ...patch } : t)));
   };
 
+  const getEmpleadoByCodigo = async (codigo: string) => {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) throw new Error('Server URL not configured');
+    const response = await authedFetch({
+      url: `${apiUrl}/api/empleados/codigo/${encodeURIComponent(String(codigo).trim())}`,
+      init: {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+      },
+      refreshAccessToken,
+      logout,
+    });
+    if (!response) throw new Error('Sesión expirada');
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      throw new Error(errData?.message || 'No se pudo obtener el empleado por código');
+    }
+    const data = await response.json();
+    if (!data?.status || !data?.data) throw new Error(data?.message || 'Empleado no encontrado');
+    return data.data;
+  };
+
+  const handleSearchParticipanteByCode = async () => {
+    const code = String(codigoParticipante || '').trim();
+    if (!code) {
+      Alert.alert('Error', 'Debes ingresar un código de participante');
+      return;
+    }
+    try {
+      const empleado = await getEmpleadoByCodigo(code);
+      const nombre = String(empleado?.nombre_completo || empleado?.nombre || '').trim();
+      const cedula = String(empleado?.cedula || '').trim();
+      setParticipantes((prev) => [
+        ...prev,
+        {
+          id_local: generateRandomId(),
+          nombre,
+          cedula,
+          firma: null,
+        },
+      ]);
+      setCodigoParticipante('');
+    } catch (e: any) {
+      Alert.alert('Error', e?.message || 'No se pudo buscar el empleado por código');
+    }
+  };
+
   const fetchRecords = useCallback(async () => {
     try {
       setIsLoading(true);
@@ -1402,7 +1450,7 @@ export default function PhysicalMinuteAgendaScreen() {
                           <ThemedText style={styles.detailLine}>
                             Lat/Lng: {info.latitud}, {info.longitud}
                           </ThemedText>
-                          <ThemedText style={styles.detailLine}>Hora: {info.timestamp}</ThemedText>
+                          <ThemedText style={styles.detailLine}>Hora: { convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString())}</ThemedText>
                         </>
                       );
                     })()}
@@ -1551,7 +1599,7 @@ export default function PhysicalMinuteAgendaScreen() {
 
             <ThemedText style={styles.label}>Fecha</ThemedText>
             <TouchableOpacity style={styles.dateButton} onPress={() => setShowDatePicker(true)} activeOpacity={0.85}>
-              <ThemedText style={styles.dateButtonText}>{formatDateDisplay(fecha)}</ThemedText>
+              <ThemedText style={styles.dateButtonText}>{convertDateTimestampToLocalString(fecha.toISOString(), false)}</ThemedText>
               <Ionicons name="calendar" size={18} color="#007AFF" />
             </TouchableOpacity>
             {showDatePicker && (
@@ -1605,10 +1653,23 @@ export default function PhysicalMinuteAgendaScreen() {
             <ThemedText style={styles.label}>Autor</ThemedText>
             <TextInput style={styles.input} value={autor} onChangeText={setAutor} placeholder="Autor" />
 
-            <ThemedText style={styles.label}>Observaciones</ThemedText>
-            <TextInput style={[styles.input, styles.textArea]} value={observaciones} onChangeText={setObservaciones} placeholder="Observaciones" multiline />
+          <ThemedText style={styles.label}>Observaciones</ThemedText>
+          <TextInput style={[styles.input, styles.textArea]} value={observaciones} onChangeText={setObservaciones} placeholder="Observaciones" multiline />
 
-            <ThemedText style={styles.formSectionTitle}>Participantes</ThemedText>
+          <ThemedText style={styles.formSectionTitle}>Participantes</ThemedText>
+          <ThemedText style={styles.label}>Buscar participante por código</ThemedText>
+          <ThemedView style={styles.codeRow}>
+            <TextInput
+              style={styles.codeInput}
+              value={codigoParticipante}
+              onChangeText={setCodigoParticipante}
+              placeholder="Código del empleado"
+              placeholderTextColor="#999"
+            />
+            <TouchableOpacity style={styles.codeActionButton} onPress={handleSearchParticipanteByCode} activeOpacity={0.85}>
+              <ThemedText style={styles.codeActionButtonText}>Buscar</ThemedText>
+            </TouchableOpacity>
+          </ThemedView>
             {participantes.length === 0 ? <ThemedText style={styles.emptyTextSmall}>—</ThemedText> : null}
             {participantes.map((p, idx) => {
               const sigUri = formatSignatureForDisplay(p.firma);
@@ -1753,7 +1814,7 @@ export default function PhysicalMinuteAgendaScreen() {
                       <ThemedText style={styles.firmaInfoText}>
                         Lat: {info.latitud} | Long: {info.longitud}
                       </ThemedText>
-                      <ThemedText style={styles.firmaInfoText}>Hora: {info.timestamp}</ThemedText>
+                      <ThemedText style={styles.firmaInfoText}>Hora: { convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString())}</ThemedText>
                     </>
                   );
                 })()}
@@ -1813,7 +1874,7 @@ export default function PhysicalMinuteAgendaScreen() {
                   } catch {
                     parsed = [];
                   }
-                  const createdAtLabel = formatCambioCreatedAt(row?.created_at);
+                  const createdAtLabel = convertDateTimestampToLocalString(row?.created_at);
                   const isOpen = expandedCambioId === row.id;
 
                   return (
@@ -1867,7 +1928,7 @@ export default function PhysicalMinuteAgendaScreen() {
                                             <ThemedView key={`c-${row.id}-${idx}-${k}`} style={styles.changeDescriptionContainer}>
                                               <ThemedText style={styles.changeDescription}>
                                                 <ThemedText style={{ fontWeight: '800' }}>{k}: </ThemedText>
-                                                {info ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${info.timestamp || 'N/A'}` : 'Firma (formato no decodificable)'}
+                                                {info ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${ convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}` : 'Firma (formato no decodificable)'}
                                               </ThemedText>
                                             </ThemedView>
                                           );
@@ -1951,7 +2012,7 @@ export default function PhysicalMinuteAgendaScreen() {
                                       {isFirmaResponsable && typeof value === 'string' && value.trim()
                                         ? (() => {
                                             const info = decodeFirmaHash(value);
-                                            return info ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${info.timestamp || 'N/A'}` : 'Firma (formato no decodificable)';
+                                            return info ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${ convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}` : 'Firma (formato no decodificable)';
                                           })()
                                         : !isFirmaResponsable ? formatChangeValue(prop, value) : 'N/A'}
                                     </ThemedText>
@@ -1987,8 +2048,8 @@ export default function PhysicalMinuteAgendaScreen() {
               <ThemedText style={styles.subtitle}>Registra y consulta agendas de minuta por puesto</ThemedText>
             </ThemedView>
 
-            {/* Filtros */}
-            {!isLoading && (
+      {/* Filtros */}
+      {(
               <ThemedView style={styles.filtersMain}>
                 <ThemedView style={styles.filterHeader}>
                   <TouchableOpacity
@@ -2325,6 +2386,19 @@ const styles = StyleSheet.create({
   },
   signatureButtonText: { color: '#007AFF', fontWeight: '700' },
   signaturePreview: { width: '100%', height: 140, backgroundColor: '#FFFFFF', borderRadius: 8, borderWidth: 1, borderColor: '#E0E0E0', marginTop: 10 },
+  codeRow: { flexDirection: 'row', gap: 10, alignItems: 'center', marginTop: 8, marginBottom: 8 },
+  codeInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    backgroundColor: '#fff',
+    color: '#000',
+  },
+  codeActionButton: { backgroundColor: '#007AFF', borderRadius: 8, paddingHorizontal: 14, paddingVertical: 11 },
+  codeActionButtonText: { color: '#FFF', fontWeight: '700' },
 
   // agreements/participants list display
   personDetailCard: { width: '100%', borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 10, padding: 10, backgroundColor: '#FFFFFF', marginBottom: 12 },

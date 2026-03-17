@@ -51,6 +51,7 @@ import {
   listCorporateVehicleMaintenances,
   CorporateVehicleMaintenanceRequest,
 } from '@/hooks/evaluationFunctions';
+import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'CorporateVehicles'>;
 
@@ -87,9 +88,10 @@ type VehicleUse = {
   bitacora_id?: number | null;
   nombre_conductor: string;
   codigo_conductor: string;
-  fecha: string; // ISO
-  inicio: string; // ISO
-  fin: string; // ISO
+  fecha_inicio: string; // ISO
+  fecha_fin: string; // ISO
+  hora_inicio: string; // ISO
+  hora_fin: string; // ISO
   combustible_inicio: string;
   combustible_fin: string;
   km_inicio: number;
@@ -192,8 +194,11 @@ const toIsoFromDateAndTime = (dateStr: string, timeStr: string) => {
   const t = String(timeStr || '').trim();
   if (!d) return new Date().toISOString();
   const hhmm = t && /^\d{2}:\d{2}$/.test(t) ? t : '00:00';
-  const dt = new Date(`${d}T${hhmm}:00`);
-  return Number.isNaN(dt.getTime()) ? new Date().toISOString() : dt.toISOString();
+  const base = new Date(`${d}T${hhmm}:00`);
+  if (Number.isNaN(base.getTime())) return new Date().toISOString();
+  // Ajuste por timezone para que la hora visual se mantenga
+  const adjusted = new Date(base.getTime() - base.getTimezoneOffset() * 60000);
+  return adjusted.toISOString();
 };
 
 const dateToYMD = (d: Date) => {
@@ -204,19 +209,31 @@ const dateToYMD = (d: Date) => {
 };
 
 const timeToHHmm = (d: Date) => {
-  const h = String(d.getHours()).padStart(2, '0');
-  const m = String(d.getMinutes()).padStart(2, '0');
-  return `${h}:${m}`;
+  const adjusted = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
+  const iso = adjusted.toISOString();
+  return iso.substring(11, 16); // HH:mm
+};
+
+const normalizeTimeHHmm = (value?: string): string => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (raw.includes('T')) return (raw.split('T')[1] || '').substring(0, 5);
+  return raw.length >= 5 ? raw.substring(0, 5) : raw;
+};
+
+const timeHHmmToPickerDate = (value?: string): Date => {
+  const normalized = normalizeTimeHHmm(value);
+  if (!normalized) return new Date();
+  const [h, m] = normalized.split(':');
+  const date = new Date();
+  date.setHours(Number(h) || 0, Number(m) || 0, 0, 0);
+  return date;
 };
 
 const isoToDate = (iso?: string) => {
   if (!iso) return '';
-  const dt = new Date(String(iso));
-  if (Number.isNaN(dt.getTime())) return '';
-  const y = dt.getFullYear();
-  const m = String(dt.getMonth() + 1).padStart(2, '0');
-  const d = String(dt.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
+  // Preservar la parte de fecha tal cual venga (YYYY-MM-DD o similar)
+  return String(iso).split('T')[0];
 };
 
 /** Formato solo para visualización: devuelve DD-MM-YYYY. Acepta entrada en YYYY-MM-DD o DD-MM-YYYY. */
@@ -233,11 +250,15 @@ const formatYMDToDMY = (value?: string) => {
 
 const isoToTime = (iso?: string) => {
   if (!iso) return '';
-  const dt = new Date(String(iso));
-  if (Number.isNaN(dt.getTime())) return '';
-  const h = String(dt.getHours()).padStart(2, '0');
-  const m = String(dt.getMinutes()).padStart(2, '0');
-  return `${h}:${m}`;
+  const s = String(iso);
+  if (s.includes('T')) {
+    const timePart = s.split('T')[1] || '';
+    return timePart.substring(0, 5);
+  }
+  // Si viene solo HH:mm o HH:mm:ss lo normalizamos
+  const m = s.match(/^(\d{2}):(\d{2})(?::\d{2})?$/);
+  if (m) return `${m[1]}:${m[2]}`;
+  return '';
 };
 
 const COMBUSTIBLE_OPTIONS = ['Vacío', 'Un cuarto', 'Medio', 'Tres cuartos', 'Lleno'];
@@ -1197,16 +1218,7 @@ export default function CorporateVehiclesScreen() {
       return;
     }
     setUsePickerKey(key);
-    const base = new Date(horaAccion);
-    if (current && /^\d{2}:\d{2}$/.test(current)) {
-      const [hh, mm] = current.split(':').map((x) => parseInt(x, 10));
-      if (!Number.isNaN(hh) && !Number.isNaN(mm)) {
-        base.setHours(hh);
-        base.setMinutes(mm);
-        base.setSeconds(0);
-        base.setMilliseconds(0);
-      }
-    }
+    const base = current ? timeHHmmToPickerDate(current) : new Date(horaAccion);
     setUseTimePickerValue(base);
     setShowUseTimePicker(true);
   };
@@ -1312,12 +1324,14 @@ export default function CorporateVehiclesScreen() {
     setUseEditing(u);
     setUseNombreConductor(String(u.nombre_conductor || ''));
     setUseCodigoConductor(String((u as any).codigo_conductor || ''));
-    const inicioIso = String((u as any).inicio || (u as any).hora_inicio || '');
-    const finIso = String((u as any).fin || (u as any).hora_fin || '');
-    setUseInicioFecha(isoToDate(inicioIso));
-    setUseInicioHora(isoToTime(inicioIso));
-    setUseFinFecha(isoToDate(finIso));
-    setUseFinHora(isoToTime(finIso));
+    const inicioFechaIso = String((u as any).fecha_inicio || (u as any).inicio || (u as any).hora_inicio || '');
+    const finFechaIso = String((u as any).fecha_fin || (u as any).fin || (u as any).hora_fin || '');
+    const inicioHoraIso = String((u as any).hora_inicio || (u as any).inicio || '');
+    const finHoraIso = String((u as any).hora_fin || (u as any).fin || '');
+    setUseInicioFecha(isoToDate(inicioFechaIso));
+    setUseInicioHora(isoToTime(inicioHoraIso));
+    setUseFinFecha(isoToDate(finFechaIso));
+    setUseFinHora(isoToTime(finHoraIso));
     setUseCombInicio(String(u.combustible_inicio ?? ''));
     setUseCombFin(String(u.combustible_fin ?? ''));
     setUseKmInicio(String(u.km_inicio ?? ''));
@@ -1387,12 +1401,16 @@ export default function CorporateVehiclesScreen() {
       )
       : '';
 
+    const inicioHoraIso = toIsoFromDateAndTime(useInicioFecha, useInicioHora);
+    const finHoraIso = toIsoFromDateAndTime(useFinFecha, useFinHora);
     return {
       nombre_conductor: useNombreConductor.trim(),
       codigo_conductor: useCodigoConductor.trim(),
+      fecha_inicio: toIsoFromDateAndTime(useInicioFecha, '00:00'),
+      fecha_fin: toIsoFromDateAndTime(useFinFecha, '00:00'),
+      hora_inicio: inicioHoraIso,
+      hora_fin: finHoraIso,
       fecha: new Date(horaAccion).toISOString(),
-      inicio: toIsoFromDateAndTime(useInicioFecha, useInicioHora),
-      fin: toIsoFromDateAndTime(useFinFecha, useFinHora),
       combustible_inicio: useCombInicio.trim(),
       combustible_fin: useCombFin.trim(),
       km_inicio: Number(useKmInicio || 0),
@@ -2212,6 +2230,7 @@ export default function CorporateVehiclesScreen() {
     if (!selectedSucursalId) return 'Sucursal es requerida';
     if (!placa.trim()) return 'Placa es requerida';
     if (!tipo.trim()) return 'Tipo es requerido';
+    if (!tipoAutoria.trim()) return 'Tipo de autoría es requerido';
     if (!firmaResponsable) return 'Firma del responsable (QR o Generar) es requerida';
     return null;
   };
@@ -2786,9 +2805,13 @@ export default function CorporateVehiclesScreen() {
                 </Picker>
               </ThemedView>
               
-              <ThemedText style={styles.label}>Tipo de autoria</ThemedText>
+              <ThemedText style={styles.label}>Tipo de autoría</ThemedText>
               <ThemedView style={styles.pickerWrapper}>
-                <Picker selectedValue={tipoAutoria} style={styles.picker}>
+                <Picker
+                  selectedValue={tipoAutoria}
+                  onValueChange={(v) => setTipoAutoria(String(v || ''))}
+                  style={styles.picker}
+                >
                   <Picker.Item label="Seleccione..." value="" />
                   <Picker.Item label="Cliente" value="Cliente" />
                   <Picker.Item label="Corporativo" value="Corporativo" />
@@ -2890,7 +2913,7 @@ export default function CorporateVehiclesScreen() {
                     Longitud: {firmaResponsable.longitud}
                   </ThemedText>
                   <ThemedText style={styles.signatureInfoText}>
-                    Fecha y hora: {new Date(Number(firmaResponsable.timestamp)).toLocaleString()}
+                    Fecha y hora: {convertDateTimestampToLocalString(new Date(Number(firmaResponsable.timestamp)).toISOString())}
                   </ThemedText>
                 </ThemedView>
               )}
@@ -3133,7 +3156,7 @@ export default function CorporateVehiclesScreen() {
 
                   <ThemedText style={styles.label}>Inicio (fecha)</ThemedText>
                   <TouchableOpacity style={styles.dateButton} onPress={() => openUseDatePicker('inicio_fecha', useInicioFecha)} activeOpacity={0.85}>
-                    <ThemedText style={styles.dateButtonText}>{useInicioFecha ? formatYMDToDMY(useInicioFecha) : 'Seleccionar fecha'}</ThemedText>
+                    <ThemedText style={styles.dateButtonText}>{useInicioFecha ? convertDateTimestampToLocalString(new Date(useInicioFecha).toISOString(), false) : 'Seleccionar fecha'}</ThemedText>
                     <Ionicons name="calendar-outline" size={18} color="#007AFF" />
                   </TouchableOpacity>
 
@@ -3145,7 +3168,7 @@ export default function CorporateVehiclesScreen() {
 
                   <ThemedText style={styles.label}>Fin (fecha)</ThemedText>
                   <TouchableOpacity style={styles.dateButton} onPress={() => openUseDatePicker('fin_fecha', useFinFecha)} activeOpacity={0.85}>
-                    <ThemedText style={styles.dateButtonText}>{useFinFecha ? formatYMDToDMY(useFinFecha) : 'Seleccionar fecha'}</ThemedText>
+                    <ThemedText style={styles.dateButtonText}>{useFinFecha ? convertDateTimestampToLocalString(new Date(useFinFecha).toISOString(), false) : 'Seleccionar fecha'}</ThemedText>
                     <Ionicons name="calendar-outline" size={18} color="#007AFF" />
                   </TouchableOpacity>
 
@@ -3272,7 +3295,7 @@ export default function CorporateVehiclesScreen() {
                           Longitud: {useFirmaResponsable.longitud}
                         </ThemedText>
                         <ThemedText style={styles.signatureInfoText}>
-                          Fecha y hora: {new Date(Number(useFirmaResponsable.timestamp)).toLocaleString()}
+                          Fecha y hora: {convertDateTimestampToLocalString(new Date(Number(useFirmaResponsable.timestamp)).toISOString())}
                         </ThemedText>
                       </ThemedView>
                     )}
@@ -3348,13 +3371,13 @@ export default function CorporateVehiclesScreen() {
                         <ThemedText style={styles.detailText}>
                           <ThemedText style={styles.cardLabel}>Inicio: </ThemedText>
                           <ThemedText style={styles.cardValue}>
-                            {`${formatYMDToDMY(isoToDate((u as any).inicio || (u as any).hora_inicio))} ${isoToTime((u as any).inicio || (u as any).hora_inicio)}`.trim() || '—'}
+                            {`${convertDateTimestampToLocalString(new Date(isoToDate((u as any).fecha_inicio || (u as any).inicio || (u as any).hora_inicio)).toISOString(), false)} ${isoToTime((u as any).hora_inicio || (u as any).inicio)}`.trim() || '—'}
                           </ThemedText>
                         </ThemedText>
                         <ThemedText style={styles.detailText}>
                           <ThemedText style={styles.cardLabel}>Fin: </ThemedText>
                           <ThemedText style={styles.cardValue}>
-                            {`${formatYMDToDMY(isoToDate((u as any).fin || (u as any).hora_fin))} ${isoToTime((u as any).fin || (u as any).hora_fin)}`.trim() || '—'}
+                            {`${convertDateTimestampToLocalString(new Date(isoToDate((u as any).fecha_fin || (u as any).fin || (u as any).hora_fin)).toISOString(), false)} ${isoToTime((u as any).hora_fin || (u as any).fin)}`.trim() || '—'}
                           </ThemedText>
                         </ThemedText>
 
@@ -3593,7 +3616,7 @@ export default function CorporateVehiclesScreen() {
 
                   <ThemedText style={styles.label}>Fecha</ThemedText>
                   <TouchableOpacity style={styles.dateButton} onPress={() => openMaintenanceDatePicker(maintenanceFecha)} activeOpacity={0.85}>
-                    <ThemedText style={styles.dateButtonText}>{maintenanceFecha ? formatYMDToDMY(maintenanceFecha) : 'Seleccionar fecha'}</ThemedText>
+                    <ThemedText style={styles.dateButtonText}>{maintenanceFecha ? convertDateTimestampToLocalString(new Date(maintenanceFecha).toISOString(), false) : 'Seleccionar fecha'}</ThemedText>
                     <Ionicons name="calendar-outline" size={18} color="#007AFF" />
                   </TouchableOpacity>
 
@@ -3754,7 +3777,7 @@ export default function CorporateVehiclesScreen() {
                         Longitud: {maintenanceFirmaResponsable.longitud}
                       </ThemedText>
                       <ThemedText style={styles.signatureInfoText}>
-                        Fecha y hora: {new Date(Number(maintenanceFirmaResponsable.timestamp)).toLocaleString()}
+                        Fecha y hora: {convertDateTimestampToLocalString(new Date(Number(maintenanceFirmaResponsable.timestamp)).toISOString())}
                       </ThemedText>
                     </ThemedView>
                   )}
@@ -3824,7 +3847,7 @@ export default function CorporateVehiclesScreen() {
                         </ThemedText>
                         <ThemedText style={styles.detailText}>
                           <ThemedText style={styles.cardLabel}>Fecha: </ThemedText>
-                          <ThemedText style={styles.cardValue}>{formatYMDToDMY(isoToDate(m.fecha)) || '—'}</ThemedText>
+                          <ThemedText style={styles.cardValue}>{convertDateTimestampToLocalString(new Date(isoToDate(m.fecha)).toISOString(), false) || '—'}</ThemedText>
                         </ThemedText>
                         <ThemedText style={styles.detailText}>
                           <ThemedText style={styles.cardLabel}>Mecánico: </ThemedText>
@@ -3977,7 +4000,7 @@ export default function CorporateVehiclesScreen() {
                   } catch {
                     parsed = [];
                   }
-                  const createdAtLabel = formatCambioCreatedAt(row?.created_at);
+                  const createdAtLabel = convertDateTimestampToLocalString(new Date(row?.created_at).toISOString());
                   const isOpen = expandedCambioId === row.id;
 
                   return (

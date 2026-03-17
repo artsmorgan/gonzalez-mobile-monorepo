@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, ActivityIndicator, Modal, View, Platform } from 'react-native';
+import { StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, ActivityIndicator, Modal, View, Platform, Image } from 'react-native';
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
@@ -19,6 +19,11 @@ import { createNote as createNoteAPI, updateNote as updateNoteAPI } from '@/hook
 import getHoraAccion from '@/hooks/getHoraAccion';
 import { eventBus } from '@/hooks/eventBus';
 import authedFetch from '@/hooks/authedFetch';
+import SignatureScreen from 'react-native-signature-canvas';
+import { CameraView, useCameraPermissions } from 'expo-camera';
+import { useQRScanner } from '@/hooks/useQRScanner';
+import * as Location from 'expo-location';
+import { jwtDecode } from 'jwt-decode';
 
 type NotesScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Notes'>;
 
@@ -78,12 +83,18 @@ interface CurrentMarca {
 
 interface Note {
   id: number;
+  puesto_id: number;
   titulo: string;
   description: string;
   division: string | null;
   categoria_id: number | null;
   relevancia: string | null;
   empleado: string;
+  creador?: string;
+  is_modified?: boolean;
+  firma_responsable?: string;
+  firma_manual_responsable?: string | null;
+  images?: Array<{ id?: number; name?: string; base64?: string; extension?: string; url?: string }>;
   updated_at: string;
   id_local: string;
 }
@@ -119,10 +130,19 @@ interface Category {
   nombre: string;
 }
 
+type MainStructurePuestoNode = { id: number; nombre: string };
+type MainStructureSucursalNode = { id: number; nombre: string; puestos: MainStructurePuestoNode[] };
+type MainStructureContratoNode = { id: number; nombre: string; sucursales: MainStructureSucursalNode[] };
+type MainStructureDivisionNode = { id: number; nombre: string; contratos: MainStructureContratoNode[] };
+type MainStructureClienteNode = { id: number; nombre: string; division: MainStructureDivisionNode[] };
+type MainStructureEmpresaNode = { id: number; nombre: string; clientes: MainStructureClienteNode[] };
+type MainStructureTree = MainStructureEmpresaNode[];
+
 const monthNames = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
 
 export default function NotesScreen() {
-  const { employee, refreshAccessToken, logout } = useAuth();
+  const { employee, refreshAccessToken, logout, accessToken } = useAuth();
+  const { scanQR, QRScannerComponent } = useQRScanner();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const navigation = useNavigation<NotesScreenNavigationProp>();
 
@@ -191,6 +211,35 @@ export default function NotesScreen() {
   const [selectedPuestos, setSelectedPuestos] = useState<number[]>([]);
   const [isLoadingPuestos, setIsLoadingPuestos] = useState(false);
 
+  // Firmas e imágenes
+  const [firmaResponsableHash, setFirmaResponsableHash] = useState('');
+  const [isGeneratingFirmaResponsable, setIsGeneratingFirmaResponsable] = useState(false);
+  const [firmaManualResponsable, setFirmaManualResponsable] = useState<string | null>(null);
+  const [signatureModalVisible, setSignatureModalVisible] = useState(false);
+  const signatureRef = useRef<any>(null);
+  const [signatureKey, setSignatureKey] = useState(0);
+  const [images, setImages] = useState<Array<{ id?: number; name?: string; base64?: string; extension?: string; url?: string }>>([]);
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+  const cameraRef = useRef<CameraView | null>(null);
+  const [isCameraVisible, setIsCameraVisible] = useState(false);
+  const [isImagePreviewVisible, setIsImagePreviewVisible] = useState(false);
+  const [selectedImageUrl, setSelectedImageUrl] = useState<string | null>(null);
+
+  // Enviar notas al cliente
+  const [mainStructure, setMainStructure] = useState<MainStructureTree>([]);
+  const [isSendNotesModalVisible, setIsSendNotesModalVisible] = useState(false);
+  const [sendEmpresaId, setSendEmpresaId] = useState<number | null>(null);
+  const [sendClienteId, setSendClienteId] = useState<number | null>(null);
+  const [sendDivisionId, setSendDivisionId] = useState<number | null>(null);
+  const [sendContratoId, setSendContratoId] = useState<number | null>(null);
+  const [sendSucursalId, setSendSucursalId] = useState<number | null>(null);
+  const [sendPuestoId, setSendPuestoId] = useState<number | null>(null);
+  const [sendEmail, setSendEmail] = useState('');
+  const [sendNotesPreview, setSendNotesPreview] = useState<Note[]>([]);
+  const [isLoadingSendPreview, setIsLoadingSendPreview] = useState(false);
+  const [imageAccessToken, setImageAccessToken] = useState<string | null>(null);
+  const [expandedSendPreviewIds, setExpandedSendPreviewIds] = useState<Set<number>>(new Set());
+
 
   useEffect(() => {
     if (employee?.roles) {
@@ -201,11 +250,24 @@ export default function NotesScreen() {
     }
   }, [employee]);
 
+  useEffect(() => {
+    const loadImageToken = async () => {
+      try {
+        const token = accessToken || await AsyncStorage.getItem('access_token');
+        setImageAccessToken(token || null);
+      } catch {
+        setImageAccessToken(accessToken || null);
+      }
+    };
+    loadImageToken();
+  }, [accessToken]);
+
   useFocusEffect(
     useCallback(() => {
       fetchNotes();
       fetchCategories();
       fetchPuestosCorpo();
+      loadMainStructureCache();
     }, [])
   );
 
@@ -215,6 +277,7 @@ export default function NotesScreen() {
         fetchNotes(),
         fetchCategories(),
         fetchPuestosCorpo(),
+        loadMainStructureCache(),
       ]);
     };
 
@@ -253,6 +316,220 @@ export default function NotesScreen() {
       msg.includes('timed out')
     );
   };
+
+  const appendTokenToUrl = (url?: string | null) => {
+    const raw = String(url || '').trim();
+    if (!raw) return '';
+    const token = accessToken || imageAccessToken;
+    if (!token) return raw;
+    return `${raw}${raw.includes('?') ? '&' : '?'}token=${encodeURIComponent(String(token))}`;
+  };
+
+  const buildNoteImageApiUrl = (
+    puestoId: number | null | undefined,
+    noteId: number | null | undefined,
+    imageName?: string | null
+  ) => {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl || !puestoId || !noteId || !imageName) return '';
+    return `${apiUrl}/api/puestos/${puestoId}/notas/${noteId}/get-image/${encodeURIComponent(String(imageName))}`;
+  };
+
+  const resolveNoteImageUri = (
+    image: { base64?: string; url?: string; name?: string },
+    noteId: number | null | undefined,
+    puestoId: number | null | undefined
+  ) => {
+    if (image.base64) return image.base64;
+    const builtUrl = buildNoteImageApiUrl(puestoId, noteId, image.name || null);
+    if (builtUrl) return appendTokenToUrl(builtUrl);
+    return appendTokenToUrl(image.url || '');
+  };
+
+  const mergeNotesBase64FromCache = (freshNotes: any[], cachedNotes: any[]) => {
+    const cachedById = new Map<number, any>(
+      (Array.isArray(cachedNotes) ? cachedNotes : [])
+        .filter((n: any) => Number.isFinite(Number(n?.id)))
+        .map((n: any) => [Number(n.id), n])
+    );
+
+    return (Array.isArray(freshNotes) ? freshNotes : []).map((note: any) => {
+      const cached = cachedById.get(Number(note?.id));
+      if (!cached) return note;
+
+      const cachedImagesByName = new Map<string, any>(
+        (Array.isArray(cached.images) ? cached.images : [])
+          .filter((img: any) => img?.name)
+          .map((img: any) => [String(img.name), img])
+      );
+
+      const mergedImages = (Array.isArray(note.images) ? note.images : []).map((img: any) => {
+        const fromCache = img?.name ? cachedImagesByName.get(String(img.name)) : null;
+        if (fromCache?.base64 && !img?.base64) {
+          return { ...img, base64: fromCache.base64 };
+        }
+        return img;
+      });
+
+      return { ...note, images: mergedImages };
+    });
+  };
+
+  const decodeFirmaHash = (hash?: string | null) => {
+    if (!hash) return null;
+    try {
+      const decoded = atob(String(hash));
+      const parts = decoded.split(':');
+      if (parts.length !== 5) return null;
+      const [sessionId, empleadoId, latitud, longitud, timestamp] = parts;
+      return { sessionId, empleadoId, latitud, longitud, timestamp };
+    } catch {
+      return null;
+    }
+  };
+
+  const generateFirmaHashForCurrentUser = async (): Promise<string | null> => {
+    try {
+      if (!employee) {
+        Alert.alert('Error', 'No se pudo obtener la información del empleado');
+        return null;
+      }
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permiso denegado', 'Se necesita permiso de ubicación para generar la firma');
+        return null;
+      }
+      const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      const token = await AsyncStorage.getItem('access_token');
+      if (!token) {
+        Alert.alert('Error', 'No se pudo obtener el token de sesión');
+        return null;
+      }
+      const decoded: any = jwtDecode(token);
+      const sessionId = decoded.sessionId || 'unknown';
+      const timestamp = await getHoraAccion();
+      if (!timestamp) {
+        Alert.alert('Error', 'No se pudo obtener la hora');
+        return null;
+      }
+      const { latitude, longitude } = location.coords;
+      return btoa(`${sessionId}:${String(employee.id)}:${latitude}:${longitude}:${timestamp}`);
+    } catch (e) {
+      console.error('Error generating firma_responsable:', e);
+      return null;
+    }
+  };
+
+  const handleGenerateFirmaResponsable = async () => {
+    try {
+      setIsGeneratingFirmaResponsable(true);
+      const hash = await generateFirmaHashForCurrentUser();
+      if (!hash) return;
+      setFirmaResponsableHash(hash);
+    } finally {
+      setIsGeneratingFirmaResponsable(false);
+    }
+  };
+
+  const handleScanFirmaResponsable = async () => {
+    try {
+      const qrData = await scanQR();
+      if (!qrData) return;
+      const decoded = decodeFirmaHash(qrData);
+      if (!decoded) {
+        Alert.alert('Error', 'El QR escaneado no tiene el formato correcto');
+        return;
+      }
+      setFirmaResponsableHash(qrData);
+    } catch (e) {
+      console.error('Error scanning firma_responsable:', e);
+      Alert.alert('Error', 'No se pudo escanear el código QR');
+    }
+  };
+
+  const openManualSignatureModal = () => {
+    setSignatureKey((prev) => prev + 1);
+    setSignatureModalVisible(true);
+  };
+
+  const acceptManualSignature = () => {
+    if (signatureRef.current?.readSignature) {
+      signatureRef.current.readSignature();
+      return;
+    }
+    Alert.alert('Error', 'Debe dibujar una firma antes de aceptar');
+  };
+
+  const handleManualSignatureRead = (signature: string) => {
+    if (!signature) {
+      Alert.alert('Error', 'No se pudo obtener la firma.');
+      return;
+    }
+    const formatted = signature.startsWith('data:') ? signature : `data:image/png;base64,${signature}`;
+    setFirmaManualResponsable(formatted);
+    setSignatureModalVisible(false);
+  };
+
+  const onManualSignatureEmpty = () => Alert.alert('Error', 'La firma está vacía');
+
+  const openCamera = async () => {
+    try {
+      if (!cameraPermission?.granted) {
+        const result = await requestCameraPermission();
+        if (!result.granted) {
+          Alert.alert('Permiso denegado', 'Se necesita permiso para usar la cámara');
+          return;
+        }
+      }
+      setIsCameraVisible(true);
+    } catch (e) {
+      console.error('Error opening camera:', e);
+      Alert.alert('Error', 'No se pudo abrir la cámara');
+    }
+  };
+
+  const capturePhoto = async () => {
+    if (!cameraRef.current) {
+      Alert.alert('Error', 'La cámara no está lista');
+      return;
+    }
+    try {
+      const photo = await cameraRef.current.takePictureAsync({
+        base64: true,
+        quality: 0.7,
+        skipProcessing: false,
+      });
+      if (!photo?.base64) {
+        Alert.alert('Error', 'No se pudo capturar la foto');
+        setIsCameraVisible(false);
+        return;
+      }
+      setIsCameraVisible(false);
+      setImages((prev) => [...prev, { base64: `data:image/jpeg;base64,${photo.base64}`, extension: 'jpg' }]);
+    } catch (e) {
+      console.error('Error capturing photo:', e);
+      Alert.alert('Error', 'No se pudo capturar la foto');
+      setIsCameraVisible(false);
+    }
+  };
+
+  const removeImage = (index: number) => {
+    Alert.alert('Confirmar', '¿Eliminar esta foto?', [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Eliminar', style: 'destructive', onPress: () => setImages((prev) => prev.filter((_, i) => i !== index)) },
+    ]);
+  };
+
+  const buildImagenesJson = () =>
+    JSON.stringify(
+      images
+        .filter((img) => Boolean(img.base64))
+        .map((img, idx) => ({
+          file_base64: img.base64 || '',
+          extension: img.extension || 'jpg',
+          original_name: img.name || `note-${Date.now()}-${idx + 1}.jpg`,
+        }))
+    );
 
   const formatDateDMY = (date: Date) => {
     const day = String(date.getDate()).padStart(2, '0');
@@ -417,6 +694,17 @@ export default function NotesScreen() {
     }
   };
 
+  const loadMainStructureCache = async () => {
+    try {
+      const cache = await AsyncStorage.getItem('main_structure_cache');
+      const parsed = cache ? JSON.parse(cache) : [];
+      setMainStructure(Array.isArray(parsed) ? parsed : []);
+    } catch (error) {
+      console.error('Error loading main_structure_cache:', error);
+      setMainStructure([]);
+    }
+  };
+
   const fetchNotes = async () => {
     // Verificar si existe current_marca
     const currentMarca = await AsyncStorage.getItem('current_marca');
@@ -464,11 +752,14 @@ export default function NotesScreen() {
         const data = await response.json();
 
         if (data.status) {
-          setNotes(data.notas || []);
+          const notesCache = await AsyncStorage.getItem('notes_cache');
+          const cachedData = notesCache ? JSON.parse(notesCache) : { notas: [] };
+          const mergedNotes = mergeNotesBase64FromCache(data.notas || [], cachedData.notas || []);
+          setNotes(mergedNotes);
           setPuesto(currentMarcaData.puesto || null);
           // Actualizar notes_cache
           await AsyncStorage.setItem('notes_cache', JSON.stringify({
-            notas: data.notas || [],
+            notas: mergedNotes,
             puesto: currentMarcaData.puesto || null
           }));
         } else {
@@ -520,6 +811,90 @@ export default function NotesScreen() {
     }
   };
 
+  const fetchNotesByPuestoForSend = async (puestoId: number) => {
+    try {
+      setIsLoadingSendPreview(true);
+      const isConnected = await getConnectionStatus();
+      if (!isConnected) {
+        Alert.alert('Sin conexión', 'Esta función solo está disponible con internet.');
+        return;
+      }
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) throw new Error('Server URL not configured');
+      const response = await authedFetch({
+        url: `${apiUrl}/api/puestos/notas/puesto/${puestoId}`,
+        init: { method: 'GET', headers: { 'Content-Type': 'application/json' } },
+        refreshAccessToken,
+        logout,
+      });
+      if (!response) return;
+      const data = await response.json();
+      if (data.status) {
+        setSendNotesPreview(Array.isArray(data.notas) ? data.notas : []);
+      } else {
+        Alert.alert('Error', data.message || 'No se pudieron cargar las notas del puesto');
+      }
+    } catch (e: any) {
+      console.error('Error fetching notes by puesto:', e);
+      Alert.alert('Error', e?.message || 'No se pudieron cargar las notas.');
+    } finally {
+      setIsLoadingSendPreview(false);
+    }
+  };
+
+  const handleSendNotesToClient = async () => {
+    try {
+      const isConnected = await getConnectionStatus();
+      if (!isConnected) {
+        Alert.alert('Sin conexión', 'Esta función solo está disponible con internet.');
+        return;
+      }
+      if (!sendPuestoId) {
+        Alert.alert('Validación', 'Selecciona un puesto.');
+        return;
+      }
+      if (!sendEmail.trim()) {
+        Alert.alert('Validación', 'Ingresa un correo electrónico.');
+        return;
+      }
+
+      Alert.alert('Confirmación', '¿Deseas enviar las notas al correo indicado?', [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Enviar',
+          onPress: async () => {
+            try {
+              const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+              if (!apiUrl) throw new Error('Server URL not configured');
+              const response = await authedFetch({
+                url: `${apiUrl}/api/puestos/notas/send-email`,
+                init: {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ puesto_id: sendPuestoId, email: sendEmail.trim() }),
+                },
+                refreshAccessToken,
+                logout,
+              });
+              if (!response) return;
+              const data = await response.json();
+              if (data.status) {
+                Alert.alert('Éxito', data.message || 'Correo enviado correctamente');
+                setIsSendNotesModalVisible(false);
+              } else {
+                Alert.alert('Error', data.message || 'No se pudo enviar el correo.');
+              }
+            } catch (e: any) {
+              Alert.alert('Error', e?.message || 'No se pudo enviar el correo.');
+            }
+          },
+        },
+      ]);
+    } catch (e: any) {
+      Alert.alert('Error', e?.message || 'No se pudo enviar el correo.');
+    }
+  };
+
   const createNote = async () => {
 
     const currentMarca = await AsyncStorage.getItem('current_marca');
@@ -545,6 +920,11 @@ export default function NotesScreen() {
 
     if (!newNote.categoria_id) {
       Alert.alert('Error', 'Debe seleccionar una categoría');
+      return;
+    }
+
+    if (!firmaResponsableHash.trim()) {
+      Alert.alert('Error', 'Debe generar o escanear la firma responsable.');
       return;
     }
 
@@ -583,7 +963,10 @@ export default function NotesScreen() {
                 division: newNote.division,
                 categoria_id: newNote.categoria_id,
                 relevancia: newNote.relevancia,
-                puestos: JSON.stringify(puestosArray)
+                puestos: JSON.stringify(puestosArray),
+                firma_responsable: firmaResponsableHash.trim(),
+                firma_manual_responsable: firmaManualResponsable,
+                imagenes: buildImagenesJson(),
               };
 
               // Verificar conectividad
@@ -604,6 +987,9 @@ export default function NotesScreen() {
                   setIsCreating(false);
                   setNewNote({ id: null, id_local: '', titulo: '', description: '', division: null, categoria_id: null, relevancia: 'Baja' });
                   setSelectedPuestos([]);
+                  setFirmaResponsableHash('');
+                  setFirmaManualResponsable(null);
+                  setImages([]);
                   fetchNotes();
                 } else {
                   Alert.alert('Error', data.message || 'Error al crear la nota');
@@ -637,6 +1023,11 @@ export default function NotesScreen() {
                   categoria_id: newNote.categoria_id,
                   relevancia: newNote.relevancia,
                   empleado: employee?.name || 'Desconocido',
+                  creador: employee?.name || 'Desconocido',
+                  is_modified: false,
+                  firma_responsable: firmaResponsableHash.trim(),
+                  firma_manual_responsable: firmaManualResponsable,
+                  images: images,
                   updated_at: new Date(horaAccion).toISOString(),
                   id_local: localId,
                 };
@@ -648,6 +1039,9 @@ export default function NotesScreen() {
                 setIsCreating(false);
                 setNewNote({ id: null, id_local: '', titulo: '', description: '', division: null, categoria_id: null, relevancia: 'Baja' });
                 setSelectedPuestos([]);
+                setFirmaResponsableHash('');
+                setFirmaManualResponsable(null);
+                setImages([]);
                 fetchNotes();
               }
             } catch (err) {
@@ -693,6 +1087,9 @@ export default function NotesScreen() {
                 division: editingNote.division,
                 categoria_id: editingNote.categoria_id,
                 relevancia: editingNote.relevancia,
+                firma_responsable: firmaResponsableHash.trim(),
+                firma_manual_responsable: firmaManualResponsable,
+                imagenes: buildImagenesJson(),
               };
 
               // Verificar conectividad
@@ -712,6 +1109,9 @@ export default function NotesScreen() {
                 if (data.status) {
                   Alert.alert('Éxito', data.message || 'Nota actualizada correctamente');
                   setEditingNote(null);
+                  setFirmaResponsableHash('');
+                  setFirmaManualResponsable(null);
+                  setImages([]);
                   fetchNotes();
                 } else {
                   Alert.alert('Error', data.message || 'Error al actualizar la nota');
@@ -757,12 +1157,19 @@ export default function NotesScreen() {
                     division: editingNote.division,
                     categoria_id: editingNote.categoria_id,
                     relevancia: editingNote.relevancia,
+                    firma_responsable: firmaResponsableHash.trim(),
+                    firma_manual_responsable: firmaManualResponsable,
+                    is_modified: true,
+                    images,
                   };
                   await AsyncStorage.setItem('notes_cache', JSON.stringify(cache));
                 }
 
                 Alert.alert('Éxito', 'Nota actualizada localmente. Se sincronizará cuando haya conexión.');
                 setEditingNote(null);
+                setFirmaResponsableHash('');
+                setFirmaManualResponsable(null);
+                setImages([]);
                 fetchNotes();
               }
             } catch (err) {
@@ -859,6 +1266,9 @@ export default function NotesScreen() {
     // Initialize refs with note values
     tituloRef.current = note.titulo;
     descriptionRef.current = note.description;
+    setFirmaResponsableHash(note.firma_responsable || '');
+    setFirmaManualResponsable(note.firma_manual_responsable || null);
+    setImages(Array.isArray(note.images) ? note.images : []);
     // Ensure the note is expanded
     const newExpanded = new Set(expandedNotes);
     newExpanded.add(note.id);
@@ -875,6 +1285,9 @@ export default function NotesScreen() {
     // Initialize refs
     tituloRef.current = '';
     descriptionRef.current = '';
+    setFirmaResponsableHash('');
+    setFirmaManualResponsable(null);
+    setImages([]);
 
     // Initialize selected puestos based on role
     const currentMarca = await AsyncStorage.getItem('current_marca');
@@ -908,6 +1321,9 @@ export default function NotesScreen() {
     setIsCreating(false);
     setNewNote({ id: null, id_local: '', titulo: '', description: '', division: null, categoria_id: null, relevancia: 'Baja' });
     setSelectedPuestos([]);
+    setFirmaResponsableHash('');
+    setFirmaManualResponsable(null);
+    setImages([]);
   };
 
   const formatDate = (dateString: string) => {
@@ -972,6 +1388,27 @@ export default function NotesScreen() {
 
     return matchesSearch && matchesDivision && matchesDate && matchesCategory && matchesRelevancia && matchesEmpleado;
   });
+
+  const isAdministrativo = currentMarca?.roleDivision?.role?.nombre === 'ADMINISTRATIVO';
+  const empresaOptions = mainStructure;
+  const selectedEmpresa = empresaOptions.find((e) => e.id === sendEmpresaId) || null;
+  const clienteOptions = selectedEmpresa?.clientes || [];
+  const selectedCliente = clienteOptions.find((c) => c.id === sendClienteId) || null;
+  const divisionOptions = selectedCliente?.division || [];
+  const selectedDivisionNode = divisionOptions.find((d) => d.id === sendDivisionId) || null;
+  const contratoOptions = selectedDivisionNode?.contratos || [];
+  const selectedContrato = contratoOptions.find((c) => c.id === sendContratoId) || null;
+  const sucursalOptions = selectedContrato?.sucursales || [];
+  const selectedSucursal = sucursalOptions.find((s) => s.id === sendSucursalId) || null;
+  const puestoOptions = selectedSucursal?.puestos || [];
+
+  useEffect(() => {
+    if (!sendPuestoId) {
+      setSendNotesPreview([]);
+      return;
+    }
+    fetchNotesByPuestoForSend(sendPuestoId);
+  }, [sendPuestoId]);
 
   // Handle menu press from header
   const handleMenuPress = () => {
@@ -1172,6 +1609,98 @@ export default function NotesScreen() {
               </ThemedView>
             </ThemedView>
 
+            <ThemedView style={styles.inputGroup}>
+              <ThemedText style={styles.inputLabel}>Firma responsable:</ThemedText>
+              <ThemedView style={styles.firmaButtonsRow}>
+                <TouchableOpacity
+                  style={[styles.firmaBlueButton, isGeneratingFirmaResponsable && styles.buttonDisabled]}
+                  onPress={handleGenerateFirmaResponsable}
+                  disabled={isGeneratingFirmaResponsable}
+                >
+                  <Ionicons name="qr-code-outline" size={16} color="#FFFFFF" />
+                  <ThemedText style={styles.firmaBlueButtonText}>
+                    {isGeneratingFirmaResponsable ? 'Generando...' : 'Generar'}
+                  </ThemedText>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.firmaBlueButton} onPress={handleScanFirmaResponsable}>
+                  <Ionicons name="scan-outline" size={16} color="#FFFFFF" />
+                  <ThemedText style={styles.firmaBlueButtonText}>Escanear QR</ThemedText>
+                </TouchableOpacity>
+              </ThemedView>
+              {!firmaResponsableHash ? (
+                <ThemedText style={styles.noteDate}>Debes generar o escanear una firma.</ThemedText>
+              ) : (
+                (() => {
+                  const info = decodeFirmaHash(firmaResponsableHash);
+                  if (!info) {
+                    return <ThemedText style={styles.noteDate}>Firma digital registrada (no decodificable)</ThemedText>;
+                  }
+                  return (
+                    <ThemedView>
+                      <ThemedText style={styles.noteDate}>Sesión: {info.sessionId || 'N/A'}</ThemedText>
+                      <ThemedText style={styles.noteDate}>Empleado: {info.empleadoId || 'N/A'}</ThemedText>
+                      <ThemedText style={styles.noteDate}>
+                        Lat: {info.latitud || 'N/A'} | Long: {info.longitud || 'N/A'}
+                      </ThemedText>
+                      <ThemedText style={styles.noteDate}>Hora: {info.timestamp || 'N/A'}</ThemedText>
+                    </ThemedView>
+                  );
+                })()
+              )}
+            </ThemedView>
+
+            <ThemedView style={styles.inputGroup}>
+              <ThemedText style={styles.inputLabel}>Firma manual responsable (opcional):</ThemedText>
+              <ThemedView style={styles.firmaButtonsRow}>
+                <TouchableOpacity style={styles.firmaBlueButton} onPress={openManualSignatureModal}>
+                  <Ionicons name="create-outline" size={16} color="#FFFFFF" />
+                  <ThemedText style={styles.firmaBlueButtonText}>
+                    {firmaManualResponsable ? 'Reemplazar firma' : 'Dibujar firma'}
+                  </ThemedText>
+                </TouchableOpacity>
+                {!!firmaManualResponsable && (
+                  <TouchableOpacity style={styles.cancelButton} onPress={() => setFirmaManualResponsable(null)}>
+                    <ThemedText style={styles.cancelButtonText}>Quitar</ThemedText>
+                  </TouchableOpacity>
+                )}
+              </ThemedView>
+              {!!firmaManualResponsable && (
+                <Image source={{ uri: firmaManualResponsable }} style={styles.signaturePreview} resizeMode="contain" />
+              )}
+            </ThemedView>
+
+            <ThemedView style={styles.inputGroup}>
+              <ThemedText style={styles.inputLabel}>Imágenes:</ThemedText>
+              <TouchableOpacity style={styles.captureImageButton} onPress={openCamera}>
+                <Ionicons name="camera" size={18} color="#007AFF" />
+                <ThemedText style={styles.captureImageText}>Agregar foto</ThemedText>
+              </TouchableOpacity>
+              {images.length > 0 && (
+                <ThemedView style={styles.imageRow}>
+                  {images.map((img, idx) => {
+                    const uri = resolveNoteImageUri(
+                      img,
+                      editingNote?.id || null,
+                      currentMarca?.puesto?.id || null
+                    );
+                    if (!uri) return null;
+                    return (
+                      <TouchableOpacity
+                        key={`edit-img-${idx}`}
+                        onPress={() => {
+                          setSelectedImageUrl(uri);
+                          setIsImagePreviewVisible(true);
+                        }}
+                        onLongPress={() => removeImage(idx)}
+                      >
+                        <Image source={{ uri }} style={styles.noteImageThumb} />
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ThemedView>
+              )}
+            </ThemedView>
+
             {submitResponse && (
               <ThemedView style={[styles.responseContainer, submitResponse.type === 'success' ? styles.responseSuccess : styles.responseError]}>
                 <ThemedText style={styles.responseText}>
@@ -1230,11 +1759,67 @@ export default function NotesScreen() {
               <ThemedView style={styles.noteBody}>
                 <ThemedText style={styles.noteDescription}>{note.description}</ThemedText>
 
-                {/* Último cambio info */}
-                <ThemedView style={styles.lastChangeContainer}>
-                  <ThemedText style={styles.lastChangeLabel}>Último cambio:</ThemedText>
-                  <ThemedText style={styles.lastChangeEmployee}>{note.empleado}</ThemedText>
+                <ThemedView style={styles.signatureCollapsableCard}>
+                  <ThemedView style={styles.signatureCollapsableHeader}>
+                    <ThemedText style={styles.signatureCollapsableHeaderText}>
+                      {note.is_modified ? 'Último cambio' : 'Creado por'}
+                    </ThemedText>
+                  </ThemedView>
+                  <ThemedView style={styles.signatureCollapsableBody}>
+                    <ThemedText style={styles.signatureInfoValue}>
+                      {note.is_modified ? note.empleado : (note.creador || note.empleado)}
+                    </ThemedText>
+                  </ThemedView>
                 </ThemedView>
+
+                {!!note.firma_responsable && (
+                  <ThemedView style={styles.lastChangeContainer}>
+                    <ThemedText style={styles.lastChangeLabel}>Firma responsable:</ThemedText>
+                    {(() => {
+                      const info = decodeFirmaHash(note.firma_responsable);
+                      if (!info) return <ThemedText style={styles.lastChangeEmployee}>No legible</ThemedText>;
+                      return (
+                        <ThemedView>
+                          <ThemedText style={styles.noteDate}>Sesión: {info.sessionId}</ThemedText>
+                          <ThemedText style={styles.noteDate}>Empleado: {info.empleadoId}</ThemedText>
+                          <ThemedText style={styles.noteDate}>Lat/Lng: {info.latitud}, {info.longitud}</ThemedText>
+                          <ThemedText style={styles.noteDate}>Hora: {info.timestamp}</ThemedText>
+                        </ThemedView>
+                      );
+                    })()}
+                  </ThemedView>
+                )}
+
+                {!!note.firma_manual_responsable && (
+                  <ThemedView style={styles.lastChangeContainer}>
+                    <ThemedText style={styles.lastChangeLabel}>Firma manual responsable:</ThemedText>
+                    <Image source={{ uri: note.firma_manual_responsable }} style={styles.signaturePreview} resizeMode="contain" />
+                  </ThemedView>
+                )}
+
+                {Array.isArray(note.images) && note.images.length > 0 && (
+                  <ThemedView style={styles.imageRow}>
+                    {note.images.map((img, idx) => {
+                      const sourceUri = resolveNoteImageUri(
+                        img,
+                        note.id,
+                        note.puesto_id || currentMarca?.puesto?.id || null
+                      );
+                      if (!sourceUri) return null;
+                      return (
+                        <TouchableOpacity
+                          key={`${note.id}-img-${img.id || idx}`}
+                          onPress={() => {
+                            setSelectedImageUrl(sourceUri);
+                            setIsImagePreviewVisible(true);
+                          }}
+                        >
+                          <Image source={{ uri: sourceUri }} style={styles.noteImageThumb} />
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </ThemedView>
+                )}
 
                 <ThemedView style={styles.buttonRow}>
                   <TouchableOpacity style={styles.editButton} onPress={() => startEditing(note)}>
@@ -1327,6 +1912,124 @@ export default function NotesScreen() {
                 <Picker.Item label="Alta" value="Alta" />
               </Picker>
             </ThemedView>
+          </ThemedView>
+
+          {!!firmaResponsableHash && (
+            <ThemedView style={styles.signatureCollapsableCard}>
+              <ThemedView style={styles.signatureCollapsableHeader}>
+                <ThemedText style={styles.signatureCollapsableHeaderText}>Firma responsable (vista previa)</ThemedText>
+              </ThemedView>
+              <ThemedView style={styles.signatureCollapsableBody}>
+                {(() => {
+                  const info = decodeFirmaHash(firmaResponsableHash);
+                  if (!info) {
+                    return <ThemedText style={styles.signatureInfoValue}>Formato no decodificable</ThemedText>;
+                  }
+                  return (
+                    <>
+                      <ThemedText style={styles.signatureInfoValue}>Sesión: {info.sessionId || 'N/A'}</ThemedText>
+                      <ThemedText style={styles.signatureInfoValue}>Empleado: {info.empleadoId || 'N/A'}</ThemedText>
+                      <ThemedText style={styles.signatureInfoValue}>
+                        Lat: {info.latitud || 'N/A'} | Long: {info.longitud || 'N/A'}
+                      </ThemedText>
+                      <ThemedText style={styles.signatureInfoValue}>Hora: {info.timestamp || 'N/A'}</ThemedText>
+                    </>
+                  );
+                })()}
+              </ThemedView>
+            </ThemedView>
+          )}
+
+          <ThemedView style={styles.inputGroup}>
+            <ThemedText style={styles.inputLabel}>Firma responsable:</ThemedText>
+            <ThemedView style={styles.firmaButtonsRow}>
+              <TouchableOpacity
+                style={[styles.firmaBlueButton, isGeneratingFirmaResponsable && styles.buttonDisabled]}
+                onPress={handleGenerateFirmaResponsable}
+                disabled={isGeneratingFirmaResponsable}
+              >
+                <Ionicons name="qr-code-outline" size={16} color="#FFFFFF" />
+                <ThemedText style={styles.firmaBlueButtonText}>
+                  {isGeneratingFirmaResponsable ? 'Generando...' : 'Generar'}
+                </ThemedText>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.firmaBlueButton} onPress={handleScanFirmaResponsable}>
+                <Ionicons name="scan-outline" size={16} color="#FFFFFF" />
+                <ThemedText style={styles.firmaBlueButtonText}>Escanear QR</ThemedText>
+              </TouchableOpacity>
+            </ThemedView>
+              {!firmaResponsableHash ? (
+                <ThemedText style={styles.noteDate}>Debes generar o escanear una firma.</ThemedText>
+              ) : (
+                (() => {
+                  const info = decodeFirmaHash(firmaResponsableHash);
+                  if (!info) {
+                    return <ThemedText style={styles.noteDate}>Firma digital registrada (no decodificable)</ThemedText>;
+                  }
+                  return (
+                    <ThemedView>
+                      <ThemedText style={styles.noteDate}>Sesión: {info.sessionId || 'N/A'}</ThemedText>
+                      <ThemedText style={styles.noteDate}>Empleado: {info.empleadoId || 'N/A'}</ThemedText>
+                      <ThemedText style={styles.noteDate}>
+                        Lat: {info.latitud || 'N/A'} | Long: {info.longitud || 'N/A'}
+                      </ThemedText>
+                      <ThemedText style={styles.noteDate}>Hora: {info.timestamp || 'N/A'}</ThemedText>
+                    </ThemedView>
+                  );
+                })()
+              )}
+          </ThemedView>
+
+          <ThemedView style={styles.inputGroup}>
+            <ThemedText style={styles.inputLabel}>Firma manual responsable (opcional):</ThemedText>
+            <ThemedView style={styles.firmaButtonsRow}>
+              <TouchableOpacity style={styles.firmaBlueButton} onPress={openManualSignatureModal}>
+                <Ionicons name="create-outline" size={16} color="#FFFFFF" />
+                <ThemedText style={styles.firmaBlueButtonText}>
+                  {firmaManualResponsable ? 'Reemplazar firma' : 'Dibujar firma'}
+                </ThemedText>
+              </TouchableOpacity>
+              {!!firmaManualResponsable && (
+                <TouchableOpacity style={styles.cancelButton} onPress={() => setFirmaManualResponsable(null)}>
+                  <ThemedText style={styles.cancelButtonText}>Quitar</ThemedText>
+                </TouchableOpacity>
+              )}
+            </ThemedView>
+            {!!firmaManualResponsable && (
+              <Image source={{ uri: firmaManualResponsable }} style={styles.signaturePreview} resizeMode="contain" />
+            )}
+          </ThemedView>
+
+          <ThemedView style={styles.inputGroup}>
+            <ThemedText style={styles.inputLabel}>Imágenes:</ThemedText>
+            <TouchableOpacity style={styles.captureImageButton} onPress={openCamera}>
+              <Ionicons name="camera" size={18} color="#007AFF" />
+              <ThemedText style={styles.captureImageText}>Agregar foto</ThemedText>
+            </TouchableOpacity>
+            {images.length > 0 && (
+              <ThemedView style={styles.imageRow}>
+                {images.map((img, idx) => {
+                  const uri = resolveNoteImageUri(
+                    img,
+                    null,
+                    currentMarca?.puesto?.id || null
+                  );
+                  if (!uri) return null;
+                  return (
+                    <TouchableOpacity
+                      key={`create-img-${idx}`}
+                      onPress={() => {
+                        setSelectedImageUrl(uri);
+                        setIsImagePreviewVisible(true);
+                      }}
+                      onLongPress={() => removeImage(idx)}
+                    >
+                      <Image source={{ uri }} style={styles.noteImageThumb} />
+                    </TouchableOpacity>
+                  );
+                })}
+              </ThemedView>
+            )}
           </ThemedView>
 
           {/* Puestos checkboxes - Solo para SUPERVISOR */}
@@ -1624,6 +2327,13 @@ export default function NotesScreen() {
             </TouchableOpacity>
           )}
 
+          {isAdministrativo && (
+            <TouchableOpacity style={styles.sendClientButton} onPress={() => setIsSendNotesModalVisible(true)}>
+              <Ionicons name="mail-outline" size={18} color="#FFFFFF" />
+              <ThemedText style={styles.sendClientButtonText}>Enviar notas al cliente</ThemedText>
+            </TouchableOpacity>
+          )}
+
           {/* New Note Form */}
           {renderNewNoteForm()}
 
@@ -1650,6 +2360,243 @@ export default function NotesScreen() {
         onHomePress={handleHomePress}
         currentRoute="Notes"
       />
+
+      {QRScannerComponent}
+
+      <Modal
+        visible={signatureModalVisible}
+        animationType="fade"
+        transparent
+        presentationStyle="overFullScreen"
+        onRequestClose={() => setSignatureModalVisible(false)}
+      >
+        <ThemedView style={styles.modalOverlay}>
+          <ThemedView style={styles.floatModalCard}>
+            <ThemedView style={styles.floatModalHeader}>
+              <ThemedText style={styles.modalTitle}>Dibujar firma manual</ThemedText>
+              <TouchableOpacity onPress={() => setSignatureModalVisible(false)}>
+                <Ionicons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+            </ThemedView>
+            <ThemedText style={styles.signatureModalHint}>Firma dentro del recuadro blanco.</ThemedText>
+            <View style={styles.signaturePadBox}>
+              <SignatureScreen
+                ref={signatureRef}
+                onOK={handleManualSignatureRead}
+                onEmpty={onManualSignatureEmpty}
+                descriptionText=""
+                clearText=""
+                confirmText=""
+                webStyle={`
+                  .m-signature-pad--footer {display: none; margin: 0px;}
+                  .m-signature-pad {box-shadow: none; border: none;}
+                  body,html {width: 100%; height: 100%; background: #ffffff;}
+                `}
+                key={signatureKey}
+              />
+            </View>
+            <ThemedView style={styles.modalActions}>
+              <TouchableOpacity style={styles.modalClearButton} onPress={() => setSignatureModalVisible(false)}>
+                <ThemedText style={styles.modalClearButtonText}>Cancelar</ThemedText>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.modalAcceptButton} onPress={acceptManualSignature}>
+                <Ionicons name="checkmark" size={20} color="#000000" />
+                <ThemedText style={styles.modalAcceptButtonText}>Confirmar</ThemedText>
+              </TouchableOpacity>
+            </ThemedView>
+          </ThemedView>
+        </ThemedView>
+      </Modal>
+
+      <Modal visible={isCameraVisible} animationType="slide" onRequestClose={() => setIsCameraVisible(false)}>
+        <View style={styles.cameraContainer}>
+          <CameraView ref={cameraRef} style={styles.camera} facing="back" />
+          <View style={styles.cameraControls}>
+            <TouchableOpacity style={styles.cameraCancelButton} onPress={() => setIsCameraVisible(false)}>
+              <Ionicons name="close" size={28} color="#FFFFFF" />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.cameraCaptureButton} onPress={capturePhoto}>
+              <View style={styles.cameraCaptureButtonInner} />
+            </TouchableOpacity>
+            <View style={styles.cameraCancelButton} />
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={isImagePreviewVisible} transparent animationType="fade" onRequestClose={() => setIsImagePreviewVisible(false)}>
+        <ThemedView style={styles.modalOverlay}>
+          <TouchableOpacity style={styles.imagePreviewClose} onPress={() => setIsImagePreviewVisible(false)}>
+            <Ionicons name="close-circle" size={34} color="#FFFFFF" />
+          </TouchableOpacity>
+          {selectedImageUrl ? <Image source={{ uri: selectedImageUrl }} style={styles.imagePreview} resizeMode="contain" /> : null}
+        </ThemedView>
+      </Modal>
+
+      <Modal visible={isSendNotesModalVisible} transparent animationType="slide" onRequestClose={() => setIsSendNotesModalVisible(false)}>
+        <ThemedView style={styles.modalOverlay}>
+          <ThemedView style={styles.sendModalContainer}>
+            <ThemedView style={styles.modalHeader}>
+              <ThemedText style={styles.modalTitle}>Enviar notas al cliente</ThemedText>
+              <TouchableOpacity onPress={() => setIsSendNotesModalVisible(false)} style={styles.closeButton}>
+                <Ionicons name="close" size={24} color="#666" />
+              </TouchableOpacity>
+            </ThemedView>
+            <ScrollView style={{ maxHeight: 520 }} contentContainerStyle={{ gap: 10, paddingBottom: 12 }}>
+              <ThemedView style={styles.inputGroup}>
+                <ThemedText style={styles.inputLabel}>Empresa:</ThemedText>
+                <ThemedView style={styles.pickerContainer}>
+                  <Picker selectedValue={sendEmpresaId} onValueChange={(v) => { setSendEmpresaId(v); setSendClienteId(null); setSendDivisionId(null); setSendContratoId(null); setSendSucursalId(null); setSendPuestoId(null); }}>
+                    <Picker.Item label="Seleccionar empresa" value={null} />
+                    {empresaOptions.map((item) => <Picker.Item key={item.id} label={item.nombre} value={item.id} />)}
+                  </Picker>
+                </ThemedView>
+              </ThemedView>
+
+              <ThemedView style={styles.inputGroup}>
+                <ThemedText style={styles.inputLabel}>Cliente:</ThemedText>
+                <ThemedView style={styles.pickerContainer}>
+                  <Picker selectedValue={sendClienteId} onValueChange={(v) => { setSendClienteId(v); setSendDivisionId(null); setSendContratoId(null); setSendSucursalId(null); setSendPuestoId(null); }} enabled={clienteOptions.length > 0}>
+                    <Picker.Item label="Seleccionar cliente" value={null} />
+                    {clienteOptions.map((item) => <Picker.Item key={item.id} label={item.nombre} value={item.id} />)}
+                  </Picker>
+                </ThemedView>
+              </ThemedView>
+
+              <ThemedView style={styles.inputGroup}>
+                <ThemedText style={styles.inputLabel}>División:</ThemedText>
+                <ThemedView style={styles.pickerContainer}>
+                  <Picker selectedValue={sendDivisionId} onValueChange={(v) => { setSendDivisionId(v); setSendContratoId(null); setSendSucursalId(null); setSendPuestoId(null); }} enabled={divisionOptions.length > 0}>
+                    <Picker.Item label="Seleccionar división" value={null} />
+                    {divisionOptions.map((item) => <Picker.Item key={item.id} label={item.nombre} value={item.id} />)}
+                  </Picker>
+                </ThemedView>
+              </ThemedView>
+
+              <ThemedView style={styles.inputGroup}>
+                <ThemedText style={styles.inputLabel}>Contrato:</ThemedText>
+                <ThemedView style={styles.pickerContainer}>
+                  <Picker selectedValue={sendContratoId} onValueChange={(v) => { setSendContratoId(v); setSendSucursalId(null); setSendPuestoId(null); }} enabled={contratoOptions.length > 0}>
+                    <Picker.Item label="Seleccionar contrato" value={null} />
+                    {contratoOptions.map((item) => <Picker.Item key={item.id} label={item.nombre} value={item.id} />)}
+                  </Picker>
+                </ThemedView>
+              </ThemedView>
+
+              <ThemedView style={styles.inputGroup}>
+                <ThemedText style={styles.inputLabel}>Sucursal:</ThemedText>
+                <ThemedView style={styles.pickerContainer}>
+                  <Picker selectedValue={sendSucursalId} onValueChange={(v) => { setSendSucursalId(v); setSendPuestoId(null); }} enabled={sucursalOptions.length > 0}>
+                    <Picker.Item label="Seleccionar sucursal" value={null} />
+                    {sucursalOptions.map((item) => <Picker.Item key={item.id} label={item.nombre} value={item.id} />)}
+                  </Picker>
+                </ThemedView>
+              </ThemedView>
+
+              <ThemedView style={styles.inputGroup}>
+                <ThemedText style={styles.inputLabel}>Puesto:</ThemedText>
+                <ThemedView style={styles.pickerContainer}>
+                  <Picker selectedValue={sendPuestoId} onValueChange={(v) => setSendPuestoId(v)} enabled={puestoOptions.length > 0}>
+                    <Picker.Item label="Seleccionar puesto" value={null} />
+                    {puestoOptions.map((item) => <Picker.Item key={item.id} label={item.nombre} value={item.id} />)}
+                  </Picker>
+                </ThemedView>
+              </ThemedView>
+
+              <ThemedView style={styles.inputGroup}>
+                <ThemedText style={styles.inputLabel}>Correo electrónico:</ThemedText>
+                <TextInput
+                  style={styles.input}
+                  value={sendEmail}
+                  onChangeText={setSendEmail}
+                  placeholder="cliente@correo.com"
+                  placeholderTextColor="#999"
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                />
+              </ThemedView>
+
+              {isLoadingSendPreview ? (
+                <ActivityIndicator size="small" color="#007AFF" />
+              ) : sendNotesPreview.length > 0 ? (
+                <ThemedView style={{ gap: 10 }}>
+                  {sendNotesPreview.map((note) => {
+                    const isExpanded = expandedSendPreviewIds.has(note.id);
+                    const toggleExpanded = () => {
+                      setExpandedSendPreviewIds((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(note.id)) {
+                          next.delete(note.id);
+                        } else {
+                          next.add(note.id);
+                        }
+                        return next;
+                      });
+                    };
+
+                    return (
+                      <ThemedView key={`send-note-${note.id}`} style={styles.sendPreviewCard}>
+                        <TouchableOpacity
+                          style={styles.sendPreviewHeader}
+                          onPress={toggleExpanded}
+                          activeOpacity={0.8}
+                        >
+                          <ThemedView style={{ flex: 1, gap: 4 }}>
+                            <ThemedText style={styles.sendPreviewTitle}>{note.titulo}</ThemedText>
+                            {note.relevancia && (
+                              <ThemedText style={styles.sendPreviewMeta}>Relevancia: {note.relevancia}</ThemedText>
+                            )}
+                            <ThemedText style={styles.sendPreviewMeta}>
+                              Último cambio por: {note.is_modified ? note.empleado : (note.creador || note.empleado)}
+                            </ThemedText>
+                          </ThemedView>
+                          <Ionicons
+                            name={isExpanded ? 'chevron-up' : 'chevron-down'}
+                            size={18}
+                            color="#007AFF"
+                          />
+                        </TouchableOpacity>
+
+                        {isExpanded && (
+                          <ThemedView style={styles.sendPreviewBody}>
+                            <ThemedText style={styles.sendPreviewDescription}>{note.description}</ThemedText>
+                            {Array.isArray(note.images) && note.images.length > 0 && (
+                              <ThemedView style={styles.imageRow}>
+                                {note.images.map((img, i) => {
+                                  const uri = resolveNoteImageUri(
+                                    img,
+                                    note.id,
+                                    note.puesto_id || sendPuestoId || null
+                                  );
+                                  if (!uri) return null;
+                                  return (
+                                    <Image
+                                      key={`preview-${note.id}-${i}`}
+                                      source={{ uri }}
+                                      style={styles.noteImageThumb}
+                                    />
+                                  );
+                                })}
+                              </ThemedView>
+                            )}
+                          </ThemedView>
+                        )}
+                      </ThemedView>
+                    );
+                  })}
+                </ThemedView>
+              ) : (
+                <ThemedText style={styles.noteDate}>
+                  Selecciona un puesto para cargar sus notas e imágenes.
+                </ThemedText>
+              )}
+            </ScrollView>
+            <TouchableOpacity style={styles.sendClientButton} onPress={handleSendNotesToClient}>
+              <Ionicons name="send-outline" size={18} color="#FFFFFF" />
+              <ThemedText style={styles.sendClientButtonText}>Enviar</ThemedText>
+            </TouchableOpacity>
+          </ThemedView>
+        </ThemedView>
+      </Modal>
 
       {/* Changes Modal */}
       <Modal
@@ -1717,12 +2664,98 @@ export default function NotesScreen() {
                           {(Array.isArray(parsed) ? parsed : []).length > 0 && (
                             <ThemedView style={styles.filterGroupSearch}>
                               <ThemedText style={styles.filterLabel}>Cambios:</ThemedText>
-                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => (
-                                <ThemedText key={`c-${row.id}-${idx}`} style={styles.changeDescription}>
-                                  <ThemedText style={{ fontWeight: '800' }}>{String(c?.prop ?? '-')}: </ThemedText>
-                                  {String(c?.after ?? '')}
-                                </ThemedText>
-                              ))}
+                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => {
+                                const prop = String(c?.prop ?? '-');
+                                const value = c?.after;
+
+                                if (prop === '__created__' && value && typeof value === 'object') {
+                                  const created: any = value;
+                                  return (
+                                    <React.Fragment key={`c-${row.id}-${idx}-created`}>
+                                      <ThemedView style={styles.changeDescriptionContainer}>
+                                        <ThemedText style={styles.changeDescription}>
+                                          <ThemedText style={{ fontWeight: '800' }}>Registro creado</ThemedText>
+                                        </ThemedText>
+                                      </ThemedView>
+                                      {Object.entries(created).map(([k, v]) => {
+                                        if (k === 'firma_responsable') {
+                                          const info = decodeFirmaHash(typeof v === 'string' ? v : v != null ? String(v) : null);
+                                          return (
+                                            <ThemedView key={`c-${row.id}-${idx}-${k}`} style={styles.changeDescriptionContainer}>
+                                              <ThemedText style={styles.changeDescription}>
+                                                <ThemedText style={{ fontWeight: '800' }}>{k}: </ThemedText>
+                                                {info
+                                                  ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${info.timestamp || 'N/A'}`
+                                                  : 'Firma (formato no decodificable)'}
+                                              </ThemedText>
+                                            </ThemedView>
+                                          );
+                                        }
+                                        if (k === 'firma_manual_responsable') {
+                                          const uri = v ? String(v) : null;
+                                          return (
+                                            <ThemedView key={`c-${row.id}-${idx}-${k}`} style={styles.changeDescriptionContainer}>
+                                              <ThemedText style={styles.changeDescription}>
+                                                <ThemedText style={{ fontWeight: '800' }}>{k}: </ThemedText>
+                                                {uri ? 'Firma manual registrada' : 'Sin firma manual'}
+                                              </ThemedText>
+                                              {uri ? (
+                                                <Image source={{ uri }} style={styles.cambioSignatureImage} resizeMode="contain" />
+                                              ) : null}
+                                            </ThemedView>
+                                          );
+                                        }
+                                        return (
+                                          <ThemedView key={`c-${row.id}-${idx}-${k}`} style={styles.changeDescriptionContainer}>
+                                            <ThemedText style={styles.changeDescription}>
+                                              <ThemedText style={{ fontWeight: '800' }}>{k}: </ThemedText>
+                                              {String(v ?? '')}
+                                            </ThemedText>
+                                          </ThemedView>
+                                        );
+                                      })}
+                                    </React.Fragment>
+                                  );
+                                }
+
+                                if (prop === 'firma_responsable') {
+                                  const info = decodeFirmaHash(typeof value === 'string' ? value : value != null ? String(value) : null);
+                                  return (
+                                    <ThemedView key={`c-${row.id}-${idx}`} style={styles.changeDescriptionContainer}>
+                                      <ThemedText style={styles.changeDescription}>
+                                        <ThemedText style={{ fontWeight: '800' }}>{prop}: </ThemedText>
+                                        {info
+                                          ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${info.timestamp || 'N/A'}`
+                                          : 'Firma (formato no decodificable)'}
+                                      </ThemedText>
+                                    </ThemedView>
+                                  );
+                                }
+
+                                if (prop === 'firma_manual_responsable') {
+                                  const uri = value ? String(value) : null;
+                                  return (
+                                    <ThemedView key={`c-${row.id}-${idx}`} style={styles.changeDescriptionContainer}>
+                                      <ThemedText style={styles.changeDescription}>
+                                        <ThemedText style={{ fontWeight: '800' }}>{prop}: </ThemedText>
+                                        {uri ? 'Firma manual registrada' : 'Sin firma manual'}
+                                      </ThemedText>
+                                      {uri ? (
+                                        <Image source={{ uri }} style={styles.cambioSignatureImage} resizeMode="contain" />
+                                      ) : null}
+                                    </ThemedView>
+                                  );
+                                }
+
+                                return (
+                                  <ThemedView key={`c-${row.id}-${idx}`} style={styles.changeDescriptionContainer}>
+                                    <ThemedText style={styles.changeDescription}>
+                                      <ThemedText style={{ fontWeight: '800' }}>{prop}: </ThemedText>
+                                      {String(value ?? '')}
+                                    </ThemedText>
+                                  </ThemedView>
+                                );
+                              })}
                             </ThemedView>
                           )}
                         </ThemedView>
@@ -2257,6 +3290,25 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 20,
   },
+  floatModalCard: {
+    width: '100%',
+    maxWidth: 520,
+    borderRadius: 14,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    overflow: 'hidden',
+  },
+  floatModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+    backgroundColor: '#F8F9FA',
+  },
   changesModalContainer: {
     backgroundColor: '#FFFFFF',
     borderRadius: 8,
@@ -2404,6 +3456,18 @@ const styles = StyleSheet.create({
     gap: 8,
     backgroundColor: '#F8F9FA',
   },
+  changeDescriptionContainer: {
+    marginBottom: 4,
+  },
+  cambioSignatureImage: {
+    width: '100%',
+    height: 120,
+    marginTop: 4,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    backgroundColor: '#FFFFFF',
+  },
   changeInfoContainer: {
     backgroundColor: '#E3F2FD',
     padding: 12,
@@ -2456,6 +3520,253 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     color: '#0f172a',
+  },
+  firmaButtonsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    alignItems: 'center',
+    flexWrap: 'wrap',
+  },
+  firmaBlueButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#007AFF',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 6,
+  },
+  firmaBlueButtonText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  signaturePreview: {
+    width: '100%',
+    height: 140,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    backgroundColor: '#FFFFFF',
+  },
+  signaturePadBox: {
+    marginTop: 10,
+    marginHorizontal: 16,
+    height: 260,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 2,
+    borderColor: '#E0E0E0',
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  modalActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    padding: 16,
+    gap: 12,
+    backgroundColor: '#FFFFFF',
+  },
+  modalClearButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    borderRadius: 10,
+    backgroundColor: '#EDEDED',
+    gap: 8,
+  },
+  modalClearButtonText: {
+    fontWeight: '800',
+    color: '#000',
+  },
+  modalAcceptButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    borderRadius: 10,
+    backgroundColor: '#D7F5E5',
+    gap: 8,
+  },
+  modalAcceptButtonText: {
+    fontWeight: '800',
+    color: '#000',
+  },
+  signatureCollapsableCard: {
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    backgroundColor: '#F9F9F9',
+    overflow: 'hidden',
+  },
+  signatureCollapsableHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 12,
+    backgroundColor: '#F0F0F0',
+  },
+  signatureCollapsableHeaderText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#007AFF',
+    flex: 1,
+    paddingRight: 8,
+  },
+  signatureCollapsableBody: {
+    padding: 12,
+    backgroundColor: '#F9F9F9',
+    gap: 2,
+  },
+  signatureInfoValue: {
+    fontSize: 13,
+    color: '#333',
+  },
+  captureImageButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderWidth: 1,
+    borderColor: '#007AFF',
+    borderRadius: 8,
+    padding: 10,
+    backgroundColor: '#F4F8FF',
+  },
+  captureImageText: {
+    color: '#007AFF',
+    fontWeight: '600',
+  },
+  imageRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  noteImageThumb: {
+    width: 84,
+    height: 84,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#D6D6D6',
+    backgroundColor: '#F3F3F3',
+  },
+  sendPreviewCard: {
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    backgroundColor: '#FFFFFF',
+    overflow: 'hidden',
+  },
+  sendPreviewHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: '#F8F9FA',
+  },
+  sendPreviewTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#111827',
+  },
+  sendPreviewMeta: {
+    fontSize: 12,
+    color: '#6B7280',
+  },
+  sendPreviewBody: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 8,
+    backgroundColor: '#FFFFFF',
+  },
+  sendPreviewDescription: {
+    fontSize: 14,
+    color: '#4B5563',
+    lineHeight: 20,
+  },
+  signatureModalContainer: {
+    width: '100%',
+    maxWidth: 520,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 10,
+    paddingBottom: 12,
+  },
+  signatureModalHint: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    color: '#666',
+    fontSize: 13,
+  },
+  cameraContainer: { flex: 1, backgroundColor: '#000000' },
+  camera: { flex: 1 },
+  cameraControls: {
+    position: 'absolute',
+    bottom: 0,
+    width: '100%',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 30,
+    paddingBottom: 30,
+  },
+  cameraCancelButton: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.45)',
+  },
+  cameraCaptureButton: {
+    width: 74,
+    height: 74,
+    borderRadius: 37,
+    borderWidth: 4,
+    borderColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cameraCaptureButtonInner: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#FFFFFF',
+  },
+  imagePreview: {
+    width: '96%',
+    height: '80%',
+  },
+  imagePreviewClose: {
+    position: 'absolute',
+    top: 30,
+    right: 20,
+    zIndex: 10,
+  },
+  sendClientButton: {
+    backgroundColor: '#0A84FF',
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 16,
+  },
+  sendClientButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 14,
+  },
+  sendModalContainer: {
+    width: '100%',
+    maxWidth: 560,
+    maxHeight: '86%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 10,
+    padding: 12,
   },
 });
 

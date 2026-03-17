@@ -1081,7 +1081,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
             
-            {hasCurrentMarca && role === 'OPERATIVO' && division === 'Seguridad' && (
+            {hasCurrentMarca && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -1243,7 +1243,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
             
-            {hasCurrentMarca && (role === 'ADMINISTRATIVO' || role === 'SUPERVISOR') && (
+            {hasCurrentMarca && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,

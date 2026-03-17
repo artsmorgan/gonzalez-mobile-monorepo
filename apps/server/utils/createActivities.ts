@@ -124,25 +124,46 @@ export async function getActivities(req: NextRequest, id: number) {
 
             const es_revision_equipo = Boolean(actividad.es_revision_equipo);
             let articlesParsed: any[] = [];
+            // Para actividades de tipo Inventario: siempre refrescar artículos del puesto y actualizar el registro
+            // (tanto si el registro se acaba de crear como si ya existía al recargar la ventana).
             if (es_revision_equipo) {
+                const articlesFromPuesto = await buildArticlesFromPuesto(req, marcaDia.puesto_id);
+                let existingParsed: any[] = [];
                 try {
-                    articlesParsed = registro.articles ? JSON.parse(registro.articles) : [];
+                    existingParsed = registro.articles ? (typeof registro.articles === "string" ? JSON.parse(registro.articles) : registro.articles) : [];
                 } catch {
-                    articlesParsed = [];
+                    existingParsed = [];
                 }
-                if (!Array.isArray(articlesParsed) || articlesParsed.length === 0) {
-                    articlesParsed = await buildArticlesFromPuesto(req, marcaDia.puesto_id);
-                    await callDynamicPrisma({
-                        req,
-                        data: {
-                            action: "UPDATE",
-                            table: "e_actividades_puesto_plaza",
-                            where: { id: registro.id },
-                            data: { articles: JSON.stringify(articlesParsed), updated_at: now.toISOString() },
-                            returning: false,
-                        },
-                    });
-                }
+                if (!Array.isArray(existingParsed)) existingParsed = [];
+                // Clave compuesta tipo:id para no mezclar Plan y Asignado que pueden compartir id
+                const existingByKey = new Map<string, any>(
+                    existingParsed.map((a: any) => [`${String(a?.tipo ?? "")}:${Number(a?.id)}`, a])
+                );
+                articlesParsed = (Array.isArray(articlesFromPuesto) ? articlesFromPuesto : []).map((item: any) => {
+                    const key = `${String(item?.tipo ?? "")}:${Number(item?.id)}`;
+                    const existing = existingByKey.get(key);
+                    if (!existing) return { ...item };
+                    return {
+                        ...item,
+                        cantidad_real: existing.cantidad_real !== undefined ? existing.cantidad_real : item.cantidad_real,
+                        estado: existing.estado !== undefined && existing.estado !== "" ? existing.estado : item.estado,
+                        observaciones: existing.observaciones !== undefined ? existing.observaciones : item.observaciones,
+                        marcada: existing.marcada !== undefined ? existing.marcada : item.marcada,
+                        file_name: existing.file_name !== undefined ? existing.file_name : item.file_name,
+                    };
+                });
+                // Persistir en BD siempre (creación o invocación del registro) para que al recargar se vea actualizado
+                console.log("Actualizando artículos en la actividad", registro.id);
+                await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "UPDATE",
+                        table: "e_actividades_puesto_plaza",
+                        where: { id: registro.id },
+                        data: { articles: JSON.stringify(articlesParsed), updated_at: now.toISOString() },
+                        returning: false,
+                    },
+                });
             }
 
             const inventario = es_revision_equipo
@@ -196,6 +217,10 @@ export async function getActivities(req: NextRequest, id: number) {
     }
 }
 
+/**
+ * Obtiene los artículos del puesto con la misma lógica que GET /api/entrega-puestos
+ * (combo -> plan directo sin duplicados -> asignados/entrega; luego último mantenimiento por artículo).
+ */
 async function buildArticlesFromPuesto(req: NextRequest, puestoId: number) {
     const articulos_return: any[] = [];
 
@@ -203,34 +228,52 @@ async function buildArticlesFromPuesto(req: NextRequest, puestoId: number) {
         req,
         data: { action: "GET", table: "e_estructura_puesto", operation: "findUnique", where: { id: puestoId } },
     });
-    if (!puesto) return articulos_return;
+    if (!puesto || !puesto.id) return articulos_return;
 
+    // 1) Artículos del combo del puesto (si existe) — igual que entrega-puestos
     if (puesto.comboArticulosCP_id) {
-        const combo = await callDynamicPrisma({
+        const combo_articulo_cp = await callDynamicPrisma({
             req,
-            data: { action: "GET", table: "e_estructura_combo_articulo_cp", operation: "findUnique", where: { id: puesto.comboArticulosCP_id } },
+            data: {
+                action: "GET",
+                table: "e_estructura_combo_articulo_cp",
+                operation: "findUnique",
+                where: { id: puesto.comboArticulosCP_id },
+            },
         });
-        if (combo?.id) {
-            const comboItems = await callDynamicPrisma({
+        if (combo_articulo_cp && combo_articulo_cp.id) {
+            const articulos_combo_articulo_cp = await callDynamicPrisma({
                 req,
-                data: { action: "GET", table: "e_estructura_articulo_corpo_puesto_plan", operation: "findMany", where: { combo_id: combo.id } },
+                data: {
+                    action: "GET",
+                    table: "e_estructura_articulo_corpo_puesto_plan",
+                    operation: "findMany",
+                    where: { combo_id: combo_articulo_cp.id },
+                },
             });
-            for (const item of Array.isArray(comboItems) ? comboItems : []) {
+            const articulosComboArray = Array.isArray(articulos_combo_articulo_cp) ? articulos_combo_articulo_cp : [];
+            for (const articulo of articulosComboArray) {
                 let art_bd = null;
-                if (item.articuloCP_id) {
+                if (articulo.articuloCP_id) {
                     art_bd = await callDynamicPrisma({
                         req,
-                        data: { action: "GET", table: "n_articulo_corpo_puesto", operation: "findUnique", where: { id: item.articuloCP_id } },
+                        data: {
+                            action: "GET",
+                            table: "n_articulo_corpo_puesto",
+                            operation: "findUnique",
+                            where: { id: articulo.articuloCP_id },
+                        },
                     });
                 }
+                const cantidad = Number(articulo.cantidad) || 0;
                 articulos_return.push({
-                    id: item.id,
+                    id: articulo.id,
                     nombre: art_bd ? art_bd.nombre : "Artículo inidentificable",
                     tipo: "Plan",
                     marca: "",
                     serie: "",
-                    cantidad_requerida: Number(item.cantidad) || 0,
-                    cantidad_real: Number(item.cantidad) || 0,
+                    cantidad_requerida: cantidad,
+                    cantidad_real: cantidad,
                     estado: "Bueno",
                     observaciones: "",
                     marcada: false,
@@ -240,36 +283,42 @@ async function buildArticlesFromPuesto(req: NextRequest, puestoId: number) {
         }
     }
 
-
-    const planItems = await callDynamicPrisma({
+    // 2) Plan directo del puesto (evitar duplicados por id) — igual que entrega-puestos
+    const articulos_puesto_plan = await callDynamicPrisma({
         req,
         data: {
             action: "GET",
             table: "e_estructura_articulo_corpo_puesto_plan",
             operation: "findMany",
-            where: { OR: [
-                { puesto_id: puestoId}, { corpo_id: puesto.corpo_id }  ],
-                id: { notIn: articulos_return.map((a: any) => a.id) }
-             },
+            where: {
+                OR: [{ puesto_id: puestoId }, { corpo_id: puesto.corpo_id }],
+                id: { notIn: articulos_return.map((a: any) => a.id) },
+            },
         },
     });
-    
-    for (const item of Array.isArray(planItems) ? planItems : []) {
+    const articulosPlanArray = Array.isArray(articulos_puesto_plan) ? articulos_puesto_plan : [];
+    for (const articulo of articulosPlanArray) {
         let art_bd = null;
-        if (item.articuloCP_id) {
+        if (articulo.articuloCP_id) {
             art_bd = await callDynamicPrisma({
                 req,
-                data: { action: "GET", table: "n_articulo_corpo_puesto", operation: "findUnique", where: { id: item.articuloCP_id } },
+                data: {
+                    action: "GET",
+                    table: "n_articulo_corpo_puesto",
+                    operation: "findUnique",
+                    where: { id: articulo.articuloCP_id },
+                },
             });
         }
+        const cantidad = Number(articulo.cantidad) || 0;
         articulos_return.push({
-            id: item.id,
+            id: articulo.id,
             nombre: art_bd ? art_bd.nombre : "Artículo inidentificable",
             tipo: "Plan",
             marca: "",
             serie: "",
-            cantidad_requerida: Number(item.cantidad) || 0,
-            cantidad_real: Number(item.cantidad) || 0,
+            cantidad_requerida: cantidad,
+            cantidad_real: cantidad,
             estado: "Bueno",
             observaciones: "",
             marcada: false,
@@ -277,29 +326,36 @@ async function buildArticlesFromPuesto(req: NextRequest, puestoId: number) {
         });
     }
 
-    const assignedItems = await callDynamicPrisma({
+    // 3) Asignados del puesto (entrega) — mismo where que entrega-puestos: OR puesto_id / corpo_id
+    const articulos_puesto_entrega = await callDynamicPrisma({
         req,
         data: {
             action: "GET",
             table: "e_estructura_articulo_corpo_puesto_entrega",
             operation: "findMany",
-            where: { puesto_id: puestoId },
+            where: { OR: [{ puesto_id: puestoId }, { corpo_id: puesto.corpo_id }] },
         },
     });
-    for (const item of Array.isArray(assignedItems) ? assignedItems : []) {
+    const articulosEntregaArray = Array.isArray(articulos_puesto_entrega) ? articulos_puesto_entrega : [];
+    for (const articulo of articulosEntregaArray) {
         let art_bd = null;
-        if (item.nomencladorArticuloCP_id) {
+        if (articulo.nomencladorArticuloCP_id) {
             art_bd = await callDynamicPrisma({
                 req,
-                data: { action: "GET", table: "n_articulo_corpo_puesto", operation: "findUnique", where: { id: item.nomencladorArticuloCP_id } },
+                data: {
+                    action: "GET",
+                    table: "n_articulo_corpo_puesto",
+                    operation: "findUnique",
+                    where: { id: articulo.nomencladorArticuloCP_id },
+                },
             });
         }
         articulos_return.push({
-            id: item.id,
+            id: articulo.id,
             nombre: art_bd ? art_bd.nombre : "Artículo inidentificable",
             tipo: "Asignado",
-            marca: item.marca || "",
-            serie: item.serie || "",
+            marca: articulo.marca || "",
+            serie: articulo.serie || "",
             cantidad_requerida: 1,
             cantidad_real: 1,
             estado: "Bueno",
@@ -309,6 +365,7 @@ async function buildArticlesFromPuesto(req: NextRequest, puestoId: number) {
         });
     }
 
+    // 4) Adjuntar último mantenimiento a cada artículo — mismo criterio que entrega-puestos
     const planIds = articulos_return.filter((a: any) => a.tipo === "Plan").map((a: any) => a.id);
     const asignadoIds = articulos_return.filter((a: any) => a.tipo === "Asignado").map((a: any) => a.id);
     if (planIds.length > 0 || asignadoIds.length > 0) {
@@ -326,17 +383,18 @@ async function buildArticlesFromPuesto(req: NextRequest, puestoId: number) {
                 select: { articulo_plan_id: true, articulo_asignado_id: true, estado: true, cantidad_real: true },
             },
         });
-        const byPlan = new Map<number, any>();
-        const byAsig = new Map<number, any>();
-        for (const m of Array.isArray(mantenimientos) ? mantenimientos : []) {
-            if (m.articulo_plan_id && !byPlan.has(m.articulo_plan_id)) byPlan.set(m.articulo_plan_id, m);
-            if (m.articulo_asignado_id && !byAsig.has(m.articulo_asignado_id)) byAsig.set(m.articulo_asignado_id, m);
+        const mantenimientosArray = Array.isArray(mantenimientos) ? mantenimientos : [];
+        const latestByPlanId = new Map<number, any>();
+        const latestByAsignadoId = new Map<number, any>();
+        for (const m of mantenimientosArray) {
+            if (m.articulo_plan_id && !latestByPlanId.has(m.articulo_plan_id)) latestByPlanId.set(m.articulo_plan_id, m);
+            if (m.articulo_asignado_id && !latestByAsignadoId.has(m.articulo_asignado_id)) latestByAsignadoId.set(m.articulo_asignado_id, m);
         }
-        for (const item of articulos_return) {
-            const ultimo = item.tipo === "Plan" ? byPlan.get(item.id) : byAsig.get(item.id);
+        for (const a of articulos_return as any[]) {
+            const ultimo = a.tipo === "Plan" ? latestByPlanId.get(a.id) ?? null : a.tipo === "Asignado" ? latestByAsignadoId.get(a.id) ?? null : null;
             if (ultimo) {
-                if (ultimo.estado === "Bueno" || ultimo.estado === "Malo" || ultimo.estado === "No está") item.estado = ultimo.estado;
-                if (typeof ultimo.cantidad_real === "number") item.cantidad_real = Math.max(0, ultimo.cantidad_real);
+                if (ultimo.estado === "Bueno" || ultimo.estado === "Malo" || ultimo.estado === "No está") a.estado = ultimo.estado;
+                if (typeof ultimo.cantidad_real === "number") a.cantidad_real = Math.max(0, ultimo.cantidad_real);
             }
         }
     }

@@ -1661,9 +1661,13 @@ interface DeleteCorporateVehicleParams {
 export type CorporateVehicleUseRequest = {
   nombre_conductor: string;
   codigo_conductor: string;
-  fecha: string; // ISO (fecha del registro)
-  inicio: string; // ISO (fecha + hora inicio)
-  fin: string; // ISO (fecha + hora fin)
+  fecha_inicio: string; // ISO
+  fecha_fin: string; // ISO
+  hora_inicio: string; // ISO
+  hora_fin: string; // ISO
+  fecha?: string; // compatibilidad legacy
+  inicio?: string; // compatibilidad legacy
+  fin?: string; // compatibilidad legacy
   combustible_inicio: string;
   combustible_fin: string;
   km_inicio: number;

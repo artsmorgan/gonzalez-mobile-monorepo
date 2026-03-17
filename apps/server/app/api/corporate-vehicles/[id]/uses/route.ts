@@ -6,6 +6,48 @@ import { sendNotificationByRole } from "../../../../../utils/sendNotification";
 
 export const runtime = "nodejs";
 
+const normalizeHora = (raw?: any): string | null => {
+  if (raw == null) return null;
+  const v = String(raw).trim();
+  if (!v) return null;
+  if (/^\d{2}:\d{2}(:\d{2})?$/.test(v)) {
+    const parts = v.split(":");
+    const hh = parts[0].padStart(2, "0");
+    const mm = (parts[1] || "00").padStart(2, "0");
+    const ss = (parts[2] || "00").padStart(2, "0");
+    return `${hh}:${mm}:${ss}`;
+  }
+  if (v.includes("T")) {
+    const timePart = v.split("T")[1] || "";
+    return timePart.substring(0, 8);
+  }
+  return null;
+};
+
+const toIsoSafe = (value: any): string => {
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === "string" && value.trim()) {
+    const d = new Date(value);
+    if (!Number.isNaN(d.getTime())) return d.toISOString();
+  }
+  return new Date().toISOString();
+};
+
+const useToApiShape = (u: any) => {
+  const inicioIso = toIsoSafe(u?.inicio || u?.hora_inicio);
+  const finIso = toIsoSafe(u?.fin || u?.hora_fin);
+  const fechaIso = toIsoSafe(u?.fecha || u?.fecha_inicio || inicioIso);
+  const fechaInicioIso = toIsoSafe(u?.fecha_inicio || fechaIso);
+  const fechaFinIso = toIsoSafe(u?.fecha_fin || fechaIso);
+  return {
+    ...u,
+    fecha_inicio: fechaInicioIso,
+    fecha_fin: fechaFinIso,
+    hora_inicio: inicioIso,
+    hora_fin: finIso,
+  };
+};
+
 export async function GET(
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
@@ -51,9 +93,11 @@ export async function GET(
     const bitacoraById = new Map(bitacorasArray.map((b: any) => [b.id, b]));
 
     const mapped = usosArray.map((u: any) => ({
-      ...u,
+      ...useToApiShape(u),
       bitacora: u.bitacora_id ? bitacoraById.get(u.bitacora_id) ?? null : null,
     }));
+
+    console.log('mapped', mapped);
 
     return NextResponse.json({ status: true, data: mapped }, { status: 200 });
   } catch (error: unknown) {
@@ -84,6 +128,8 @@ export async function POST(
       fecha,
       inicio,
       fin,
+      fecha_inicio,
+      fecha_fin,
       hora_inicio,
       hora_fin,
       combustible_inicio,
@@ -98,9 +144,23 @@ export async function POST(
 
     const createdAt = toZonedTime(new Date(), "America/Costa_Rica");
     const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
-    const fechaValue = fecha ? new Date(fecha) : createdAt;
-    const inicioValue = inicio ? new Date(inicio) : (hora_inicio ? new Date(hora_inicio) : createdAt);
-    const finValue = fin ? new Date(fin) : (hora_fin ? new Date(hora_fin) : createdAt);
+    const fechaValue = fecha
+      ? new Date(fecha)
+      : (fecha_inicio ? new Date(fecha_inicio) : (fecha_fin ? new Date(fecha_fin) : createdAt));
+
+    const horaInicioNorm = normalizeHora(hora_inicio || inicio);
+    const horaFinNorm = normalizeHora(hora_fin || fin);
+
+    const buildDateTimeFromFechaAndHora = (fechaBase: Date, horaNorm: string | null): Date => {
+      if (!horaNorm) return fechaBase;
+      const [hh, mm, ss] = horaNorm.split(':');
+      const d = new Date(fechaBase);
+      d.setHours(Number(hh) || 0, Number(mm) || 0, Number(ss) || 0, 0);
+      return d;
+    };
+
+    const inicioValue = fecha_inicio.split('T')[0] + 'T' + hora_inicio.split('T')[1];
+    const finValue = fecha_fin.split('T')[0] + 'T' + hora_fin.split('T')[1];
 
     const created = await callDynamicPrisma({
       req,
@@ -113,8 +173,8 @@ export async function POST(
           nombre_conductor: String(nombre_conductor ?? ""),
           codigo_conductor: String(codigo_conductor ?? ""),
           fecha: fechaValue.toISOString(),
-          inicio: inicioValue.toISOString(),
-          fin: finValue.toISOString(),
+          inicio: inicioValue,
+          fin: finValue,
           combustible_inicio: String(combustible_inicio ?? ""),
           combustible_fin: String(combustible_fin ?? ""),
           km_inicio: Number(km_inicio ?? 0),
@@ -149,8 +209,8 @@ export async function POST(
               nombre_conductor: createdObj.nombre_conductor,
               codigo_conductor: createdObj.codigo_conductor,
               fecha: fechaValue.toISOString(),
-              inicio: inicioValue.toISOString(),
-              fin: finValue.toISOString(),
+              inicio: inicioValue,
+              fin: finValue,
               combustible_inicio: createdObj.combustible_inicio,
               combustible_fin: createdObj.combustible_fin,
               km_inicio: createdObj.km_inicio,
@@ -216,7 +276,7 @@ export async function POST(
       }
     }
 
-    return NextResponse.json({ status: true, data: created }, { status: 201 });
+    return NextResponse.json({ status: true, data: useToApiShape(createdObj) }, { status: 201 });
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in POST /api/corporate-vehicles/[id]/uses:", errorMessage);

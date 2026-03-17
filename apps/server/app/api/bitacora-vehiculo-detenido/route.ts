@@ -146,7 +146,7 @@ export async function POST(req: NextRequest) {
     } = body ?? {};
 
     // marca_id era requerido previamente. Ahora permitimos crear por estructura directa.
-    if ((!marca_id && (!empresa_id || !cliente_id || !sucursal_id)) || !tipo || !observaciones || !firma_responsable) {
+    if ((!marca_id && (!empresa_id || !cliente_id || !sucursal_id)) || !tipo || !firma_responsable) {
       return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 200 });
     }
 
@@ -244,7 +244,7 @@ export async function POST(req: NextRequest) {
           informacion_general: normalizeToStringifiedJson(informacion_general),
           informacion_revision: normalizeToStringifiedJson(informacion_revision),
           movimientos_vehiculos: normalizeToStringifiedJson(movimientos_vehiculos),
-          observaciones: String(observaciones),
+          observaciones: String(observaciones ?? "-"),
           firma_responsable: String(firma_responsable),
           created_by: createdBy,
           created_at: createdAt.toISOString(),

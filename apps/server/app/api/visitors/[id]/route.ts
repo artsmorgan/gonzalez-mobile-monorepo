@@ -25,6 +25,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             hora_entrada,
             hora_salida,
             razon_visita,
+            dep_pers_visita,
             es_funcionario,
             observaciones,
             tipo_accion,
@@ -48,6 +49,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             hora_entrada: new Date(hora_entrada).toISOString(),
             hora_salida: hora_salida ? new Date(hora_salida).toISOString() : null,
             razon_visita,
+            dep_pers_visita: dep_pers_visita ?? null,
             es_funcionario,
             observaciones,
             tipo_accion,
@@ -72,8 +74,9 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         });
         const activosExistentesArray = activosExistentes.map((a: any) => ({
             tipo_id: a.tipo_id,
-            detalles: a.detalles ? JSON.parse(a.detalles) : [],
-            numero_serie: a.numero_serie,
+            nombre: a.nombre,
+            detalles: a.detalles ? (typeof a.detalles === 'string' ? JSON.parse(a.detalles) : a.detalles) : [],
+            numero_id: a.numero_id,
             numero_activo: a.numero_activo,
         }));
 
@@ -159,8 +162,9 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                             data: {
                                 visitante_id: visitor.id,
                                 tipo_id: tipo_activo.id,
+                                nombre: (a.nombre != null && String(a.nombre).trim() !== '') ? String(a.nombre).trim() : tipo_activo.nombre,
                                 detalles: JSON.stringify(a.detalles),
-                                numero_serie: a.numero_serie,
+                                numero_id: a.numero_id != null ? String(a.numero_id) : '',
                                 numero_activo: a.numero_activo ? a.numero_activo : null,
                             }
                         }

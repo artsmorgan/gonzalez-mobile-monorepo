@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import { router } from 'expo-router';
 import React, { createContext, ReactNode, useContext, useEffect, useState, useRef } from 'react';
+import { eventBus } from '../hooks/eventBus';
 
 interface Role {
   id: number;
@@ -184,6 +185,11 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       setRefreshToken(refreshToken);
       setTokenCreatedAt(tokenCreatedAt);
       setEmployee(employeeData);
+
+      // Tras login: sincronizar cachés pendientes (mismo flujo que reconexión / foco en App.tsx)
+      queueMicrotask(() => {
+        eventBus.emit('syncCachesRequested');
+      });
 
       return { success: true, passwordExpired: false };
     } catch (error) {

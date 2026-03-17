@@ -34,6 +34,7 @@ import { createSurvey as createSurveyAPI, updateSurveySignature } from '@/hooks/
 import { eventBus } from '@/hooks/eventBus';
 import authedFetch from '@/hooks/authedFetch';
 import getValidAccessTokenOrLogout from '@/hooks/getValidAccessTokenOrLogout';
+import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 
 type SatisfactionSurveysScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'SatisfactionSurveys'>;
 
@@ -878,12 +879,7 @@ export default function SatisfactionSurveysScreen() {
   };
 
   const formatDateForDisplay = (dateString: string): string => {
-    if (!dateString) return '';
-    const date = new Date(dateString);
-    const day = date.getDate().toString().padStart(2, '0');
-    const month = (date.getMonth() + 1).toString().padStart(2, '0');
-    const year = date.getFullYear();
-    return `${day}-${month}-${year}`;
+    return convertDateTimestampToLocalString(dateString, false);
   };
 
   const dateToLocalString = (date: Date): string => {
@@ -2210,7 +2206,7 @@ export default function SatisfactionSurveysScreen() {
                                         Ubicación: {parseFloat(firmasData.responsable.latitud).toFixed(6)}, {parseFloat(firmasData.responsable.longitud).toFixed(6)}
                                       </ThemedText>
                                       <ThemedText style={styles.firmaText}>
-                                        Hora y fecha: {generateDateTime(firmasData.responsable.timestamp)}
+                                        Hora y fecha: {convertDateTimestampToLocalString(new Date(Number(firmasData.responsable.timestamp)).toISOString())}
                                       </ThemedText>
                                       <ThemedText style={styles.firmaText}>
                                         Sesión: {firmasData.responsable.sessionId}
@@ -2781,7 +2777,7 @@ export default function SatisfactionSurveysScreen() {
                             Longitud: {firmaResponsable.longitud}
                           </ThemedText>
                           <ThemedText style={styles.signatureInfoText}>
-                            Timestamp: {generateDateTime(firmaResponsable.timestamp)}
+                            Timestamp: {convertDateTimestampToLocalString(new Date(Number(firmaResponsable.timestamp)).toISOString())}
                           </ThemedText>
                           <TouchableOpacity
                             style={styles.removeSignatureButton}

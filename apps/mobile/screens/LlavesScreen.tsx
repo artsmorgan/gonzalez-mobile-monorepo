@@ -24,6 +24,7 @@ import { createLlave, deleteLlave, listLlaves, LlaveItem, updateLlave } from '..
 import { createMovimientoLlave, deleteMovimientoLlave, updateMovimientoLlave } from '../hooks/movimientosLlavesFunctions';
 import { createLlavero, deleteLlavero, listLlaveros, LlaveroItem, updateLlavero } from '../hooks/llaverosFunctions';
 import { createMovimientoLlavero, deleteMovimientoLlavero, updateMovimientoLlavero } from '../hooks/movimientosLlaverosFunctions';
+import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 
 type LlaveUI = LlaveItem & { id_local?: string };
 type MovimientoUI = {
@@ -100,6 +101,7 @@ export default function LlavesScreen() {
   const [llaveroMovimientos, setLlaveroMovimientos] = useState<MovimientoLlaveroUI[]>([]);
   const [llaveroMovIsCreating, setLlaveroMovIsCreating] = useState(false);
   const [llaveroMovEditing, setLlaveroMovEditing] = useState<MovimientoLlaveroUI | null>(null);
+  const [isSavingLlaveroMov, setIsSavingLlaveroMov] = useState(false);
   const [llaveroMovFilterSearch, setLlaveroMovFilterSearch] = useState('');
   const [llaveroMovFilterFecha, setLlaveroMovFilterFecha] = useState('');
   const [showLlaveroMovFilterFechaPicker, setShowLlaveroMovFilterFechaPicker] = useState(false);
@@ -123,6 +125,7 @@ export default function LlavesScreen() {
   const [movimientos, setMovimientos] = useState<MovimientoUI[]>([]);
   const [movIsCreating, setMovIsCreating] = useState(false);
   const [movEditing, setMovEditing] = useState<MovimientoUI | null>(null);
+  const [isSavingMov, setIsSavingMov] = useState(false);
 
   const [movFilterSearch, setMovFilterSearch] = useState('');
   const [movFilterFecha, setMovFilterFecha] = useState('');
@@ -201,14 +204,7 @@ export default function LlavesScreen() {
   };
 
   const formatYMDToDMY = (value?: string): string => {
-    const v = String(value || '').trim();
-    if (!v) return '';
-    const onlyDate = v.split('T')[0];
-    const ymd = onlyDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    if (ymd) return `${ymd[3]}-${ymd[2]}-${ymd[1]}`;
-    const dmy = onlyDate.match(/^(\d{2})-(\d{2})-(\d{4})$/);
-    if (dmy) return `${dmy[1]}-${dmy[2]}-${dmy[3]}`;
-    return onlyDate;
+    return convertDateTimestampToLocalString(value || '', false);
   };
 
   const parseDateStringToDate = (value?: string): Date => {
@@ -224,10 +220,26 @@ export default function LlavesScreen() {
   };
 
   const timeToHHMMSS = (d: Date): string => {
-    const hh = String(d.getHours()).padStart(2, '0');
-    const mm = String(d.getMinutes()).padStart(2, '0');
-    const ss = String(d.getSeconds()).padStart(2, '0');
-    return `${hh}:${mm}:${ss}`;
+    // Ajuste por timezone para que la hora visual seleccionada
+    // sea exactamente la misma que se guarda en HH:mm:ss.
+    const adjusted = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
+    return adjusted.toISOString().substring(11, 19);
+  };
+
+  const normalizeTimeValue = (value?: string): string => {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    if (raw.includes('T')) return raw.split('T')[1]?.split('.')[0] || '';
+    return raw.length >= 8 ? raw.slice(0, 8) : raw;
+  };
+
+  const timeStringToPickerDate = (value?: string): Date => {
+    const normalized = normalizeTimeValue(value);
+    if (!normalized) return new Date();
+    const [h, m, s] = normalized.split(':');
+    const date = new Date();
+    date.setHours(Number(h) || 0, Number(m) || 0, Number(s) || 0, 0);
+    return date;
   };
 
   const getConnectionStatus = async (): Promise<boolean> => {
@@ -756,8 +768,7 @@ export default function LlavesScreen() {
     setMovDepartamento(m.departamento || '');
     setMovTelefono(m.telefono || '');
     setMovFecha(m.fecha ? String(m.fecha).split('T')[0] : '');
-    const horaStr = String(m.hora || '');
-    setMovHora(horaStr.includes('T') ? horaStr.split('T')[1]?.split('.')[0] || '' : horaStr);
+    setMovHora(normalizeTimeValue(String(m.hora || '')));
     setMovFirmaEntrega(m.firma_entrega || '');
     setMovFirmaRecibe(m.firma_recibe || '');
     setMovFirmaResponsable(m.firma_responsable || '');
@@ -783,117 +794,127 @@ export default function LlavesScreen() {
   };
 
   const handleMovSave = async () => {
+    if (isSavingMov) return;
     if (!employee) return;
     if (!movLlave) return;
     if (!validateMovForm()) return;
 
-    const payload = await buildMovPayload();
-    const isConnected = await getConnectionStatus();
+    setIsSavingMov(true);
+    try {
+      const payload = await buildMovPayload();
+      const isConnected = await getConnectionStatus();
 
-    // create
-    if (!movEditing) {
-      if (isConnected && movLlave.id && movLlave.id !== 0) {
-        const res = await createMovimientoLlave({ llaveId: movLlave.id, requestData: payload, refreshAccessToken, logout });
-        if (res.status) {
-          Alert.alert('Éxito', 'Movimiento creado correctamente');
-          setMovIsCreating(false);
-          await fetchLlaves();
+      // create
+      if (!movEditing) {
+        if (isConnected && movLlave.id && movLlave.id !== 0) {
+          const res = await createMovimientoLlave({ llaveId: movLlave.id, requestData: payload, refreshAccessToken, logout });
+          if (res.status) {
+            Alert.alert('Éxito', 'Movimiento creado correctamente');
+            setMovIsCreating(false);
+            await fetchLlaves();
+          } else {
+            Alert.alert('Error', res.message || 'No se pudo crear el movimiento');
+          }
         } else {
-          Alert.alert('Error', res.message || 'No se pudo crear el movimiento');
-        }
-      } else {
-        const localId = `local-mov-${Date.now()}`;
-        const localItem: MovimientoUI = {
-          id: 0,
-          id_local: localId,
-          llave_id: movLlave.id || 0,
-          llaveLocalId: movLlave.id_local || '',
-          nombre_persona_recibe: payload.nombre_persona_recibe,
-          nombre_persona_entrega: payload.nombre_persona_entrega,
-          departamento: payload.departamento,
-          telefono: payload.telefono,
-          fecha: payload.fecha,
-          hora: payload.hora,
-          firma_entrega: payload.firma_entrega,
-          firma_recibe: payload.firma_recibe,
-          firma_responsable: payload.firma_responsable,
-        };
-        const next = [localItem, ...movimientos];
-        await persistMovimientosToLlavesCache(movLlave, next);
-        await upsertMovAction({
-          type: 'create',
-          id: localId,
-          llaveId: movLlave.id || 0,
-          llaveLocalId: movLlave.id_local || '',
-          requestData: payload,
-        });
-        Alert.alert('Guardado (offline)', 'El movimiento se sincronizará cuando vuelva la conexión.');
-        setMovIsCreating(false);
-      }
-      return;
-    }
-
-    // update
-    const isLocalMov = !!movEditing.id_local || movEditing.id === 0;
-    if (isConnected && !isLocalMov && movLlave.id && movLlave.id !== 0) {
-      const res = await updateMovimientoLlave({
-        llaveId: movLlave.id,
-        id: movEditing.id,
-        requestData: payload,
-        refreshAccessToken,
-        logout,
-      });
-      if (res.status) {
-        Alert.alert('Éxito', 'Movimiento actualizado correctamente');
-        setMovIsCreating(false);
-        setMovEditing(null);
-        await fetchLlaves();
-      } else {
-        Alert.alert('Error', res.message || 'No se pudo actualizar el movimiento');
-      }
-    } else {
-      const next = movimientos.map((m) => {
-        const match = (movEditing.id_local && m.id_local === movEditing.id_local) || (!movEditing.id_local && m.id === movEditing.id);
-        if (!match) return m;
-        return {
-          ...m,
-          nombre_persona_recibe: payload.nombre_persona_recibe,
-          nombre_persona_entrega: payload.nombre_persona_entrega,
-          departamento: payload.departamento,
-          telefono: payload.telefono,
-          fecha: payload.fecha,
-          hora: payload.hora,
-          firma_entrega: payload.firma_entrega,
-          firma_recibe: payload.firma_recibe,
-          firma_responsable: payload.firma_responsable,
-        };
-      });
-      await persistMovimientosToLlavesCache(movLlave, next);
-
-      if (movEditing.id_local) {
-        const updated = await updateMovCreateActionForLocalId(movEditing.id_local, payload);
-        if (!updated) {
+          const localId = `local-mov-${Date.now()}`;
+          const localItem: MovimientoUI = {
+            id: 0,
+            id_local: localId,
+            llave_id: movLlave.id || 0,
+            llaveLocalId: movLlave.id_local || '',
+            nombre_persona_recibe: payload.nombre_persona_recibe,
+            nombre_persona_entrega: payload.nombre_persona_entrega,
+            departamento: payload.departamento,
+            telefono: payload.telefono,
+            fecha: payload.fecha,
+            hora: payload.hora,
+            firma_entrega: payload.firma_entrega,
+            firma_recibe: payload.firma_recibe,
+            firma_responsable: payload.firma_responsable,
+          };
+          const next = [localItem, ...movimientos];
+          await persistMovimientosToLlavesCache(movLlave, next);
           await upsertMovAction({
             type: 'create',
-            id: movEditing.id_local,
+            id: localId,
+            llaveId: movLlave.id || 0,
+            llaveLocalId: movLlave.id_local || '',
+            requestData: payload,
+          });
+          Alert.alert('Guardado (offline)', 'El movimiento se sincronizará cuando vuelva la conexión.');
+          setMovIsCreating(false);
+        }
+        return;
+      }
+
+      // update
+      const isLocalMov = !!movEditing.id_local || movEditing.id === 0;
+      if (isConnected && !isLocalMov && movLlave.id && movLlave.id !== 0) {
+        const res = await updateMovimientoLlave({
+          llaveId: movLlave.id,
+          id: movEditing.id,
+          requestData: payload,
+          refreshAccessToken,
+          logout,
+        });
+        if (res.status) {
+          Alert.alert('Éxito', 'Movimiento actualizado correctamente');
+          setMovIsCreating(false);
+          setMovEditing(null);
+          await fetchLlaves();
+        } else {
+          Alert.alert('Error', res.message || 'No se pudo actualizar el movimiento');
+        }
+      } else {
+        const next = movimientos.map((m) => {
+          const match =
+            (movEditing.id_local && m.id_local === movEditing.id_local) ||
+            (!movEditing.id_local && m.id === movEditing.id);
+          if (!match) return m;
+          return {
+            ...m,
+            nombre_persona_recibe: payload.nombre_persona_recibe,
+            nombre_persona_entrega: payload.nombre_persona_entrega,
+            departamento: payload.departamento,
+            telefono: payload.telefono,
+            fecha: payload.fecha,
+            hora: payload.hora,
+            firma_entrega: payload.firma_entrega,
+            firma_recibe: payload.firma_recibe,
+            firma_responsable: payload.firma_responsable,
+          };
+        });
+        await persistMovimientosToLlavesCache(movLlave, next);
+
+        if (movEditing.id_local) {
+          const updated = await updateMovCreateActionForLocalId(movEditing.id_local, payload);
+          if (!updated) {
+            await upsertMovAction({
+              type: 'create',
+              id: movEditing.id_local,
+              llaveId: movLlave.id || 0,
+              llaveLocalId: movLlave.id_local || '',
+              requestData: payload,
+            });
+          }
+        } else {
+          await upsertMovAction({
+            type: 'update',
+            id: movEditing.id,
             llaveId: movLlave.id || 0,
             llaveLocalId: movLlave.id_local || '',
             requestData: payload,
           });
         }
-      } else {
-        await upsertMovAction({
-          type: 'update',
-          id: movEditing.id,
-          llaveId: movLlave.id || 0,
-          llaveLocalId: movLlave.id_local || '',
-          requestData: payload,
-        });
-      }
 
-      Alert.alert('Guardado (offline)', 'Los cambios se sincronizarán cuando vuelva la conexión.');
-      setMovIsCreating(false);
-      setMovEditing(null);
+        Alert.alert('Guardado (offline)', 'Los cambios se sincronizarán cuando vuelva la conexión.');
+        setMovIsCreating(false);
+        setMovEditing(null);
+      }
+    } catch (e) {
+      Alert.alert('Error', e instanceof Error ? e.message : 'No se pudo guardar el movimiento');
+    } finally {
+      setIsSavingMov(false);
     }
   };
 
@@ -1372,8 +1393,7 @@ export default function LlavesScreen() {
     setLlaveroMovDepartamento(m.departamento || '');
     setLlaveroMovTelefono(m.telefono || '');
     setLlaveroMovFecha(m.fecha ? String(m.fecha).split('T')[0] : '');
-    const horaStr = String(m.hora || '');
-    setLlaveroMovHora(horaStr.includes('T') ? horaStr.split('T')[1]?.split('.')[0] || '' : horaStr);
+    setLlaveroMovHora(normalizeTimeValue(String(m.hora || '')));
     setLlaveroMovFirmaEntrega(m.firma_entrega || '');
     setLlaveroMovFirmaRecibe(m.firma_recibe || '');
     setLlaveroMovFirmaResponsable(m.firma_responsable || '');
@@ -1399,111 +1419,117 @@ export default function LlavesScreen() {
   };
 
   const handleLlaveroMovSave = async () => {
+    if (isSavingLlaveroMov) return;
     if (!employee) return;
     if (!movLlavero) return;
     if (!validateLlaveroMovForm()) return;
 
-    const payload = await buildLlaveroMovPayload();
-    const isConnected = await getConnectionStatus();
+    setIsSavingLlaveroMov(true);
+    try {
+      const payload = await buildLlaveroMovPayload();
+      const isConnected = await getConnectionStatus();
 
-    // create
-    if (!llaveroMovEditing) {
-      if (isConnected && movLlavero.id && movLlavero.id !== 0) {
-        const res = await createMovimientoLlavero({ llaveroId: movLlavero.id, requestData: payload, refreshAccessToken, logout });
-        if (res.status) {
-          Alert.alert('Éxito', 'Movimiento creado correctamente');
+      // create
+      if (!llaveroMovEditing) {
+        if (isConnected && movLlavero.id && movLlavero.id !== 0) {
+          const res = await createMovimientoLlavero({ llaveroId: movLlavero.id, requestData: payload, refreshAccessToken, logout });
+          if (res.status) {
+            Alert.alert('Éxito', 'Movimiento creado correctamente');
+            setLlaveroMovIsCreating(false);
+            await fetchLlaveros();
+          } else {
+            Alert.alert('Error', res.message || 'No se pudo crear el movimiento');
+          }
+        } else {
+          const localId = `local-mov-llavero-${Date.now()}`;
+          const localItem: MovimientoLlaveroUI = {
+            id: 0,
+            id_local: localId,
+            llavero_id: movLlavero.id || 0,
+            llaveroLocalId: movLlavero.id_local || '',
+            nombre_persona_recibe: payload.nombre_persona_recibe,
+            nombre_persona_entrega: payload.nombre_persona_entrega,
+            departamento: payload.departamento,
+            telefono: payload.telefono,
+            fecha: payload.fecha,
+            hora: payload.hora,
+            firma_entrega: payload.firma_entrega,
+            firma_recibe: payload.firma_recibe,
+            firma_responsable: payload.firma_responsable,
+          };
+          const next = [localItem, ...llaveroMovimientos];
+          await persistMovimientosToLlaverosCache(movLlavero, next);
+          await upsertLlaveroMovAction({
+            type: 'create',
+            id: localId,
+            llaveroId: movLlavero.id || 0,
+            llaveroLocalId: movLlavero.id_local || '',
+            requestData: payload,
+          });
+          Alert.alert('Guardado (offline)', 'El movimiento se sincronizará cuando vuelva la conexión.');
           setLlaveroMovIsCreating(false);
+        }
+        return;
+      }
+
+      // update
+      const isLocalMov = !!llaveroMovEditing.id_local || llaveroMovEditing.id === 0;
+      if (isConnected && !isLocalMov && movLlavero.id && movLlavero.id !== 0) {
+        const res = await updateMovimientoLlavero({
+          llaveroId: movLlavero.id,
+          id: llaveroMovEditing.id,
+          requestData: payload,
+          refreshAccessToken,
+          logout,
+        });
+        if (res.status) {
+          Alert.alert('Éxito', 'Movimiento actualizado correctamente');
+          setLlaveroMovIsCreating(false);
+          setLlaveroMovEditing(null);
           await fetchLlaveros();
         } else {
-          Alert.alert('Error', res.message || 'No se pudo crear el movimiento');
+          Alert.alert('Error', res.message || 'No se pudo actualizar el movimiento');
         }
       } else {
-        const localId = `local-mov-llavero-${Date.now()}`;
-        const localItem: MovimientoLlaveroUI = {
-          id: 0,
-          id_local: localId,
-          llavero_id: movLlavero.id || 0,
-          llaveroLocalId: movLlavero.id_local || '',
-          nombre_persona_recibe: payload.nombre_persona_recibe,
-          nombre_persona_entrega: payload.nombre_persona_entrega,
-          departamento: payload.departamento,
-          telefono: payload.telefono,
-          fecha: payload.fecha,
-          hora: payload.hora,
-          firma_entrega: payload.firma_entrega,
-          firma_recibe: payload.firma_recibe,
-          firma_responsable: payload.firma_responsable,
-        };
-        const next = [localItem, ...llaveroMovimientos];
-        await persistMovimientosToLlaverosCache(movLlavero, next);
-        await upsertLlaveroMovAction({
-          type: 'create',
-          id: localId,
-          llaveroId: movLlavero.id || 0,
-          llaveroLocalId: movLlavero.id_local || '',
-          requestData: payload,
+        const next = llaveroMovimientos.map((m) => {
+          const match = (llaveroMovEditing.id_local && m.id_local === llaveroMovEditing.id_local) || (!llaveroMovEditing.id_local && m.id === llaveroMovEditing.id);
+          if (!match) return m;
+          return {
+            ...m,
+            nombre_persona_recibe: payload.nombre_persona_recibe,
+            nombre_persona_entrega: payload.nombre_persona_entrega,
+            departamento: payload.departamento,
+            telefono: payload.telefono,
+            fecha: payload.fecha,
+            hora: payload.hora,
+            firma_entrega: payload.firma_entrega,
+            firma_recibe: payload.firma_recibe,
+            firma_responsable: payload.firma_responsable,
+          };
         });
-        Alert.alert('Guardado (offline)', 'El movimiento se sincronizará cuando vuelva la conexión.');
-        setLlaveroMovIsCreating(false);
-      }
-      return;
-    }
-
-    // update
-    const isLocalMov = !!llaveroMovEditing.id_local || llaveroMovEditing.id === 0;
-    if (isConnected && !isLocalMov && movLlavero.id && movLlavero.id !== 0) {
-      const res = await updateMovimientoLlavero({
-        llaveroId: movLlavero.id,
-        id: llaveroMovEditing.id,
-        requestData: payload,
-        refreshAccessToken,
-        logout,
-      });
-      if (res.status) {
-        Alert.alert('Éxito', 'Movimiento actualizado correctamente');
+        await persistMovimientosToLlaverosCache(movLlavero, next);
+        if (llaveroMovEditing.id_local) {
+          await upsertLlaveroMovAction({
+            type: 'create',
+            id: llaveroMovEditing.id_local,
+            llaveroId: movLlavero.id || 0,
+            llaveroLocalId: movLlavero.id_local || '',
+            requestData: payload,
+          });
+        } else {
+          await upsertLlaveroMovAction({
+            type: 'update',
+            id: llaveroMovEditing.id,
+            llaveroId: movLlavero.id || 0,
+            requestData: payload,
+          });
+        }
+        Alert.alert('Guardado (offline)', 'Los cambios se sincronizarán cuando vuelva la conexión.');
         setLlaveroMovIsCreating(false);
         setLlaveroMovEditing(null);
-        await fetchLlaveros();
-      } else {
-        Alert.alert('Error', res.message || 'No se pudo actualizar el movimiento');
       }
-    } else {
-      const next = llaveroMovimientos.map((m) => {
-        const match = (llaveroMovEditing.id_local && m.id_local === llaveroMovEditing.id_local) || (!llaveroMovEditing.id_local && m.id === llaveroMovEditing.id);
-        if (!match) return m;
-        return {
-          ...m,
-          nombre_persona_recibe: payload.nombre_persona_recibe,
-          nombre_persona_entrega: payload.nombre_persona_entrega,
-          departamento: payload.departamento,
-          telefono: payload.telefono,
-          fecha: payload.fecha,
-          hora: payload.hora,
-          firma_entrega: payload.firma_entrega,
-          firma_recibe: payload.firma_recibe,
-          firma_responsable: payload.firma_responsable,
-        };
-      });
-      await persistMovimientosToLlaverosCache(movLlavero, next);
-      if (llaveroMovEditing.id_local) {
-        await upsertLlaveroMovAction({
-          type: 'create',
-          id: llaveroMovEditing.id_local,
-          llaveroId: movLlavero.id || 0,
-          llaveroLocalId: movLlavero.id_local || '',
-          requestData: payload,
-        });
-      } else {
-        await upsertLlaveroMovAction({
-          type: 'update',
-          id: llaveroMovEditing.id,
-          llaveroId: movLlavero.id || 0,
-          requestData: payload,
-        });
-      }
-      Alert.alert('Guardado (offline)', 'Los cambios se sincronizarán cuando vuelva la conexión.');
-      setLlaveroMovIsCreating(false);
-      setLlaveroMovEditing(null);
+    } finally {
+      setIsSavingLlaveroMov(false);
     }
   };
 
@@ -1846,7 +1872,7 @@ export default function LlavesScreen() {
                         <ThemedText style={styles.firmaInfoValue}>Sesión: {info.sessionId || 'N/A'}</ThemedText>
                         <ThemedText style={styles.firmaInfoValue}>Empleado: {info.empleadoId || 'N/A'}</ThemedText>
                         <ThemedText style={styles.firmaInfoValue}>Lat: {info.latitud || 'N/A'} | Long: {info.longitud || 'N/A'}</ThemedText>
-                        <ThemedText style={styles.firmaInfoValue}>Hora: {info.timestamp || 'N/A'}</ThemedText>
+                        <ThemedText style={styles.firmaInfoValue}>Hora: { convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}</ThemedText>
                       </>
                     );
                   })()}
@@ -1953,7 +1979,7 @@ export default function LlavesScreen() {
                         <ThemedText style={styles.firmaInfoValue}>Sesión: {info.sessionId || 'N/A'}</ThemedText>
                         <ThemedText style={styles.firmaInfoValue}>Empleado: {info.empleadoId || 'N/A'}</ThemedText>
                         <ThemedText style={styles.firmaInfoValue}>Lat: {info.latitud || 'N/A'} | Long: {info.longitud || 'N/A'}</ThemedText>
-                        <ThemedText style={styles.firmaInfoValue}>Hora: {info.timestamp || 'N/A'}</ThemedText>
+                        <ThemedText style={styles.firmaInfoValue}>Hora: { convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}</ThemedText>
                       </>
                     );
                   })()}
@@ -2173,7 +2199,7 @@ export default function LlavesScreen() {
                               <ThemedText style={styles.firmaInfoValue}>Sesión: {info.sessionId || 'N/A'}</ThemedText>
                               <ThemedText style={styles.firmaInfoValue}>Empleado: {info.empleadoId || 'N/A'}</ThemedText>
                               <ThemedText style={styles.firmaInfoValue}>Lat: {info.latitud || 'N/A'} | Long: {info.longitud || 'N/A'}</ThemedText>
-                              <ThemedText style={styles.firmaInfoValue}>Hora: {info.timestamp || 'N/A'}</ThemedText>
+                              <ThemedText style={styles.firmaInfoValue}>Hora: { convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}</ThemedText>
                             </>
                           );
                         })()}
@@ -2431,7 +2457,7 @@ export default function LlavesScreen() {
                               <ThemedText style={styles.firmaInfoValue}>Sesión: {info.sessionId || 'N/A'}</ThemedText>
                               <ThemedText style={styles.firmaInfoValue}>Empleado: {info.empleadoId || 'N/A'}</ThemedText>
                               <ThemedText style={styles.firmaInfoValue}>Lat: {info.latitud || 'N/A'} | Long: {info.longitud || 'N/A'}</ThemedText>
-                              <ThemedText style={styles.firmaInfoValue}>Hora: {info.timestamp || 'N/A'}</ThemedText>
+                              <ThemedText style={styles.firmaInfoValue}>Hora: { convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}</ThemedText>
                             </>
                           );
                         })()}
@@ -2546,7 +2572,7 @@ export default function LlavesScreen() {
 
       {showLlaveroMovHoraPicker && (
         <DateTimePicker
-          value={llaveroMovHora ? new Date(`1970-01-01T${llaveroMovHora}`) : new Date()}
+          value={timeStringToPickerDate(llaveroMovHora)}
           mode="time"
           display={Platform.OS === 'ios' ? 'spinner' : 'default'}
           onChange={(event, date) => {
@@ -2726,7 +2752,7 @@ export default function LlavesScreen() {
                             <ThemedText style={styles.firmaInfoValue}>Sesión: {info.sessionId || 'N/A'}</ThemedText>
                             <ThemedText style={styles.firmaInfoValue}>Empleado: {info.empleadoId || 'N/A'}</ThemedText>
                             <ThemedText style={styles.firmaInfoValue}>Lat: {info.latitud || 'N/A'} | Long: {info.longitud || 'N/A'}</ThemedText>
-                            <ThemedText style={styles.firmaInfoValue}>Hora: {info.timestamp || 'N/A'}</ThemedText>
+                            <ThemedText style={styles.firmaInfoValue}>Hora: { convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}</ThemedText>
                           </>
                         );
                       })()}
@@ -2738,13 +2764,27 @@ export default function LlavesScreen() {
                 )}
 
                 <ThemedView style={styles.formActions}>
-                  <TouchableOpacity style={[styles.formActionButton, styles.formActionCancel]} onPress={cancelMovCreating}>
+                  <TouchableOpacity
+                    style={[styles.formActionButton, styles.formActionCancel]}
+                    onPress={cancelMovCreating}
+                    disabled={isSavingMov}
+                  >
                     <Ionicons name="close" size={18} color="#000" />
                     <ThemedText style={styles.formActionCancelText}>Cancelar</ThemedText>
                   </TouchableOpacity>
-                  <TouchableOpacity style={[styles.formActionButton, styles.formActionSave]} onPress={handleMovSave}>
-                    <Ionicons name="save" size={18} color="#fff" />
-                    <ThemedText style={styles.formActionSaveText}>Guardar</ThemedText>
+                  <TouchableOpacity
+                    style={[styles.formActionButton, styles.formActionSave, isSavingMov && styles.formActionButtonDisabled]}
+                    onPress={handleMovSave}
+                    disabled={isSavingMov}
+                  >
+                    {isSavingMov ? (
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                      <>
+                        <Ionicons name="save" size={18} color="#fff" />
+                        <ThemedText style={styles.formActionSaveText}>Guardar</ThemedText>
+                      </>
+                    )}
                   </TouchableOpacity>
                 </ThemedView>
               </ThemedView>
@@ -2809,7 +2849,7 @@ export default function LlavesScreen() {
                                     <ThemedText style={styles.firmaInfoValue}>Sesión: {info.sessionId || 'N/A'}</ThemedText>
                                     <ThemedText style={styles.firmaInfoValue}>Empleado: {info.empleadoId || 'N/A'}</ThemedText>
                                     <ThemedText style={styles.firmaInfoValue}>Lat: {info.latitud || 'N/A'} | Long: {info.longitud || 'N/A'}</ThemedText>
-                                    <ThemedText style={styles.firmaInfoValue}>Hora: {info.timestamp || 'N/A'}</ThemedText>
+                                    <ThemedText style={styles.firmaInfoValue}>Hora: { convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}</ThemedText>
                                   </>
                                 );
                               })()}
@@ -2873,7 +2913,7 @@ export default function LlavesScreen() {
 
           {showMovHoraPicker && (
             <DateTimePicker
-              value={movHora ? new Date(`1970-01-01T${movHora}`) : new Date()}
+              value={timeStringToPickerDate(movHora)}
               mode="time"
               display={Platform.OS === 'ios' ? 'spinner' : 'default'}
               onChange={(event, date) => {
@@ -3084,7 +3124,7 @@ export default function LlavesScreen() {
                             <ThemedText style={styles.firmaInfoValue}>Sesión: {info.sessionId || 'N/A'}</ThemedText>
                             <ThemedText style={styles.firmaInfoValue}>Empleado: {info.empleadoId || 'N/A'}</ThemedText>
                             <ThemedText style={styles.firmaInfoValue}>Lat: {info.latitud || 'N/A'} | Long: {info.longitud || 'N/A'}</ThemedText>
-                            <ThemedText style={styles.firmaInfoValue}>Hora: {info.timestamp || 'N/A'}</ThemedText>
+                            <ThemedText style={styles.firmaInfoValue}>Hora: { convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}</ThemedText>
                           </>
                         );
                       })()}
@@ -3096,13 +3136,27 @@ export default function LlavesScreen() {
                 )}
 
                 <ThemedView style={styles.formActions}>
-                  <TouchableOpacity style={[styles.formActionButton, styles.formActionCancel]} onPress={cancelLlaveroMovCreating}>
+                  <TouchableOpacity
+                    style={[styles.formActionButton, styles.formActionCancel]}
+                    onPress={cancelLlaveroMovCreating}
+                    disabled={isSavingLlaveroMov}
+                  >
                     <Ionicons name="close" size={18} color="#000" />
                     <ThemedText style={styles.formActionCancelText}>Cancelar</ThemedText>
                   </TouchableOpacity>
-                  <TouchableOpacity style={[styles.formActionButton, styles.formActionSave]} onPress={handleLlaveroMovSave}>
-                    <Ionicons name="save" size={18} color="#fff" />
-                    <ThemedText style={styles.formActionSaveText}>Guardar</ThemedText>
+                  <TouchableOpacity
+                    style={[styles.formActionButton, styles.formActionSave, isSavingLlaveroMov && styles.formActionButtonDisabled]}
+                    onPress={handleLlaveroMovSave}
+                    disabled={isSavingLlaveroMov}
+                  >
+                    {isSavingLlaveroMov ? (
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                      <>
+                        <Ionicons name="save" size={18} color="#fff" />
+                        <ThemedText style={styles.formActionSaveText}>Guardar</ThemedText>
+                      </>
+                    )}
                   </TouchableOpacity>
                 </ThemedView>
               </ThemedView>
@@ -3167,7 +3221,7 @@ export default function LlavesScreen() {
                                     <ThemedText style={styles.firmaInfoValue}>Sesión: {info.sessionId || 'N/A'}</ThemedText>
                                     <ThemedText style={styles.firmaInfoValue}>Empleado: {info.empleadoId || 'N/A'}</ThemedText>
                                     <ThemedText style={styles.firmaInfoValue}>Lat: {info.latitud || 'N/A'} | Long: {info.longitud || 'N/A'}</ThemedText>
-                                    <ThemedText style={styles.firmaInfoValue}>Hora: {info.timestamp || 'N/A'}</ThemedText>
+                                    <ThemedText style={styles.firmaInfoValue}>Hora: { convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}</ThemedText>
                                   </>
                                 );
                               })()}
@@ -3230,8 +3284,8 @@ export default function LlavesScreen() {
           )}
 
           {showLlaveroMovHoraPicker && (
-            <DateTimePicker
-              value={llaveroMovHora ? new Date(`1970-01-01T${llaveroMovHora}`) : new Date()}
+        <DateTimePicker
+          value={timeStringToPickerDate(llaveroMovHora)}
               mode="time"
               display={Platform.OS === 'ios' ? 'spinner' : 'default'}
               onChange={(event, date) => {
@@ -3337,7 +3391,7 @@ export default function LlavesScreen() {
                   } catch {
                     parsed = [];
                   }
-                  const createdAtLabel = formatCambioCreatedAt(row?.created_at);
+                  const createdAtLabel = convertDateTimestampToLocalString(new Date(row?.created_at).toISOString());
                   const isOpen = expandedCambioId === row.id;
 
                   return (
@@ -3401,7 +3455,7 @@ export default function LlavesScreen() {
                                             {(() => {
                                               const info = decodeFirmaHash(created.firma_responsable);
                                               return info
-                                                ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${info.timestamp || 'N/A'}`
+                                                ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${ convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}`
                                                 : 'Firma responsable (formato no decodificable)';
                                             })()}
                                           </ThemedText>
@@ -3437,7 +3491,7 @@ export default function LlavesScreen() {
                                       {isResponsable && (() => {
                                         const info = typeof value === 'string' ? decodeFirmaHash(value) : null;
                                         if (!info) return 'Firma responsable (formato no decodificable)';
-                                        return `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${info.timestamp || 'N/A'}`;
+                                        return `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${ convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}`;
                                       })()}
                                     </ThemedText>
                                     {isManualSignature && value && (
@@ -3665,6 +3719,9 @@ const styles = StyleSheet.create({
   formActionCancelText: { color: '#000', fontWeight: '800' },
   formActionSave: { backgroundColor: '#007AFF' },
   formActionSaveText: { color: '#fff', fontWeight: '800' },
+  formActionButtonDisabled: {
+    opacity: 0.6,
+  },
   buttonDisabled: {
     opacity: 0.6,
   },

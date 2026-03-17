@@ -263,7 +263,7 @@ export default function MutuosAcuerdosScreen() {
         ...prev,
         loadingMarcas: false,
         marcas: Array.isArray(res.data) ? res.data : [],
-        selectedMarcaId: null,
+        selectedMarcaId: Array.isArray(res.data) && res.data.length > 0 ? res.data[0].id : null,
         message: Array.isArray(res.data) && res.data.length === 0 ? (res.message || 'El empleado está libre ese día') : '',
       }));
     } catch (e: any) {

@@ -61,10 +61,10 @@ const styles = StyleSheet.create({
   },
   content: {
     padding: 16,
+    flexGrow: 1,
   },
   moduleContainer: {
     width: '100%',
-    maxWidth: 800,
     alignSelf: 'center',
   },
   titleContainer: {

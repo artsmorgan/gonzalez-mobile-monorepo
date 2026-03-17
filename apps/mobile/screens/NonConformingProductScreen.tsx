@@ -25,7 +25,7 @@ import Ionicons from '@expo/vector-icons/build/Ionicons';
 import { jwtDecode } from 'jwt-decode';
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import { useVideoPlayer, VideoView } from 'expo-video';
-
+import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 import AppHeader from '@/components/AppHeader';
 import AppFooter from '@/components/AppFooter';
 import SlideMenu from '@/components/SlideMenu';
@@ -127,9 +127,11 @@ const dateToLocalString = (d: Date): string => {
 };
 
 const formatDateForDisplay = (d: Date): string => {
-  const ymd = dateToLocalString(d);
-  const [y, m, day] = ymd.split('-');
-  return `${day}-${m}-${y}`;
+  // d es un Date local del picker; usamos su ISO directamente
+  if (!(d instanceof Date) || Number.isNaN(d.getTime())) {
+    return 'N/A';
+  }
+  return convertDateTimestampToLocalString(d.toISOString(), false);
 };
 
 const getBase64Only = (value: string | null | undefined): string => {
@@ -151,12 +153,8 @@ const formatSignatureForDisplay = (value: string | null | undefined): string | n
 
 const formatFirmaDateLabel = (timestamp: string | undefined): string => {
   if (!timestamp) return '';
-  const ms = Number(timestamp);
-  if (!Number.isFinite(ms)) return String(timestamp);
-  const d = new Date(ms);
-  const date = d.toISOString().split('T')[0];
-  const time = d.toISOString().split('T')[1]?.split('.')[0] ?? '';
-  return `${date} ${time}`;
+  // El hook acepta string o number; dejamos que él parse la fecha
+  return convertDateTimestampToLocalString(String(timestamp));
 };
 
 const decodeFirmaHash = (hash?: string | null) => {
@@ -640,7 +638,7 @@ export default function NonConformingProductScreen() {
     }, [fetchRecords, fetchTiposProductoNoConforme])
   );
 
-  const resetForm = (horaAccion: string) => {
+  const resetForm = (horaAccion: number) => {
     setFechaIdentificacion(new Date(horaAccion));
     setFechaSolucion(new Date(horaAccion));
     setResponsableCuenta('');
@@ -667,7 +665,7 @@ export default function NonConformingProductScreen() {
     }
     setIsCreating(true);
     setEditing(null);
-    resetForm(String(horaAccion));
+    resetForm(horaAccion);
     // si ya tenemos defaults por marca, mantenerlos (no limpiar selects)
   };
 
@@ -693,8 +691,8 @@ export default function NonConformingProductScreen() {
       return;
     }
 
-    setFechaIdentificacion(r.fecha_identificacion ? new Date(String(r.fecha_identificacion)) : new Date(String(horaAccion)));
-    setFechaSolucion(r.fecha_solucion ? new Date(String(r.fecha_solucion)) : new Date(String(horaAccion)));
+    setFechaIdentificacion(r.fecha_identificacion ? new Date(r.fecha_identificacion) : new Date(horaAccion));
+    setFechaSolucion(r.fecha_solucion ? new Date(r.fecha_solucion) : new Date(horaAccion));
     setResponsableCuenta(r.responsable_cuenta || '');
     setTipoServicioNoConforme(r.tipo_servicio_no_conforme || '');
     setPersonaIdentifico(r.persona_identifico_pnc || '');
@@ -720,7 +718,7 @@ export default function NonConformingProductScreen() {
     }
     setIsCreating(false);
     setEditing(null);
-    resetForm(String(horaAccion));
+    resetForm(horaAccion);
   };
 
   const toggleExpanded = (key: string) => {
@@ -1198,11 +1196,6 @@ export default function NonConformingProductScreen() {
           : ''
       );
 
-    const divisionName =
-      selectedClienteId && selectedDivisionId
-        ? (divisionOptions.find((d) => d.id === selectedDivisionId)?.nombre || 'División')
-        : 'Seleccione cliente primero';
-
     return (
       <ThemedView style={styles.formCard}>
         <ThemedText style={styles.formTitle}>{editing ? 'Editar registro' : 'Nuevo registro'}</ThemedText>
@@ -1241,10 +1234,26 @@ export default function NonConformingProductScreen() {
           </Picker>
         </ThemedView>
 
-        <ThemedText style={styles.label}>División (automática)</ThemedText>
+        <ThemedText style={styles.label}>División *</ThemedText>
         <ThemedView style={styles.pickerWrapper}>
-          <Picker selectedValue={selectedDivisionId ?? 0} onValueChange={() => { }} enabled={false} style={styles.picker}>
-            <Picker.Item label={divisionName} value={0} />
+          <Picker
+            selectedValue={selectedDivisionId ?? 0}
+            onValueChange={(v) => {
+              const next = Number(v) || null;
+              setSelectedDivisionId(next);
+              setSelectedContratoId(null);
+              setSelectedSucursalId(null);
+            }}
+            enabled={selectedClienteId !== null && divisionOptions.length > 0}
+            style={styles.picker}
+          >
+            <Picker.Item
+              label={selectedClienteId ? 'Seleccione división...' : 'Seleccione cliente primero'}
+              value={0}
+            />
+            {divisionOptions.map((d) => (
+              <Picker.Item key={d.id} label={d.nombre} value={d.id} />
+            ))}
           </Picker>
         </ThemedView>
 
@@ -1432,7 +1441,7 @@ export default function NonConformingProductScreen() {
                 Longitud: {decodedFirma.longitud}
               </ThemedText>
               <ThemedText style={styles.signatureInfoText}>
-                Fecha y hora: {formatFirmaDateLabel(decodedFirma.timestamp)}
+                Fecha y hora: {convertDateTimestampToLocalString(new Date(Number(decodedFirma.timestamp)).toISOString())}
               </ThemedText>
             </ThemedView>
           )}
@@ -1520,7 +1529,7 @@ export default function NonConformingProductScreen() {
 
               <ThemedText style={styles.cardLine}>
                 <ThemedText style={styles.cardLabel}>Fecha identificación: </ThemedText>
-                <ThemedText style={styles.cardValue}>{formatDateDMY(r.fecha_identificacion, '—')}</ThemedText>
+                <ThemedText style={styles.cardValue}>{convertDateTimestampToLocalString(String(r.fecha_identificacion || ''), false)}</ThemedText>
               </ThemedText>
               <ThemedText style={styles.cardLine}>
                 <ThemedText style={styles.cardLabel}>Responsable: </ThemedText>
@@ -1749,7 +1758,7 @@ export default function NonConformingProductScreen() {
                   } catch {
                     parsed = [];
                   }
-                  const createdAtLabel = formatCambioCreatedAt(row?.created_at);
+                  const createdAtLabel = convertDateTimestampToLocalString(String(row?.created_at || ''));
                   const isOpen = expandedCambioId === row.id;
 
                   return (
@@ -1814,7 +1823,7 @@ export default function NonConformingProductScreen() {
                                             {(() => {
                                               const info = decodeFirmaHash(created.firma_responsable);
                                               return info
-                                                ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${info.timestamp || 'N/A'}`
+                                                ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}`
                                                 : 'Firma responsable (formato no decodificable)';
                                             })()}
                                           </ThemedText>
@@ -1859,7 +1868,7 @@ export default function NonConformingProductScreen() {
                                       {isResponsableSignature && (() => {
                                         const info = typeof value === 'string' ? decodeFirmaHash(value) : null;
                                         if (!info) return 'Firma responsable (formato no decodificable)';
-                                        return `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${info.timestamp || 'N/A'}`;
+                                        return `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${ convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}`;
                                       })()}
                                     </ThemedText>
                                     {isManualSignature && value && (

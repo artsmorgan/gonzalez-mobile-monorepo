@@ -39,6 +39,7 @@ export async function getPendingSyncActions(): Promise<PendingSyncActions> {
         'notes_actions',
         'activities_actions',
         'evaluations_actions',
+        'checklist_supervision_actions',
     ];
 
     // Obtener todas las acciones pendientes
@@ -59,6 +60,29 @@ export async function getPendingSyncActions(): Promise<PendingSyncActions> {
     return result;
 }
 
+/** Identificador estable para listar/eliminar (checklist create no tiene `id`). */
+export function pendingActionRowId(storageKey: string, action: any, index: number): string {
+    if (storageKey === 'checklist_supervision_actions' && action && typeof action === 'object') {
+        return `checklist|${action.type || ''}|${action.id_local || ''}|${action.id ?? ''}`;
+    }
+    if (action?.id != null && action.id !== '') return String(action.id);
+    if (action?.id_local) return String(action.id_local);
+    return `${storageKey}-${index}`;
+}
+
+function checklistActionMatchesMarker(action: any, marker: string): boolean {
+    if (!marker.startsWith('checklist|')) return false;
+    const parts = marker.split('|');
+    const type = parts[1] ?? '';
+    const id_local = parts[2] ?? '';
+    const id = parts[3] ?? '';
+    return (
+        String(action?.type || '') === type &&
+        String(action?.id_local || '') === id_local &&
+        String(action?.id ?? '') === id
+    );
+}
+
 /**
  * Elimina una acción específica de su variable AsyncStorage
  */
@@ -73,8 +97,14 @@ export async function removePendingAction(
         const actions = JSON.parse(actionsStr);
         if (!Array.isArray(actions)) return false;
 
-        // Filtrar la acción a eliminar
-        const updatedActions = actions.filter((action: any) => action.id !== actionId);
+        const updatedActions = actions.filter((action: any) => {
+            if (storageKey === 'checklist_supervision_actions' && actionId.startsWith('checklist|')) {
+                return !checklistActionMatchesMarker(action, actionId);
+            }
+            return String(action.id) !== String(actionId);
+        });
+
+        if (updatedActions.length === actions.length) return false;
 
         // Si no quedan acciones, eliminar la clave, sino actualizarla
         if (updatedActions.length === 0) {

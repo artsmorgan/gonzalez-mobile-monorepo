@@ -3,6 +3,7 @@ import { toZonedTime } from "date-fns-tz";
 import { callDynamicPrisma } from "../../../../../../utils/callDynamicPrisma";
 import { sendNotificationByPlaza } from "../../../../../../utils/sendNotification";
 import { verifyAccessTokenByApi } from "../../../../../../utils/verifyAccessTokenByApi";
+import { uploadDynamicFiles } from "../../../../../../utils/callDynamicFilesApi";
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string, "id-nota": string }> }) {
     try {
@@ -56,7 +57,17 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         const id = parseInt(resolvedParams.id);
         const id_nota = parseInt(resolvedParams["id-nota"]);
 
-        const { marca_id, titulo, description, categoria_id, relevancia, empleado_id } = await req.json();
+        const {
+            marca_id,
+            titulo,
+            description,
+            categoria_id,
+            relevancia,
+            empleado_id,
+            firma_responsable,
+            firma_manual_responsable,
+            imagenes
+        } = await req.json();
 
         const puesto = await callDynamicPrisma({
             req,
@@ -119,9 +130,57 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                 action: "UPDATE",
                 table: "c_puesto_notas",
                 where: { id: id_nota },
-                data: { titulo, description, categoria_id: categoria_id, relevancia: relevanciaValue, puesto_id: puesto.id, updated_at: updated_at.toISOString() }
+                data: {
+                    titulo,
+                    description,
+                    categoria_id: categoria_id,
+                    relevancia: relevanciaValue,
+                    puesto_id: puesto.id,
+                    firma_responsable: (firma_responsable && String(firma_responsable).trim().length > 0) ? String(firma_responsable) : nota.firma_responsable,
+                    firma_manual_responsable: (firma_manual_responsable && String(firma_manual_responsable).trim().length > 0) ? String(firma_manual_responsable) : null,
+                    is_modified: true,
+                    updated_at: updated_at.toISOString()
+                }
             }
         });
+
+        let imagesParsed: Array<{ file_base64: string; extension?: string; original_name?: string }> = [];
+        if (imagenes) {
+            try {
+                imagesParsed = typeof imagenes === "string" ? JSON.parse(imagenes) : imagenes;
+            } catch {
+                imagesParsed = [];
+            }
+        }
+        if (Array.isArray(imagesParsed) && imagesParsed.length > 0) {
+            const uploadResp = await uploadDynamicFiles({
+                req,
+                folderPath: `puesto-notas/${id_nota}`,
+                files: imagesParsed
+                    .filter((img) => img?.file_base64)
+                    .map((img) => ({
+                        type: "image",
+                        extension: String(img.extension || "jpg").replace(".", "").trim() || "jpg",
+                        original_name: img.original_name,
+                        file_base64: img.file_base64,
+                    })),
+            });
+            const uploadedFiles = Array.isArray(uploadResp?.files) ? uploadResp.files : [];
+            for (const uploaded of uploadedFiles) {
+                await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "POST",
+                        table: "c_imagenes_puesto_notas",
+                        operation: "create",
+                        data: {
+                            name: uploaded.name,
+                            nota_id: id_nota,
+                        },
+                    },
+                });
+            }
+        }
 
         if (updatedNota) {
             const all_plazas_puesto = await callDynamicPrisma({
@@ -138,22 +197,20 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             }
         }
 
-        await callDynamicPrisma({
-            req,
-            data: {
-                action: "POST",
-                table: "c_puesto_notas_bitacora_cambios",
-                data: { nota_id: id_nota, titulo, description, relevancia: relevanciaValue, created_at: updated_at.toISOString(), empleado_id: empleado.id, categoria: categoriaData.nombre },
-                returning: false
-            }
-        });
-
         // Registro de cambios (nueva modalidad)
         const cambiosArr: Array<{ prop: string; before: any; after: any }> = [];
         if (nota.titulo !== titulo) cambiosArr.push({ prop: "titulo", before: nota.titulo, after: titulo });
         if (nota.description !== description) cambiosArr.push({ prop: "description", before: nota.description, after: description });
         if ((nota.categoria_id ?? null) !== (categoria_id ?? null)) cambiosArr.push({ prop: "categoria_id", before: nota.categoria_id ?? null, after: categoria_id ?? null });
         if ((nota.relevancia ?? null) !== (relevanciaValue ?? null)) cambiosArr.push({ prop: "relevancia", before: nota.relevancia ?? null, after: relevanciaValue ?? null });
+        if ((nota.firma_responsable ?? null) !== ((firma_responsable && String(firma_responsable).trim().length > 0) ? String(firma_responsable) : (nota.firma_responsable ?? null))) {
+            cambiosArr.push({ prop: "firma_responsable", before: nota.firma_responsable ?? null, after: (firma_responsable && String(firma_responsable).trim().length > 0) ? String(firma_responsable) : nota.firma_responsable ?? null });
+        }
+        const nextFirmaManual = (firma_manual_responsable && String(firma_manual_responsable).trim().length > 0) ? String(firma_manual_responsable) : null;
+        if ((nota.firma_manual_responsable ?? null) !== nextFirmaManual) {
+            cambiosArr.push({ prop: "firma_manual_responsable", before: nota.firma_manual_responsable ?? null, after: nextFirmaManual });
+        }
+        if (!nota.is_modified) cambiosArr.push({ prop: "is_modified", before: false, after: true });
 
         if (cambiosArr.length > 0) {
             await callDynamicPrisma({

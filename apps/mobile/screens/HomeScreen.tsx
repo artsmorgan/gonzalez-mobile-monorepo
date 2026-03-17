@@ -14,7 +14,15 @@ import { RootStackParamList } from '../App';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { getPendingSyncActions, removePendingAction, PendingSyncActions } from '../hooks/getPendingSyncActions';
+import * as Linking from 'expo-linking';
+import {
+  getPendingSyncActions,
+  removePendingAction,
+  pendingActionRowId,
+  PendingSyncActions,
+} from '../hooks/getPendingSyncActions';
+import { eventBus } from '../hooks/eventBus';
+import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 
 type HomeScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Home'>;
 
@@ -22,6 +30,41 @@ type HomeScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'H
 const COMPANY_LOGOS: { [key: string]: any } = {
   'gonzalez': require('../assets/images/gonzalez-logo.png'),
   'charmander': require('../assets/images/charmander-logo.png'),
+};
+
+type MobileVersionPayload = {
+  available: boolean;
+  appVersion?: string;
+  data?: {
+    id?: string;
+    name?: string;
+    version?: string;
+    created_at?: string;
+    title?: string;
+    description?: string;
+    notas?: Array<string | { title?: string; description?: string }>;
+  } | null;
+};
+
+const appendTokenToUrl = (url: string, accessToken?: string | null): string => {
+  if (!url) return '';
+  if (!accessToken || accessToken.trim().length === 0) return url;
+  if (/[?&]token=/.test(url)) return url;
+  const sep = url.includes('?') ? '&' : '?';
+  return `${url}${sep}token=${encodeURIComponent(accessToken)}`;
+};
+
+const compareSemver = (a: string, b: string): number => {
+  const pa = String(a || '0.0.0').split('.').map((x) => parseInt(x, 10) || 0);
+  const pb = String(b || '0.0.0').split('.').map((x) => parseInt(x, 10) || 0);
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i++) {
+    const av = pa[i] ?? 0;
+    const bv = pb[i] ?? 0;
+    if (av > bv) return 1;
+    if (av < bv) return -1;
+  }
+  return 0;
 };
 
 export default function HomeScreen() {
@@ -35,6 +78,14 @@ export default function HomeScreen() {
   const [expandedSections, setExpandedSections] = useState<{ [key: string]: boolean }>({});
   const [expandedActions, setExpandedActions] = useState<{ [key: string]: string | null }>({});
   const [isLoadingActions, setIsLoadingActions] = useState(false);
+  const [isUpdateButtonVisible, setIsUpdateButtonVisible] = useState(false);
+  const [isVersionModalVisible, setIsVersionModalVisible] = useState(false);
+  const [versionModalMode, setVersionModalMode] = useState<'current' | 'update'>('current');
+  const [mobileVersionInfo, setMobileVersionInfo] = useState<MobileVersionPayload['data']>(null);
+  const [currentAppVersion, setCurrentAppVersion] = useState<string>(String(Constants.expoConfig?.extra?.APP_VERSION_INFO?.version || '0.0.0'));
+  const isNewerServerVersion =
+    !!mobileVersionInfo?.version &&
+    compareSemver(String(mobileVersionInfo.version || '0.0.0'), currentAppVersion) === 1;
 
   useFocusEffect(
     useCallback(() => {
@@ -53,6 +104,21 @@ export default function HomeScreen() {
       navigation.replace('Login');
     }
   }, [isAuthenticated, isLoading, navigation]);
+
+  useEffect(() => {
+    const handler = (payload?: MobileVersionPayload) => {
+      const available = !!payload?.available;
+      //const available = true;
+      setIsUpdateButtonVisible(available);
+      setMobileVersionInfo(payload?.data ?? null);
+      if (payload?.appVersion) setCurrentAppVersion(String(payload.appVersion));
+      if (!available) setIsVersionModalVisible(false);
+    };
+    eventBus.on('mobileVersionAvailabilityChanged', handler);
+    return () => {
+      eventBus.off('mobileVersionAvailabilityChanged', handler);
+    };
+  }, []);
 
   const getCurrentUserStatus = async () => {
     const current_marca = await AsyncStorage.getItem('current_marca');
@@ -159,6 +225,10 @@ export default function HomeScreen() {
     navigation.navigate('VoiceNotes');
   };
 
+  const handleJerarquiaPress = () => {
+    navigation.navigate('Jerarquia');
+  };
+
   const getActionIcon = (action: string, isActive: boolean) => {
     switch (action.toLowerCase()) {
       case 'profile': return <Ionicons name="person" size={30} color='#000000' />;
@@ -255,6 +325,26 @@ export default function HomeScreen() {
     );
   };
 
+  const handleDownloadMobileApk = async () => {
+    try {
+      const id = String(mobileVersionInfo?.id || '').trim();
+      if (!id) {
+        Alert.alert('Error', 'No se encontró el identificador de la versión.');
+        return;
+      }
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) {
+        Alert.alert('Error', 'No se encontró la URL del servidor.');
+        return;
+      }
+      const token = (await AsyncStorage.getItem('access_token'))?.trim() || '';
+      const downloadUrl = appendTokenToUrl(`${apiUrl}/api/mobile-versions/${encodeURIComponent(id)}`, token);
+      await Linking.openURL(downloadUrl);
+    } catch (error: any) {
+      Alert.alert('Error', error?.message || 'No se pudo iniciar la descarga del APK');
+    }
+  };
+
   const toggleSection = (storageKey: string) => {
     setExpandedSections((prev) => ({
       ...prev,
@@ -290,6 +380,7 @@ export default function HomeScreen() {
       'notes_actions': 'Notas',
       'activities_actions': 'Actividades',
       'evaluations_actions': 'Evaluaciones',
+      'checklist_supervision_actions': 'Checklist de supervisión',
     };
     return labels[key] || key.replace('_actions', '').replace(/_/g, ' ');
   };
@@ -381,10 +472,6 @@ export default function HomeScreen() {
                 <ThemedText style={styles.buttonText}>Marca</ThemedText>
               </TouchableOpacity>
 
-            </View>
-
-
-            <View style={styles.buttonsRow}>
               <TouchableOpacity
                 style={[styles.quickAccessButton, styles.scanButton]}
                 onPress={handleScanQRPress}
@@ -392,15 +479,13 @@ export default function HomeScreen() {
                 {getActionIcon('scan-qr', true)}
                 <ThemedText style={styles.buttonText}>Escanear Firma</ThemedText>
               </TouchableOpacity>
-            </View>
 
-            <View style={styles.buttonsRow}>
               <TouchableOpacity
                 style={[styles.quickAccessButton, { backgroundColor: '#FF9500' }]}
-                onPress={handleOpenSyncModal}
+                onPress={handleJerarquiaPress}
               >
-                <Ionicons name="sync" size={30} color="#fff" />
-                <ThemedText style={styles.buttonText}>Sincronización Pendiente</ThemedText>
+                <Ionicons name="git-network-outline" size={30} color="#fff" />
+                <ThemedText style={styles.buttonText}>Jerarquía</ThemedText>
               </TouchableOpacity>
             </View>
           </ThemedView>
@@ -459,18 +544,25 @@ export default function HomeScreen() {
                       {isSectionExpanded && (
                         <ThemedView style={styles.actionsContainer}>
                           {actions.map((action, index) => {
-                            const actionKey = `${storageKey}-${action.id}`;
-                            const isActionExpanded = expandedActions[storageKey] === action.id;
+                            const rowId = pendingActionRowId(storageKey, action, index);
+                            const actionKey = `${storageKey}-${rowId}`;
+                            const isActionExpanded = expandedActions[storageKey] === rowId;
+                            const titleId =
+                              storageKey === 'checklist_supervision_actions'
+                                ? action.type === 'create'
+                                  ? `local ${String(action.id_local || '').slice(0, 24)}`
+                                  : `id ${action.id ?? action.id_local ?? 'N/A'}`
+                                : action.id?.substring?.(0, 20) || action.id || 'N/A';
 
                             return (
                               <ThemedView key={actionKey} style={styles.actionItem}>
                                 <TouchableOpacity
                                   style={styles.actionHeader}
-                                  onPress={() => toggleAction(storageKey, action.id)}
+                                  onPress={() => toggleAction(storageKey, rowId)}
                                   activeOpacity={0.8}
                                 >
                                   <ThemedText style={styles.actionTitle}>
-                                    {action.type || action.action || 'Acción'} - ID: {action.id?.substring(0, 20) || 'N/A'}
+                                    {action.type || action.action || 'Acción'} — {titleId}
                                   </ThemedText>
                                   <Ionicons
                                     name={isActionExpanded ? "chevron-up" : "chevron-down"}
@@ -486,7 +578,7 @@ export default function HomeScreen() {
                                     </ThemedText>
                                     <TouchableOpacity
                                       style={styles.deleteButton}
-                                      onPress={() => handleDeleteAction(storageKey, action.id)}
+                                      onPress={() => handleDeleteAction(storageKey, rowId)}
                                     >
                                       <Ionicons name="trash" size={18} color="#FF3B30" />
                                       <ThemedText style={styles.deleteButtonText}>Eliminar</ThemedText>
@@ -501,6 +593,110 @@ export default function HomeScreen() {
                     </ThemedView>
                   );
                 })
+              )}
+            </ScrollView>
+          </ThemedView>
+        </View>
+      </Modal>
+
+      {/* Versión actual de la app (toca para ver detalles) */}
+      <View style={styles.versionFooterContainer}>
+        <TouchableOpacity
+          onPress={() => {
+            setVersionModalMode('current');
+            setIsVersionModalVisible(true);
+          }}
+          activeOpacity={0.85}
+        >
+          <ThemedText style={styles.appVersionText}>
+            Versión:{' '}
+            <ThemedText style={styles.appVersionStrong}>
+              {currentAppVersion}
+            </ThemedText>
+          </ThemedText>
+        </TouchableOpacity>
+
+        {isUpdateButtonVisible && (
+          <TouchableOpacity
+            style={[styles.updateBarButton, { marginTop: 8, backgroundColor: '#FF3B30' }]}
+            onPress={() => {
+              setVersionModalMode('update');
+              setIsVersionModalVisible(true);
+            }}
+            activeOpacity={0.9}
+          >
+            <Ionicons name="download-outline" size={20} color="#fff" />
+            <ThemedText style={styles.updateBarButtonText}>Actualización disponible</ThemedText>
+          </TouchableOpacity>
+        )}
+      </View>
+
+      {/* Modal: información de versión */}
+      <Modal
+        visible={isVersionModalVisible}
+        animationType="fade"
+        transparent
+        presentationStyle="overFullScreen"
+        onRequestClose={() => setIsVersionModalVisible(false)}
+      >
+        <View style={styles.overlay}>
+          <ThemedView style={styles.floatModalCardMovimientos}>
+            <ThemedView style={styles.floatModalHeader}>
+              <ThemedText style={styles.modalTitle}>
+                {versionModalMode === 'update' && isNewerServerVersion
+                  ? 'Nueva versión disponible'
+                  : 'Versión actual de la aplicación'}
+              </ThemedText>
+              <TouchableOpacity onPress={() => setIsVersionModalVisible(false)}>
+                <Ionicons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+            </ThemedView>
+            <ScrollView style={{ maxHeight: Dimensions.get('window').height * 0.75 }} contentContainerStyle={{ padding: 16 }}>
+              <ThemedText style={styles.cardLine}>
+                <ThemedText style={styles.cardLabel}>
+                  {versionModalMode === 'update' && isNewerServerVersion ? 'App actual: ' : 'Versión instalada: '}
+                </ThemedText>
+                {currentAppVersion}
+              </ThemedText>
+              {versionModalMode === 'update' && isNewerServerVersion && (
+                <ThemedText style={styles.cardLine}>
+                  <ThemedText style={styles.cardLabel}>Versión disponible: </ThemedText>
+                  {mobileVersionInfo?.version || '-'}
+                </ThemedText>
+              )}
+              <ThemedText style={styles.cardLine}>
+                <ThemedText style={styles.cardLabel}>Nombre: </ThemedText>{mobileVersionInfo?.name || '-'}
+              </ThemedText>
+              <ThemedText style={styles.cardLine}>
+                <ThemedText style={styles.cardLabel}>Título: </ThemedText>{mobileVersionInfo?.title || '-'}
+              </ThemedText>
+              <ThemedText style={styles.cardLine}>
+                <ThemedText style={styles.cardLabel}>Descripción: </ThemedText>{mobileVersionInfo?.description || '-'}
+              </ThemedText>
+              {!!mobileVersionInfo?.created_at && (
+                <ThemedText style={styles.cardLine}>
+                  <ThemedText style={styles.cardLabel}>Fecha: </ThemedText>{ convertDateTimestampToLocalString(mobileVersionInfo.created_at, false) }
+                </ThemedText>
+              )}
+              {Array.isArray(mobileVersionInfo?.notas) && mobileVersionInfo!.notas!.length > 0 && (
+                <ThemedView style={{ marginTop: 8 }}>
+                  <ThemedText style={[styles.cardLabel, { marginBottom: 6 }]}>Notas</ThemedText>
+                  {mobileVersionInfo!.notas!.map((n: any, idx: number) => (
+                    <ThemedText key={`note-${idx}`} style={styles.cardLine}>
+                      - {typeof n === 'string' ? n : `${n?.title ? `${n.title}: ` : ''}${n?.description || ''}`}
+                    </ThemedText>
+                  ))}
+                </ThemedView>
+              )}
+              {versionModalMode === 'update' && isNewerServerVersion && (
+                <TouchableOpacity
+                  style={[styles.updateBarButton, { marginTop: 14 }]}
+                  onPress={handleDownloadMobileApk}
+                  activeOpacity={0.9}
+                >
+                  <Ionicons name="download-outline" size={20} color="#fff" />
+                  <ThemedText style={styles.updateBarButtonText}>Descargar APK</ThemedText>
+                </TouchableOpacity>
               )}
             </ScrollView>
           </ThemedView>
@@ -546,6 +742,15 @@ const styles = StyleSheet.create({
     fontSize: 18,
     opacity: 0.8,
     marginTop: 8,
+  },
+  appVersionText: {
+    fontSize: 12,
+    color: '#007AFF',
+    textAlign: 'center',
+  },
+  appVersionStrong: {
+    fontWeight: '700',
+    color: '#007AFF',
   },
   logoContainer: {
     alignItems: 'center',
@@ -717,6 +922,37 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#FF3B30',
     marginLeft: 6,
+  },
+  cardLine: {
+    marginBottom: 8,
+    color: '#222',
+    fontSize: 14,
+  },
+  cardLabel: {
+    fontWeight: '700',
+    color: '#000',
+  },
+  updateBarButton: {
+    backgroundColor: '#007AFF',
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    shadowColor: '#000',
+    marginBottom: 8,
+  },
+  updateBarButtonText: {
+    color: '#fff',
+    fontWeight: '800',
+    fontSize: 14,
+  },
+  versionFooterContainer: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    alignItems: 'center',
   },
 });
 

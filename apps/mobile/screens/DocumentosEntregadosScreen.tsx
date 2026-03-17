@@ -40,6 +40,7 @@ import {
 } from '../hooks/documentosEntregadosFunctions';
 import { listDocumentosEntregados } from '../hooks/documentosEntregadosFunctions';
 import Constants from 'expo-constants';
+import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 
 type DocUI = DocumentoEntregadoItem & { id_local?: string };
 type DocumentTypeUI = { id: number; nombre: string };
@@ -701,7 +702,7 @@ export default function DocumentosEntregadosScreen() {
 
         <ThemedText style={styles.line}>
           <ThemedText style={styles.labelInline}>Fecha: </ThemedText>
-          <ThemedText style={styles.valueInline}>{formatYMDToDMY(d)}</ThemedText>
+          <ThemedText style={styles.valueInline}>{convertDateTimestampToLocalString(new Date(d).toISOString(), false)}</ThemedText>
         </ThemedText>
         <ThemedText style={styles.line}>
           <ThemedText style={styles.labelInline}>Entrega: </ThemedText>
@@ -752,7 +753,7 @@ export default function DocumentosEntregadosScreen() {
                         <ThemedText style={styles.firmaInfoValue}>
                           Lat: {info.latitud || 'N/A'} | Long: {info.longitud || 'N/A'}
                         </ThemedText>
-                        <ThemedText style={styles.firmaInfoValue}>Hora: {info.timestamp || 'N/A'}</ThemedText>
+                        <ThemedText style={styles.firmaInfoValue}>Hora: {convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}</ThemedText>
                       </>
                     );
                   })()}
@@ -838,7 +839,7 @@ export default function DocumentosEntregadosScreen() {
                   <ThemedView style={styles.filterGroup}>
                     <ThemedText style={styles.filterLabel}>Fecha:</ThemedText>
                     <TouchableOpacity style={styles.dateButton} onPress={() => setShowFilterFechaPicker(true)}>
-                      <ThemedText style={styles.dateButtonText}>{filterFecha ? formatYMDToDMY(filterFecha) : 'Seleccionar fecha'}</ThemedText>
+                      <ThemedText style={styles.dateButtonText}>{filterFecha ? convertDateTimestampToLocalString(new Date(filterFecha).toISOString(), false) : 'Seleccionar fecha'}</ThemedText>
                       <Ionicons name="calendar-outline" size={18} color="#007AFF" />
                     </TouchableOpacity>
                   </ThemedView>
@@ -861,7 +862,7 @@ export default function DocumentosEntregadosScreen() {
 
               <ThemedText style={styles.label}>Fecha *</ThemedText>
               <TouchableOpacity style={styles.dateButton} onPress={() => setShowFechaPicker(true)}>
-                <ThemedText style={styles.dateButtonText}>{fecha ? formatYMDToDMY(fecha) : 'Seleccionar fecha'}</ThemedText>
+                <ThemedText style={styles.dateButtonText}>{fecha ? convertDateTimestampToLocalString(new Date(fecha).toISOString(), false) : 'Seleccionar fecha'}</ThemedText>
                 <Ionicons name="calendar-outline" size={18} color="#007AFF" />
               </TouchableOpacity>
 
@@ -942,7 +943,7 @@ export default function DocumentosEntregadosScreen() {
                           <ThemedText style={styles.firmaInfoValue}>
                             Lat: {info.latitud || 'N/A'} | Long: {info.longitud || 'N/A'}
                           </ThemedText>
-                          <ThemedText style={styles.firmaInfoValue}>Hora: {info.timestamp || 'N/A'}</ThemedText>
+                          <ThemedText style={styles.firmaInfoValue}>Hora: { convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}</ThemedText>
                         </>
                       );
                     })()}
@@ -1147,7 +1148,7 @@ export default function DocumentosEntregadosScreen() {
                   } catch {
                     parsed = [];
                   }
-                  const createdAtLabel = formatCambioCreatedAt(row?.created_at);
+                  const createdAtLabel = convertDateTimestampToLocalString(new Date(row?.created_at).toISOString()); 
                   const isOpen = expandedCambioId === row.id;
 
                   return (
@@ -1216,7 +1217,7 @@ export default function DocumentosEntregadosScreen() {
                                             <ThemedView key={`c-${row.id}-${idx}-${k}`} style={styles.changeDescriptionContainer}>
                                               <ThemedText style={styles.changeDescription}>
                                                 <ThemedText style={{ fontWeight: '800' }}>{k}: </ThemedText>
-                                                {info ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${info.timestamp || 'N/A'}` : 'Firma (formato no decodificable)'}
+                                                {info ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}` : 'Firma (formato no decodificable)'}
                                               </ThemedText>
                                             </ThemedView>
                                           );
@@ -1241,7 +1242,7 @@ export default function DocumentosEntregadosScreen() {
                                       {!isFirmaCliente && !isFirmaResponsable && formatChangeValue(prop, value)}
                                       {isFirmaResponsable && typeof value === 'string' && value.trim() && (() => {
                                         const info = decodeFirmaHash(value);
-                                        return info ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${info.timestamp || 'N/A'}` : 'Firma (formato no decodificable)';
+                                        return info ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${ convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}` : 'Firma (formato no decodificable)';
                                       })()}
                                     </ThemedText>
                                     {isFirmaCliente && value && (

@@ -2,6 +2,7 @@ import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Dimensions,
   Image,
   Linking,
   Modal,
@@ -20,6 +21,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Network from 'expo-network';
 import * as Location from 'expo-location';
 import * as DocumentPicker from 'expo-document-picker';
+import { CameraView, useCameraPermissions } from 'expo-camera';
+import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
+import { useVideoPlayer, VideoView } from 'expo-video';
 import { jwtDecode } from 'jwt-decode';
 import Constants from 'expo-constants';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
@@ -30,11 +34,13 @@ import AppFooter from '@/components/AppFooter';
 import SlideMenu from '@/components/SlideMenu';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
+import { Collapsible } from '@/components/Collapsible';
 import { useAuth } from '@/contexts/AuthContext';
 import authedFetch from '@/hooks/authedFetch';
 import { useQRScanner } from '@/hooks/useQRScanner';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import { RootStackParamList } from '../App';
+import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'PermitRequest'>;
 type PermitType = 'Con goce' | 'Sin goce';
@@ -60,9 +66,9 @@ type PermitRecord = {
   fecha_fin: string;
   ejecutivo_cuenta: number;
   comentarios?: string | null;
-  file_name?: string | null;
   reemplazo_obligatorio?: number | null;
   turnos: Turno[];
+  archivos?: PermitAttachment[];
   firma_ejecutivo_cuenta_digital?: string | null;
   firma_ejecutivo_cuenta_manual?: string | null;
   created_at: string;
@@ -71,6 +77,15 @@ type PermitRecord = {
   is_own_record?: boolean;
   can_complete_by_executive?: boolean;
   is_executive_for_record?: boolean;
+};
+
+type PermitAttachment = {
+  id?: number;
+  name: string;
+  original_name?: string;
+  extension?: string;
+  type: string;
+  is_main?: boolean;
 };
 
 type PlazaOption = {
@@ -82,11 +97,13 @@ type PlazaOption = {
 };
 
 type AttachedDocument = {
+  id: string;
   base64: string;
   extension: string;
   original_name: string;
   mimeType?: string;
   type: string;
+  is_main: boolean;
 };
 
 const SIGNATURE_WEB_STYLE = `
@@ -122,23 +139,34 @@ const decodeFirmaHash = (hash?: string | null): { sessionId: string; empleadoId:
   }
 };
 
-/** Construye la URL de get-file con token (mismo patrón que ComplaintsMasterScreen buildComplaintFileUrl). */
-const buildPermitRequestFileUrl = (
+const appendTokenToUrl = (url: string, accessToken?: string | null): string => {
+  if (!url) return '';
+  if (!accessToken || accessToken.trim().length === 0) return url;
+  if (/[?&]token=/.test(url)) return url;
+  const sep = url.includes('?') ? '&' : '?';
+  return `${url}${sep}token=${encodeURIComponent(accessToken)}`;
+};
+
+const buildPermitRequestMediaUrl = (
   recordId: number,
   fileName: string,
+  type: string,
   accessToken?: string | null
 ): string => {
   const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
   if (!apiUrl) return '';
   if (!recordId || !fileName || !String(fileName).trim()) return '';
-  const appendToken = (url: string) => {
-    if (!accessToken || accessToken.trim().length === 0) return url;
-    if (/[?&]token=/.test(url)) return url;
-    const sep = url.includes('?') ? '&' : '?';
-    return `${url}${sep}token=${encodeURIComponent(accessToken)}`;
-  };
-  return appendToken(
-    `${apiUrl}/api/permit-request/${recordId}/get-file/${encodeURIComponent(String(fileName).trim())}`
+  const cleanType = String(type || '').toLowerCase().trim();
+  const endpoint = cleanType === 'image'
+    ? 'get-image'
+    : cleanType === 'audio'
+      ? 'get-audio'
+      : cleanType === 'video'
+        ? 'get-video'
+        : 'get-file';
+  return appendTokenToUrl(
+    `${apiUrl}/api/permit-request/${recordId}/${endpoint}/${encodeURIComponent(String(fileName).trim())}`,
+    accessToken
   );
 };
 
@@ -165,10 +193,13 @@ export default function PermitRequestScreenV2() {
   const [comentarios, setComentarios] = useState('');
   const [turnosPreview, setTurnosPreview] = useState<Turno[]>([]);
   const [turnosMessage, setTurnosMessage] = useState('');
-  const [attachedDocument, setAttachedDocument] = useState<AttachedDocument | null>(null);
+  const [attachedDocuments, setAttachedDocuments] = useState<AttachedDocument[]>([]);
   const [firmaResponsable, setFirmaResponsable] = useState('');
   const [isGeneratingFirma, setIsGeneratingFirma] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isCameraVisible, setIsCameraVisible] = useState(false);
+  const cameraRef = useRef<CameraView | null>(null);
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
 
   const [isCompleteModalOpen, setIsCompleteModalOpen] = useState(false);
   const [selectedRecord, setSelectedRecord] = useState<PermitRecord | null>(null);
@@ -181,15 +212,33 @@ export default function PermitRequestScreenV2() {
   const [isGeneratingFirmaEjecutivo, setIsGeneratingFirmaEjecutivo] = useState(false);
   const [isSavingComplete, setIsSavingComplete] = useState(false);
 
+  const [currentPuestoNombre, setCurrentPuestoNombre] = useState<string | null>(null);
+
   const [isDrawModalVisible, setIsDrawModalVisible] = useState(false);
   const [isReadingSignature, setIsReadingSignature] = useState(false);
   const [signatureKey, setSignatureKey] = useState(0);
   const signatureRef = useRef<any>(null);
 
-  const getConnectionStatus = async () => {
+  const getConnectionStatus = useCallback(async () => {
     const n = await Network.getNetworkStateAsync();
     return Boolean(n.isConnected && n.isInternetReachable);
-  };
+  }, []);
+
+  const loadCurrentMarcaInfo = useCallback(async () => {
+    try {
+      const cache = await AsyncStorage.getItem('current_marca');
+      if (!cache) {
+        setCurrentPuestoNombre(null);
+        return;
+      }
+      const marca = JSON.parse(cache);
+      const nombrePuesto: string | null =
+        marca?.puesto?.nombre != null ? String(marca.puesto.nombre).trim() : null;
+      setCurrentPuestoNombre(nombrePuesto);
+    } catch {
+      setCurrentPuestoNombre(null);
+    }
+  }, []);
 
   const generateFirmaHashForCurrentUser = async (): Promise<string | null> => {
     try {
@@ -277,12 +326,21 @@ export default function PermitRequestScreenV2() {
     } finally {
       setIsLoading(false);
     }
-  }, [refreshAccessToken, logout]);
+  }, [getConnectionStatus, refreshAccessToken, logout]);
 
   useFocusEffect(
     useCallback(() => {
-      fetchAll();
-    }, [fetchAll])
+      let isActive = true;
+      (async () => {
+        if (!isActive) return;
+        await loadCurrentMarcaInfo();
+        if (!isActive) return;
+        await fetchAll();
+      })();
+      return () => {
+        isActive = false;
+      };
+    }, [fetchAll, loadCurrentMarcaInfo])
   );
 
   const fetchPlazas = useCallback(async () => {
@@ -379,38 +437,101 @@ export default function PermitRequestScreenV2() {
     }
   };
 
-  const handlePickDocument = async () => {
+  const normalizeFileType = (mimeType?: string | null): 'image' | 'audio' | 'video' | 'text' => {
+    const m = String(mimeType || '').toLowerCase();
+    if (m.startsWith('image/')) return 'image';
+    if (m.startsWith('audio/')) return 'audio';
+    if (m.startsWith('video/')) return 'video';
+    return 'text';
+  };
+
+  const markOneAsMain = (files: AttachedDocument[], mainId: string): AttachedDocument[] =>
+    files.map((f) => ({ ...f, is_main: f.id === mainId }));
+
+  const addAttachedDocument = (doc: Omit<AttachedDocument, 'id' | 'is_main'>) => {
+    const id = `local_file_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    setAttachedDocuments((prev) => {
+      const nextItem: AttachedDocument = { ...doc, id, is_main: prev.length === 0 };
+      return [...prev, nextItem];
+    });
+  };
+
+  const handlePickDocuments = async () => {
     try {
       const result = await DocumentPicker.getDocumentAsync({
-        type: ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'text/plain'],
-        multiple: false,
+        type: ['image/*', 'audio/*', 'video/*', 'text/plain', 'text/csv', 'application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+        multiple: true,
         copyToCacheDirectory: true,
       });
       if (result.canceled || !result.assets?.length) return;
-      const file = result.assets[0];
-      const fileResponse = await fetch(file.uri);
-      const blob = await fileResponse.blob();
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          const raw = reader.result;
-          if (typeof raw !== 'string') return reject(new Error('No se pudo leer archivo'));
-          const parts = raw.split(',');
-          resolve(parts.length > 1 ? parts[1] : parts[0]);
-        };
-        reader.onerror = () => reject(reader.error ?? new Error('No se pudo leer archivo'));
-        reader.readAsDataURL(blob);
-      });
-      const extension = String(file.name || '').split('.').pop()?.toLowerCase() || 'dat';
-      setAttachedDocument({
-        base64,
-        extension,
-        original_name: file.name || `archivo.${extension}`,
-        mimeType: file.mimeType || undefined,
-        type: 'file',
-      });
+      for (const asset of result.assets) {
+        const fileResponse = await fetch(asset.uri);
+        const blob = await fileResponse.blob();
+        const base64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            const raw = reader.result;
+            if (typeof raw !== 'string') return reject(new Error('No se pudo leer archivo'));
+            const parts = raw.split(',');
+            resolve(parts.length > 1 ? parts[1] : parts[0]);
+          };
+          reader.onerror = () => reject(reader.error ?? new Error('No se pudo leer archivo'));
+          reader.readAsDataURL(blob);
+        });
+        const extension = String(asset.name || '').split('.').pop()?.toLowerCase()
+          || String(asset.mimeType || '').split('/').pop()?.toLowerCase()
+          || 'dat';
+        addAttachedDocument({
+          base64,
+          extension,
+          original_name: asset.name || `archivo.${extension}`,
+          mimeType: asset.mimeType || undefined,
+          type: normalizeFileType(asset.mimeType),
+        });
+      }
     } catch (e: any) {
-      Alert.alert('Error', e?.message || 'No se pudo adjuntar archivo');
+      Alert.alert('Error', e?.message || 'No se pudo adjuntar archivo(s)');
+    }
+  };
+
+  const openCameraForPhoto = async () => {
+    try {
+      if (!cameraPermission?.granted) {
+        const res = await requestCameraPermission();
+        if (!res.granted) {
+          Alert.alert('Permiso denegado', 'Se necesita permiso para usar la cámara');
+          return;
+        }
+      }
+      setIsCameraVisible(true);
+    } catch (e: any) {
+      Alert.alert('Error', e?.message || 'No se pudo abrir la cámara');
+    }
+  };
+
+  const capturePermitPhoto = async () => {
+    if (!cameraRef.current) return;
+    try {
+      const photo = await cameraRef.current.takePictureAsync({
+        base64: true,
+        quality: 0.7,
+        skipProcessing: false,
+      });
+      if (!photo?.base64) {
+        Alert.alert('Error', 'No se pudo capturar la foto');
+        return;
+      }
+      const extension = 'jpg';
+      addAttachedDocument({
+        base64: photo.base64,
+        extension,
+        original_name: `foto_${Date.now()}.jpg`,
+        mimeType: 'image/jpeg',
+        type: 'image',
+      });
+      setIsCameraVisible(false);
+    } catch (e: any) {
+      Alert.alert('Error', e?.message || 'No se pudo capturar la foto');
     }
   };
 
@@ -427,7 +548,7 @@ export default function PermitRequestScreenV2() {
     setComentarios('');
     setTurnosPreview([]);
     setTurnosMessage('');
-    setAttachedDocument(null);
+    setAttachedDocuments([]);
     setFirmaResponsable('');
   };
 
@@ -455,14 +576,15 @@ export default function PermitRequestScreenV2() {
         fecha_fin: formatDateYMD(fechaFin),
         comentarios: comentarios.trim() || undefined,
         firma_responsable: firmaResponsable,
+        files: attachedDocuments.map((f) => ({
+          type: f.type,
+          extension: f.extension,
+          original_name: f.original_name,
+          file_base64: f.base64,
+          mimeType: f.mimeType,
+          is_main: Boolean(f.is_main),
+        })),
       };
-      if (attachedDocument) {
-        payload.file_base64 = attachedDocument.base64;
-        payload.extension = attachedDocument.extension;
-        payload.original_name = attachedDocument.original_name;
-        payload.mimeType = attachedDocument.mimeType;
-        payload.type = attachedDocument.type;
-      }
       const resp = await authedFetch({
         url: `${apiUrl}/api/permit-request`,
         init: {
@@ -668,12 +790,11 @@ export default function PermitRequestScreenV2() {
     }
   };
 
-  const downloadAttachment = async (record: PermitRecord) => {
+  const openAttachment = async (record: PermitRecord, file: PermitAttachment) => {
     try {
-      if (!record.file_name) return;
-      // Token del contexto o AsyncStorage (mismo criterio que ComplaintsMasterScreen)
+      if (!file?.name) return;
       const token = accessToken?.trim() || (await AsyncStorage.getItem('access_token'))?.trim() || '';
-      const url = buildPermitRequestFileUrl(record.id, record.file_name, token);
+      const url = buildPermitRequestMediaUrl(record.id, file.name, file.type, token);
       if (!url) {
         Alert.alert('Error', 'No se pudo generar el enlace. Verifica tu sesión o la configuración del servidor.');
         return;
@@ -682,6 +803,20 @@ export default function PermitRequestScreenV2() {
     } catch (e: any) {
       Alert.alert('Error', e?.message || 'No se pudo acceder al archivo');
     }
+  };
+
+  const setMainAttachment = (fileId: string) => {
+    setAttachedDocuments((prev) => markOneAsMain(prev, fileId));
+  };
+
+  const removeAttachment = (fileId: string) => {
+    setAttachedDocuments((prev) => {
+      const filtered = prev.filter((f) => f.id !== fileId);
+      if (!filtered.some((f) => f.is_main) && filtered.length > 0) {
+        filtered[0] = { ...filtered[0], is_main: true };
+      }
+      return filtered;
+    });
   };
 
   const listRecords = useMemo(() => records, [records]);
@@ -752,10 +887,47 @@ export default function PermitRequestScreenV2() {
                       <ThemedText style={styles.cardLine}>
                         <ThemedText style={styles.cardLabel}>Turnos: </ThemedText>{Array.isArray(r.turnos) ? r.turnos.length : 0}
                       </ThemedText>
-                      {!!r.file_name && (
-                        <ThemedText style={styles.cardLine}>
-                          <ThemedText style={styles.cardLabel}>Archivo: </ThemedText>{r.file_name}
-                        </ThemedText>
+                      <ThemedText style={styles.cardLine}>
+                        <ThemedText style={styles.cardLabel}>Adjuntos: </ThemedText>{Array.isArray(r.archivos) ? r.archivos.length : 0}
+                      </ThemedText>
+                      {!!r.archivos?.length && (
+                        <Collapsible title="Ver adjuntos">
+                          <ThemedView style={styles.attachmentsList}>
+                            {r.archivos.map((file, idx) => {
+                              const mediaUrl = buildPermitRequestMediaUrl(r.id, file.name, file.type, accessToken);
+                              const displayName = String(file.original_name || file.name || `Archivo ${idx + 1}`);
+                              const normalizedType = String(file.type || '').toLowerCase();
+                              const isTextLike = normalizedType !== 'image' && normalizedType !== 'audio' && normalizedType !== 'video';
+                              return (
+                                <ThemedView key={`rf-${r.id}-${file.id || file.name}-${idx}`} style={styles.attachmentCard}>
+                                  <ThemedText style={styles.attachmentName}>
+                                    {file.is_main ? '⭐ ' : ''}{displayName}
+                                  </ThemedText>
+                                  <ThemedText style={styles.attachmentMeta}>Tipo: {normalizedType || 'file'}</ThemedText>
+                                  {!Boolean(r.is_executive_for_record) ? (
+                                    <ThemedText style={styles.signatureHintMuted}>Disponible para el ejecutivo asignado.</ThemedText>
+                                  ) : normalizedType === 'image' ? (
+                                    <Image source={{ uri: mediaUrl }} style={styles.attachmentImage} resizeMode="contain" />
+                                  ) : normalizedType === 'audio' ? (
+                                    <PermitAudioPlayer sourceUrl={mediaUrl} />
+                                  ) : normalizedType === 'video' ? (
+                                    <PermitVideoPlayer sourceUrl={mediaUrl} />
+                                  ) : null}
+                                  {Boolean(r.is_executive_for_record) && isTextLike && (
+                                    <TouchableOpacity
+                                      style={[styles.actionBtn, styles.downloadBtn, { marginTop: 8 }]}
+                                      onPress={() => openAttachment(r, file)}
+                                      activeOpacity={0.85}
+                                    >
+                                      <Ionicons name="download-outline" size={18} color="#FFFFFF" />
+                                      <ThemedText style={styles.actionBtnText}>Descargar</ThemedText>
+                                    </TouchableOpacity>
+                                  )}
+                                </ThemedView>
+                              );
+                            })}
+                          </ThemedView>
+                        </Collapsible>
                       )}
 
                       <ThemedView style={styles.actionsRow}>
@@ -769,16 +941,6 @@ export default function PermitRequestScreenV2() {
                             <ThemedText style={styles.actionBtnText}>Completar</ThemedText>
                           </TouchableOpacity>
                         )}
-                        {Boolean(r.file_name) && Boolean(r.is_executive_for_record) && (
-                          <TouchableOpacity
-                            style={[styles.actionBtn, styles.downloadBtn]}
-                            onPress={() => downloadAttachment(r)}
-                            activeOpacity={0.85}
-                          >
-                            <Ionicons name="download-outline" size={18} color="#FFFFFF" />
-                            <ThemedText style={styles.actionBtnText}>Descargar archivo</ThemedText>
-                          </TouchableOpacity>
-                        )}
                       </ThemedView>
                     </ThemedView>
                   ))}
@@ -789,6 +951,12 @@ export default function PermitRequestScreenV2() {
 
           {isCreating && (
             <ThemedView style={styles.formCard}>
+              {currentPuestoNombre && (
+                <ThemedText style={styles.currentPuestoText}>
+                  Puesto actual:{' '}
+                  <ThemedText style={styles.currentPuestoName}>{currentPuestoNombre}</ThemedText>
+                </ThemedText>
+              )}
               <ThemedText style={styles.label}>Tipo de solicitud *</ThemedText>
               <View style={styles.pickerWrap}>
                 <Picker selectedValue={tipo} onValueChange={(v) => setTipo(v as PermitType | '')}>
@@ -899,11 +1067,43 @@ export default function PermitRequestScreenV2() {
                 placeholderTextColor="#999"
               />
 
-              <TouchableOpacity style={styles.secondaryAction} onPress={handlePickDocument}>
-                <ThemedText style={styles.secondaryActionText}>Adjuntar archivo (opcional)</ThemedText>
-              </TouchableOpacity>
-              {!!attachedDocument?.original_name && (
-                <ThemedText style={styles.fileText}>Archivo: {attachedDocument.original_name}</ThemedText>
+              <ThemedText style={styles.label}>Adjuntos (opcional)</ThemedText>
+              <ThemedView style={styles.attachButtonsRow}>
+                <TouchableOpacity style={[styles.secondaryAction, { backgroundColor: '#007AFF', gap: 6 }]} onPress={handlePickDocuments}>
+                  <ThemedText style={styles.secondaryActionText}>Adjuntar archivo(s)</ThemedText>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.secondaryAction, { backgroundColor: '#34C759', gap: 6 }]} onPress={openCameraForPhoto}>
+                  <ThemedText style={styles.secondaryActionText}>Abrir cámara</ThemedText>
+                </TouchableOpacity>
+              </ThemedView>
+              {!!attachedDocuments.length && (
+                <ThemedView style={styles.attachmentsList}>
+                  {attachedDocuments.map((f, idx) => (
+                    <ThemedView key={f.id} style={styles.attachmentCard}>
+                      <ThemedText style={styles.attachmentName}>{f.original_name}</ThemedText>
+                      <ThemedText style={styles.attachmentMeta}>Tipo: {f.type}</ThemedText>
+                      <ThemedView style={styles.mainCheckRow}>
+                        <TouchableOpacity onPress={() => setMainAttachment(f.id)} style={styles.checkboxSquare} activeOpacity={0.8}>
+                          {f.is_main ? <Ionicons name="checkmark" size={16} color="#007AFF" /> : null}
+                        </TouchableOpacity>
+                        <ThemedText style={styles.mainCheckText}>Descatar</ThemedText>
+                        <TouchableOpacity onPress={() => removeAttachment(f.id)} style={styles.removeAttachmentBtn} activeOpacity={0.8}>
+                          <Ionicons name="trash-outline" size={16} color="#FFFFFF" />
+                        </TouchableOpacity>
+                      </ThemedView>
+                      {f.type === 'image' ? (
+                        <Image
+                          source={{ uri: `data:${f.mimeType || 'image/jpeg'};base64,${f.base64}` }}
+                          style={styles.attachmentImage}
+                          resizeMode="contain"
+                        />
+                      ) : null}
+                      {idx === 0 && !attachedDocuments.some((x) => x.is_main) ? (
+                        <ThemedText style={styles.warningText}>Se marcará como destacado automáticamente.</ThemedText>
+                      ) : null}
+                    </ThemedView>
+                  ))}
+                </ThemedView>
               )}
 
               <ThemedText style={styles.sectionTitle}>Firma responsable *</ThemedText>
@@ -945,7 +1145,7 @@ export default function PermitRequestScreenV2() {
                           <ThemedText style={styles.firmaInfoValue}>Sesión: {info.sessionId || 'N/A'}</ThemedText>
                           <ThemedText style={styles.firmaInfoValue}>Empleado: {info.empleadoId || 'N/A'}</ThemedText>
                           <ThemedText style={styles.firmaInfoValue}>Lat: {info.latitud || 'N/A'} | Long: {info.longitud || 'N/A'}</ThemedText>
-                          <ThemedText style={styles.firmaInfoValue}>Hora: {info.timestamp || 'N/A'}</ThemedText>
+                          <ThemedText style={styles.firmaInfoValue}>Hora: { convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}</ThemedText>
                         </>
                       );
                     })()}
@@ -1077,7 +1277,7 @@ export default function PermitRequestScreenV2() {
                           <ThemedText style={styles.firmaInfoValue}>Sesión: {info.sessionId || 'N/A'}</ThemedText>
                           <ThemedText style={styles.firmaInfoValue}>Empleado: {info.empleadoId || 'N/A'}</ThemedText>
                           <ThemedText style={styles.firmaInfoValue}>Lat: {info.latitud || 'N/A'} | Long: {info.longitud || 'N/A'}</ThemedText>
-                          <ThemedText style={styles.firmaInfoValue}>Hora: {info.timestamp || 'N/A'}</ThemedText>
+                          <ThemedText style={styles.firmaInfoValue}>Hora: { convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}</ThemedText>
                         </>
                       );
                     })()}
@@ -1157,6 +1357,20 @@ export default function PermitRequestScreenV2() {
         </View>
       </Modal>
 
+      {/* Cámara pantalla completa (mismo patrón que ActivitiesScreen) */}
+      <Modal visible={isCameraVisible} animationType="slide" onRequestClose={() => setIsCameraVisible(false)}>
+        <ThemedView style={{ flex: 1, backgroundColor: '#000' }}>
+          <CameraView ref={cameraRef} style={{ flex: 1 }} facing="back">
+            <TouchableOpacity style={styles.cameraCloseButton} onPress={() => setIsCameraVisible(false)}>
+              <Ionicons name="close" size={30} color="#fff" />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.cameraCaptureButton} onPress={capturePermitPhoto}>
+              <ThemedView style={styles.cameraCaptureButtonInner} />
+            </TouchableOpacity>
+          </CameraView>
+        </ThemedView>
+      </Modal>
+
       <AppFooter />
       <SlideMenu
         isVisible={isMenuVisible}
@@ -1178,6 +1392,8 @@ const styles = StyleSheet.create({
   titleContainer: { alignItems: 'center', marginBottom: 18, paddingBottom: 14, borderBottomWidth: 1, borderBottomColor: '#E0E0E0' },
   title: { fontSize: 22, fontWeight: 'bold', textAlign: 'center', marginBottom: 8 },
   subtitle: { fontSize: 14, opacity: 0.7, textAlign: 'center' },
+  currentPuestoText: { marginTop: 6, fontSize: 13, textAlign: 'center', color: '#555' },
+  currentPuestoName: { fontWeight: '700', color: '#000' },
 
   errorBox: { backgroundColor: '#FCE8E6', borderRadius: 8, padding: 12, marginBottom: 12 },
   errorText: { color: '#FF3B30', textAlign: 'center', marginBottom: 12, fontWeight: '700' },
@@ -1245,6 +1461,16 @@ const styles = StyleSheet.create({
   dateBtn: { borderWidth: 1, borderColor: '#DDD', borderRadius: 8, padding: 12, backgroundColor: '#F7F7F7' },
   secondaryAction: { backgroundColor: '#0A84FF', borderRadius: 8, paddingVertical: 10, alignItems: 'center' },
   secondaryActionText: { color: '#fff', fontWeight: '700' },
+  attachButtonsRow: { flexDirection: 'column', width: '100%', gap: 8 },
+  attachmentsList: { gap: 8, marginTop: 8 },
+  attachmentCard: { borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 8, padding: 10, backgroundColor: '#FAFAFA' },
+  attachmentName: { fontWeight: '700', color: '#222' },
+  attachmentMeta: { marginTop: 4, marginBottom: 6, fontSize: 12, color: '#555' },
+  attachmentImage: { width: '100%', height: 190, borderRadius: 8, backgroundColor: '#00000010' },
+  mainCheckRow: { marginTop: 6, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  checkboxSquare: { width: 22, height: 22, borderWidth: 1, borderColor: '#007AFF', borderRadius: 4, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff' },
+  mainCheckText: { fontWeight: '700', color: '#333' },
+  removeAttachmentBtn: { marginLeft: 'auto', width: 28, height: 28, borderRadius: 6, backgroundColor: '#FF3B30', alignItems: 'center', justifyContent: 'center' },
   warningText: { color: '#C62828', fontWeight: '700' },
   turnosBox: { borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 8, overflow: 'hidden' },
   turnoRow: { padding: 8, borderBottomWidth: 1, borderBottomColor: '#F0F0F0', backgroundColor: '#FAFAFA' },
@@ -1264,6 +1490,34 @@ const styles = StyleSheet.create({
     textAlignVertical: 'top',
   },
   fileText: { fontSize: 12, color: '#333' },
+  cameraCloseButton: {
+    position: 'absolute',
+    top: 40,
+    right: 20,
+    zIndex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    borderRadius: 25,
+    padding: 10,
+  },
+  cameraCaptureButton: {
+    position: 'absolute',
+    bottom: 40,
+    alignSelf: 'center',
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    backgroundColor: 'rgba(255, 255, 255, 0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 4,
+    borderColor: '#fff',
+  },
+  cameraCaptureButtonInner: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: '#fff',
+  },
   overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', alignItems: 'center', justifyContent: 'center', padding: 16 },
   floatCard: { width: '100%', maxWidth: 820, backgroundColor: '#fff', borderRadius: 12, overflow: 'hidden' },
   floatHeader: {
@@ -1305,4 +1559,73 @@ const styles = StyleSheet.create({
   },
   plazaCardBadgeText: { color: '#FFFFFF', fontSize: 12, fontWeight: '600' },
   rowButtonsModal: { flexDirection: 'row', gap: 8, padding: 12 },
+  audioPlayerContainer: { marginTop: 8, marginBottom: 4 },
+  audioPlayer: { flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 8, padding: 8, backgroundColor: '#FFF' },
+  playButton: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#EAF2FF', alignItems: 'center', justifyContent: 'center' },
+  audioTime: { fontSize: 12, color: '#333' },
+  resetAudioButton: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#007AFF', alignItems: 'center', justifyContent: 'center' },
+  videoContainer: { marginTop: 8, borderRadius: 8, overflow: 'hidden', backgroundColor: '#000' },
 });
+
+function PermitAudioPlayer({ sourceUrl }: { sourceUrl: string }) {
+  const player = useAudioPlayer(sourceUrl);
+  const status = useAudioPlayerStatus(player);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const duration = status.duration ?? 0;
+  const position = status.currentTime ?? 0;
+
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const togglePlayPause = () => {
+    if (!player) return;
+    if (isPlaying) {
+      player.pause();
+      setIsPlaying(false);
+    } else {
+      player.play();
+      setIsPlaying(true);
+    }
+  };
+
+  const resetAudio = () => {
+    if (!player) return;
+    player.seekTo(0);
+    player.pause();
+    setIsPlaying(false);
+  };
+
+  return (
+    <ThemedView style={styles.audioPlayerContainer}>
+      <ThemedView style={styles.audioPlayer}>
+        <TouchableOpacity style={styles.playButton} onPress={togglePlayPause}>
+          <Ionicons name={isPlaying ? 'pause' : 'play'} size={20} color="#007AFF" />
+        </TouchableOpacity>
+        <ThemedText style={styles.audioTime}>{formatTime(position)} / {formatTime(duration)}</ThemedText>
+        <TouchableOpacity style={styles.resetAudioButton} onPress={resetAudio}>
+          <Ionicons name="refresh" size={16} color="#FFFFFF" />
+        </TouchableOpacity>
+      </ThemedView>
+    </ThemedView>
+  );
+}
+
+function PermitVideoPlayer({ sourceUrl }: { sourceUrl: string }) {
+  const player = useVideoPlayer(sourceUrl);
+  const maxContainerWidth = Dimensions.get('window').width - 100;
+  return (
+    <View style={[styles.videoContainer, { width: maxContainerWidth, maxWidth: '100%' }]}>
+      <VideoView
+        player={player}
+        style={{ width: '100%', aspectRatio: 16 / 9, backgroundColor: '#000' }}
+        contentFit="contain"
+        nativeControls
+        allowsFullscreen={false}
+        allowsPictureInPicture={false}
+      />
+    </View>
+  );
+}

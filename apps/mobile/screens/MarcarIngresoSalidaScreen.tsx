@@ -1678,18 +1678,19 @@ export default function MarcarIngresoSalidaScreen() {
         }
       });
 
-      // Ordenar días
-      const sortedDays = Object.keys(groupedByDay).sort();
-
-      if (sortedDays.length === 0) {
-        return (
-          <ThemedView style={styles.marksEmptyContainer}>
-            <ThemedText style={styles.marksEmptyText}>
-              No se encontraron marcas válidas
-            </ThemedText>
-          </ThemedView>
-        );
-      }
+      // Construir los próximos 30 días (incluyendo días sin marcas)
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const next30Days = Array.from({ length: 30 }, (_, index) => {
+        const d = new Date(today);
+        d.setDate(d.getDate() + index);
+        const year = d.getFullYear();
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        const isoDate = `${year}-${month}-${day}`;
+        const label = formatDateDMY(isoDate);
+        return { key: isoDate, label };
+      });
 
       const formatHora = (hora: any): string => {
         if (!hora) return '';
@@ -1710,8 +1711,10 @@ export default function MarcarIngresoSalidaScreen() {
         }
       };
 
-      return sortedDays.map((dayKey) => {
-        const dayMarks = groupedByDay[dayKey]
+      return next30Days.map(({ key, label }) => {
+        const marksForDay = groupedByDay[label] || [];
+        const dayMarks = marksForDay
+          .slice()
           .sort((a, b) => {
             const getHoraTime = (hora: any) => {
               if (!hora) return 0;
@@ -1734,40 +1737,43 @@ export default function MarcarIngresoSalidaScreen() {
             return getHoraTime(a.hora_inicio) - getHoraTime(b.hora_inicio);
           });
 
-        let dayLabel = dayKey;
-
         return (
-          <Collapsible key={dayKey} title={dayLabel}>
+          <Collapsible key={key} title={label}>
             <ThemedView style={styles.marksDayContainer}>
-              {dayMarks.map((mark, index) => {
-                const horaInicioStr = formatHora(mark.hora_inicio);
-                const horaFinStr = formatHora(mark.hora_fin);
+              {dayMarks.length === 0 ? (
+                <ThemedText style={styles.marksEmptyText}>
+                  Estás libre este día
+                </ThemedText>
+              ) : (
+                dayMarks.map((mark, index) => {
+                  const horaInicioStr = formatHora(mark.hora_inicio);
+                  const horaFinStr = formatHora(mark.hora_fin);
 
-                let tipoTurno = 'Desconocido';
-                if (mark.tipo_turno) {
-                  switch (mark.tipo_turno) {
-                    case 'D':
-                      tipoTurno = 'Diurno';
-                      break;
-                    case 'N':
-                      tipoTurno = 'Nocturno';
-                      break;
-                    case 'M':
-                      tipoTurno = 'Mixto';
-                      break;
+                  let tipoTurno = 'Desconocido';
+                  if (mark.tipo_turno) {
+                    switch (mark.tipo_turno) {
+                      case 'D':
+                        tipoTurno = 'Diurno';
+                        break;
+                      case 'N':
+                        tipoTurno = 'Nocturno';
+                        break;
+                      case 'M':
+                        tipoTurno = 'Mixto';
+                        break;
+                    }
                   }
-                }
 
-                return (
-                  <ThemedView key={mark.id || index} style={styles.markItem}>
-                    <ThemedView style={styles.markItemHeader}>
-                      <Ionicons name="time-outline" size={18} color="#007AFF" />
-                      <ThemedText style={styles.markItemTime}>
-                        {horaInicioStr || 'Sin hora'}
-                        {horaFinStr ? ` - ${horaFinStr}` : ''}
-                      </ThemedText>
-                    </ThemedView>
-                    <ThemedView style={styles.markItemDetails}>
+                  return (
+                    <ThemedView key={mark.id || index} style={styles.markItem}>
+                      <ThemedView style={styles.markItemHeader}>
+                        <Ionicons name="time-outline" size={18} color="#007AFF" />
+                        <ThemedText style={styles.markItemTime}>
+                          {horaInicioStr || 'Sin hora'}
+                          {horaFinStr ? ` - ${horaFinStr}` : ''}
+                        </ThemedText>
+                      </ThemedView>
+                      <ThemedView style={styles.markItemDetails}>
                       {mark.empresa && mark.empresa.nombre && (
                         <ThemedView style={styles.markItemRow}>
                           <ThemedText style={styles.markItemTitle}>
@@ -1841,10 +1847,11 @@ export default function MarcarIngresoSalidaScreen() {
                           {tipoTurno}
                         </ThemedText>
                       </ThemedView>
+                      </ThemedView>
                     </ThemedView>
-                  </ThemedView>
-                );
-              })}
+                  );
+                })
+              )}
             </ThemedView>
           </Collapsible>
         );
@@ -2044,7 +2051,7 @@ export default function MarcarIngresoSalidaScreen() {
               <ThemedText style={styles.loadingDataText}>
                 {processingType === 'salida'
                   ? 'Procesando salida, por favor no cierre la ventana...'
-                  : 'Procesando ingreso, por favor no cierre la ventana...'}
+                  : 'Procesando ingreso. Esto puede tardar unos segundos, por favor no cierre la ventana...'}
               </ThemedText>
             </ThemedView>
           ) : isLoadingData ? (

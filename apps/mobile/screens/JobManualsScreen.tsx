@@ -25,6 +25,7 @@ import getValidAccessTokenOrLogout from '../hooks/getValidAccessTokenOrLogout';
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { jwtDecode } from 'jwt-decode';
+import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 
 type JobManualsNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Home'>;
 
@@ -1552,11 +1553,7 @@ export default function JobManualsScreen() {
   };
 
   const formatDateLabel = (iso: string) => {
-    if (!iso) return '';
-    const date_complete = new Date(Number(iso)).toISOString().split('T');
-    const date = date_complete[0];
-    const time = date_complete[1].split('.')[0];
-    return `${date} ${time}`;
+    return convertDateTimestampToLocalString(iso);
   };
 
   if (isLoading) {
@@ -2480,7 +2477,7 @@ export default function JobManualsScreen() {
                     )}
                     <ThemedText style={styles.signatureInfoText}>Latitud: {firmaResponsable.latitud}</ThemedText>
                     <ThemedText style={styles.signatureInfoText}>Longitud: {firmaResponsable.longitud}</ThemedText>
-                    <ThemedText style={styles.signatureInfoText}>Fecha y hora: {formatDateLabel(firmaResponsable.timestamp)}</ThemedText>
+                    <ThemedText style={styles.signatureInfoText}>Fecha y hora: {convertDateTimestampToLocalString( new Date(Number(firmaResponsable.timestamp)).toISOString())}</ThemedText>
                     <TouchableOpacity
                       style={styles.clearSignatureButton}
                       onPress={() => setFirmaResponsable(null)}
@@ -2751,7 +2748,7 @@ export default function JobManualsScreen() {
                                 {firma.nombre_empleado || 'Empleado'}
                               </ThemedText>
                               <ThemedText style={styles.signatureListDate}>
-                                {firma.created_at ? new Date(firma.created_at).toLocaleString() : ''}
+                                {firma.created_at ? convertDateTimestampToLocalString(new Date(firma.created_at).toISOString()) : ''}
                               </ThemedText>
                             </ThemedView>
 

@@ -20,6 +20,8 @@ import { useQRScanner } from '@/hooks/useQRScanner';
 import { jwtDecode } from 'jwt-decode';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import authedFetch from '@/hooks/authedFetch';
+import { Collapsible } from '@/components/Collapsible';
+import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 
 type EntregaPuestosScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'EntregaPuestos'>;
 
@@ -53,6 +55,7 @@ interface CurrentMarca {
       nombre: string;
     };
   };
+  empleadoFijo_id?: number;
 }
 
 interface EntregaPuestosInfo {
@@ -102,6 +105,47 @@ interface ArticuloForm {
   cantidad_real: number;
   estado: 'Bueno' | 'Malo' | 'No está';
   observaciones?: string;
+}
+
+type MainStructurePuestoNode = { id: number; nombre: string };
+type MainStructureSucursalNode = { id: number; nombre: string; puestos: MainStructurePuestoNode[] };
+type MainStructureContratoNode = { id: number; nombre: string; sucursales: MainStructureSucursalNode[] };
+type MainStructureDivisionNode = { id: number; nombre: string; contratos: MainStructureContratoNode[] };
+type MainStructureClienteNode = { id: number; nombre: string; division: MainStructureDivisionNode[] };
+type MainStructureEmpresaNode = { id: number; nombre: string; clientes: MainStructureClienteNode[] };
+type MainStructureTree = MainStructureEmpresaNode[];
+
+interface EntregaPuestoRecordArticulo {
+  id: number;
+  nombre: string;
+  tipo?: string;
+  cantidad_requerida: number;
+  cantidad_real: number;
+  estado: 'Bueno' | 'Malo' | 'No está' | string;
+  observaciones?: string;
+}
+
+interface EntregaPuestoRecord {
+  id: number;
+  oficial_entrega: string;
+  fecha_entrada_entrega: string | Date;
+  fecha_salida_entrega: string | Date;
+  hora_entrada_entrega: string | Date;
+  hora_salida_entrega: string | Date;
+  turno_entrega: string;
+  oficial_recibe: string;
+  fecha_entrada_recibe: string | Date;
+  fecha_salida_recibe: string | Date;
+  hora_entrada_recibe: string | Date;
+  hora_salida_recibe: string | Date;
+  turno_recibe: string;
+  articulos_puesto: EntregaPuestoRecordArticulo[];
+  observaciones: string;
+  firma_recibe: string;
+  firma_entrega: string | null;
+  firma_responsable: string;
+  created_at: string | Date;
+  created_by: number;
 }
 
 const signatureWebStyle = `
@@ -185,6 +229,21 @@ export default function EntregaPuestosScreen() {
   const [signatureKey, setSignatureKey] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitResponse, setSubmitResponse] = useState<{ type: 'success' | 'error', message: string } | null>(null);
+  const [hasEntregaTurno, setHasEntregaTurno] = useState(false);
+
+  const [showRecordsList, setShowRecordsList] = useState(false);
+  const [isHierarchyFiltersExpanded, setIsHierarchyFiltersExpanded] = useState(false);
+  const [records, setRecords] = useState<EntregaPuestoRecord[]>([]);
+  const [isLoadingRecords, setIsLoadingRecords] = useState(false);
+
+  const [mainStructure, setMainStructure] = useState<MainStructureTree>([]);
+  const [filterEmpresaId, setFilterEmpresaId] = useState<number | null>(null);
+  const [filterClienteId, setFilterClienteId] = useState<number | null>(null);
+  const [filterDivisionId, setFilterDivisionId] = useState<number | null>(null);
+  const [filterContratoId, setFilterContratoId] = useState<number | null>(null);
+  const [filterSucursalId, setFilterSucursalId] = useState<number | null>(null);
+  const [filterPuestoId, setFilterPuestoId] = useState<number | null>(null);
+  const [isStructureLoading, setIsStructureLoading] = useState(false);
 
   const getConnectionStatus = async (): Promise<boolean> => {
     const networkState = await Network.getNetworkStateAsync();
@@ -195,12 +254,297 @@ export default function EntregaPuestosScreen() {
     return `local-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
   };
 
+  const generateRandomMaintenanceId = (): number => {
+    const ts = Date.now();
+    const rand = Math.floor(Math.random() * 1000000);
+    return Number(`${ts}${rand}`);
+  };
+
+  /**
+   * Sincroniza las actividades en activities_cache (solo revisión de equipo)
+   * con el último estado de los artículos del puesto actual.
+   */
+  const updateActivitiesCacheWithEntrega = async () => {
+    try {
+      const cacheStr = await AsyncStorage.getItem('activities_cache');
+      if (!cacheStr || !Array.isArray(articulos) || articulos.length === 0) return;
+      const parsed: any = JSON.parse(cacheStr);
+      if (!Array.isArray(parsed)) return;
+
+      const articulosById = new Map<number, ArticuloForm>(
+        articulos.map((a) => [a.id, a] as [number, ArticuloForm])
+      );
+
+      const updatedActivities = parsed.map((act: any) => {
+        if (!act?.is_revision_equipo || !Array.isArray(act.inventario)) return act;
+
+        const updatedInventario = act.inventario.map((inv: any) => {
+          const form = articulosById.get(Number(inv.id));
+          if (!form) return inv;
+
+          const estado = form.estado;
+          const cantidad_real = form.cantidad_real;
+          const observaciones = form.observaciones || '';
+
+          const rev = inv.revision_equipo || {};
+
+          return {
+            ...inv,
+            cantidad_requerida:
+              inv.cantidad_requerida != null ? inv.cantidad_requerida : form.cantidad_requerida,
+            cantidad_real,
+            estado,
+            observaciones,
+            revision_equipo: {
+              ...rev,
+              es_correcto: estado === 'Bueno',
+              motivo_incorrecto: estado === 'Bueno' ? '-' : (observaciones || '-'),
+            },
+          };
+        });
+
+        return {
+          ...act,
+          inventario: updatedInventario,
+        };
+      });
+
+      await AsyncStorage.setItem('activities_cache', JSON.stringify(updatedActivities));
+    } catch (e) {
+      console.error('Error updating activities_cache after entrega-puestos:', e);
+    }
+  };
+
+  /**
+   * Actualiza en main_structure_cache el último mantenimiento de los artículos del puesto actual
+   * usando el estado recién guardado en el formulario de entrega de puestos.
+   */
+  const updateMainStructureCacheWithEntrega = async (options?: { enqueueActions?: boolean }) => {
+    try {
+      const cacheStr = await AsyncStorage.getItem('main_structure_cache');
+      if (!cacheStr) return;
+      const parsed: any = JSON.parse(cacheStr);
+      if (!Array.isArray(parsed) || !currentMarca || !Array.isArray(articulos) || articulos.length === 0) {
+        return;
+      }
+      const shouldEnqueueActions = Boolean(options?.enqueueActions);
+
+      const horaAccion = await getHoraAccion();
+      if (!horaAccion) {
+        throw new Error('No se pudo obtener la hora de acción');
+      }
+
+      const puestoId = currentMarca.puesto.id;
+      const actionsKey = 'articulo_mantenimiento_actions';
+      const actionsStr = shouldEnqueueActions ? await AsyncStorage.getItem(actionsKey) : null;
+      const actions = shouldEnqueueActions && actionsStr ? JSON.parse(actionsStr) : [];
+      const actionsArr: any[] = Array.isArray(actions) ? actions : [];
+
+      const upsertAction = (newAction: any) => {
+        if (!shouldEnqueueActions) return;
+        if (newAction?.type === 'update' && newAction?.id) {
+          const idx = actionsArr.findIndex((a: any) => a?.type === 'update' && Number(a?.id) === Number(newAction.id));
+          if (idx !== -1) actionsArr[idx] = { ...actionsArr[idx], ...newAction };
+          else actionsArr.push(newAction);
+          return;
+        }
+        if (newAction?.type === 'create') {
+          const planId = Number(newAction?.requestData?.articulo_plan_id || 0);
+          const asigId = Number(newAction?.requestData?.articulo_asignado_id || 0);
+          const idx = actionsArr.findIndex((a: any) => {
+            if (a?.type !== 'create') return false;
+            const aPlan = Number(a?.requestData?.articulo_plan_id || 0);
+            const aAsig = Number(a?.requestData?.articulo_asignado_id || 0);
+            return (planId > 0 && aPlan === planId) || (asigId > 0 && aAsig === asigId);
+          });
+          if (idx !== -1) actionsArr[idx] = { ...actionsArr[idx], ...newAction };
+          else actionsArr.push(newAction);
+        }
+      };
+
+      const updated = parsed.map((empresa: any) => {
+        if (!empresa?.clientes) return empresa;
+        return {
+          ...empresa,
+          clientes: empresa.clientes.map((cliente: any) => {
+            if (!cliente?.division) return cliente;
+            return {
+              ...cliente,
+              division: cliente.division.map((division: any) => {
+                if (!division?.contratos) return division;
+                return {
+                  ...division,
+                  contratos: division.contratos.map((contrato: any) => {
+                    if (!contrato?.sucursales) return contrato;
+                    return {
+                      ...contrato,
+                      sucursales: contrato.sucursales.map((sucursal: any) => {
+                        if (!sucursal?.puestos) return sucursal;
+                        return {
+                          ...sucursal,
+                          puestos: sucursal.puestos.map((puesto: any) => {
+                            if (!puesto || puesto.id !== puestoId || !Array.isArray(puesto.articulos)) {
+                              return puesto;
+                            }
+
+                            const articulosById = new Map<number, ArticuloForm>(
+                              articulos.map((a) => [a.id, a] as [number, ArticuloForm])
+                            );
+
+                            const updatedArticulos = puesto.articulos.map((art: any) => {
+                              const form = articulosById.get(Number(art.id));
+                              if (!form) return art;
+
+                              const existingUltimo = art.ultimo_mantenimiento && typeof art.ultimo_mantenimiento === 'object'
+                                ? { ...art.ultimo_mantenimiento }
+                                : null;
+                              const existingMaints = Array.isArray(art.mantenimientos) ? [...art.mantenimientos] : [];
+
+                              const isPlan = String(form.tipo || art.tipo || '').toLowerCase() === 'plan';
+                              const articuloEstructuraId = Number(form.id || art.id || 0) || null;
+                              const estadoActual = String(form.estado || 'Bueno');
+                              const lastEstado = String(existingUltimo?.estado || 'Bueno');
+                              const shouldCreate = estadoActual !== 'Bueno' && (existingUltimo == null || lastEstado === 'Bueno');
+                              const shouldUpdate =
+                                !shouldCreate &&
+                                existingUltimo != null &&
+                                ((estadoActual === 'Bueno' && lastEstado !== 'Bueno') || (estadoActual !== lastEstado));
+
+                              const newBasic = {
+                                id: generateRandomMaintenanceId(),
+                                articulo_plan_id: isPlan ? articuloEstructuraId : null,
+                                articulo_asignado_id: isPlan ? null : articuloEstructuraId,
+                                estado: estadoActual,
+                                cantidad_necesaria: Number(form.cantidad_requerida || 0),
+                                cantidad_real: Number(form.cantidad_real || 0),
+                                observaciones: form.observaciones || '',
+                                fecha_solucion: null,
+                                accion: null,
+                                fecha_inicio: null,
+                                numero_boleta_proveeduria: null,
+                                tipo: null,
+                                marca: null,
+                                modelo: null,
+                                serie_placa: null,
+                                marca_nuevo: null,
+                                modelo_nuevo: null,
+                                serie_placa_nuevo: null,
+                                categoria: null,
+                                tipo_mantenimiento_art: null,
+                                fecha_salida: null,
+                                fecha_entrada: null,
+                                kilometraje: null,
+                                mant_armas_form: null,
+                                categoria_mantenimiento: null,
+                                detalle: null,
+                                numero_fc: null,
+                                proveedor: null,
+                                costo_mo: null,
+                                costo_i: null,
+                                iva: null,
+                                costo_total: null,
+                                fecha_fin: null,
+                                reincidencia_treinta_dias: null,
+                                tipo_mant_art_reincid: null,
+                                c_archivos_adjuntos_articulo_mantenimiento: [],
+                                created_at: horaAccion,
+                                updated_at: horaAccion,
+                                /** Opcional: indica que el registro se creó/actualizó desde Entrega de puestos */
+                                evaluacion_mantenimiento_origen: 'entrega_puestos' as const,
+                              };
+
+                              let nextUltimo: any = existingUltimo ? { ...existingUltimo } : { ...newBasic };
+                              let nextMantenimientos: any[] = [...existingMaints];
+
+                              if (shouldCreate) {
+                                nextUltimo = { ...newBasic };
+                                nextMantenimientos = [nextUltimo, ...nextMantenimientos];
+                              } else {
+                                nextUltimo = {
+                                  ...(existingUltimo ?? newBasic),
+                                  articulo_plan_id: isPlan ? articuloEstructuraId : null,
+                                  articulo_asignado_id: isPlan ? null : articuloEstructuraId,
+                                  estado: estadoActual,
+                                  cantidad_necesaria:
+                                    existingUltimo?.cantidad_necesaria != null
+                                      ? existingUltimo.cantidad_necesaria
+                                      : Number(form.cantidad_requerida || 0),
+                                  cantidad_real: Number(form.cantidad_real || 0),
+                                  observaciones: form.observaciones || '',
+                                  fecha_solucion: estadoActual === 'Bueno' ? horaAccion : null,
+                                  updated_at: horaAccion,
+                                  evaluacion_mantenimiento_origen: 'entrega_puestos' as const,
+                                };
+                                if (existingUltimo?.id) {
+                                  let replaced = false;
+                                  nextMantenimientos = nextMantenimientos.map((m: any) => {
+                                    if (Number(m?.id) !== Number(existingUltimo.id)) return m;
+                                    replaced = true;
+                                    return { ...m, ...nextUltimo };
+                                  });
+                                  if (!replaced) nextMantenimientos = [nextUltimo, ...nextMantenimientos];
+                                } else {
+                                  nextMantenimientos = [nextUltimo, ...nextMantenimientos];
+                                }
+
+                                if (shouldUpdate && existingUltimo?.id) {
+                                  upsertAction({
+                                    type: 'update',
+                                    id: existingUltimo.id,
+                                    requestData: {
+                                      estado: estadoActual,
+                                      cantidad_necesaria:
+                                        existingUltimo?.cantidad_necesaria != null
+                                          ? existingUltimo.cantidad_necesaria
+                                          : Number(form.cantidad_requerida || 0),
+                                      cantidad_real: Number(form.cantidad_real || 0),
+                                      observaciones: form.observaciones || '',
+                                      fecha_solucion: estadoActual === 'Bueno' ? horaAccion : null,
+                                      hora_accion: horaAccion,
+                                    },
+                                    meta: { puestoId, source: isPlan ? 'plan' : 'asignado', estructuraId: articuloEstructuraId },
+                                  });
+                                }
+                              }
+
+                              return {
+                                ...art,
+                                mantenimientos: nextMantenimientos,
+                                ultimo_mantenimiento: nextUltimo,
+                                ultimo_registro_mantenimiento: nextUltimo,
+                              };
+                            });
+
+                            return {
+                              ...puesto,
+                              articulos: updatedArticulos,
+                            };
+                          }),
+                        };
+                      }),
+                    };
+                  }),
+                };
+              }),
+            };
+          }),
+        };
+      });
+
+      await AsyncStorage.setItem('main_structure_cache', JSON.stringify(updated));
+      if (shouldEnqueueActions) {
+        await AsyncStorage.setItem(actionsKey, JSON.stringify(actionsArr));
+      }
+    } catch (e) {
+      console.error('Error updating main_structure_cache after entrega-puestos:', e);
+    }
+  };
+
   const formatDate = (date: Date | string): string => {
-    const d = typeof date === 'string' ? new Date(date) : date;
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${day}-${month}-${year}`;
+    if (typeof date === 'string') {
+      return convertDateTimestampToLocalString(date, false);
+    }
+    return convertDateTimestampToLocalString(new Date(date).toISOString(), false);
   };
 
   const formatTime = (time: string | Date): string => {
@@ -244,6 +588,19 @@ export default function EntregaPuestosScreen() {
       const currentMarcaData = JSON.parse(currentMarcaStr);
       setCurrentMarca(currentMarcaData);
 
+      // Cargar jerarquía principal para filtros de ADMINISTRATIVO / SUPERVISOR
+      try {
+        setIsStructureLoading(true);
+        const cache = await AsyncStorage.getItem('main_structure_cache');
+        const parsed = cache ? JSON.parse(cache) : [];
+        setMainStructure(Array.isArray(parsed) ? parsed : []);
+      } catch (e) {
+        console.error('Error loading main_structure_cache in EntregaPuestosScreen:', e);
+        setMainStructure([]);
+      } finally {
+        setIsStructureLoading(false);
+      }
+
       const isConnected = await getConnectionStatus();
       if (!isConnected) {
         setError('Se requiere conexión a internet para cargar los datos');
@@ -274,7 +631,15 @@ export default function EntregaPuestosScreen() {
 
       const data = await response.json();
       if (!data.status) {
-        setError(data.message || 'Error al cargar los datos');
+        const message = data.message || 'Error al cargar los datos';
+        if (message === 'Ya has registrado la entrega de puesto para este turno') {
+          setHasEntregaTurno(true);
+          setError(null);
+          setShowRecordsList(true);
+          await fetchEntregaRecordsByPuesto(currentMarcaData?.puesto?.id ?? null);
+        } else {
+          setError(message);
+        }
         setIsLoading(false);
         return;
       }
@@ -321,6 +686,101 @@ export default function EntregaPuestosScreen() {
   useEffect(() => {
     loadData();
   }, []);
+
+  const formatDateOnly = (value: string | Date | null | undefined): string => {
+    if (!value) return 'No definido';
+    if (typeof value === 'string') {
+      return convertDateTimestampToLocalString(value, false);
+    }
+    return convertDateTimestampToLocalString(new Date(value).toISOString(), false);
+  };
+
+  const formatTimeOnly = (value: string | Date | null | undefined): string => {
+    if (!value) return 'No definido';
+    if (typeof value === 'string') {
+      const parts = value.includes('T') ? value.split('T')[1] : value;
+      const timePart = parts.split('.')[0];
+      return timePart || value;
+    }
+    const hours = String(value.getHours()).padStart(2, '0');
+    const minutes = String(value.getMinutes()).padStart(2, '0');
+    const seconds = String(value.getSeconds()).padStart(2, '0');
+    return `${hours}:${minutes}:${seconds}`;
+  };
+
+  const fetchEntregaRecordsByPuesto = async (puestoId: number | null) => {
+    if (!puestoId) {
+      setRecords([]);
+      return;
+    }
+    try {
+      setIsLoadingRecords(true);
+      const isConnected = await getConnectionStatus();
+      if (!isConnected) {
+        Alert.alert('Modo offline', 'Se requiere conexión a internet para cargar los registros.');
+        setRecords([]);
+        return;
+      }
+
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) {
+        throw new Error('Server URL not configured');
+      }
+
+      const response = await authedFetch({
+        url: `${apiUrl}/api/entrega-puestos/puesto/${puestoId}`,
+        init: {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        },
+        refreshAccessToken,
+        logout,
+      });
+      if (!response) return;
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      if (!data.status) {
+        throw new Error(data.message || 'Error al cargar los registros');
+      }
+
+      const registros = Array.isArray(data.registros) ? data.registros : [];
+      const parsed: EntregaPuestoRecord[] = registros.map((r: any) => ({
+        id: r.id,
+        oficial_entrega: r.oficial_entrega,
+        fecha_entrada_entrega: r.fecha_entrada_entrega,
+        fecha_salida_entrega: r.fecha_salida_entrega,
+        hora_entrada_entrega: r.hora_entrada_entrega,
+        hora_salida_entrega: r.hora_salida_entrega,
+        turno_entrega: r.turno_entrega,
+        oficial_recibe: r.oficial_recibe,
+        fecha_entrada_recibe: r.fecha_entrada_recibe,
+        fecha_salida_recibe: r.fecha_salida_recibe,
+        hora_entrada_recibe: r.hora_entrada_recibe,
+        hora_salida_recibe: r.hora_salida_recibe,
+        turno_recibe: r.turno_recibe,
+        articulos_puesto: Array.isArray(r.articulos_puesto) ? r.articulos_puesto : [],
+        observaciones: r.observaciones || '',
+        firma_recibe: r.firma_recibe,
+        firma_entrega: r.firma_entrega ?? null,
+        firma_responsable: r.firma_responsable,
+        created_at: r.created_at,
+        created_by: r.created_by,
+      }));
+
+      setRecords(parsed);
+    } catch (err: any) {
+      console.error('Error fetching entrega-puestos records by puesto:', err);
+      Alert.alert('Error', err.message || 'No se pudieron cargar los registros');
+    } finally {
+      setIsLoadingRecords(false);
+    }
+  };
 
   const handleArticuloEstadoChange = (index: number, estado: 'Bueno' | 'Malo' | 'No está') => {
     const newArticulos = [...articulos];
@@ -545,6 +1005,10 @@ export default function EntregaPuestosScreen() {
                   throw new Error(data.message || 'Error al guardar');
                 }
 
+                // Actualizar caches locales con el nuevo estado de mantenimiento de los artículos
+                await updateMainStructureCacheWithEntrega({ enqueueActions: false });
+                await updateActivitiesCacheWithEntrega();
+
                 Alert.alert('Éxito', data.message || 'Registro de entrega de puesto guardado correctamente');
                 setTimeout(() => {
                   navigation.goBack();
@@ -561,6 +1025,10 @@ export default function EntregaPuestosScreen() {
                   type: 'create',
                 });
                 await AsyncStorage.setItem('entrega_puestos_actions', JSON.stringify(actions));
+
+                // Mantener consistencia offline de caches y encolar sincronización de mantenimiento de artículos
+                await updateMainStructureCacheWithEntrega({ enqueueActions: true });
+                await updateActivitiesCacheWithEntrega();
 
                 Alert.alert('Éxito', 'Registro guardado localmente. Se sincronizará cuando haya conexión.');
                 setTimeout(() => {
@@ -613,7 +1081,7 @@ export default function EntregaPuestosScreen() {
     );
   }
 
-  if (error || !info || !currentMarca) {
+  if (error || !currentMarca) {
     return (
       <ThemedView style={styles.container}>
         <AppHeader onMenuPress={() => setIsMenuVisible(true)} title="Entrega de Puestos" />
@@ -634,14 +1102,16 @@ export default function EntregaPuestosScreen() {
     );
   }
 
-  const fechaEntradaEntrega = formatDate(info.previous_marca.fecha);
-  const fechaSalidaEntrega = calculateFechaSalida(
-    info.previous_marca.fecha,
-    info.previous_marca.hora_inicio,
-    info.previous_marca.hora_fin
-  );
-  const horaEntradaEntrega = formatTime(info.previous_marca.hora_inicio);
-  const horaSalidaEntrega = formatTime(info.previous_marca.hora_fin);
+  const fechaEntradaEntrega = info ? formatDate(info.previous_marca.fecha) : '';
+  const fechaSalidaEntrega = info
+    ? calculateFechaSalida(
+      info.previous_marca.fecha,
+      info.previous_marca.hora_inicio,
+      info.previous_marca.hora_fin
+    )
+    : '';
+  const horaEntradaEntrega = info ? formatTime(info.previous_marca.hora_inicio) : '';
+  const horaSalidaEntrega = info ? formatTime(info.previous_marca.hora_fin) : '';
 
   const fechaEntradaRecibe = formatDate(currentMarca.fecha);
   const fechaSalidaRecibe = calculateFechaSalida(
@@ -672,23 +1142,27 @@ export default function EntregaPuestosScreen() {
     return `${fecha} ${hora.split('T')[1]}`;
   };
 
-  const dataLecturaEntrega = [
-    { label: 'Cliente', value: currentMarca.cliente.nombre },
-    { label: 'Sucursal', value: currentMarca.corpo.nombre },
-    { label: 'Puesto', value: currentMarca.puesto.nombre },
-    { label: 'Oficial', value: info.previous_employee.nombre },
-    { label: 'Entrada', value: formatDateTimeValue(fechaEntradaEntrega, horaEntradaEntrega) },
-    { label: 'Salida', value: formatDateTimeValue(fechaSalidaEntrega, horaSalidaEntrega) },
-    { label: 'Turno', value: getTurnoLabel(info.previous_marca.tipo_turno) },
-  ];
+  const dataLecturaEntrega = info
+    ? [
+      { label: 'Cliente', value: currentMarca.cliente.nombre },
+      { label: 'Sucursal', value: currentMarca.corpo.nombre },
+      { label: 'Puesto', value: currentMarca.puesto.nombre },
+      { label: 'Oficial', value: info.previous_employee.nombre },
+      { label: 'Fecha', value: fechaEntradaEntrega },
+      { label: 'Hora entrada', value: horaEntradaEntrega.split('T')[1] },
+      { label: 'Hora salida', value: horaSalidaEntrega.split('T')[1] },
+      { label: 'Turno', value: getTurnoLabel(info.previous_marca.tipo_turno) },
+    ]
+    : [];
 
   const dataLecturaRecibe = [
     { label: 'Cliente', value: currentMarca.cliente.nombre },
     { label: 'Sucursal', value: currentMarca.corpo.nombre },
     { label: 'Puesto', value: currentMarca.puesto.nombre },
     { label: 'Oficial', value: employee?.name || 'Desconocido' },
-    { label: 'Entrada', value: formatDateTimeValue(fechaEntradaRecibe, horaEntradaRecibe) },
-    { label: 'Salida', value: formatDateTimeValue(fechaSalidaRecibe, horaSalidaRecibe) },
+    { label: 'Fecha', value: fechaEntradaRecibe },
+    { label: 'Hora entrada', value: horaEntradaRecibe.split('T')[1] },
+    { label: 'Hora salida', value: horaSalidaRecibe.split('T')[1] },
     { label: 'Turno', value: getTurnoLabel(currentMarca.tipo_turno) },
   ];
 
@@ -709,6 +1183,154 @@ export default function EntregaPuestosScreen() {
     </ThemedView>
   );
 
+  const isAdminOrSupervisor =
+    currentMarca?.roleDivision?.role?.nombre === 'ADMINISTRATIVO' ||
+    currentMarca?.roleDivision?.role?.nombre === 'SUPERVISOR';
+
+  const selectedEmpresa = filterEmpresaId != null
+    ? mainStructure.find((e) => e.id === filterEmpresaId) || null
+    : null;
+  const selectedCliente = selectedEmpresa && filterClienteId != null
+    ? selectedEmpresa.clientes.find((c) => c.id === filterClienteId) || null
+    : null;
+  const selectedDivision = selectedCliente && filterDivisionId != null
+    ? selectedCliente.division.find((d) => d.id === filterDivisionId) || null
+    : null;
+  const selectedContrato = selectedDivision && filterContratoId != null
+    ? selectedDivision.contratos.find((c) => c.id === filterContratoId) || null
+    : null;
+  const selectedSucursal = selectedContrato && filterSucursalId != null
+    ? selectedContrato.sucursales.find((s) => s.id === filterSucursalId) || null
+    : null;
+
+  const handleToggleRecordsView = async () => {
+    const next = !showRecordsList;
+    setShowRecordsList(next);
+    if (next && records.length === 0) {
+      const puestoIdToLoad = filterPuestoId ?? currentMarca?.puesto?.id ?? null;
+      await fetchEntregaRecordsByPuesto(puestoIdToLoad);
+    }
+  };
+
+  const renderRecordCard = (record: EntregaPuestoRecord) => {
+    const decodedFirma = decodeFirmaHash(record.firma_responsable);
+    return (
+      <ThemedView key={record.id} style={styles.recordCard}>
+        <ThemedText style={styles.recordTitle}>Registro #{record.id}</ThemedText>
+        <ThemedText style={styles.recordLine}>
+          <ThemedText style={styles.recordLabel}>Oficial entrega: </ThemedText>
+          <ThemedText style={styles.recordValue}>{record.oficial_entrega}</ThemedText>
+        </ThemedText>
+        <ThemedText style={styles.recordLine}>
+          <ThemedText style={styles.recordLabel}>Oficial recibe: </ThemedText>
+          <ThemedText style={styles.recordValue}>{record.oficial_recibe}</ThemedText>
+        </ThemedText>
+        <ThemedText style={styles.recordLine}>
+          <ThemedText style={styles.recordLabel}>Entrada entrega: </ThemedText>
+          <ThemedText style={styles.recordValue}>
+            {formatDateOnly(record.fecha_entrada_entrega)} {formatTimeOnly(record.hora_entrada_entrega)}
+          </ThemedText>
+        </ThemedText>
+        <ThemedText style={styles.recordLine}>
+          <ThemedText style={styles.recordLabel}>Salida entrega: </ThemedText>
+          <ThemedText style={styles.recordValue}>
+            {formatDateOnly(record.fecha_salida_entrega)} {formatTimeOnly(record.hora_salida_entrega)}
+          </ThemedText>
+        </ThemedText>
+        <ThemedText style={styles.recordLine}>
+          <ThemedText style={styles.recordLabel}>Entrada recibe: </ThemedText>
+          <ThemedText style={styles.recordValue}>
+            {formatDateOnly(record.fecha_entrada_recibe)} {formatTimeOnly(record.hora_entrada_recibe)}
+          </ThemedText>
+        </ThemedText>
+        <ThemedText style={styles.recordLine}>
+          <ThemedText style={styles.recordLabel}>Salida recibe: </ThemedText>
+          <ThemedText style={styles.recordValue}>
+            {formatDateOnly(record.fecha_salida_recibe)} {formatTimeOnly(record.hora_salida_recibe)}
+          </ThemedText>
+        </ThemedText>
+        <ThemedText style={styles.recordLine}>
+          <ThemedText style={styles.recordLabel}>Turno entrega: </ThemedText>
+          <ThemedText style={styles.recordValue}>{getTurnoLabel(record.turno_entrega)}</ThemedText>
+        </ThemedText>
+        <ThemedText style={styles.recordLine}>
+          <ThemedText style={styles.recordLabel}>Turno recibe: </ThemedText>
+          <ThemedText style={styles.recordValue}>{getTurnoLabel(record.turno_recibe)}</ThemedText>
+        </ThemedText>
+        <ThemedText style={styles.recordLine}>
+          <ThemedText style={styles.recordLabel}>Observaciones: </ThemedText>
+          <ThemedText style={styles.recordValue}>{record.observaciones || 'Sin observaciones'}</ThemedText>
+        </ThemedText>
+
+        <Collapsible title="Firmas">
+          <ThemedText style={styles.recordLine}>
+            <ThemedText style={styles.recordLabel}>Firma recibe: </ThemedText>
+          </ThemedText>
+          {record.firma_recibe ? (
+            <Image
+              source={{ uri: record.firma_recibe }}
+              style={styles.signaturePreviewImageSmall}
+              resizeMode="contain"
+            />
+          ) : (
+            <ThemedText style={styles.recordValue}>No registrada</ThemedText>
+          )}
+          <ThemedText style={[styles.recordLine, { marginTop: 6 }]}>
+            <ThemedText style={styles.recordLabel}>Firma entrega: </ThemedText>
+          </ThemedText>
+          {record.firma_entrega ? (
+            <Image
+              source={{ uri: record.firma_entrega }}
+              style={styles.signaturePreviewImageSmall}
+              resizeMode="contain"
+            />
+          ) : (
+            <ThemedText style={styles.recordValue}>No registrada</ThemedText>
+          )}
+          <ThemedText style={[styles.recordLine, { marginTop: 6 }]}>
+            <ThemedText style={styles.recordLabel}>Firma responsable (digital): </ThemedText>
+          </ThemedText>
+          {decodedFirma ? (
+            <ThemedView style={styles.firmaInfoBoxRecord}>
+              <ThemedText style={styles.firmaInfoTitle}>Información de la firma:</ThemedText>
+              <ThemedText style={styles.firmaInfoValue}>Sesión: {decodedFirma.sessionId || 'N/A'}</ThemedText>
+              <ThemedText style={styles.firmaInfoValue}>Empleado: {decodedFirma.empleadoId || 'N/A'}</ThemedText>
+              <ThemedText style={styles.firmaInfoValue}>
+                Lat: {decodedFirma.latitud || 'N/A'} | Long: {decodedFirma.longitud || 'N/A'}
+              </ThemedText>
+              <ThemedText style={styles.firmaInfoValue}>Hora: { convertDateTimestampToLocalString(new Date(Number(decodedFirma.timestamp)).toISOString()) || 'N/A'}</ThemedText>
+            </ThemedView>
+          ) : (
+            <ThemedText style={styles.recordValue}>No se pudo decodificar la firma</ThemedText>
+          )}
+        </Collapsible>
+
+        <Collapsible title="Artículos del puesto">
+          {record.articulos_puesto && record.articulos_puesto.length > 0 ? (
+            record.articulos_puesto.map((art, index) => (
+              <ThemedView key={`${record.id}-art-${index}`} style={styles.recordArticuloRow}>
+                <ThemedText style={styles.recordArticuloNombre}>{art.nombre}</ThemedText>
+                <ThemedText style={styles.recordArticuloDetail}>
+                  Estado: {art.estado || 'No definido'}
+                </ThemedText>
+                <ThemedText style={styles.recordArticuloDetail}>
+                  Cant. requerida: {art.cantidad_requerida} | Cant. real: {art.cantidad_real}
+                </ThemedText>
+                {art.observaciones ? (
+                  <ThemedText style={styles.recordArticuloDetail}>
+                    Observaciones: {art.observaciones}
+                  </ThemedText>
+                ) : null}
+              </ThemedView>
+            ))
+          ) : (
+            <ThemedText style={styles.recordValue}>No hay artículos registrados.</ThemedText>
+          )}
+        </Collapsible>
+      </ThemedView>
+    );
+  };
+
   return (
     <ThemedView style={styles.container}>
       <AppHeader onMenuPress={() => setIsMenuVisible(true)} title="Entrega de Puestos" />
@@ -724,7 +1346,41 @@ export default function EntregaPuestosScreen() {
             <ThemedText style={styles.subtitle}>Registro de entrega y recepción de puestos</ThemedText>
           </ThemedView>
 
+          <ThemedView style={styles.toggleBar}>
+            <TouchableOpacity
+              style={[
+                styles.toggleButton,
+                showRecordsList && styles.toggleButtonActive,
+              ]}
+              onPress={handleToggleRecordsView}
+            >
+              <Ionicons
+                name={showRecordsList ? 'arrow-forward-circle' : 'list-outline'}
+                size={16}
+                color={showRecordsList ? '#FFFFFF' : '#007AFF'}
+              />
+              <ThemedText
+                style={[
+                  styles.toggleButtonText,
+                  showRecordsList && styles.toggleButtonTextActive,
+                ]}
+              >
+                {showRecordsList ? 'Realizar entrega de puesto' : 'Ver registros'}
+              </ThemedText>
+            </TouchableOpacity>
+          </ThemedView>
+
+        {!showRecordsList && hasEntregaTurno && (
+            <ThemedView style={styles.infoBanner}>
+              <Ionicons name="information-circle-outline" size={18} color="#FF9500" />
+              <ThemedText style={styles.infoBannerText}>
+                Ya has registrado la entrega de puesto para este turno. Puedes revisar tus registros a continuación.
+              </ThemedText>
+            </ThemedView>
+          )}
+
           {/* Formulario principal */}
+          {!showRecordsList && info && (
           <ThemedView style={styles.formCard}>
             <ThemedText style={styles.formTitle}>Datos de Entrega y Recepción</ThemedText>
 
@@ -793,7 +1449,7 @@ export default function EntregaPuestosScreen() {
                     </ThemedText>
                     <ThemedText style={styles.bitLine}>
                       <ThemedText style={styles.bitLabel}>Fecha: </ThemedText>
-                      <ThemedText style={styles.bitValue}>{new Date(nota.updated_at).toLocaleString()}</ThemedText>
+                      <ThemedText style={styles.bitValue}>{ convertDateTimestampToLocalString(new Date(nota.updated_at).toISOString()) || 'N/A'}</ThemedText>
                     </ThemedText>
                   </ThemedView>
                 ))
@@ -999,7 +1655,7 @@ export default function EntregaPuestosScreen() {
                         <ThemedText style={styles.firmaInfoValue}>Sesión: {info.sessionId || 'N/A'}</ThemedText>
                         <ThemedText style={styles.firmaInfoValue}>Empleado: {info.empleadoId || 'N/A'}</ThemedText>
                         <ThemedText style={styles.firmaInfoValue}>Lat: {info.latitud || 'N/A'} | Long: {info.longitud || 'N/A'}</ThemedText>
-                        <ThemedText style={styles.firmaInfoValue}>Hora: {info.timestamp || 'N/A'}</ThemedText>
+                        <ThemedText style={styles.firmaInfoValue}>Hora: { convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}</ThemedText>
                       </>
                     );
                   })()}
@@ -1035,6 +1691,183 @@ export default function EntregaPuestosScreen() {
               </TouchableOpacity>
             </ThemedView>
           </ThemedView>
+          )}
+
+          {/* Lista de registros */}
+          {showRecordsList && (
+            <ThemedView>
+              {true && (
+                <ThemedView style={styles.hierarchyFiltersContainer}>
+                  <ThemedView style={styles.hierarchyFiltersHeader}>
+                    <TouchableOpacity
+                      style={styles.hierarchyFilterToggleButton}
+                      onPress={() => setIsHierarchyFiltersExpanded(!isHierarchyFiltersExpanded)}
+                    >
+                      <ThemedText style={styles.hierarchyFiltersTitle}>
+                        Filtrar por jerarquía
+                      </ThemedText>
+                      <Ionicons
+                        name={isHierarchyFiltersExpanded ? 'chevron-up' : 'chevron-down'}
+                        size={20}
+                        color="#007AFF"
+                      />
+                    </TouchableOpacity>
+                  </ThemedView>
+
+                  {isHierarchyFiltersExpanded && (
+                    <ThemedView style={styles.hierarchyFiltersContent}>
+                      {isStructureLoading ? (
+                        <ActivityIndicator size="small" color="#007AFF" />
+                      ) : (
+                        <>
+                          <ThemedText style={styles.label}>Empresa</ThemedText>
+                          <View style={styles.pickerContainer}>
+                            <Picker
+                              selectedValue={filterEmpresaId ?? 0}
+                              onValueChange={(value) => {
+                                const v = Number(value) || 0;
+                                setFilterEmpresaId(v || null);
+                                setFilterClienteId(null);
+                                setFilterDivisionId(null);
+                                setFilterContratoId(null);
+                                setFilterSucursalId(null);
+                                setFilterPuestoId(null);
+                                setRecords([]);
+                              }}
+                              style={styles.picker}
+                            >
+                              <Picker.Item label="Seleccione una empresa" value={0} />
+                              {mainStructure.map((empresa) => (
+                                <Picker.Item key={empresa.id} label={empresa.nombre} value={empresa.id} />
+                              ))}
+                            </Picker>
+                          </View>
+
+                          <ThemedText style={styles.label}>Cliente</ThemedText>
+                          <View style={styles.pickerContainer}>
+                            <Picker
+                              selectedValue={filterClienteId ?? 0}
+                              enabled={!!selectedEmpresa}
+                              onValueChange={(value) => {
+                                const v = Number(value) || 0;
+                                setFilterClienteId(v || null);
+                                setFilterDivisionId(null);
+                                setFilterContratoId(null);
+                                setFilterSucursalId(null);
+                                setFilterPuestoId(null);
+                                setRecords([]);
+                              }}
+                              style={styles.picker}
+                            >
+                              <Picker.Item label="Seleccione un cliente" value={0} />
+                              {selectedEmpresa?.clientes.map((cliente) => (
+                                <Picker.Item key={cliente.id} label={cliente.nombre} value={cliente.id} />
+                              ))}
+                            </Picker>
+                          </View>
+
+                          <ThemedText style={styles.label}>División</ThemedText>
+                          <View style={styles.pickerContainer}>
+                            <Picker
+                              selectedValue={filterDivisionId ?? 0}
+                              enabled={!!selectedCliente}
+                              onValueChange={(value) => {
+                                const v = Number(value) || 0;
+                                setFilterDivisionId(v || null);
+                                setFilterContratoId(null);
+                                setFilterSucursalId(null);
+                                setFilterPuestoId(null);
+                                setRecords([]);
+                              }}
+                              style={styles.picker}
+                            >
+                              <Picker.Item label="Seleccione una división" value={0} />
+                              {selectedCliente?.division.map((division) => (
+                                <Picker.Item key={division.id} label={division.nombre} value={division.id} />
+                              ))}
+                            </Picker>
+                          </View>
+
+                          <ThemedText style={styles.label}>Contrato</ThemedText>
+                          <View style={styles.pickerContainer}>
+                            <Picker
+                              selectedValue={filterContratoId ?? 0}
+                              enabled={!!selectedDivision}
+                              onValueChange={(value) => {
+                                const v = Number(value) || 0;
+                                setFilterContratoId(v || null);
+                                setFilterSucursalId(null);
+                                setFilterPuestoId(null);
+                                setRecords([]);
+                              }}
+                              style={styles.picker}
+                            >
+                              <Picker.Item label="Seleccione un contrato" value={0} />
+                              {selectedDivision?.contratos.map((contrato) => (
+                                <Picker.Item key={contrato.id} label={contrato.nombre} value={contrato.id} />
+                              ))}
+                            </Picker>
+                          </View>
+
+                          <ThemedText style={styles.label}>Sucursal</ThemedText>
+                          <View style={styles.pickerContainer}>
+                            <Picker
+                              selectedValue={filterSucursalId ?? 0}
+                              enabled={!!selectedContrato}
+                              onValueChange={(value) => {
+                                const v = Number(value) || 0;
+                                setFilterSucursalId(v || null);
+                                setFilterPuestoId(null);
+                                setRecords([]);
+                              }}
+                              style={styles.picker}
+                            >
+                              <Picker.Item label="Seleccione una sucursal" value={0} />
+                              {selectedContrato?.sucursales.map((sucursal) => (
+                                <Picker.Item key={sucursal.id} label={sucursal.nombre} value={sucursal.id} />
+                              ))}
+                            </Picker>
+                          </View>
+
+                          <ThemedText style={styles.label}>Puesto</ThemedText>
+                          <View style={styles.pickerContainer}>
+                            <Picker
+                              selectedValue={filterPuestoId ?? 0}
+                              enabled={!!selectedSucursal}
+                              onValueChange={(value) => {
+                                const v = Number(value) || 0;
+                                const nextPuestoId = v || null;
+                                setFilterPuestoId(nextPuestoId);
+                                fetchEntregaRecordsByPuesto(nextPuestoId);
+                              }}
+                              style={styles.picker}
+                            >
+                              <Picker.Item label="Seleccione un puesto" value={0} />
+                              {selectedSucursal?.puestos.map((puestoNode) => (
+                                <Picker.Item key={puestoNode.id} label={puestoNode.nombre} value={puestoNode.id} />
+                              ))}
+                            </Picker>
+                          </View>
+                        </>
+                      )}
+                    </ThemedView>
+                  )}
+                </ThemedView>
+              )}
+
+              <ThemedView style={styles.infoSection}>
+                {isLoadingRecords ? (
+                  <ActivityIndicator size="small" color="#007AFF" />
+                ) : records.length === 0 ? (
+                  <ThemedText style={styles.emptySectionText}>
+                    No hay registros de entrega de puesto para el puesto seleccionado.
+                  </ThemedText>
+                ) : (
+                  records.map(renderRecordCard)
+                )}
+              </ThemedView>
+            </ThemedView>
+          )}
         </ThemedView>
       </ScrollView >
 
@@ -1151,11 +1984,8 @@ const styles = StyleSheet.create({
   textArea: { minHeight: 90, textAlignVertical: 'top' },
 
   infoSection: {
-    marginTop: 16,
     marginBottom: 16,
     paddingBottom: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E0E0E0',
   },
   sectionTitle: { marginTop: 14, fontSize: 15, fontWeight: '800', color: '#007AFF', marginBottom: 10 },
   readingCardsContainer: {
@@ -1209,6 +2039,95 @@ const styles = StyleSheet.create({
     color: '#666666',
     marginTop: 4,
     marginBottom: 4,
+  },
+
+  // Filtros jerárquicos (inspirado en VisitorsScreen)
+  hierarchyFiltersContainer: {
+    width: '100%',
+    marginBottom: 16,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    overflow: 'hidden',
+    marginTop: 10,
+  },
+  hierarchyFiltersHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: '#F8F9FA',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+  },
+  hierarchyFilterToggleButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    width: '100%',
+  },
+  hierarchyFiltersTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#007AFF',
+    textAlign: 'right',
+  },
+  hierarchyFiltersContent: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: '#F8F9FA',
+    gap: 6,
+  },
+
+  // Toggle formulario / registros
+  toggleBar: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 8,
+  },
+  toggleButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#007AFF',
+    backgroundColor: '#FFFFFF',
+    gap: 6,
+  },
+  toggleButtonActive: {
+    backgroundColor: '#007AFF',
+  },
+  toggleButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#007AFF',
+  },
+  toggleButtonTextActive: {
+    color: '#FFFFFF',
+  },
+
+  // Banner de información cuando ya existe registro en el turno
+  infoBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: '#FFF4E5',
+    borderWidth: 1,
+    borderColor: '#FFE0B2',
+    marginBottom: 10,
+  },
+  infoBannerText: {
+    flex: 1,
+    fontSize: 13,
+    color: '#A15C00',
   },
 
   // Cards (igual que LlavesScreen)
@@ -1352,6 +2271,68 @@ const styles = StyleSheet.create({
   bitLabel: { fontWeight: '700', color: '#333' },
   bitValue: { color: '#000' },
 
+  // Tarjetas de registros de entrega de puesto
+  recordCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 10,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    marginBottom: 12,
+  },
+  recordTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    marginBottom: 8,
+    color: '#000',
+  },
+  recordLine: {
+    marginBottom: 4,
+  },
+  recordLabel: {
+    fontWeight: '700',
+    color: '#333',
+  },
+  recordValue: {
+    color: '#000',
+  },
+  recordArticuloRow: {
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+  },
+  recordArticuloNombre: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#000',
+    marginBottom: 2,
+  },
+  recordArticuloDetail: {
+    fontSize: 13,
+    color: '#333',
+    marginBottom: 1,
+  },
+
+  signaturePreviewImageSmall: {
+    width: '100%',
+    height: 70,
+    borderRadius: 6,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    marginTop: 4,
+    marginBottom: 4,
+  },
+
+  firmaInfoBoxRecord: {
+    marginTop: 6,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    backgroundColor: '#F9F9F9',
+  },
+
   pickerContainer: {
     borderWidth: 1,
     borderColor: '#E0E0E0',
@@ -1437,6 +2418,30 @@ const styles = StyleSheet.create({
   },
   responseText: {
     fontSize: 14,
+    fontWeight: '600',
+  },
+
+  // Encabezado de sección de registros
+  recordsHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+    gap: 12,
+  },
+  refreshButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    backgroundColor: '#007AFF',
+    width: '100%',
+  },
+  refreshButtonText: {
+    color: '#FFFFFF',
+    fontSize: 13,
     fontWeight: '600',
   },
 

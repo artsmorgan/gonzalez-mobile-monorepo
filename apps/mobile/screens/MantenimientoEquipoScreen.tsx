@@ -32,6 +32,7 @@ import Constants from 'expo-constants';
 import getHoraAccion from '../hooks/getHoraAccion';
 import authedFetch from '../hooks/authedFetch';
 import getValidAccessTokenOrLogout from '../hooks/getValidAccessTokenOrLogout';
+import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 
 type TipoMantenimientoArticulo = { id: number; nombre: string };
 
@@ -73,6 +74,8 @@ type ArticuloMantenimiento = {
     tipo_mant_art_reincid?: string | null;
     mant_armas_form?: string | null;
     archivos?: ActivoFileRemote[];
+    /** Solo en caché: creado/actualizado desde Entrega/Actividades/Checklist (no es aún fila real en servidor) */
+    evaluacion_mantenimiento_origen?: 'entrega_puestos' | 'activities' | 'checklist_supervision';
 };
 
 type ArticuloPuestoMantenimientoItem = {
@@ -93,8 +96,14 @@ type ArticuloPuestoMantenimientoItem = {
         cantidad_necesaria: number;
         cantidad_real: number;
         observaciones: string;
+        evaluacion_mantenimiento_origen?: 'entrega_puestos' | 'activities' | 'checklist_supervision';
     };
 };
+
+function isMantenimientoSoloEvaluacionCache(m: { evaluacion_mantenimiento_origen?: string } | null | undefined): boolean {
+    const o = m?.evaluacion_mantenimiento_origen;
+    return o === 'entrega_puestos' || o === 'activities' || o === 'checklist_supervision';
+}
 
 type CategoriaMantenimiento = {
     id: number;
@@ -589,6 +598,7 @@ export default function MantenimientoEquipoScreen() {
     const [movActivo, setMovActivo] = useState<ArticuloPuestoMantenimientoItem | null>(null);
     const [movimientos, setMovimientos] = useState<MovimientoArticuloMantenimientoItem[]>([]);
     const [movIsCreating, setMovIsCreating] = useState(false);
+    const [isHierarchyHintVisible, setIsHierarchyHintVisible] = useState(true);
     const [movEditing, setMovEditing] = useState<MovimientoArticuloMantenimientoItem | null>(null);
 
     const [movFilterSearch, setMovFilterSearch] = useState('');
@@ -922,6 +932,7 @@ export default function MantenimientoEquipoScreen() {
     };
 
     const getConnectionStatus = useCallback(async (): Promise<boolean> => {
+       //return false;
         const state = await Network.getNetworkStateAsync();
         // `isInternetReachable` puede venir null/undefined aunque haya internet.
         // Solo consideramos offline cuando explícitamente es false.
@@ -1210,6 +1221,7 @@ export default function MantenimientoEquipoScreen() {
             const currentMarcaId = current?.id ?? marcaId;
             if (!currentMarcaId) {
                 setHasCurrentMarca(false);
+                console.log('Nos caímos 1');
                 setReportes([]);
                 setIsLoading(false);
                 isFetchingReportesRef.current = false;
@@ -1219,6 +1231,7 @@ export default function MantenimientoEquipoScreen() {
             const puestoIdForQuery = activePuestoId ?? marcaPuestoId ?? null;
             if (!puestoIdForQuery) {
                 setError('Puesto no especificado');
+                console.log('Nos caímos 2');
                 setReportes([]);
                 setIsLoading(false);
                 isFetchingReportesRef.current = false;
@@ -1251,8 +1264,6 @@ export default function MantenimientoEquipoScreen() {
 
                 const url = `${apiUrl}/api/articulo-mantenimiento/puesto/${puestoIdForQuery}`;
 
-                console.log('url: ', url);
-
                 const response = await authedFetch({
                     url,
                     init: {
@@ -1282,6 +1293,7 @@ export default function MantenimientoEquipoScreen() {
                         mantenimientos: Array.isArray(it.mantenimientos) ? it.mantenimientos.map(normalizeMantenimiento) : [],
                         movimientos: Array.isArray(it.movimientos) ? it.movimientos : [],
                     }));
+                    console.log('Actualizamos reportes internet');
                     setReportes(list);
                     await AsyncStorage.setItem(cacheKey, JSON.stringify(list));
                 } else {
@@ -1290,6 +1302,7 @@ export default function MantenimientoEquipoScreen() {
                     if (cacheStr) {
                         setReportes(JSON.parse(cacheStr));
                     } else {
+                        console.log('Nos caímos 3');
                         setReportes([]);
                     }
                 }
@@ -1327,14 +1340,17 @@ export default function MantenimientoEquipoScreen() {
                     });
 
                     if (listFromStructure.length > 0) {
+                        console.log('Actualizamos reportes offline');
                         setReportes(listFromStructure);
                         await AsyncStorage.setItem(cacheKey, JSON.stringify(listFromStructure));
                     } else {
                         // Fallback: cache propio del módulo si no hay estructura disponible
                         const cacheStr = await AsyncStorage.getItem(cacheKey);
                         if (cacheStr) {
+                            console.log('Actualizamos reportes offline desde cache');
                             setReportes(JSON.parse(cacheStr));
                         } else {
+                            console.log('Nos caímos 4');
                             setReportes([]);
                         }
                     }
@@ -1344,18 +1360,21 @@ export default function MantenimientoEquipoScreen() {
                     if (cacheStr) {
                         setReportes(JSON.parse(cacheStr));
                     } else {
+                        console.log('Nos caímos 5');
                         setReportes([]);
                     }
                 }
             }
         } catch (e: any) {
             setError(e.message || 'Error al cargar artículos');
+            console.log(e.message);
             const puestoIdForQuery = activePuestoId ?? null;
             const cacheKey = `mantenimiento_equipo_${String(puestoIdForQuery ?? 'current')}_cache`;
             const cacheStr = await AsyncStorage.getItem(cacheKey);
             if (cacheStr) {
                 setReportes(JSON.parse(cacheStr));
             } else {
+                console.log('Nos caímos 6');
                 setReportes([]);
             }
         } finally {
@@ -1509,6 +1528,13 @@ export default function MantenimientoEquipoScreen() {
     };
 
     const handleActualizar = (activo: ArticuloMantenimiento) => {
+        if (isMantenimientoSoloEvaluacionCache(activo)) {
+            Alert.alert(
+                'No editable',
+                'Este registro es solo informativo hasta actualizar la jerarquía. No puede editarse aquí.'
+            );
+            return;
+        }
         setSelectedActivo(activo);
         setIsUpdating(true);
         setShowActivos(false);
@@ -1932,6 +1958,10 @@ export default function MantenimientoEquipoScreen() {
         }
 
         const requestData: any = {
+            estado: selectedActivo.estado ?? 'Bueno',
+            cantidad_necesaria: selectedActivo.cantidad_necesaria ?? 0,
+            cantidad_real: selectedActivo.cantidad_real ?? 0,
+            observaciones: selectedActivo.observaciones ?? '',
             accion: accion || null,
             fecha_inicio: fechaInicio ? fechaInicio.toISOString() : null,
             numero_boleta_proveeduria: numeroBoletaProveeduria || null,
@@ -2000,7 +2030,9 @@ export default function MantenimientoEquipoScreen() {
         // Patch permitido para actualizar main_structure_cache (solo si el ultimo_mantenimiento coincide)
         const allowedKeys = new Set([
             'estado',
+            'cantidad_necesaria',
             'cantidad_real',
+            'observaciones',
             'fecha_solucion',
             'accion',
             'fecha_inicio',
@@ -2088,24 +2120,38 @@ export default function MantenimientoEquipoScreen() {
         } else {
             // Modo offline
             const localId = selectedActivo.id_local || generateRandomId();
-            const actionsStr = await AsyncStorage.getItem('articulo_mantenimiento_actions');
-            const actions = actionsStr ? JSON.parse(actionsStr) : [];
-            actions.push({
-                type: 'update',
-                id: selectedActivo.id,
-                id_local: localId,
-                parentKey: selectedReporte?.key,
-                // Metadatos para trazabilidad/sincronización (IDs del artículo/puesto)
-                meta: {
-                    puestoId: activePuestoId,
-                    source: selectedReporte?.source ?? null,
-                    estructuraId: selectedReporte?.estructura_id ?? null,
-                },
-                requestData,
-            });
-            await AsyncStorage.setItem('articulo_mantenimiento_actions', JSON.stringify(actions));
+            const esSoloEvaluacionLocal = isMantenimientoSoloEvaluacionCache(selectedActivo);
 
-            // Actualizar cache
+            // Registros válidos (existentes en servidor): encolar PUT para sincronizar luego
+            if (!esSoloEvaluacionLocal && Number.isFinite(Number(selectedActivo.id)) && Number(selectedActivo.id) > 0) {
+                const horaAccion = await getHoraAccion();
+                if (horaAccion) {
+                    requestData.hora_accion = new Date(horaAccion).toISOString();
+                }
+                const actionsStr = await AsyncStorage.getItem('articulo_mantenimiento_actions');
+                const actions = actionsStr ? JSON.parse(actionsStr) : [];
+                const actionsArr: any[] = Array.isArray(actions) ? actions : [];
+                const newAction = {
+                    type: 'update' as const,
+                    id: selectedActivo.id,
+                    id_local: localId,
+                    parentKey: selectedReporte?.key,
+                    meta: {
+                        puestoId: activePuestoId,
+                        source: selectedReporte?.source ?? null,
+                        estructuraId: selectedReporte?.estructura_id ?? null,
+                    },
+                    requestData,
+                };
+                const idx = actionsArr.findIndex(
+                    (a: any) => a?.type === 'update' && Number(a?.id) === Number(selectedActivo.id)
+                );
+                if (idx !== -1) actionsArr[idx] = { ...actionsArr[idx], ...newAction };
+                else actionsArr.push(newAction);
+                await AsyncStorage.setItem('articulo_mantenimiento_actions', JSON.stringify(actionsArr));
+            }
+
+            // Actualizar cache (siempre, para reflejar el formulario)
             const updatedActivos = activos.map((a) =>
                 a.id === selectedActivo.id ? { ...a, ...requestData, id_local: localId } : a
             );
@@ -2148,7 +2194,12 @@ export default function MantenimientoEquipoScreen() {
                 patch: mainStructurePatch,
             });
 
-            Alert.alert('Éxito', 'Los cambios se sincronizarán cuando vuelva la conexión.');
+            Alert.alert(
+                'Éxito',
+                esSoloEvaluacionLocal
+                    ? 'Cambios guardados solo en caché (registro local / esperando jerarquía).'
+                    : 'Los cambios se sincronizarán cuando vuelva la conexión.'
+            );
             setTimeout(async () => {
                 setIsUpdating(false);
                 setSelectedActivo(null);
@@ -2165,11 +2216,21 @@ export default function MantenimientoEquipoScreen() {
 
     const renderReporte = (reporte: ArticuloPuestoMantenimientoItem) => {
         const ultimo = reporte.ultimo_mantenimiento;
+        const esperandoJerarquia = isMantenimientoSoloEvaluacionCache(ultimo as any);
         return (
             <ThemedView key={reporte.key} style={styles.bitacoraCard}>
                 <ThemedText style={styles.bitTitle}>
                     {reporte.articulo_nombre} ({reporte.tipo})
                 </ThemedText>
+
+                {esperandoJerarquia ? (
+                    <ThemedView style={styles.evaluacionJerarquiaBanner}>
+                        <Ionicons name="cloud-offline-outline" size={20} color="#B45309" />
+                        <ThemedText style={styles.evaluacionJerarquiaBannerText}>
+                            Esperando actualización de jerarquía
+                        </ThemedText>
+                    </ThemedView>
+                ) : null}
 
                 <ThemedText style={styles.bitLine}>
                     <ThemedText style={styles.bitLabel}>Estado: </ThemedText>
@@ -2234,6 +2295,7 @@ export default function MantenimientoEquipoScreen() {
         const archivos = activo.archivos || [];
         const isSolucionado = activo.fecha_solucion !== null && activo.fecha_solucion !== undefined;
         const fechaFormateada = formatFechaSolucion(activo.fecha_solucion);
+        const soloInformativo = isMantenimientoSoloEvaluacionCache(activo);
 
         return (
             <ThemedView key={activo.id} style={styles.bitacoraCard}>
@@ -2275,11 +2337,22 @@ export default function MantenimientoEquipoScreen() {
                     <ThemedText style={styles.bitValue}>{activo.observaciones || '-'}</ThemedText>
                 </ThemedText>
 
+                {soloInformativo ? (
+                    <ThemedView style={styles.evaluacionInformativoBox}>
+                        <ThemedText style={styles.evaluacionInformativoText}>
+                            Este registro muestra el último estado designado del artículo y es meramente informativo, más no
+                            corresponde a ningún registro de mantenimiento creado. Si desea ver los últimos registros
+                            reales, actualice la jerarquía
+                        </ThemedText>
+                    </ThemedView>
+                ) : null}
+
                 {archivos.length > 0 && (
                     <ActivoFilesViewer activoId={activo.id} files={archivos} accessToken={accessToken} />
                 )}
 
                 <ThemedView style={styles.listItemButtons}>
+                    {!soloInformativo ? (
                     <TouchableOpacity
                         style={[styles.listItemButton, styles.editButtonActivo]}
                         onPress={() => handleActualizar(activo)}
@@ -2287,6 +2360,7 @@ export default function MantenimientoEquipoScreen() {
                         <Ionicons name="pencil" size={18} color="#FFFFFF" />
                         <ThemedText style={styles.listItemButtonText}>Actualizar</ThemedText>
                     </TouchableOpacity>
+                    ) : null}
                     <TouchableOpacity
                         style={[styles.listItemButton, styles.changesButton]}
                         onPress={() => {
@@ -3810,6 +3884,42 @@ export default function MantenimientoEquipoScreen() {
                         </ThemedView>
                     )}
 
+                    {/* Aviso jerarquía: debajo del filtro principal de la lista de artículos del puesto */}
+                    {!isUpdating &&
+                        !showActivos &&
+                        hasCurrentMarca &&
+                        !isLoading &&
+                        isHierarchyHintVisible && (
+                            <ThemedView style={[styles.hierarchyHintBox, styles.hierarchyHintBoxColumn, { marginHorizontal: 0 }]}>
+                                <ThemedView style={styles.hierarchyHintTopRow}>
+                                    <Ionicons name="information-circle-outline" size={22} color="#007AFF" style={{ marginRight: 10 }} />
+                                    <ThemedView style={styles.hierarchyHintTextRow}>
+                                        <ThemedText style={[styles.hierarchyHintText, { flex: 1 }]}>
+                                            Algunos datos podrían estar desactualizados. Para mayor precisión, vaya a la sección de jerarquía y actualice la información.
+                                        </ThemedText>
+                                        <TouchableOpacity
+                                            onPress={() => setIsHierarchyHintVisible(false)}
+                                            style={styles.hierarchyHintClose}
+                                            accessibilityLabel="Cerrar aviso"
+                                        >
+                                            <ThemedText style={styles.hierarchyHintCloseText}>Cerrar</ThemedText>
+                                        </TouchableOpacity>
+                                    </ThemedView>
+                                </ThemedView>
+                                <TouchableOpacity
+                                    style={[styles.goEntregaButton, styles.hierarchyHintGoButton]}
+                                    onPress={() => navigation.navigate('Jerarquia')}
+                                    activeOpacity={0.85}
+                                    accessibilityLabel="Abrir Jerarquía para actualizar"
+                                >
+                                    <Ionicons name="open-outline" size={16} color="#007AFF" />
+                                    <ThemedText style={styles.goEntregaButtonText}>
+                                        Actualiza los datos en Jerarquía
+                                    </ThemedText>
+                                </TouchableOpacity>
+                            </ThemedView>
+                        )}
+
                     {isUpdating ? (
                         renderForm()
                     ) : showActivos ? (
@@ -4091,7 +4201,7 @@ export default function MantenimientoEquipoScreen() {
                                                             <ThemedText style={styles.firmaInfoValue}>Sesión: {info.sessionId || 'N/A'}</ThemedText>
                                                             <ThemedText style={styles.firmaInfoValue}>Empleado: {info.empleadoId || 'N/A'}</ThemedText>
                                                             <ThemedText style={styles.firmaInfoValue}>Lat: {info.latitud || 'N/A'} | Long: {info.longitud || 'N/A'}</ThemedText>
-                                                            <ThemedText style={styles.firmaInfoValue}>Hora: {info.timestamp || 'N/A'}</ThemedText>
+                                                            <ThemedText style={styles.firmaInfoValue}>Hora: { convertDateTimestampToLocalString( new Date(Number(info.timestamp)).toISOString()) || 'N/A'}</ThemedText>
                                                         </>
                                                     );
                                                 })()}
@@ -5085,6 +5195,122 @@ const styles = StyleSheet.create({
 
     createButton: { backgroundColor: '#007AFF', paddingVertical: 12, borderRadius: 8, alignItems: 'center', marginBottom: 16 },
     createButtonText: { color: '#FFFFFF', fontSize: 16, fontWeight: '600' },
+    hierarchyHintBox: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#E8F4FF',
+        borderWidth: 1,
+        borderColor: '#B8DAF8',
+        borderRadius: 10,
+        paddingVertical: 12,
+        paddingHorizontal: 12,
+        marginBottom: 16,
+    },
+    hierarchyHintBoxColumn: {
+        flexDirection: 'column',
+        alignItems: 'stretch',
+    },
+    hierarchyHintTopRow: {
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        width: '100%',
+        backgroundColor: '#E8F4FF',
+    },
+    hierarchyHintTextRow: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        gap: 8,
+        minWidth: 0,
+        backgroundColor: '#E8F4FF',
+    },
+    hierarchyHintGoButton: {
+        width: '100%',
+        marginTop: 10,
+        marginBottom: 0,
+    },
+    hierarchyHintText: {
+        fontSize: 14,
+        color: '#1a1a1a',
+        lineHeight: 20,
+        backgroundColor: '#E8F4FF',
+    },
+    hierarchyHintClose: {
+        paddingVertical: 6,
+        paddingHorizontal: 10,
+        borderRadius: 8,
+        backgroundColor: '#FFFFFF',
+        borderWidth: 1,
+        borderColor: '#007AFF',
+        flexShrink: 0,
+        alignSelf: 'flex-start',
+    },
+    hierarchyHintCloseText: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#007AFF',
+    },
+    /** Misma apariencia que el acceso a Entrega de puestos en ActivitiesScreen */
+    goEntregaButton: {
+        borderWidth: 1,
+        borderColor: '#007AFF',
+        borderRadius: 8,
+        paddingVertical: 8,
+        paddingHorizontal: 10,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        backgroundColor: '#F4F9FF',
+        marginTop: 10,
+        marginBottom: 4,
+        alignSelf: 'stretch',
+    },
+    goEntregaButtonText: {
+        color: '#007AFF',
+        fontWeight: '700',
+        fontSize: 12,
+        flex: 1,
+    },
+    hierarchyHintActions: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginTop: 8,
+        width: '100%',
+        justifyContent: 'flex-end',
+    },
+    evaluacionJerarquiaBanner: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        backgroundColor: '#FEF3C7',
+        borderWidth: 1,
+        borderColor: '#F59E0B',
+        borderRadius: 8,
+        paddingVertical: 10,
+        paddingHorizontal: 12,
+        marginBottom: 10,
+        marginTop: 4,
+    },
+    evaluacionJerarquiaBannerText: {
+        flex: 1,
+        fontSize: 14,
+        fontWeight: '700',
+        color: '#92400E',
+    },
+    evaluacionInformativoBox: {
+        backgroundColor: '#F3F4F6',
+        borderLeftWidth: 4,
+        borderLeftColor: '#6B7280',
+        padding: 12,
+        borderRadius: 8,
+        marginTop: 10,
+        marginBottom: 8,
+    },
+    evaluacionInformativoText: {
+        fontSize: 13,
+        color: '#374151',
+        lineHeight: 20,
+    },
 
     sectionTitle: { marginTop: 14, fontSize: 15, fontWeight: '800', color: '#007AFF' },
 

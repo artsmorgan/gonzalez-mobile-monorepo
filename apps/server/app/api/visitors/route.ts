@@ -87,8 +87,9 @@ export async function GET(req: NextRequest) {
                                 id: tipo_activo.id,
                                 nombre: tipo_activo.nombre,
                             },
+                            nombre: a.nombre,
                             detalles: a.detalles,
-                            numero_serie: a.numero_serie,
+                            numero_id: a.numero_id,
                             numero_activo: a.numero_activo,
                         });
                     }
@@ -102,6 +103,7 @@ export async function GET(req: NextRequest) {
                 hora_entrada: v.hora_entrada,
                 hora_salida: v.hora_salida,
                 razon_visita: v.razon_visita,
+                dep_pers_visita: v.dep_pers_visita ?? null,
                 responsable: {
                     id: v.responsable_id,
                     nombre: responsable.nombre + " " + responsable.primer_apellido + " " + responsable.segundo_apellido,
@@ -137,6 +139,7 @@ export async function POST(req: NextRequest) {
             hora_entrada,
             hora_salida, // Opcional
             razon_visita,
+            dep_pers_visita, // Opcional
             es_funcionario,
             observaciones, // Opcional
             tipo_accion, // Opcional
@@ -181,6 +184,7 @@ export async function POST(req: NextRequest) {
                     hora_entrada: new Date(hora_entrada).toISOString(),
                     hora_salida: hora_salida ? new Date(hora_salida).toISOString() : null,
                     razon_visita,
+                    dep_pers_visita: dep_pers_visita ?? null,
                     es_funcionario,
                     observaciones,
                     tipo_accion,
@@ -208,6 +212,7 @@ export async function POST(req: NextRequest) {
                             hora_entrada: new_visita.hora_entrada,
                             hora_salida: new_visita.hora_salida ? new_visita.hora_salida : null,
                             razon_visita: new_visita.razon_visita,
+                            dep_pers_visita: new_visita.dep_pers_visita ?? null,
                             es_funcionario: new_visita.es_funcionario,
                             observaciones: new_visita.observaciones,
                             tipo_accion: new_visita.tipo_accion,
@@ -250,8 +255,9 @@ export async function POST(req: NextRequest) {
                                 data: {
                                     visitante_id: new_visita.id,
                                     tipo_id: tipo_activo.id,
+                                    nombre: (a.nombre != null && String(a.nombre).trim() !== '') ? String(a.nombre).trim() : tipo_activo.nombre,
                                     detalles: JSON.stringify(a.detalles),
-                                    numero_serie: a.numero_serie,
+                                    numero_id: a.numero_id != null ? String(a.numero_id) : '',
                                     numero_activo: a.numero_activo ? a.numero_activo : null,
                                 }
                             }

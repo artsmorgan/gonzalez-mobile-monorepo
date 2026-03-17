@@ -42,14 +42,7 @@ export async function PUT(
                 action: "GET",
                 table: "e_estructura_puesto",
                 operation: "findUnique",
-                where: { id: puestoId },
-                include: {
-                    e_estructura_plazas: {
-                        where: {
-                            deleted: null,
-                        },
-                    },
-                },
+                where: { id: puestoId }
             },
         });
 
@@ -84,11 +77,18 @@ export async function PUT(
             );
         }
 
-        // Obtener plazas vinculadas al puesto
-        const plazasIds = puestoObj.e_estructura_plazas?.map((plaza: any) => plaza.id) || [];
+        const plazas = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "e_estructura_plazas",
+                operation: "findMany",
+                where: { puesto_id: puestoId }
+            },
+        });
 
         // Enviar notificación a las plazas vinculadas
-        if (plazasIds.length > 0) {
+        if (plazas.length > 0) {
             // Obtener el marca_dia actual del empleado si existe
             const empleadoId = payload?.id;
             let marcaDiaId = puestoId; // Fallback al puestoId (aunque no sea semánticamente correcto)
@@ -120,7 +120,7 @@ export async function PUT(
                 marcaDiaId,
                 "Ubicación del puesto actualizada",
                 `Se ha actualizado la ubicación del puesto ${puestoObj.nombre || puestoObj.codigo || 'N/A'} a la latitud ${latitud} y longitud ${longitud}`,
-                plazasIds
+                plazas.map((plaza: any) => plaza.id)
             );
         }
 

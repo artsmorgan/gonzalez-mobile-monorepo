@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, Modal, TextInput, Image, View, Platform, Dimensions } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { ThemedText } from '@/components/ThemedText';
@@ -25,6 +25,7 @@ import { useQRScanner } from '@/hooks/useQRScanner';
 import { createActivity, deleteCreatedActivity, listCreatedActivitiesByPuesto, updateCreatedActivity } from '@/hooks/activitiesFunctions';
 import authedFetch from '@/hooks/authedFetch';
 import getValidAccessTokenOrLogout from '@/hooks/getValidAccessTokenOrLogout';
+import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 
 type ActivitiesScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Activities'>;
 
@@ -579,6 +580,28 @@ interface RevisionEquipo {
   imagen_adjunta: string;
 }
 
+function normalizeCantidadNecesaria(value: any): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 1;
+  return Math.max(1, Math.floor(n));
+}
+
+function generateRandomMaintenanceId(): number {
+  const ts = Date.now();
+  const rand = Math.floor(Math.random() * 1000000);
+  return Number(`${ts}${rand}`);
+}
+
+/** Alineado con servidor/API: Plan vs Asignado (evita fallar con "Plan de puesto", etc.) */
+function isPlanTipo(formTipo: any, artTipo: any): boolean {
+  const s = String(formTipo ?? artTipo ?? '').trim();
+  if (!s) return false;
+  const lower = s.toLowerCase();
+  if (lower === 'plan' || lower.includes('plan de')) return true;
+  if (lower === 'asignado' || lower.includes('asignado')) return false;
+  return lower === 'plan';
+}
+
 interface EmpleadoOption {
   nombre: string;
   primer_apellido: string;
@@ -750,6 +773,7 @@ export default function ActivitiesScreen() {
   const [markedPlazaIds, setMarkedPlazaIds] = useState<string[]>([]);
   const [selectedArticuloId, setSelectedArticuloId] = useState<string>('');
   const [assignedResponsables, setAssignedResponsables] = useState<AssignedResponsable[]>([]);
+  const [isSelectedPuestosExpanded, setIsSelectedPuestosExpanded] = useState(false);
   const [articuloRules, setArticuloRules] = useState<ArticuloRuleEntry[]>([]);
   const [isLoadingCatalogs, setIsLoadingCatalogs] = useState(false);
   const [catalogError, setCatalogError] = useState<string | null>(null);
@@ -782,6 +806,266 @@ export default function ActivitiesScreen() {
   const [cambiosItems, setCambiosItems] = useState<any[]>([]);
   const [expandedCambioId, setExpandedCambioId] = useState<number | null>(null);
 
+  /**
+   * Actualiza en main_structure_cache el último mantenimiento de los artículos del puesto actual
+   * usando el estado de los formularios de inventario de actividades de revisión de equipo.
+   * @param activityOverride Si se pasa (p. ej. justo después de marcar), se usa como fuente principal
+   *        para el mapa de artículos; evita depender de `activities` aún no refrescado tras el PUT.
+   */
+  const updateMainStructureCacheFromActivities = useCallback(async (activityOverride?: Actividad | null) => {
+    try {
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      if (!currentMarcaStr) return;
+      const currentMarca = JSON.parse(currentMarcaStr);
+      const puestoId = currentMarca?.puesto?.id;
+      if (!puestoId) return;
+
+      const cacheStr = await AsyncStorage.getItem('main_structure_cache');
+      if (!cacheStr) return;
+      const parsed: any = JSON.parse(cacheStr);
+      if (!Array.isArray(parsed)) return;
+
+      const horaAccionValue = await getHoraAccion();
+      const horaAccionIso = horaAccionValue ? new Date(horaAccionValue).toISOString() : new Date().toISOString();
+
+      // Construir mapa de artículos (por id). Primero la actividad que se acaba de marcar (si aplica),
+      // luego el resto, para no perder estado si activities aún no se ha refrescado.
+      const articleMap = new Map<number, { tipo?: string; cantidad_requerida: number; cantidad_real: number; estado: EstadoArticulo; observaciones: string }>();
+
+      const pushInventario = (act: Actividad) => {
+        if (!act?.is_revision_equipo || !Array.isArray(act.inventario)) return;
+        act.inventario.forEach((inv) => {
+          const form = getArticleFormState(act.id, inv);
+          articleMap.set(inv.id, {
+            tipo: (inv as any)?.tipo,
+            cantidad_requerida: normalizeCantidadNecesaria(
+              inv.cantidad_requerida ?? (inv as any)?.cantidad_requerida
+            ),
+            cantidad_real: form.cantidadReal,
+            estado: form.estado,
+            observaciones: form.observaciones || '',
+          });
+        });
+      };
+
+      if (activityOverride) {
+        pushInventario(activityOverride);
+      }
+      activities.forEach((act) => {
+        if (activityOverride && act.id === activityOverride.id) return;
+        pushInventario(act);
+      });
+      if (articleMap.size === 0) return;
+
+      const updated = parsed.map((empresa: any) => {
+        if (!empresa?.clientes) return empresa;
+        return {
+          ...empresa,
+          clientes: empresa.clientes.map((cliente: any) => {
+            if (!cliente?.division) return cliente;
+            return {
+              ...cliente,
+              division: cliente.division.map((division: any) => {
+                if (!division?.contratos) return division;
+                return {
+                  ...division,
+                  contratos: division.contratos.map((contrato: any) => {
+                    if (!contrato?.sucursales) return contrato;
+                    return {
+                      ...contrato,
+                      sucursales: contrato.sucursales.map((sucursal: any) => {
+                        if (!sucursal?.puestos) return sucursal;
+                        return {
+                          ...sucursal,
+                          puestos: sucursal.puestos.map((puesto: any) => {
+                            if (!puesto || puesto.id !== puestoId || !Array.isArray(puesto.articulos)) {
+                              return puesto;
+                            }
+
+                            const updatedArticulos = puesto.articulos.map((art: any) => {
+                              const form = articleMap.get(Number(art.id));
+                              if (!form) return art;
+
+                              const existingUltimo =
+                                art.ultimo_mantenimiento && typeof art.ultimo_mantenimiento === 'object'
+                                  ? { ...art.ultimo_mantenimiento }
+                                  : null;
+                              const existingMaints = Array.isArray(art.mantenimientos) ? [...art.mantenimientos] : [];
+
+                              const isPlan = isPlanTipo(form.tipo, art.tipo);
+                              const articuloEstructuraId = Number(art.id || 0) || null;
+
+                              const estadoActual = form.estado;
+                              const lastEstado = String(existingUltimo?.estado || 'Bueno');
+                              const shouldCreate =
+                                estadoActual !== 'Bueno' && (existingUltimo == null || lastEstado === 'Bueno');
+                              const shouldUpdate =
+                                !shouldCreate &&
+                                existingUltimo != null &&
+                                ((estadoActual === 'Bueno' && lastEstado !== 'Bueno') || estadoActual !== lastEstado);
+
+                              const newBasic = {
+                                id: generateRandomMaintenanceId(),
+                                articulo_plan_id: isPlan ? articuloEstructuraId : null,
+                                articulo_asignado_id: isPlan ? null : articuloEstructuraId,
+                                estado: estadoActual,
+                                cantidad_necesaria: normalizeCantidadNecesaria(form.cantidad_requerida),
+                                cantidad_real: Number(form.cantidad_real || 0),
+                                observaciones: form.observaciones || '',
+                                fecha_solucion: null,
+                                accion: null,
+                                fecha_inicio: null,
+                                numero_boleta_proveeduria: null,
+                                tipo: null,
+                                marca: null,
+                                modelo: null,
+                                serie_placa: null,
+                                marca_nuevo: null,
+                                modelo_nuevo: null,
+                                serie_placa_nuevo: null,
+                                categoria: null,
+                                tipo_mantenimiento_art: null,
+                                fecha_salida: null,
+                                fecha_entrada: null,
+                                kilometraje: null,
+                                mant_armas_form: null,
+                                categoria_mantenimiento: null,
+                                detalle: null,
+                                numero_fc: null,
+                                proveedor: null,
+                                costo_mo: null,
+                                costo_i: null,
+                                iva: null,
+                                costo_total: null,
+                                fecha_fin: null,
+                                reincidencia_treinta_dias: null,
+                                tipo_mant_art_reincid: null,
+                                c_archivos_adjuntos_articulo_mantenimiento: [],
+                                created_at: horaAccionIso,
+                                updated_at: horaAccionIso,
+                                /** Opcional: indica que el registro se creó/actualizó desde Actividades (revisión equipo) */
+                                evaluacion_mantenimiento_origen: 'activities' as const,
+                              };
+
+                              let nextUltimo: any = existingUltimo ? { ...existingUltimo } : { ...newBasic };
+                              let nextMantenimientos: any[] = [...existingMaints];
+
+                              if (shouldCreate) {
+                                nextUltimo = { ...newBasic };
+                                nextMantenimientos = [nextUltimo, ...nextMantenimientos];
+                              } else {
+                                nextUltimo = {
+                                  ...(existingUltimo ?? newBasic),
+                                  articulo_plan_id: isPlan ? articuloEstructuraId : null,
+                                  articulo_asignado_id: isPlan ? null : articuloEstructuraId,
+                                  estado: estadoActual,
+                                  cantidad_necesaria:
+                                    existingUltimo?.cantidad_necesaria != null
+                                      ? normalizeCantidadNecesaria(existingUltimo.cantidad_necesaria)
+                                      : normalizeCantidadNecesaria(form.cantidad_requerida),
+                                  cantidad_real: Number(form.cantidad_real || 0),
+                                  observaciones: form.observaciones || '',
+                                  fecha_solucion: estadoActual === 'Bueno' ? horaAccionIso : null,
+                                  updated_at: horaAccionIso,
+                                  evaluacion_mantenimiento_origen: 'activities' as const,
+                                };
+
+                                if (existingUltimo?.id) {
+                                  let replaced = false;
+                                  nextMantenimientos = nextMantenimientos.map((m: any) => {
+                                    if (Number(m?.id) !== Number(existingUltimo.id)) return m;
+                                    replaced = true;
+                                    return { ...m, ...nextUltimo };
+                                  });
+                                  if (!replaced) nextMantenimientos = [nextUltimo, ...nextMantenimientos];
+                                } else {
+                                  nextMantenimientos = [nextUltimo, ...nextMantenimientos];
+                                }
+                              }
+
+                              const nuevoUltimo = { ...nextUltimo };
+
+                              return {
+                                ...art,
+                                mantenimientos: nextMantenimientos,
+                                ultimo_mantenimiento: nuevoUltimo,
+                                ultimo_registro_mantenimiento: nuevoUltimo,
+                              };
+                            });
+
+                            return {
+                              ...puesto,
+                              articulos: updatedArticulos,
+                            };
+                          }),
+                        };
+                      }),
+                    };
+                  }),
+                };
+              }),
+            };
+          }),
+        };
+      });
+
+      await AsyncStorage.setItem('main_structure_cache', JSON.stringify(updated));
+    } catch (e) {
+      console.error('Error updating main_structure_cache from activities:', e);
+    }
+  }, [activities, getArticleFormState]);
+
+  /**
+   * Actualiza activities_cache con el estado actual de los artículos
+   * para todas las actividades de revisión de equipo, sin depender de conexión.
+   */
+  const updateActivitiesCacheFromActivities = useCallback(async () => {
+    try {
+      const cacheStr = await AsyncStorage.getItem('activities_cache');
+      if (!cacheStr) return;
+      const parsed: any = JSON.parse(cacheStr);
+      if (!Array.isArray(parsed)) return;
+
+      const updatedActivities = parsed.map((act: any) => {
+        if (!act?.is_revision_equipo || !Array.isArray(act.inventario)) return act;
+
+        const updatedInventario = act.inventario.map((inv: any) => {
+          const activityId = act.id;
+          const form = getArticleFormState(activityId, inv as Inventario);
+          const estado = form.estado;
+          const cantidad_real = form.cantidadReal;
+          const observaciones = form.observaciones || '';
+          const rev = inv.revision_equipo || {};
+
+          return {
+            ...inv,
+            cantidad_requerida:
+              inv.cantidad_requerida != null
+                ? normalizeCantidadNecesaria(inv.cantidad_requerida)
+                : normalizeCantidadNecesaria((inv as any)?.cantidad_requerida),
+            cantidad_real,
+            estado,
+            observaciones,
+            revision_equipo: {
+              ...rev,
+              es_correcto: estado === 'Bueno',
+              motivo_incorrecto: estado === 'Bueno' ? '-' : (observaciones || '-'),
+            },
+          };
+        });
+
+        return {
+          ...act,
+          inventario: updatedInventario,
+        };
+      });
+
+      await AsyncStorage.setItem('activities_cache', JSON.stringify(updatedActivities));
+    } catch (e) {
+      console.error('Error updating activities_cache from activities:', e);
+    }
+  }, [getArticleFormState]);
+
   useFocusEffect(
     useCallback(() => {
       //findCurrentMarca();
@@ -789,9 +1073,9 @@ export default function ActivitiesScreen() {
     }, [])
   );
 
-  // Update dynamic labels for monthly and yearly options
+  // Etiquetas de repetición según **Fecha inicio** (día de semana / ordinal / mes), no el día actual del dispositivo
   useEffect(() => {
-    const baseDate = activityStartDate || new Date();
+    const baseDate = calendarDateFromPicker(activityStartDate || new Date());
     const weekdays = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
     const weekOrdinals = ['primer', 'segundo', 'tercer', 'cuarto', 'último'];
     const months = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
@@ -837,6 +1121,7 @@ export default function ActivitiesScreen() {
   }, []);
 
   const getConnectionStatus = async (): Promise<boolean> => {
+    //return false;
     const networkState = await Network.getNetworkStateAsync();
     return networkState.isConnected && networkState.isInternetReachable ? true : false;
   };
@@ -941,11 +1226,23 @@ export default function ActivitiesScreen() {
     }
   };
 
-  const resetCreateActivityForm = (_horaAccion: string) => {
+  /** Día de la semana en inglés según la fecha (para repetición personalizada). */
+  const weekdayKeyFromDate = (d: Date) => {
+    const keys = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'] as const;
+    return keys[d.getDay()];
+  };
+
+  /** Fecha local de calendario (mediodía) para evaluar día/mes sin desfases por zona. */
+  const calendarDateFromPicker = (d: Date) => {
+    if (!d || isNaN(d.getTime())) return new Date();
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12, 0, 0, 0);
+  };
+
+  const resetCreateActivityForm = (horaAccion: number) => {
     setActivityName('');
     setActivityDescription('');
-    // Siempre iniciar en la fecha actual para evitar fechas inválidas
-    setActivityStartDate(new Date());
+    const start = calendarDateFromPicker(new Date(horaAccion));
+    setActivityStartDate(start);
     setShowStartDatePicker(false);
     setTipoActividad('Normal');
     setSelectedPuestoId('');
@@ -959,7 +1256,8 @@ export default function ActivitiesScreen() {
     setRepetitionType('custom');
     setCustomInterval('1');
     setCustomUnit('week');
-    setSelectedWeekdays([]);
+    // Repetición semanal alineada al día de la fecha de inicio (no al “hoy” implícito sin picker)
+    setSelectedWeekdays([weekdayKeyFromDate(start)]);
     setMonthOption('day-of-month');
     setYearMonth('1');
     setYearDay('1');
@@ -1316,7 +1614,7 @@ export default function ActivitiesScreen() {
 
     if (config.endType === 'date' && config.endDate) {
       const endDateObj = new Date(config.endDate);
-      const endDateStr = formatDateForDisplay(endDateObj);
+      const endDateStr = convertDateTimestampToLocalString(endDateObj.toISOString(), false);
       title += ` (termina el ${endDateStr})`;
     } else if (config.endType === 'never') {
       title += ' (sin fecha de finalización)';
@@ -1337,7 +1635,7 @@ export default function ActivitiesScreen() {
       Alert.alert('Error', 'No se pudo obtener la hora de acción');
       return;
     }
-    resetCreateActivityForm(String(horaAccion));
+    resetCreateActivityForm(horaAccion);
     setIsEditingCreatedActivity(false);
     setEditingCreatedActivityId(null);
     setIsCreateActivityVisible(true);
@@ -1350,7 +1648,7 @@ export default function ActivitiesScreen() {
       Alert.alert('Error', 'No se pudo obtener la hora de acción');
       return;
     }
-    resetCreateActivityForm(String(horaAccion));
+    resetCreateActivityForm(horaAccion);
     setIsCreateActivityVisible(false);
     setModuleStep('created');
     setIsEditingCreatedActivity(false);
@@ -1384,7 +1682,11 @@ export default function ActivitiesScreen() {
       setShowStartDatePicker(false);
     }
     if (selectedDate) {
-      setActivityStartDate(selectedDate);
+      const cal = calendarDateFromPicker(selectedDate);
+      setActivityStartDate(cal);
+      if (customUnit === 'week') {
+        setSelectedWeekdays([weekdayKeyFromDate(cal)]);
+      }
     }
   };
 
@@ -1450,7 +1752,7 @@ export default function ActivitiesScreen() {
       return;
     }
 
-    const plazasToAdd = puesto.plazas.filter(plaza =>
+    const plazasToAdd = puesto.plazas.filter((plaza: any) =>
       markedPlazaIds.includes(String(plaza.id))
     );
 
@@ -1466,8 +1768,8 @@ export default function ActivitiesScreen() {
     }
 
     const newPlazaRecords = plazasToAdd
-      .filter(plaza => !(assignedEntry?.plazas.some(p => p.plazaId === plaza.id)))
-      .map(plaza => ({
+      .filter((plaza: any) => !(assignedEntry?.plazas.some(p => p.plazaId === plaza.id)))
+      .map((plaza: any) => ({
         plazaId: plaza.id,
         plazaNombre: formatPlazaLabel(plaza),
       }));
@@ -1812,7 +2114,7 @@ export default function ActivitiesScreen() {
   const submitCreateActivity = async () => {
     try {
       setIsSubmittingActivity(true);
-      const frequencyConfig = await buildFrequencyConfig();
+      const frequencyConfig = buildFrequencyConfig();
       const frequencyString = JSON.stringify(frequencyConfig);
 
       const reglasPayload = articuloRules.map(rule => ({
@@ -1918,12 +2220,8 @@ export default function ActivitiesScreen() {
     );
   };
 
-  const buildFrequencyConfig = async () => {
-    const horaAccion = await getHoraAccion();
-    if (!horaAccion) {
-      throw new Error('No se pudo obtener la hora de acción');
-    }
-    const baseDate = activityStartDate || new Date(String(horaAccion));
+  const buildFrequencyConfig = () => {
+    const baseDate = calendarDateFromPicker(activityStartDate || new Date());
     const currentWeekday = baseDate.getDay();
     const currentDay = baseDate.getDate();
     const currentMonth = baseDate.getMonth() + 1;
@@ -1952,9 +2250,8 @@ export default function ActivitiesScreen() {
       config.unit = customUnit;
 
       if (customUnit === 'week') {
-        if (selectedWeekdays.length > 0) {
-          config.weekdays = selectedWeekdays;
-        }
+        config.weekdays =
+          selectedWeekdays.length > 0 ? selectedWeekdays : [weekdayKeyFromDate(baseDate)];
       } else if (customUnit === 'month') {
         config.monthOption = monthOption;
         if (monthOption === 'day-of-month') {
@@ -2118,15 +2415,12 @@ export default function ActivitiesScreen() {
       return;
     }
 
-    if (estado === 'marcar' && activity.is_revision_equipo && activity.inventario?.length) {
-      for (const inv of activity.inventario) {
-        const form = getArticleFormState(activity.id, inv);
-        if (form.estado !== 'Bueno' && (!form.observaciones || !form.observaciones.trim())) {
-          Alert.alert('Observaciones requeridas', `El artículo "${inv.nombre}" tiene estado "${form.estado}". Ingresa observaciones antes de marcar la actividad.`);
-          return;
-        }
-      }
+    const horaAccionNumber = await getHoraAccion();
+    if (!horaAccionNumber) {
+      Alert.alert('Error', 'No se pudo obtener la hora de acción');
+      return;
     }
+    const horaAccionIso = new Date(horaAccionNumber).toISOString();
 
     const isConnected = await getConnectionStatus();
 
@@ -2134,7 +2428,21 @@ export default function ActivitiesScreen() {
       e: parseInt(employee.id),
       estado: estado,
       bitacora: bitacora || '-',
+      hora_accion: horaAccionIso,
     };
+
+    // Para actividades de revisión de equipo, enviar también el estado actual de los artículos mostrado en la tabla
+    if (estado === 'marcar' && activity.is_revision_equipo && activity.inventario?.length) {
+      requestData.articles_state = activity.inventario.map((inv) => {
+        const form = getArticleFormState(activity.id, inv);
+        return {
+          id: inv.id,
+          estado: form.estado,
+          cantidad_real: form.cantidadReal,
+          observaciones: form.observaciones?.trim() || '',
+        };
+      });
+    }
 
     // Add image if captured (already formatted as data:image/jpeg;base64,...)
     if (imageBase64) {
@@ -2155,6 +2463,10 @@ export default function ActivitiesScreen() {
         });
 
         if (result.status) {
+          // Sincronizar main_structure_cache con la actividad marcada (fuente explícita; activities puede no estar refrescado aún)
+          await updateMainStructureCacheFromActivities(activity);
+          await updateActivitiesCacheFromActivities();
+
           if (estado === 'marcar' && activity.is_revision_equipo && activity.inventario?.length && employee?.id) {
             const { updateRevisionEquipo } = await import('@/hooks/activitiesFunctions');
             for (const inv of activity.inventario) {
@@ -2168,6 +2480,7 @@ export default function ActivitiesScreen() {
                 motivo_incorrecto: form.estado === 'Bueno' ? '-' : (form.observaciones.trim() || '-'),
                 estado: form.estado,
                 cantidad_real: form.cantidadReal,
+                hora_accion: horaAccionIso,
               };
               const img = inventoryImages[inv.id];
               requestData.file = img ?? null;
@@ -2203,15 +2516,13 @@ export default function ActivitiesScreen() {
           (action: any) => action.activity_id === activity.id && action.type === 'update'
         );
 
-        const horaAccion = await getHoraAccion();
-
         if (existingActionIndex !== -1) {
           // Replace existing action with new one (including new bitacora and image)
           actions[existingActionIndex] = {
             type: 'update',
             activity_id: activity.id,
             requestData,
-            timestamp: horaAccion,
+            timestamp: horaAccionNumber,
           };
           Alert.alert('Acción actualizada', 'La acción se sincronizará cuando recuperes la conexión.');
         } else {
@@ -2220,7 +2531,7 @@ export default function ActivitiesScreen() {
             type: 'update',
             activity_id: activity.id,
             requestData,
-            timestamp: horaAccion,
+            timestamp: horaAccionNumber,
           });
           Alert.alert('Guardado offline', 'La acción se sincronizará cuando recuperes la conexión.');
         }
@@ -2239,6 +2550,7 @@ export default function ActivitiesScreen() {
               motivo_incorrecto: form.estado === 'Bueno' ? '-' : (form.observaciones.trim() || '-'),
               estado: form.estado,
               cantidad_real: form.cantidadReal,
+              hora_accion: horaAccionIso,
             };
             const img = inventoryImages[inv.id];
             req.file = img ?? null;
@@ -2256,7 +2568,7 @@ export default function ActivitiesScreen() {
               activity_id: activity.id,
               inventory_id: inv.id,
               requestData: req,
-              timestamp: horaAccion,
+              timestamp: horaAccionNumber,
             };
 
             if (existingEquipIndex !== -1) {
@@ -2282,6 +2594,10 @@ export default function ActivitiesScreen() {
             await AsyncStorage.setItem('activities_cache', JSON.stringify(activities));
           }
         }
+
+        // Sincronizar main_structure_cache con la actividad marcada (offline también)
+        await updateMainStructureCacheFromActivities(activity);
+        await updateActivitiesCacheFromActivities();
 
         // Reload activities list after offline update
         await fetchActivities();
@@ -2348,23 +2664,117 @@ export default function ActivitiesScreen() {
   const selectedContrato = contratosOptions.find((c) => c.id === selectedContratoId) || null;
   const sucursalesOptions = selectedContrato?.sucursales || [];
   const selectedSucursal = sucursalesOptions.find((s) => s.id === selectedSucursalId) || null;
-  const puestosOptionsFromHierarchy = selectedSucursal?.puestos || [];
-  const filteredPuestos = selectedPuestoFilterId
-    ? puestosOptionsFromHierarchy.filter((p) => p.id === selectedPuestoFilterId)
-    : puestosOptionsFromHierarchy;
+  const normalizeDivisionName = (name: string) =>
+    String(name || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .trim();
 
-  const getDivisionPuestos = useCallback((divisionId: number) => {
-    for (const empresa of structure) {
-      for (const cliente of empresa.clientes || []) {
-        for (const division of cliente.division || []) {
-          if (division.id !== divisionId) continue;
-          return (division.contratos || [])
-            .flatMap((contrato) => contrato.sucursales || [])
-            .flatMap((sucursal) => sucursal.puestos || []);
+  const getUniquePuestos = (puestos: any[]) => {
+    const map = new Map<number, any>();
+    for (const puesto of Array.isArray(puestos) ? puestos : []) {
+      const id = Number(puesto?.id);
+      if (!id || map.has(id)) continue;
+      map.set(id, puesto);
+    }
+    return Array.from(map.values());
+  };
+
+  const puestosOptionsFromHierarchy = useMemo<any[]>(() => {
+    if (!selectedEmpresaId) return [];
+    if (selectedSucursalId && selectedSucursal) {
+      return getUniquePuestos(selectedSucursal.puestos || []);
+    }
+    if (selectedContratoId && selectedContrato) {
+      const puestos = (selectedContrato.sucursales || []).flatMap((sucursal: any) => sucursal?.puestos || []);
+      return getUniquePuestos(puestos);
+    }
+    if (selectedDivisionId && selectedDivision) {
+      const puestos = (selectedDivision.contratos || [])
+        .flatMap((contrato: any) => contrato?.sucursales || [])
+        .flatMap((sucursal: any) => sucursal?.puestos || []);
+      return getUniquePuestos(puestos);
+    }
+    if (selectedClienteId && selectedCliente) {
+      const puestos = (selectedCliente.division || [])
+        .flatMap((division: any) => division?.contratos || [])
+        .flatMap((contrato: any) => contrato?.sucursales || [])
+        .flatMap((sucursal: any) => sucursal?.puestos || []);
+      return getUniquePuestos(puestos);
+    }
+    const puestos = (selectedEmpresa?.clientes || [])
+      .flatMap((cliente: any) => cliente?.division || [])
+      .flatMap((division: any) => division?.contratos || [])
+      .flatMap((contrato: any) => contrato?.sucursales || [])
+      .flatMap((sucursal: any) => sucursal?.puestos || []);
+    return getUniquePuestos(puestos);
+  }, [
+    selectedEmpresaId,
+    selectedSucursalId,
+    selectedSucursal,
+    selectedContratoId,
+    selectedContrato,
+    selectedDivisionId,
+    selectedDivision,
+    selectedClienteId,
+    selectedCliente,
+    selectedEmpresa,
+  ]);
+
+  const divisionMassiveOptions = useMemo<Array<{ id: number; nombre: string }>>(() => {
+    const targetNames = ['seguridad', 'aseo y limpieza'];
+    const fallbackByName: Record<string, { id: number; nombre: string }> = {
+      seguridad: { id: 4, nombre: 'Seguridad' },
+      'aseo y limpieza': { id: 5, nombre: 'Aseo y limpieza' },
+    };
+    const picked = new Map<string, { id: number; nombre: string }>();
+    for (const empresa of structure || []) {
+      for (const cliente of empresa?.clientes || []) {
+        for (const division of cliente?.division || []) {
+          const id = Number(division?.id);
+          const nombre = String(division?.nombre || '').trim();
+          const normalized = normalizeDivisionName(nombre);
+          if (!id || !targetNames.includes(normalized) || picked.has(normalized)) continue;
+          picked.set(normalized, { id, nombre });
         }
       }
     }
-    return [];
+    return targetNames
+      .map((name) => picked.get(name) || fallbackByName[name])
+      .filter((item): item is { id: number; nombre: string } => !!item);
+  }, [structure]);
+
+  const filteredPuestos: any[] = selectedPuestoFilterId
+    ? puestosOptionsFromHierarchy.filter((p: any) => p.id === selectedPuestoFilterId)
+    : puestosOptionsFromHierarchy;
+
+  // Igual que en JobManuals: recorre todo main_structure_cache y agrega
+  // todos los puestos de contratos/sucursales de la división seleccionada.
+  const getDivisionPuestos = useCallback((divisionId: number): any[] => {
+    if (!structure || structure.length === 0) return [];
+    const seen = new Set<number>();
+    const out: any[] = [];
+
+    for (const empresa of structure as any[]) {
+      for (const cliente of empresa?.clientes || []) {
+        for (const division of cliente?.division || []) {
+          if (Number(division?.id) !== Number(divisionId)) continue;
+          for (const contrato of division?.contratos || []) {
+            for (const sucursal of contrato?.sucursales || []) {
+              for (const puesto of sucursal?.puestos || []) {
+                const puestoId = Number(puesto?.id);
+                if (!puestoId || seen.has(puestoId)) continue;
+                seen.add(puestoId);
+                out.push(puesto);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return out;
   }, [structure]);
 
   const effectivePuestos = assignToAllDivision && selectedDivisionForAll
@@ -2372,7 +2782,11 @@ export default function ActivitiesScreen() {
     : filteredPuestos;
 
   const handleConfirmPuestosSelection = () => {
-    const uniquePuestosCount = Array.from(new Set(effectivePuestos.map((p) => p.id))).length;
+    if (assignToAllDivision && !selectedDivisionForAll) {
+      Alert.alert('Validación', 'Selecciona una división para asignar todos sus puestos.');
+      return;
+    }
+    const uniquePuestosCount = Array.from(new Set(effectivePuestos.map((p: any) => p.id))).length;
     if (uniquePuestosCount === 0) {
       Alert.alert('Validación', 'Selecciona una jerarquía válida para obtener puestos.');
       return;
@@ -2388,7 +2802,7 @@ export default function ActivitiesScreen() {
             style: 'default',
             onPress: () => {
               setAssignedResponsables(
-                effectivePuestos.map((puesto) => ({
+                effectivePuestos.map((puesto: any) => ({
                   puestoId: puesto.id,
                   puestoNombre: puesto.nombre,
                   assignAll: true,
@@ -2402,13 +2816,14 @@ export default function ActivitiesScreen() {
       return;
     }
     setAssignedResponsables(
-      effectivePuestos.map((puesto) => ({
+      effectivePuestos.map((puesto: any) => ({
         puestoId: puesto.id,
         puestoNombre: puesto.nombre,
         assignAll: true,
         plazas: [],
       }))
     );
+    setIsSelectedPuestosExpanded(false);
     Alert.alert('Listo', `Se utilizarán ${uniquePuestosCount} puestos en el formulario.`);
   };
 
@@ -2535,7 +2950,7 @@ export default function ActivitiesScreen() {
         `Empleado: ${decoded.employeeId || 'N/A'}`,
         `Latitud: ${decoded.latitude || 'N/A'}`,
         `Longitud: ${decoded.longitude || 'N/A'}`,
-        `Hora: ${decoded.timestamp ? generateDateTime(decoded.timestamp) : 'N/A'}`,
+        `Hora: ${decoded.timestamp ? convertDateTimestampToLocalString(new Date(Number(decoded.timestamp)).toISOString()) : 'N/A'}`,
       ].join('\n');
     } catch {
       return 'Firma digital (formato no decodificable)';
@@ -2599,14 +3014,48 @@ export default function ActivitiesScreen() {
     }
   };
 
-  const startEditCreatedActivity = (activity: CreatedActivityItem) => {
+  const startEditCreatedActivity = async (activity: CreatedActivityItem) => {
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora de acción');
+      return;
+    }
     setEditingCreatedActivityId(activity.id);
     setIsEditingCreatedActivity(true);
     setActivityName(activity.nombre_actividad || '');
     setActivityDescription(activity.descripcion_actividad || '');
-    setActivityStartDate(activity.fecha_inicio ? new Date(activity.fecha_inicio) : new Date());
+    const startCal = calendarDateFromPicker(
+      activity.fecha_inicio ? new Date(activity.fecha_inicio) : new Date(horaAccion)
+    );
+    setActivityStartDate(startCal);
     setEndType('date');
-    setEndDate(activity.fecha_fin ? formatDateForApi(new Date(activity.fecha_fin)) : formatDateForApi(new Date()));
+    setEndDate(
+      activity.fecha_fin
+        ? formatDateForApi(new Date(activity.fecha_fin))
+        : formatDateForApi(startCal)
+    );
+    try {
+      const freq = activity.frecuencia ? JSON.parse(activity.frecuencia) : null;
+      if (freq && typeof freq === 'object') {
+        if (freq.type) setRepetitionType(freq.type);
+        if (typeof freq.interval === 'number') setCustomInterval(String(freq.interval));
+        if (freq.unit) setCustomUnit(freq.unit);
+        if (Array.isArray(freq.weekdays) && freq.weekdays.length > 0) {
+          setSelectedWeekdays(freq.weekdays);
+        } else {
+          setSelectedWeekdays([weekdayKeyFromDate(startCal)]);
+        }
+        if (freq.monthOption) setMonthOption(freq.monthOption);
+        if (freq.endType) setEndType(freq.endType);
+        if (freq.endDate) setEndDate(freq.endDate);
+        if (freq.month != null) setYearMonth(String(freq.month));
+        if (freq.day != null) setYearDay(String(freq.day));
+      } else {
+        setSelectedWeekdays([weekdayKeyFromDate(startCal)]);
+      }
+    } catch {
+      setSelectedWeekdays([weekdayKeyFromDate(startCal)]);
+    }
     setTipoActividad(activity.es_revision_equipo ? 'Inventario' : 'Normal');
     try {
       const decoded = decodeSignatureHash(activity.firma_responsable || '');
@@ -2989,7 +3438,7 @@ export default function ActivitiesScreen() {
                   onPress={() => setShowStartDatePicker(true)}
                 >
                   <ThemedText style={styles.dateButtonText}>
-                    {formatDateForDisplay(activityStartDate)}
+                    {convertDateTimestampToLocalString(new Date(activityStartDate).toISOString(), false)}
                   </ThemedText>
                   <Ionicons name="calendar" size={20} color="#007AFF" />
                 </TouchableOpacity>
@@ -3010,61 +3459,91 @@ export default function ActivitiesScreen() {
                     <ActivityIndicator size="small" color="#007AFF" />
                   ) : (
                     <>
-                      <ThemedText style={styles.formLabel}>Jerarquía para puestos</ThemedText>
-                      <ThemedView style={styles.pickerContainer}>
-                        <Picker
-                          selectedValue={selectedEmpresaId ? String(selectedEmpresaId) : ''}
-                          onValueChange={(v) => { setSelectedEmpresaId(v ? Number(v) : null); resetHierarchyBelowEmpresa(); }}
-                          style={styles.picker}
+                      <ThemedView style={styles.hierarchyModeToggleContainer}>
+                        <TouchableOpacity
+                          style={styles.hierarchyModeToggleRow}
+                          onPress={() => {
+                            const nextMode = !assignToAllDivision;
+                            setAssignToAllDivision(nextMode);
+                            setSelectedPuestoFilterId(null);
+                            setSelectedPuestoId('');
+                            if (!nextMode) {
+                              setSelectedDivisionForAll(null);
+                            }
+                          }}
                         >
-                          <Picker.Item label="Selecciona empresa" value="" />
-                          {empresasOptions.map((empresa) => (
-                            <Picker.Item key={empresa.id} label={empresa.nombre} value={String(empresa.id)} />
-                          ))}
-                        </Picker>
+                          <Ionicons
+                            name={assignToAllDivision ? 'checkbox' : 'square-outline'}
+                            size={20}
+                            color={assignToAllDivision ? '#007AFF' : '#999'}
+                          />
+                          <ThemedText style={styles.hierarchyModeToggleLabel}>
+                            Asignar a todos los puestos de una división
+                          </ThemedText>
+                        </TouchableOpacity>
                       </ThemedView>
-                      {!!selectedEmpresaId && (
+
+                      {assignToAllDivision ? (
                         <ThemedView style={styles.pickerContainer}>
                           <Picker
-                            selectedValue={selectedClienteId ? String(selectedClienteId) : ''}
-                            onValueChange={(v) => { setSelectedClienteId(v ? Number(v) : null); resetHierarchyBelowCliente(); }}
-                            style={styles.picker}
-                          >
-                            <Picker.Item label="Selecciona cliente" value="" />
-                            {clientesOptions.map((cliente) => (
-                              <Picker.Item key={cliente.id} label={cliente.nombre} value={String(cliente.id)} />
-                            ))}
-                          </Picker>
-                        </ThemedView>
-                      )}
-                      {!!selectedClienteId && (
-                        <ThemedView style={styles.pickerContainer}>
-                          <Picker
-                            selectedValue={selectedDivisionId ? String(selectedDivisionId) : ''}
-                            onValueChange={(v) => { setSelectedDivisionId(v ? Number(v) : null); resetHierarchyBelowDivision(); }}
+                            selectedValue={selectedDivisionForAll ? String(selectedDivisionForAll) : ''}
+                            onValueChange={(v) => {
+                              setSelectedDivisionForAll(v ? Number(v) : null);
+                              setSelectedPuestoFilterId(null);
+                              setSelectedPuestoId('');
+                            }}
                             style={styles.picker}
                           >
                             <Picker.Item label="Selecciona división" value="" />
-                            {divisionesOptions.map((division) => (
+                            {divisionMassiveOptions.map((division: { id: number; nombre: string }) => (
                               <Picker.Item key={division.id} label={division.nombre} value={String(division.id)} />
                             ))}
                           </Picker>
                         </ThemedView>
-                      )}
-                      {!!selectedDivisionId && (
+                      ) : (
                         <>
-                          <TouchableOpacity
-                            style={styles.secondaryButtonOutline}
-                            onPress={() => {
-                              setAssignToAllDivision(!assignToAllDivision);
-                              setSelectedDivisionForAll(assignToAllDivision ? null : selectedDivisionId);
-                            }}
-                          >
-                            <ThemedText style={styles.secondaryButtonOutlineText}>
-                              {assignToAllDivision ? 'Quitar selección de toda la división' : 'Seleccionar todos los puestos de la división'}
-                            </ThemedText>
-                          </TouchableOpacity>
-                          {!assignToAllDivision && (
+                          <ThemedText style={styles.formLabel}>Jerarquía para puestos</ThemedText>
+                          <ThemedView style={styles.pickerContainer}>
+                            <Picker
+                              selectedValue={selectedEmpresaId ? String(selectedEmpresaId) : ''}
+                              onValueChange={(v) => { setSelectedEmpresaId(v ? Number(v) : null); resetHierarchyBelowEmpresa(); }}
+                              style={styles.picker}
+                            >
+                              <Picker.Item label="Selecciona empresa" value="" />
+                              {empresasOptions.map((empresa) => (
+                                <Picker.Item key={empresa.id} label={empresa.nombre} value={String(empresa.id)} />
+                              ))}
+                            </Picker>
+                          </ThemedView>
+                          {!!selectedEmpresaId && (
+                            <ThemedView style={styles.pickerContainer}>
+                              <Picker
+                                selectedValue={selectedClienteId ? String(selectedClienteId) : ''}
+                                onValueChange={(v) => { setSelectedClienteId(v ? Number(v) : null); resetHierarchyBelowCliente(); }}
+                                style={styles.picker}
+                              >
+                                <Picker.Item label="Selecciona cliente" value="" />
+                                {clientesOptions.map((cliente) => (
+                                  <Picker.Item key={cliente.id} label={cliente.nombre} value={String(cliente.id)} />
+                                ))}
+                              </Picker>
+                            </ThemedView>
+                          )}
+                          {!!selectedClienteId && (
+                            <ThemedView style={styles.pickerContainer}>
+                              <Picker
+                                selectedValue={selectedDivisionId ? String(selectedDivisionId) : ''}
+                                onValueChange={(v) => { setSelectedDivisionId(v ? Number(v) : null); resetHierarchyBelowDivision(); }}
+                                style={styles.picker}
+                              >
+                                <Picker.Item label="Selecciona división" value="" />
+                                {divisionesOptions.map((division) => (
+                                  <Picker.Item key={division.id} label={division.nombre} value={String(division.id)} />
+                                ))}
+                              </Picker>
+                            </ThemedView>
+                          )}
+                          {!!selectedDivisionId && (
                             <ThemedView style={styles.pickerContainer}>
                               <Picker
                                 selectedValue={selectedContratoId ? String(selectedContratoId) : ''}
@@ -3078,7 +3557,7 @@ export default function ActivitiesScreen() {
                               </Picker>
                             </ThemedView>
                           )}
-                          {!assignToAllDivision && !!selectedContratoId && (
+                          {!!selectedContratoId && (
                             <ThemedView style={styles.pickerContainer}>
                               <Picker
                                 selectedValue={selectedSucursalId ? String(selectedSucursalId) : ''}
@@ -3099,19 +3578,23 @@ export default function ActivitiesScreen() {
                         <ThemedText style={styles.secondaryButtonText}>Confirmar selección de puestos</ThemedText>
                       </TouchableOpacity>
 
-                      <ThemedText style={styles.formLabel}>Puestos</ThemedText>
-                      <ThemedView style={styles.pickerContainer}>
-                          <Picker
-                            selectedValue={selectedPuestoId}
-                            onValueChange={handleSelectPuesto}
-                            style={styles.picker}
-                          >
-                            <Picker.Item label="Selecciona un puesto" value="" />
-                            {effectivePuestos.map(puesto => (
-                              <Picker.Item key={puesto.id} label={puesto.nombre} value={String(puesto.id)} />
-                            ))}
-                          </Picker>
-                      </ThemedView>
+                      {!!selectedSucursalId && (
+                        <>
+                          <ThemedText style={styles.formLabel}>Puestos</ThemedText>
+                          <ThemedView style={styles.pickerContainer}>
+                            <Picker
+                              selectedValue={selectedPuestoId}
+                              onValueChange={handleSelectPuesto}
+                              style={styles.picker}
+                            >
+                              <Picker.Item label="Selecciona un puesto" value="" />
+                              {effectivePuestos.map((puesto: any) => (
+                                <Picker.Item key={puesto.id} label={puesto.nombre} value={String(puesto.id)} />
+                              ))}
+                            </Picker>
+                          </ThemedView>
+                        </>
+                      )}
 
                       {selectedPuesto && (
                         <>
@@ -3127,11 +3610,11 @@ export default function ActivitiesScreen() {
                           ) : (
                             <>
                               <ThemedView style={styles.plazaListContainer}>
-                                {selectedPuestoPlazas.map((plaza, index) => {
+                                {selectedPuestoPlazas.map((plaza: any, index: number) => {
                                   const plazaIdStr = String(plaza.id);
                                   const isChecked = markedPlazaIds.includes(plazaIdStr);
                                   const employeesLabel = plaza.empleados && plaza.empleados.length > 0
-                                    ? plaza.empleados.map(emp => emp.nombre).join(', ')
+                                    ? plaza.empleados.map((emp: any) => emp.nombre).join(', ')
                                     : 'Sin empleados asignados';
                                   const isLast = index === selectedPuestoPlazas.length - 1;
                                   return (
@@ -3198,36 +3681,54 @@ export default function ActivitiesScreen() {
                             Aún no has asignado plazas o puestos completos.
                           </ThemedText>
                         ) : (
-                          assignedResponsables.map(responsable => (
-                            <ThemedView key={responsable.puestoId} style={styles.assignedItem}>
-                              <View style={styles.assignedHeader}>
-                                <ThemedText style={styles.assignedTitle}>{responsable.puestoNombre}</ThemedText>
-                                <TouchableOpacity
-                                  style={styles.removeButton}
-                                  onPress={() => handleRemovePuesto(responsable.puestoId)}
-                                >
-                                  <Ionicons name="trash" size={18} color="#FF3B30" />
-                                </TouchableOpacity>
-                              </View>
-                              {responsable.assignAll ? (
-                                <ThemedText style={styles.helperText}>
-                                  Actividad asignada a todo el puesto.
-                                </ThemedText>
-                              ) : (
-                                responsable.plazas.map(plaza => (
-                                  <View key={plaza.plazaId} style={styles.plazaChip}>
-                                    <ThemedText style={styles.plazaChipText}>{plaza.plazaNombre}</ThemedText>
+                          <>
+                            <TouchableOpacity
+                              style={styles.selectedPuestosHeader}
+                              onPress={() => setIsSelectedPuestosExpanded((prev) => !prev)}
+                              activeOpacity={0.85}
+                            >
+                              <ThemedText style={styles.selectedPuestosHeaderText}>
+                                Puestos seleccionados ({assignedResponsables.length})
+                              </ThemedText>
+                              <Ionicons
+                                name={isSelectedPuestosExpanded ? 'chevron-up' : 'chevron-down'}
+                                size={18}
+                                color="#007AFF"
+                              />
+                            </TouchableOpacity>
+
+                            {isSelectedPuestosExpanded &&
+                              assignedResponsables.map((responsable) => (
+                                <ThemedView key={responsable.puestoId} style={styles.assignedItem}>
+                                  <View style={styles.assignedHeader}>
+                                    <ThemedText style={styles.assignedTitle}>{responsable.puestoNombre}</ThemedText>
                                     <TouchableOpacity
                                       style={styles.removeButton}
-                                      onPress={() => handleRemovePlaza(responsable.puestoId, plaza.plazaId)}
+                                      onPress={() => handleRemovePuesto(responsable.puestoId)}
                                     >
-                                      <Ionicons name="close-circle" size={18} color="#FF3B30" />
+                                      <Ionicons name="trash" size={18} color="#FF3B30" />
                                     </TouchableOpacity>
                                   </View>
-                                ))
-                              )}
-                            </ThemedView>
-                          ))
+                                  {responsable.assignAll ? (
+                                    <ThemedText style={styles.helperText}>
+                                      Actividad asignada a todo el puesto.
+                                    </ThemedText>
+                                  ) : (
+                                    responsable.plazas.map((plaza) => (
+                                      <View key={plaza.plazaId} style={styles.plazaChip}>
+                                        <ThemedText style={styles.plazaChipText}>{plaza.plazaNombre}</ThemedText>
+                                        <TouchableOpacity
+                                          style={styles.removeButton}
+                                          onPress={() => handleRemovePlaza(responsable.puestoId, plaza.plazaId)}
+                                        >
+                                          <Ionicons name="close-circle" size={18} color="#FF3B30" />
+                                        </TouchableOpacity>
+                                      </View>
+                                    ))
+                                  )}
+                                </ThemedView>
+                              ))}
+                          </>
                         )}
                       </ThemedView>
                     </>
@@ -3494,7 +3995,7 @@ export default function ActivitiesScreen() {
                         onPress={() => setShowEndDatePicker(true)}
                       >
                         <ThemedText style={styles.dateButtonText}>
-                          {endDate ? formatDateForDisplay(new Date(`${endDate}T00:00:00`)) : 'Seleccionar fecha'}
+                          {endDate ? convertDateTimestampToLocalString(new Date(`${endDate}T00:00:00`).toISOString(), false) : 'Seleccionar fecha'}
                         </ThemedText>
                         <Ionicons name="calendar" size={20} color="#007AFF" />
                       </TouchableOpacity>
@@ -3548,7 +4049,7 @@ export default function ActivitiesScreen() {
                     )}
                     <ThemedText style={styles.signatureInfoText}>Latitud: {signatureData.latitude}</ThemedText>
                     <ThemedText style={styles.signatureInfoText}>Longitud: {signatureData.longitude}</ThemedText>
-                    <ThemedText style={styles.signatureInfoText}>Hora actual: {generateDateTime(signatureData.timestamp)}</ThemedText>
+                    <ThemedText style={styles.signatureInfoText}>Hora actual: {convertDateTimestampToLocalString(new Date(Number(signatureData.timestamp)).toISOString())}</ThemedText>
                     <TouchableOpacity
                       style={styles.clearSignatureButton}
                       onPress={() => {
@@ -3739,7 +4240,7 @@ export default function ActivitiesScreen() {
                   } catch {
                     parsed = [];
                   }
-                  const createdAtLabel = formatCambioCreatedAt(row?.created_at);
+                  const createdAtLabel = convertDateTimestampToLocalString(new Date(row?.created_at).toISOString());
                   const isOpen = expandedCambioId === row.id;
 
                   return (
@@ -4460,6 +4961,36 @@ const styles = StyleSheet.create({
     color: '#007AFF',
     fontWeight: '600',
     textAlign: 'center',
+  },
+  selectedPuestosHeader: {
+    marginTop: 12,
+    marginBottom: 4,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    backgroundColor: '#F2F4F7',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  selectedPuestosHeaderText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#333',
+  },
+  hierarchyModeToggleContainer: {
+    marginBottom: 8,
+  },
+  hierarchyModeToggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 6,
+  },
+  hierarchyModeToggleLabel: {
+    fontSize: 14,
+    color: '#333',
+    fontWeight: '600',
   },
   
   editButton: {

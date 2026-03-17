@@ -115,7 +115,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       informacion_general: informacion_general !== undefined ? normalizeToStringifiedJson(informacion_general) : existing.informacion_general,
       informacion_revision: informacion_revision !== undefined ? normalizeToStringifiedJson(informacion_revision) : existing.informacion_revision,
       movimientos_vehiculos: movimientos_vehiculos !== undefined ? normalizeToStringifiedJson(movimientos_vehiculos) : existing.movimientos_vehiculos,
-      observaciones: typeof observaciones === "string" ? observaciones : existing.observaciones,
+      observaciones: typeof observaciones === "string" ? observaciones ?? "-" : existing.observaciones,
       firma_responsable: typeof firma_responsable === "string" ? firma_responsable : existing.firma_responsable,
       created_at: existing.created_at ?? (toZonedTime(new Date(), "America/Costa_Rica") as Date),
       created_by: existing.created_by ?? (parseInt(String((payload as any)?.id ?? 0)) || 0),
