@@ -16,6 +16,7 @@ import Constants from 'expo-constants';
 
 import authedFetch from '@/hooks/authedFetch';
 import { useAuth } from '@/contexts/AuthContext';
+import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 
 type AnyNode = Record<string, any>;
 
@@ -47,6 +48,7 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
   const [selectedPuestoId, setSelectedPuestoId] = useState<number | null>(null);
   const [selectedPlazaId, setSelectedPlazaId] = useState<number | null>(null);
   const [selectedEmpleadoId, setSelectedEmpleadoId] = useState<number | null>(null);
+  const [createdAt, setCreatedAt] = useState<number | null>(null);
   const [activeSummary, setActiveSummary] = useState<
     'empresa' | 'cliente' | 'division' | 'contrato' | 'sucursal' | 'puesto' | 'plaza' | 'empleado' | null
   >(null);
@@ -174,8 +176,12 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
                 throw new Error(data?.message || 'Error al actualizar la jerarquía');
               }
 
+              console.log("data.created_at", data.created_at);
+
               setStructure(data.structure);
+              setCreatedAt(data.created_at);
               await AsyncStorage.setItem('main_structure_cache', JSON.stringify(data.structure));
+              await AsyncStorage.setItem('main_structure_created_at', String(data.created_at));
               Alert.alert('Éxito', 'Se ha actualizado la jerarquía');
             } catch (e) {
               Alert.alert(
@@ -193,7 +199,15 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
 
   useEffect(() => {
     loadFromCache();
+    loadCreatedAt();
   }, [loadFromCache]);
+
+  const loadCreatedAt = useCallback(async () => {
+    const createdAtStr = await AsyncStorage.getItem('main_structure_created_at');
+    if (createdAtStr) {
+      setCreatedAt(Number(createdAtStr));
+    }
+  }, []);
 
   const empresas = useMemo(() => (Array.isArray(structure) ? structure : []), [structure]);
 
@@ -606,6 +620,10 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
                 ),
               )}
           </View>
+        )}
+
+        {createdAt && (
+            <Text style={[styles.label, { marginBottom: 0 }]}>Última actualización: {convertDateTimestampToLocalString(new Date(createdAt).toISOString())}</Text>
         )}
       </ScrollView>
     </View>

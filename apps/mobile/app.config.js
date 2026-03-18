@@ -70,7 +70,7 @@ module.exports = {
         process.env.API_SERVER ||
         process.env.NEXT_PUBLIC_API_SERVER ||
         // https://api-gonzalez-mobile-monorepo-production.up.railway.app
-        "https://api-gonzalez-mobile-monorepo-production.up.railway.app", // Local dev fallback
+        "https://barrett-nondelirious-denisha.ngrok-free.dev", // Local dev fallback
       APP_VERSION_INFO: {
         "version": "1.0.0",
         "id": "34cd939c-893f-4a98-9279-d76c82cbca3c",
