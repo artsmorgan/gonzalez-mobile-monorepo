@@ -550,11 +550,8 @@ export default function MarcarIngresoSalidaScreen() {
               getLlaves(attendanceData.marca.id),
               getLlaveros(attendanceData.marca.id),
               getCategoriesMantenimiento(),
+              await getMainStructure()
             ]);
-
-            if (!main_structure_cache || main_structure_cache === '') {
-              await getMainStructure();
-            }
           }
         }
         else {
@@ -601,6 +598,7 @@ export default function MarcarIngresoSalidaScreen() {
         'remembered_cedula',
         'server_time',
         'main_structure_cache',
+        'main_structure_created_at',
       ];
       const keys = await AsyncStorage.getAllKeys();
 
@@ -1989,7 +1987,7 @@ export default function MarcarIngresoSalidaScreen() {
           </ThemedView>
           {/* Test Button - Always Visible */}
           
-          {true && (
+          {false && (
           <ThemedView style={styles.testButtonContainer}>
             <TouchableOpacity
               style={[

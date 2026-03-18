@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { toZonedTime } from "date-fns-tz";
+import fs from "fs/promises";
+import path from "path";
 import { prisma } from "../../../../utils/prismaClient";
 import { verifyAccessToken } from "../../../../utils/verifyToken";
 import { verifyTokenFromBody } from "../../../../utils/verifyTokenFromBody";
@@ -463,10 +465,129 @@ export async function POST(req: NextRequest) {
             }
             structure.push(empresa_data as never);
         }
+        // Persistimos el cache en disco para que el mobile pueda reutilizarlo offline.
+        // Best-effort: si falla el write, no impedimos devolver la respuesta al cliente.
+
+        try {
+            const createdAt = toZonedTime(new Date(), "America/Costa_Rica").getTime();
+            // En Next/Turbopack, __dirname puede apuntar a rutas internas (ej: C:\ROOT).
+            // Guardamos en la raiz real del proyecto para mantener `main-structure.json` actualizado.
+            const outPath = path.resolve(process.cwd(), "main-structure.json");
+            const tmpPath = `${outPath}.tmp`;
+            await fs.mkdir(path.dirname(outPath), { recursive: true });
+            const payload = JSON.stringify({ created_at: createdAt, structure }, null, 2);
+
+            // Escritura atómica: escribir a tmp y luego reemplazar para evitar JSON truncado.
+            await fs.writeFile(tmpPath, payload, "utf8");
+            try {
+                await fs.rename(tmpPath, outPath);
+            } catch {
+                // Windows puede fallar `rename` si el destino existe.
+                await fs.unlink(outPath).catch(() => undefined);
+                await fs.rename(tmpPath, outPath);
+            }
+            console.log("Cache escrito en disco (atómico)");
+        } catch (e) {
+            console.error("[main-structure] No se pudo escribir main-structure.json:", e);
+        }
+
         return NextResponse.json({ status: true, structure: structure }, { status: 200 });
     }
     catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        return NextResponse.json({ message: errorMessage }, { status: 500 });
+    }
+}
+
+// Función GET para obtener el archivo
+export async function GET(req: NextRequest) {
+    try {
+        const sp = req.nextUrl.searchParams;
+
+        const expectedMobileToken = process.env.MOBILE_ACCESS_TOKEN?.trim();
+        const incomingMobileToken = String(sp.get("mobileAccessToken") || "").trim();
+        const token = String(sp.get("token") || "").trim();
+        const shouldVerifyAccessToken =
+            sp.get("shouldVerifyAccessToken") == null ? true : sp.get("shouldVerifyAccessToken") !== "false";
+        const createdAtRequestedRaw = sp.get("created_at");
+        const createdAtRequested = createdAtRequestedRaw ? Number(createdAtRequestedRaw) : 0;
+
+        if (!expectedMobileToken) {
+            return NextResponse.json(
+                { status: false, message: "MOBILE_ACCESS_TOKEN no configurado en el servidor" },
+                { status: 500 }
+            );
+        }
+        if (!incomingMobileToken) {
+            return NextResponse.json(
+                { status: false, message: "mobileAccessToken es obligatorio" },
+                { status: 403 }
+            );
+        }
+        if (incomingMobileToken !== expectedMobileToken) {
+            return NextResponse.json(
+                { status: false, message: "mobileAccessToken inválido" },
+                { status: 403 }
+            );
+        }
+
+        const tokenValidationHeader = verifyAccessToken(req);
+        const tokenValidationBody = verifyTokenFromBody(token);
+        const tokenValidation = tokenValidationHeader.valid ? tokenValidationHeader : tokenValidationBody;
+
+        if (shouldVerifyAccessToken && !tokenValidation.valid) {
+            return NextResponse.json(
+                { status: false, expired: tokenValidation.expired, message: tokenValidation.message },
+                { status: tokenValidation.expired ? 401 : 403 }
+            );
+        }
+
+        console.log(7);
+        const outPath = path.resolve(process.cwd(), "main-structure.json");
+
+        console.log(8);
+        let data: string;
+        try {
+            data = await fs.readFile(outPath, "utf8");
+        } catch {
+            // Cache inexistente: devolvemos vacío para que el cliente pueda regenerar.
+            return NextResponse.json(
+                { status: false, created_at: null, message: "Cache main-structure.json no existe", structure: JSON.stringify([]) },
+                { status: 200 }
+            );
+        }
+
+        console.log(9);
+        let parsed: { created_at: unknown; structure: unknown };
+        try {
+            parsed = JSON.parse(data);
+        } catch (e) {
+            // Cache corrupto/truncado: lo movemos a un backup y devolvemos vacío.
+            try {
+                const corruptPath = `${outPath}.corrupt.${Date.now()}`;
+                await fs.rename(outPath, corruptPath);
+            } catch {
+                await fs.unlink(outPath).catch(() => undefined);
+            }
+
+            return NextResponse.json(
+                {
+                    status: false,
+                    created_at: null,
+                    message: "Cache main-structure.json inválida (corrupta/truncada). Se requiere regeneración.",
+                    structure: JSON.stringify([]),
+                },
+                { status: 200 }
+            );
+        }
+
+        console.log(10);
+        const { created_at, structure } = parsed;
+        console.log(11);
+        return NextResponse.json({ status: true, created_at, structure }, { status: 200 });
+    } catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        console.error("[main-structure] Error al leer main-structure.json:", errorMessage);
         return NextResponse.json({ message: errorMessage }, { status: 500 });
     }
 }

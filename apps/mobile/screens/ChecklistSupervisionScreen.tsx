@@ -1619,20 +1619,22 @@ export default function ChecklistSupervisionScreen() {
   };
 
   const updateInput = (sectionId: string, subsectionId: string, inputId: string, updates: Partial<EvaluationInput>) => {
-    setEvaluation(
-      evaluation.map((s) =>
+    setEvaluation((prev) =>
+      prev.map((s) =>
         s.id === sectionId
           ? {
-            ...s,
-            subsections: s.subsections.map((sub) =>
-              sub.id === subsectionId
-                ? {
-                  ...sub,
-                  inputs: sub.inputs.map((inp) => (inp.id === inputId ? { ...inp, ...updates } : inp)),
-                }
-                : sub
-            ),
-          }
+              ...s,
+              subsections: s.subsections.map((sub) =>
+                sub.id === subsectionId
+                  ? {
+                      ...sub,
+                      inputs: sub.inputs.map((inp) =>
+                        inp.id === inputId ? { ...inp, ...updates } : inp
+                      ),
+                    }
+                  : sub
+              ),
+            }
           : s
       )
     );
@@ -1727,6 +1729,20 @@ export default function ChecklistSupervisionScreen() {
       });
       return copy;
     });
+  };
+
+  const isNumericRatingSelect = (input: EvaluationInput): boolean => {
+    const opts = input.options || [];
+    const normalized = opts.map(o => String(o || '').trim());
+    // ['No aplica', '1', '2', '3', '4', '5']
+    if (normalized.length === 6 && normalized[0].toLowerCase() === 'no aplica') {
+      return normalized.slice(1).every(v => /^[1-5]$/.test(v));
+    }
+    // ['1', '2', '3', '4', '5']
+    if (normalized.length === 5) {
+      return normalized.every(v => /^[1-5]$/.test(v));
+    }
+    return false;
   };
 
   // Funciones para firma supervisor (dibujo)
@@ -2396,6 +2412,33 @@ export default function ChecklistSupervisionScreen() {
           />
         );
       case 'select':
+        if (isNumericRatingSelect(input)) {
+          const currentValue = String(input.value || '').trim();
+          const currentScore = /^[1-5]$/.test(currentValue) ? Number(currentValue) : 0;
+          return (
+            <View style={styles.starsRow}>
+              {Array.from({ length: 5 }).map((_, i) => {
+                const starValue = i + 1;
+                const filled = starValue <= currentScore;
+                return (
+                  <TouchableOpacity
+                    key={starValue}
+                    onPress={() => {
+                      updateInput(sectionId, subsectionId, input.id, { value: String(starValue) });
+                    }}
+                  >
+                    <Ionicons
+                      name={filled ? 'star' : 'star-outline'}
+                      size={20}
+                      color={filled ? '#FFD700' : '#C7C7CC'}
+                      style={styles.starIcon}
+                    />
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          );
+        }
         return (
           <View style={styles.pickerContainer}>
             <Picker
@@ -4053,6 +4096,16 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     borderWidth: 1,
     borderColor: '#E0E0E0',
+  },
+  starsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 4,
+    marginBottom: 4,
+  },
+  starIcon: {
+    marginHorizontal: 2,
   },
   formTitle: { fontSize: 18, fontWeight: '800', color: '#000', marginBottom: 16 },
   label: { fontSize: 14, fontWeight: '600', color: '#333', marginBottom: 6, marginTop: 12 },
