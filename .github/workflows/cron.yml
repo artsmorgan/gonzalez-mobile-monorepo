@@ -2,8 +2,8 @@ name: Cron Job Endpoint
 
 on:
   schedule:
-    # 6 AM, 2 PM, 10 PM Costa Rica (convertido a UTC)
     - cron: "0 12,20,4 * * *"
+  workflow_dispatch: # 👈 AGREGA ESTO
 
 jobs:
   call-endpoint:
@@ -12,5 +12,5 @@ jobs:
     steps:
       - name: Call API
         run: |
-          curl -X POST https://api-gonzalez-mobile-monorepo-production.up.railway.app/api/dynamic-prisma/main-structure \
+          curl --fail -X POST https://api-gonzalez-mobile-monorepo-production.up.railway.app/api/dynamic-prisma/main-structure \
           -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}"
