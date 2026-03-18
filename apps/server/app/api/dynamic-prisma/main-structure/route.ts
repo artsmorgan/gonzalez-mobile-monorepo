@@ -16,45 +16,10 @@ type MainStructurePayload = {
 
 export async function POST(req: NextRequest) {
     try {
-        const payload = (await req.json()) as MainStructurePayload;
-        if (!payload || typeof payload !== "object") {
-            return NextResponse.json({ status: false, message: "Payload inválido" }, { status: 400 });
-        }
+        const auth = req.headers.get("authorization");
 
-        const expectedMobileToken = process.env.MOBILE_ACCESS_TOKEN?.trim();
-        const incomingMobileToken = String(payload.mobileAccessToken || "").trim();
-
-        if (!expectedMobileToken) {
-            return NextResponse.json(
-                { status: false, message: "MOBILE_ACCESS_TOKEN no configurado en el servidor" },
-                { status: 500 }
-            );
-        }
-        if (!incomingMobileToken) {
-            console.log("mobileAccessToken es obligatorio");
-            return NextResponse.json(
-                { status: false, message: "mobileAccessToken es obligatorio" },
-                { status: 403 }
-            );
-        }
-        if (incomingMobileToken !== expectedMobileToken) {
-            console.log("mobileAccessToken inválido");
-            return NextResponse.json(
-                { status: false, message: "mobileAccessToken inválido" },
-                { status: 403 }
-            );
-        }
-
-        const shouldVerifyAccessToken = payload.shouldVerifyAccessToken !== false;
-        const tokenValidationHeader = verifyAccessToken(req);
-        const tokenValidationBody = verifyTokenFromBody(payload.token);
-        const tokenValidation = tokenValidationHeader.valid ? tokenValidationHeader : tokenValidationBody;
-
-        if (shouldVerifyAccessToken && !tokenValidation.valid) {
-            return NextResponse.json(
-                { status: false, expired: tokenValidation.expired, message: tokenValidation.message },
-                { status: tokenValidation.expired ? 401 : 403 }
-            );
+        if (auth !== `Bearer ${process.env.CRON_SECRET}`) {
+          return new Response("Unauthorized", { status: 401 });
         }
 
         const nowCostaRica = toZonedTime(new Date(), "America/Costa_Rica");
