@@ -1,17 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { promises as fs } from "fs";
-import path from "path";
 import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
+import mobile_versions from "../../../../mobile_versions.json";
 
 export const runtime = "nodejs";
-
-function isValidUuid(v: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
-}
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
     const { valid, expired, message } = await verifyAccessTokenByApi(req);
+
     if (!valid) {
       return NextResponse.json(
         { status: false, expired, message },
@@ -20,47 +16,51 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
     }
 
     const { id } = await context.params;
-    const versionId = String(id || "").trim();
-    if (!isValidUuid(versionId)) {
-      return NextResponse.json(
-        { status: false, message: "UUID inválido" },
-        { status: 400 }
-      );
-    }
 
-    const folderPath = path.join(process.cwd(), "mobile-apks", versionId);
-    let files: string[] = [];
-    try {
-      files = await fs.readdir(folderPath);
-    } catch {
+    // 🔧 Aquí debes mapear UUID → tag
+    const mobileVersion = mobile_versions.find((version: any) => version.id === id);
+    const releaseTag = `v${mobileVersion?.version || '0.0.0'}`; // <-- lo tienes que implementar
+
+    // 🔥 Llamada a la API de GitHub
+    const response = await fetch(
+      `https://api.github.com/repos/artsmorgan/gonzalez-mobile-monorepo/releases/tags/${releaseTag}`,
+      {
+        headers: {
+          Accept: "application/vnd.github+json",
+        },
+      }
+    );
+
+    if (!response.ok) {
       return NextResponse.json(
-        { status: false, message: "No existe un APK para esta versión" },
+        { status: false, message: "Release no encontrado en GitHub" },
         { status: 404 }
       );
     }
 
-    const apkFileName = files.find((f) => f.toLowerCase().endsWith(".apk"));
-    if (!apkFileName) {
+    const data = await response.json();
+
+    // 🔍 Buscar el APK
+    const asset = data.assets.find((a: any) =>
+      a.name.toLowerCase().endsWith(".apk")
+    );
+
+    if (!asset) {
       return NextResponse.json(
-        { status: false, message: "Archivo APK no encontrado" },
+        { status: false, message: "APK no encontrado en release" },
         { status: 404 }
       );
     }
 
-    const apkFullPath = path.join(folderPath, apkFileName);
-    const fileBuffer = await fs.readFile(apkFullPath);
-    const body = new Uint8Array(fileBuffer);
+    // 🚀 URL directa (rápida)
+    const directUrl = asset.browser_download_url;
 
-    return new NextResponse(body, {
-      status: 200,
-      headers: {
-        "Content-Type": "application/vnd.android.package-archive",
-        "Content-Disposition": `attachment; filename="${apkFileName}"`,
-        "Cache-Control": "no-store",
-      },
-    });
-  } catch (error: unknown) {
-    const errorMessage = error instanceof Error ? error.message : "Error desconocido";
-    return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
+    return NextResponse.redirect(directUrl);
+
+  } catch (error) {
+    return NextResponse.json(
+      { status: false, message: "Error obteniendo APK" },
+      { status: 500 }
+    );
   }
 }

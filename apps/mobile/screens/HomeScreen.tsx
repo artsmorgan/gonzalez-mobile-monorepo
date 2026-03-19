@@ -107,7 +107,7 @@ export default function HomeScreen() {
 
   useEffect(() => {
     const handler = (payload?: MobileVersionPayload) => {
-      const available = !!payload?.available;
+      const available = true;
       //const available = true;
       setIsUpdateButtonVisible(available);
       setMobileVersionInfo(payload?.data ?? null);
