@@ -16,7 +16,9 @@ type MainStructurePayload = {
 
 export async function POST(req: NextRequest) {
     try {
-        console.log('Main structure route called');
+        // Cadena de 8 números aleatorios
+        const randomNumber = Math.random().toString(36).substring(2, 15);
+        console.log('Main structure route called', randomNumber);
         const auth = req.headers.get("authorization");
 
         if (auth !== `Bearer ${process.env.CRON_SECRET}`) {
@@ -452,7 +454,7 @@ export async function POST(req: NextRequest) {
                 await fs.unlink(outPath).catch(() => undefined);
                 await fs.rename(tmpPath, outPath);
             }
-            console.log("Cache escrito en disco (atómico)");
+            console.log("Cache escrito en disco (atómico)", randomNumber);
         } catch (e) {
             console.error("[main-structure] No se pudo escribir main-structure.json:", e);
         }
