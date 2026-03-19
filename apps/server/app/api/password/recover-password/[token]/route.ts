@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 import { NextRequest, NextResponse } from "next/server";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
+import { toZonedTime } from "date-fns-tz";
 const bcrypt = require('bcrypt');
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ token: string }> }) {
@@ -32,8 +33,12 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ token: 
         if (!empleado) return NextResponse.json({ status: false, message: "Empleado no encontrado" });
         const password_expires_at = empleado.password_expires_at;
         
-        const newDateExpiresAt = new Date(password_expires_at);
-        newDateExpiresAt.setMonth(newDateExpiresAt.getMonth() + 2);
+        let newDateExpiresAt = new Date(password_expires_at);
+
+        if (password_expires_at < toZonedTime(new Date(), "America/Costa_Rica")) {
+            const now = toZonedTime(new Date(), "America/Costa_Rica");
+            newDateExpiresAt = toZonedTime(new Date(now.getTime() + 2 * 30 * 24 * 60 * 60 * 1000), "America/Costa_Rica");
+        }
 
         const hashedPassword = await bcrypt.hash(password, 10);
         await callDynamicPrisma({
