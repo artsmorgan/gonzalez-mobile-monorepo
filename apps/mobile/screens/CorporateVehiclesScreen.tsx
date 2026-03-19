@@ -609,6 +609,8 @@ export default function CorporateVehiclesScreen() {
   // Estados para filtros jerárquicos
   const [filterEmpresaId, setFilterEmpresaId] = useState<number | null>(null);
   const [filterClienteId, setFilterClienteId] = useState<number | null>(null);
+  const [filterDivisionId, setFilterDivisionId] = useState<number | null>(null);
+  const [filterContratoId, setFilterContratoId] = useState<number | null>(null);
   const [filterCorpoId, setFilterCorpoId] = useState<number | null>(null);
   const [isHierarchyFiltersExpanded, setIsHierarchyFiltersExpanded] = useState(false);
 
@@ -799,6 +801,7 @@ export default function CorporateVehiclesScreen() {
   }, [refreshAccessToken, logout]);
 
   const getConnectionStatus = async (): Promise<boolean> => {
+    //return false;
     try {
       const state = await Network.getNetworkStateAsync();
       return !!(state.isConnected && state.isInternetReachable);
@@ -890,25 +893,51 @@ export default function CorporateVehiclesScreen() {
     return empresa?.clientes || [];
   }, [filterEmpresas, filterEmpresaId]);
 
-  const filterSucursales = useMemo(() => {
+  const filterDivisiones = useMemo(() => {
     if (!filterClienteId) return [];
     const empresa = filterEmpresas.find((e: any) => e.id === filterEmpresaId);
     if (!empresa) return [];
     const cliente = empresa.clientes?.find((c: any) => c.id === filterClienteId);
     if (!cliente) return [];
-    // Recopilar todas las sucursales de todas las divisiones y contratos del cliente
-    const sucursales: any[] = [];
-    cliente.division?.forEach((division: any) => {
-      division.contratos?.forEach((contrato: any) => {
-        contrato.sucursales?.forEach((sucursal: any) => {
-          if (!sucursales.find(s => s.id === sucursal.id)) {
-            sucursales.push(sucursal);
-          }
+    return cliente.division || cliente.divisiones || [];
+  }, [filterEmpresas, filterEmpresaId, filterClienteId]);
+
+  const filterContratos = useMemo(() => {
+    if (!filterDivisionId) return [];
+    const empresa = filterEmpresas.find((e: any) => e.id === filterEmpresaId);
+    if (!empresa) return [];
+    const cliente = empresa.clientes?.find((c: any) => c.id === filterClienteId);
+    if (!cliente) return [];
+    const divs = cliente.division || cliente.divisiones || [];
+    const division = divs.find((d: any) => Number(d.id) === Number(filterDivisionId));
+    return division?.contratos || [];
+  }, [filterEmpresas, filterEmpresaId, filterClienteId, filterDivisionId]);
+
+  const filterSucursales = useMemo(() => {
+    // Sucursal depende del contrato (cadena: Empresa -> Cliente -> División -> Contrato -> Sucursal)
+    if (!filterClienteId || filterContratoId == null) return [];
+
+    const empresa = filterEmpresas.find((e: any) => e.id === filterEmpresaId);
+    if (!empresa) return [];
+    const cliente = empresa.clientes?.find((c: any) => c.id === filterClienteId);
+    if (!cliente) return [];
+
+    const divs = cliente.division || cliente.divisiones || [];
+    const sucursalesMap = new Map<number, any>();
+
+    divs.forEach((division: any) => {
+      if (filterDivisionId != null && Number(division.id) !== Number(filterDivisionId)) return;
+      (division.contratos || []).forEach((contrato: any) => {
+        if (Number(contrato.id) !== Number(filterContratoId)) return;
+        (contrato.sucursales || []).forEach((sucursal: any) => {
+          const idNum = Number(sucursal?.id);
+          if (!sucursalesMap.has(idNum)) sucursalesMap.set(idNum, sucursal);
         });
       });
     });
-    return sucursales;
-  }, [filterEmpresas, filterEmpresaId, filterClienteId]);
+
+    return Array.from(sucursalesMap.values());
+  }, [filterEmpresas, filterEmpresaId, filterClienteId, filterDivisionId, filterContratoId]);
 
   const findPathForSucursal = useCallback(
     (clienteId: number | null, sucursalId: number | null) => {
@@ -1031,15 +1060,22 @@ export default function CorporateVehiclesScreen() {
     if (marcaEmpresaId && !filterEmpresaId) setFilterEmpresaId(marcaEmpresaId);
     if (marcaClienteId && !filterClienteId) setFilterClienteId(marcaClienteId);
     if (marcaCorpoId && !filterCorpoId) setFilterCorpoId(marcaCorpoId);
-  }, [structure, marcaEmpresaId, marcaClienteId, marcaCorpoId]);
+
+    // Completar cadena Empresa -> Cliente -> División -> Contrato -> Sucursal
+    const path = findPathForSucursal(marcaClienteId, marcaCorpoId);
+    if (path) {
+      if (path.division_id != null && !filterDivisionId) setFilterDivisionId(path.division_id);
+      if (path.contrato_id != null && !filterContratoId) setFilterContratoId(path.contrato_id);
+    }
+  }, [structure, marcaEmpresaId, marcaClienteId, marcaCorpoId, findPathForSucursal, filterDivisionId, filterContratoId, filterEmpresaId, filterClienteId, filterCorpoId]);
 
   // Trigger fetch cuando cambien los filtros jerárquicos (pero no al inicializar)
   useEffect(() => {
     // Solo hacer fetch si hay al menos un filtro activo y la estructura está cargada
-    if (structure && structure.length > 0 && (filterEmpresaId || filterClienteId || filterCorpoId)) {
+    if (structure && structure.length > 0 && filterCorpoId != null) {
       fetchRecords();
     }
-  }, [filterEmpresaId, filterClienteId, filterCorpoId]);
+  }, [filterCorpoId]);
 
   const toggleExpanded = (key: string) => {
     setExpanded((prev) => {
@@ -1080,6 +1116,356 @@ export default function CorporateVehiclesScreen() {
     return '';
   };
 
+  const updateMainStructureCacheFromFetchedVehicles = useCallback(
+    async (params: { sucursalId: number | null; vehicles: VehicleRecord[] }) => {
+      const { sucursalId, vehicles } = params;
+      if (!sucursalId || !Array.isArray(vehicles) || vehicles.length === 0) return;
+
+      try {
+        const cacheStr = await AsyncStorage.getItem('main_structure_cache');
+        if (!cacheStr) return;
+
+        const tree = safeParse<any[]>(cacheStr, []);
+        if (!Array.isArray(tree) || tree.length === 0) return;
+
+        let updated = false;
+
+        for (const empresa of tree) {
+          const clientes = empresa?.clientes || [];
+          for (const cliente of clientes) {
+            const divisiones = cliente?.division || cliente?.divisiones || [];
+            for (const division of divisiones) {
+              const contratos = division?.contratos || [];
+              for (const contrato of contratos) {
+                const sucursales = contrato?.sucursales || [];
+                for (const sucursal of sucursales) {
+                  if (Number(sucursal?.id) !== Number(sucursalId)) continue;
+
+                  const targetKey = Array.isArray(sucursal?.vehiculos_corporativos)
+                    ? 'vehiculos_corporativos'
+                    : Array.isArray(sucursal?.c_vehiculos_corporativos)
+                      ? 'c_vehiculos_corporativos'
+                      : 'vehiculos_corporativos';
+
+                  const vehiculos: any[] = Array.isArray(sucursal?.[targetKey])
+                    ? sucursal[targetKey]
+                    : [];
+
+                  // Mapa por id para upsert sin destruir los demás campos del objeto.
+                  const byId = new Map<number, any>();
+                  for (const v of vehiculos) {
+                    const vid = Number(v?.id);
+                    if (Number.isFinite(vid)) byId.set(vid, v);
+                  }
+
+                  for (const fv of vehicles) {
+                    const fid = Number((fv as any)?.id);
+                    if (!Number.isFinite(fid)) continue;
+
+                    const existing = byId.get(fid);
+                    if (existing) {
+                      // Actualizamos usos (incluye bitacora desde el endpoint GET).
+                      if (Array.isArray((fv as any)?.usos)) {
+                        const serverUsos = (fv as any).usos;
+                        const currentUsos: any[] = Array.isArray(existing.usos)
+                          ? existing.usos
+                          : Array.isArray(existing.c_usos_vehiculos_corporativos)
+                            ? existing.c_usos_vehiculos_corporativos
+                            : [];
+
+                        // Conservamos usos locales/pendientes si existieran (id_local o synced=false).
+                        const serverIds = new Set(
+                          serverUsos
+                            .map((u: any) => (typeof u?.id === 'number' ? u.id : null))
+                            .filter((id: any) => Number.isFinite(id))
+                        );
+                        const localUnsyncedUsos = currentUsos.filter((u: any) => {
+                          const idLocal = u?.id_local;
+                          const id = u?.id;
+                          if (typeof idLocal === 'string' && idLocal.startsWith('local-')) return true;
+                          if (typeof id === 'string' && id.startsWith('local-')) return true;
+                          if (u?.synced === false) return true;
+                          return false;
+                        });
+                        const localToKeep = localUnsyncedUsos.filter((u: any) => {
+                          const idNum = typeof u?.id === 'number' ? u.id : null;
+                          if (idNum != null && serverIds.has(idNum)) return false;
+                          return true;
+                        });
+
+                        const mergedUsos = [...serverUsos, ...localToKeep];
+                        existing.usos = mergedUsos;
+                        // Algunos módulos usan el alias "c_usos_..." si no existe "usos".
+                        existing.c_usos_vehiculos_corporativos = mergedUsos;
+                      }
+
+                      // Actualizamos mantenimientos.
+                      if (Array.isArray((fv as any)?.mantenimientos)) {
+                        const serverMants = (fv as any).mantenimientos;
+                        const currentMants: any[] = Array.isArray(existing.mantenimientos)
+                          ? existing.mantenimientos
+                          : Array.isArray(existing.c_mantenimiento_vehiculos_corporativos)
+                            ? existing.c_mantenimiento_vehiculos_corporativos
+                            : [];
+
+                        const serverMantIds = new Set(
+                          serverMants
+                            .map((m: any) => (typeof m?.id === 'number' ? m.id : null))
+                            .filter((id: any) => Number.isFinite(id))
+                        );
+                        const localUnsyncedMants = currentMants.filter((m: any) => {
+                          const idLocal = m?.id_local;
+                          const id = m?.id;
+                          if (typeof idLocal === 'string' && idLocal.startsWith('local-')) return true;
+                          if (typeof id === 'string' && id.startsWith('local-')) return true;
+                          if (m?.synced === false) return true;
+                          return false;
+                        });
+                        const localMantsToKeep = localUnsyncedMants.filter((m: any) => {
+                          const idNum = typeof m?.id === 'number' ? m.id : null;
+                          if (idNum != null && serverMantIds.has(idNum)) return false;
+                          return true;
+                        });
+
+                        const mergedMants = [...serverMants, ...localMantsToKeep];
+                        existing.mantenimientos = mergedMants;
+                        existing.c_mantenimiento_vehiculos_corporativos = mergedMants;
+                      }
+
+                      // Actualizamos campos base (sin tocar imágenes para evitar perder base64 offline).
+                      const baseFields = [
+                        'empresa_id',
+                        'cliente_id',
+                        'sucursal_id',
+                        'corpo_id',
+                        'placa',
+                        'tipo',
+                        'tipo_autoria',
+                        'estado',
+                        'kilometraje',
+                        'prox_cambio_aceite',
+                        'modelo',
+                        'anno',
+                        'descripcion',
+                        'titulo_propiedad',
+                        'rtv',
+                        'marchamo',
+                        'firma_responsable',
+                        'created_by',
+                        'created_at',
+                      ] as const;
+                      for (const k of baseFields) {
+                        if ((fv as any)[k] !== undefined) existing[k] = (fv as any)[k];
+                      }
+
+                      updated = true;
+                    } else {
+                      // Añadimos si el cache no tenía el vehículo.
+                      vehiculos.push({
+                        ...fv,
+                        // Aseguramos alias usados en módulos offline.
+                        c_usos_vehiculos_corporativos: Array.isArray((fv as any)?.usos) ? (fv as any).usos : [],
+                        c_mantenimiento_vehiculos_corporativos: Array.isArray((fv as any)?.mantenimientos) ? (fv as any).mantenimientos : [],
+                      });
+                      updated = true;
+                      byId.set(fid, vehiculos[vehiculos.length - 1]);
+                    }
+                  }
+
+                  // Persistimos la lista final sobre el nodo sucursal.
+                  sucursal[targetKey] = vehiculos;
+                }
+              }
+            }
+          }
+        }
+
+        if (updated) {
+          console.log('Updating main_structure_cache');
+          await AsyncStorage.setItem('main_structure_cache', JSON.stringify(tree));
+        }
+      } catch (e) {
+        console.error('Error updating main_structure_cache (fetched vehicles):', e);
+      }
+    },
+    []
+  );
+
+  const updateMainStructureCacheFromFetchedVehicleUses = useCallback(
+    async (params: { sucursalId: number | null; vehiculoId: number; usos: VehicleUse[] }) => {
+      const { sucursalId, vehiculoId, usos } = params;
+      if (!vehiculoId || !Array.isArray(usos) || usos.length === 0) return;
+
+      try {
+        const cacheStr = await AsyncStorage.getItem('main_structure_cache');
+        if (!cacheStr) return;
+
+        const tree = safeParse<any[]>(cacheStr, []);
+        if (!Array.isArray(tree) || tree.length === 0) return;
+
+        let updated = false;
+
+        for (const empresa of tree) {
+          const clientes = empresa?.clientes || [];
+          for (const cliente of clientes) {
+            const divisiones = cliente?.division || cliente?.divisiones || [];
+            for (const division of divisiones) {
+              const contratos = division?.contratos || [];
+              for (const contrato of contratos) {
+                const sucursales = contrato?.sucursales || [];
+                for (const sucursal of sucursales) {
+                  if (sucursalId != null && Number(sucursal?.id) !== Number(sucursalId)) continue;
+
+                  const targetKey = Array.isArray(sucursal?.vehiculos_corporativos)
+                    ? 'vehiculos_corporativos'
+                    : Array.isArray(sucursal?.c_vehiculos_corporativos)
+                      ? 'c_vehiculos_corporativos'
+                      : 'vehiculos_corporativos';
+
+                  const vehiculos: any[] = Array.isArray(sucursal?.[targetKey]) ? sucursal[targetKey] : [];
+                  if (!vehiculos.length) continue;
+
+                  const targetVehiculo = vehiculos.find((v: any) => Number(v?.id) === Number(vehiculoId));
+                  if (!targetVehiculo) continue;
+
+                  const currentUsos: any[] = Array.isArray(targetVehiculo?.usos)
+                    ? targetVehiculo.usos
+                    : Array.isArray(targetVehiculo?.c_usos_vehiculos_corporativos)
+                      ? targetVehiculo.c_usos_vehiculos_corporativos
+                      : [];
+
+                  const serverUsos = usos;
+                  const serverIds = new Set(
+                    serverUsos
+                      .map((u: any) => (typeof u?.id === 'number' ? u.id : null))
+                      .filter((id: any) => Number.isFinite(id))
+                  );
+
+                  // Preservamos los usos locales/pending si existieran.
+                  const localUnsyncedUsos = currentUsos.filter((u: any) => {
+                    const idLocal = u?.id_local;
+                    if (typeof idLocal === 'string' && idLocal.startsWith('local-')) return true;
+                    if (typeof u?.id === 'string' && u.id.startsWith('local-')) return true;
+                    if (u?.synced === false) return true;
+                    return false;
+                  });
+
+                  const localToKeep = localUnsyncedUsos.filter((u: any) => {
+                    const idNum = typeof u?.id === 'number' ? u.id : null;
+                    if (idNum != null && serverIds.has(idNum)) return false;
+                    return true;
+                  });
+
+                  const mergedUsos = [...serverUsos, ...localToKeep];
+
+                  targetVehiculo.usos = mergedUsos;
+                  targetVehiculo.c_usos_vehiculos_corporativos = mergedUsos; // alias para otros módulos
+
+                  updated = true;
+                }
+              }
+            }
+          }
+        }
+
+        if (updated) {
+          await AsyncStorage.setItem('main_structure_cache', JSON.stringify(tree));
+        }
+      } catch (e) {
+        console.error('Error updating main_structure_cache (fetched vehicle uses):', e);
+      }
+    },
+    []
+  );
+
+  const updateMainStructureCacheFromFetchedVehicleMaintenances = useCallback(
+    async (params: { sucursalId: number | null; vehiculoId: number; mantenimientos: VehicleMaintenance[] }) => {
+      const { sucursalId, vehiculoId, mantenimientos } = params;
+      if (!sucursalId || !Number.isFinite(vehiculoId) || !Array.isArray(mantenimientos) || mantenimientos.length === 0) return;
+
+      try {
+        const cacheStr = await AsyncStorage.getItem('main_structure_cache');
+        if (!cacheStr) return;
+
+        const tree = safeParse<any[]>(cacheStr, []);
+        if (!Array.isArray(tree) || tree.length === 0) return;
+
+        let updated = false;
+
+        for (const empresa of tree) {
+          const clientes = empresa?.clientes || [];
+          for (const cliente of clientes) {
+            const divisiones = cliente?.division || cliente?.divisiones || [];
+            for (const division of divisiones) {
+              const contratos = division?.contratos || [];
+              for (const contrato of contratos) {
+                const sucursales = contrato?.sucursales || [];
+                for (const sucursal of sucursales) {
+                  if (Number(sucursal?.id) !== Number(sucursalId)) continue;
+
+                  const targetKey = Array.isArray(sucursal?.vehiculos_corporativos)
+                    ? 'vehiculos_corporativos'
+                    : Array.isArray(sucursal?.c_vehiculos_corporativos)
+                      ? 'c_vehiculos_corporativos'
+                      : 'vehiculos_corporativos';
+
+                  const vehiculos: any[] = Array.isArray(sucursal?.[targetKey]) ? sucursal[targetKey] : [];
+                  if (!vehiculos.length) continue;
+
+                  const targetVehiculo = vehiculos.find((v: any) => Number(v?.id) === Number(vehiculoId));
+                  if (!targetVehiculo) continue;
+
+                  const currentMants: any[] = Array.isArray(targetVehiculo?.mantenimientos)
+                    ? targetVehiculo.mantenimientos
+                    : Array.isArray(targetVehiculo?.c_mantenimiento_vehiculos_corporativos)
+                      ? targetVehiculo.c_mantenimiento_vehiculos_corporativos
+                      : [];
+
+                  const serverMants = mantenimientos;
+                  const serverIds = new Set(
+                    serverMants
+                      .map((m: any) => (typeof m?.id === 'number' ? m.id : null))
+                      .filter((id: any) => Number.isFinite(id))
+                  );
+
+                  const localUnsyncedMants = currentMants.filter((m: any) => {
+                    const idLocal = m?.id_local;
+                    if (typeof idLocal === 'string' && idLocal.startsWith('local-')) return true;
+                    if (typeof m?.id === 'string' && m.id.startsWith('local-')) return true;
+                    if (m?.synced === false) return true;
+                    return false;
+                  });
+
+                  const localMantsToKeep = localUnsyncedMants.filter((m: any) => {
+                    const idNum = typeof m?.id === 'number' ? m.id : null;
+                    if (idNum != null && serverIds.has(idNum)) return false;
+                    return true;
+                  });
+
+                  const mergedMants = [...serverMants, ...localMantsToKeep];
+
+                  targetVehiculo.mantenimientos = mergedMants;
+                  // Mantiene compatibilidad con la forma usada por `dynamic-prisma/main-structure`.
+                  targetVehiculo.c_mantenimiento_vehiculos_corporativos = mergedMants;
+
+                  updated = true;
+                }
+              }
+            }
+          }
+        }
+
+        if (updated) {
+          console.log('Updating main_structure_cache');
+          await AsyncStorage.setItem('main_structure_cache', JSON.stringify(tree));
+        }
+      } catch (e) {
+        console.error('Error updating main_structure_cache (fetched vehicle maintenances):', e);
+      }
+    },
+    []
+  );
+
   const fetchRecords = useCallback(async () => {
     try {
       setIsLoading(true);
@@ -1096,9 +1482,10 @@ export default function CorporateVehiclesScreen() {
       // Usar filtros jerárquicos si están disponibles, sino usar current_marca
       const empresaId = filterEmpresaId ?? marcaEmpresaId ?? Number(current?.empresa?.id ?? current?.empresa_id ?? 0);
       const clienteId = filterClienteId ?? marcaClienteId ?? Number(current?.cliente?.id ?? current?.cliente_id ?? 0);
-      const corpoId = filterCorpoId ?? marcaCorpoId ?? Number(current?.corpo?.id ?? current?.corpo_id ?? 0);
+      const corpoIdLocal = filterCorpoId ?? marcaCorpoId ?? Number(current?.corpo?.id ?? current?.corpo_id ?? 0);
+      const corpoIdForQuery = filterCorpoId; // SOLO buscar online cuando está seleccionada la sucursal
 
-      if (!corpoId) {
+      if (!corpoIdLocal) {
         setError('No se encontró el ID de la sucursal (corpo) en la marca actual');
         setIsLoading(false);
         return;
@@ -1108,11 +1495,12 @@ export default function CorporateVehiclesScreen() {
       const cache = cacheStr ? JSON.parse(cacheStr) : [];
       const localCacheAll: VehicleRecord[] = cache.filter((item: any) => item.type === 'corporate_vehicle');
       // Filtrar cache local por corpo_id
-      const localCache: VehicleRecord[] = localCacheAll.filter((r: any) => Number(r.corpo_id) === Number(corpoId));
+      const localCache: VehicleRecord[] = localCacheAll.filter((r: any) => Number(r.corpo_id) === Number(corpoIdLocal));
       const localOnly = localCache.filter((r: any) => !r?.synced || String(r?.id_local || '').startsWith('local-'));
 
       const isConnected = await getConnectionStatus();
-      if (!isConnected) {
+      // Si no hay sucursal seleccionada, evitamos búsqueda online (solo mantenemos el cache local)
+      if (!isConnected || corpoIdForQuery == null) {
         setRecords(localCache);
         return;
       }
@@ -1121,7 +1509,7 @@ export default function CorporateVehiclesScreen() {
       const res = await listCorporateVehicles({
         empresa_id: empresaId || undefined,
         cliente_id: clienteId || undefined,
-        corpo_id: corpoId || undefined,
+        corpo_id: corpoIdForQuery || undefined,
         refreshAccessToken,
         logout,
       });
@@ -1139,27 +1527,39 @@ export default function CorporateVehiclesScreen() {
       setRecords(merged);
 
       const withoutThis = cache.filter(
-        (item: any) => !(item.type === 'corporate_vehicle' && Number(item.corpo_id) === Number(corpoId))
+        (item: any) => !(item.type === 'corporate_vehicle' && Number(item.corpo_id) === Number(corpoIdForQuery))
       );
       await AsyncStorage.setItem(
         'evaluations_cache',
         JSON.stringify([...withoutThis, ...merged.map((r: any) => ({ ...r, type: 'corporate_vehicle' }))])
       );
+
+      // Sincronizamos también el árbol jerárquico offline para que `main_structure_cache`
+      // refleje los últimos `usos`/bitácoras y mantenimientos de la sucursal consultada.
+      void updateMainStructureCacheFromFetchedVehicles({
+        sucursalId: Number(corpoIdForQuery),
+        vehicles: serverItems,
+      });
     } catch (e: any) {
       console.error('Error fetching corporate vehicles:', e);
       setError(e?.message || 'Error al cargar los vehículos');
     } finally {
       setIsLoading(false);
     }
-  }, [fetchMainStructure, refreshAccessToken, logout, filterEmpresaId, filterClienteId, filterCorpoId, marcaEmpresaId, marcaClienteId, marcaCorpoId]);
+  }, [fetchMainStructure, refreshAccessToken, logout, filterEmpresaId, filterClienteId, filterCorpoId, marcaEmpresaId, marcaClienteId, marcaCorpoId, updateMainStructureCacheFromFetchedVehicles]);
+
+  const fetchRecordsRef = useRef(fetchRecords);
+  useEffect(() => {
+    fetchRecordsRef.current = fetchRecords;
+  }, [fetchRecords]);
 
   useFocusEffect(
     useCallback(() => {
-      fetchRecords();
-      const handler = () => fetchRecords();
+      fetchRecordsRef.current();
+      const handler = () => fetchRecordsRef.current();
       eventBus.on('connectionRestored', handler);
       return () => eventBus.off('connectionRestored', handler);
-    }, [fetchRecords])
+    }, [])
   );
 
   const resetForm = () => {
@@ -1285,10 +1685,12 @@ export default function CorporateVehiclesScreen() {
       }));
       setUseRecords(initial);
 
+      console.log('Checking connection for vehicle', vehicle.id);
       const isConnected = await getConnectionStatus();
       if (!isConnected) return;
       if (typeof vehicle.id !== 'number') return; // si no hay id real, no podemos refrescar del server aún
 
+      console.log('Fetching uses for vehicle', vehicle.id);
       const res = await listCorporateVehicleUses({
         vehiculo_id: String(vehicle.id),
         refreshAccessToken,
@@ -1300,8 +1702,16 @@ export default function CorporateVehiclesScreen() {
         : [];
       setUseRecords(serverUsos);
       await setUsesForVehicleKey(key, serverUsos);
+
+       // Sincronizamos `usos` dentro del árbol offline para que `main_structure_cache`
+       // tenga la misma lista que el endpoint GET.
+       void updateMainStructureCacheFromFetchedVehicleUses({
+         sucursalId: Number(vehicle.corpo_id ?? (vehicle as any)?.sucursal_id ?? 0) || null,
+         vehiculoId: Number(vehicle.id),
+         usos: serverUsos,
+       });
     },
-    [getConnectionStatus, listCorporateVehicleUses, refreshAccessToken, logout, resetUseForm, setUsesForVehicleKey]
+    [getConnectionStatus, listCorporateVehicleUses, refreshAccessToken, logout, resetUseForm, setUsesForVehicleKey, updateMainStructureCacheFromFetchedVehicleUses]
   );
 
   const closeUsesModal = () => {
@@ -1766,8 +2176,22 @@ export default function CorporateVehiclesScreen() {
         : [];
       setMaintenanceRecords(serverMaintenances);
       await setMaintenancesForVehicleKey(key, serverMaintenances);
+
+      void updateMainStructureCacheFromFetchedVehicleMaintenances({
+        sucursalId: Number(vehicle.corpo_id),
+        vehiculoId: Number(vehicle.id),
+        mantenimientos: serverMaintenances,
+      });
     },
-    [getConnectionStatus, listCorporateVehicleMaintenances, refreshAccessToken, logout, resetMaintenanceForm, setMaintenancesForVehicleKey]
+    [
+      getConnectionStatus,
+      listCorporateVehicleMaintenances,
+      refreshAccessToken,
+      logout,
+      resetMaintenanceForm,
+      setMaintenancesForVehicleKey,
+      updateMainStructureCacheFromFetchedVehicleMaintenances,
+    ]
   );
 
   const closeMaintenanceModal = () => {
@@ -2625,7 +3049,7 @@ export default function CorporateVehiclesScreen() {
           ) : null}
 
           {/* Filtros Jerárquicos */}
-          {!isCreating && !isLoading && (
+          {!isCreating && (
             <ThemedView style={styles.filtersContainer}>
               <ThemedView style={styles.filtersHeader}>
                 <TouchableOpacity
@@ -2647,6 +3071,8 @@ export default function CorporateVehiclesScreen() {
                     onPress={() => {
                       setFilterEmpresaId(null);
                       setFilterClienteId(null);
+                      setFilterDivisionId(null);
+                      setFilterContratoId(null);
                       setFilterCorpoId(null);
                     }}
                   >
@@ -2661,10 +3087,12 @@ export default function CorporateVehiclesScreen() {
                     <ThemedText style={styles.filterLabel}>Empresa:</ThemedText>
                     <View style={styles.pickerWrapper}>
                       <Picker
-                        selectedValue={filterEmpresaId || ''}
+                        selectedValue={filterEmpresaId ?? ''}
                         onValueChange={(value) => {
                           setFilterEmpresaId(value && value !== '' ? Number(value) : null);
                           setFilterClienteId(null);
+                          setFilterDivisionId(null);
+                          setFilterContratoId(null);
                           setFilterCorpoId(null);
                         }}
                         style={styles.picker}
@@ -2677,14 +3105,16 @@ export default function CorporateVehiclesScreen() {
                     </View>
                   </ThemedView>
 
-                  {filterEmpresaId && (
+                  {filterEmpresaId != null && (
                     <ThemedView style={styles.filterGroup}>
                       <ThemedText style={styles.filterLabel}>Cliente:</ThemedText>
                       <View style={styles.pickerWrapper}>
                         <Picker
-                          selectedValue={filterClienteId || ''}
+                          selectedValue={filterClienteId ?? ''}
                           onValueChange={(value) => {
                             setFilterClienteId(value && value !== '' ? Number(value) : null);
+                            setFilterDivisionId(null);
+                            setFilterContratoId(null);
                             setFilterCorpoId(null);
                           }}
                           style={styles.picker}
@@ -2698,12 +3128,55 @@ export default function CorporateVehiclesScreen() {
                     </ThemedView>
                   )}
 
-                  {filterClienteId && (
+                  {filterClienteId != null && (
+                    <ThemedView style={styles.filterGroup}>
+                      <ThemedText style={styles.filterLabel}>División:</ThemedText>
+                      <View style={styles.pickerWrapper}>
+                        <Picker
+                          selectedValue={filterDivisionId ?? ''}
+                          onValueChange={(value) => {
+                            setFilterDivisionId(value && value !== '' ? Number(value) : null);
+                            setFilterContratoId(null);
+                            setFilterCorpoId(null);
+                          }}
+                          style={styles.picker}
+                        >
+                          <Picker.Item label="Seleccionar..." value="" />
+                          {filterDivisiones.map((d: any) => (
+                            <Picker.Item key={d.id} label={d.nombre} value={d.id} />
+                          ))}
+                        </Picker>
+                      </View>
+                    </ThemedView>
+                  )}
+
+                  {filterDivisionId != null && (
+                    <ThemedView style={styles.filterGroup}>
+                      <ThemedText style={styles.filterLabel}>Contrato:</ThemedText>
+                      <View style={styles.pickerWrapper}>
+                        <Picker
+                          selectedValue={filterContratoId ?? ''}
+                          onValueChange={(value) => {
+                            setFilterContratoId(value && value !== '' ? Number(value) : null);
+                            setFilterCorpoId(null);
+                          }}
+                          style={styles.picker}
+                        >
+                          <Picker.Item label="Seleccionar..." value="" />
+                          {filterContratos.map((c: any) => (
+                            <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                          ))}
+                        </Picker>
+                      </View>
+                    </ThemedView>
+                  )}
+
+                  {filterContratoId != null && (
                     <ThemedView style={styles.filterGroup}>
                       <ThemedText style={styles.filterLabel}>Sucursal:</ThemedText>
                       <View style={styles.pickerWrapper}>
                         <Picker
-                          selectedValue={filterCorpoId || ''}
+                          selectedValue={filterCorpoId ?? ''}
                           onValueChange={(value) => {
                             setFilterCorpoId(value && value !== '' ? Number(value) : null);
                           }}
@@ -4273,18 +4746,19 @@ const styles = StyleSheet.create({
 
   // Filtros jerárquicos
   filtersContainer: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 8,
-    padding: 16,
     marginBottom: 16,
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
     borderColor: '#E0E0E0',
+    borderRadius: 8,
+    overflow: 'hidden',
   },
   filtersHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 12,
+    padding: 12,
+    backgroundColor: '#F0F0F0',
   },
   filterToggleButton: {
     flexDirection: 'row',
@@ -4292,16 +4766,18 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   filtersTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#000000',
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#007AFF',
   },
   resetFiltersButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6,
+    backgroundColor: '#FFECEC',
   },
   resetFiltersText: {
     fontSize: 12,
@@ -4309,16 +4785,19 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   filtersContent: {
-    gap: 12,
+    padding: 12,
+    backgroundColor: '#F9F9F9',
+    gap: 8,
   },
   filterGroup: {
-    marginBottom: 12,
+    marginBottom: 8,
+    backgroundColor: '#F9F9F9',
   },
   filterLabel: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '600',
-    color: '#000000',
-    marginBottom: 8,
+    color: '#000',
+    marginBottom: 4,
   },
 });
 

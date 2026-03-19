@@ -159,15 +159,9 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                     tipos_mantenimiento: articuloNomencladorId ? tiposByArticuloId.get(articuloNomencladorId) ?? [] : [],
                     mantenimientos,
                     movimientos,
-                    ultimo_mantenimiento: ultimo
-                        ? {
-                            id: ultimo.id,
-                            estado: ultimo.estado,
-                            cantidad_necesaria: ultimo.cantidad_necesaria,
-                            cantidad_real: ultimo.cantidad_real,
-                            observaciones: ultimo.observaciones,
-                        }
-                        : null,
+                    // Igual que dynamic-prisma/main-structure: estos campos apuntan al registro más reciente completo
+                    ultimo_mantenimiento: ultimo ?? null,
+                    ultimo_registro_mantenimiento: ultimo ?? null,
                 };
             })
         );
@@ -214,21 +208,17 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                     articulo_nomenclador_id: articuloNomencladorId,
                     articulo_nombre: articuloNombre,
                     tipo: "Asignado al puesto",
-                    // Mantener null (igual que mantenimiento-equipo previo)
-                    marca: null,
-                    serie: null,
+                    // Mantener la misma lógica que main-structure: para asignados se toman de la tabla base
+                    // (marca/serie provienen de `e_estructura_articulo_corpo_puesto_entrega`).
+                    marca: a.marca ?? null,
+                    serie: a.serie ?? null,
+                    cantidad_plan: null,
                     tipos_mantenimiento: articuloNomencladorId ? tiposByArticuloId.get(articuloNomencladorId) ?? [] : [],
                     mantenimientos,
                     movimientos,
-                    ultimo_mantenimiento: ultimo
-                        ? {
-                            id: ultimo.id,
-                            estado: ultimo.estado,
-                            cantidad_necesaria: ultimo.cantidad_necesaria,
-                            cantidad_real: ultimo.cantidad_real,
-                            observaciones: ultimo.observaciones,
-                        }
-                        : null,
+                    // Igual que dynamic-prisma/main-structure: estos campos apuntan al registro más reciente completo
+                    ultimo_mantenimiento: ultimo ?? null,
+                    ultimo_registro_mantenimiento: ultimo ?? null,
                 };
             })
         );
