@@ -16,6 +16,7 @@ type MainStructurePayload = {
 
 export async function POST(req: NextRequest) {
     try {
+        console.log('Main structure route called');
         const auth = req.headers.get("authorization");
 
         if (auth !== `Bearer ${process.env.CRON_SECRET}`) {
