@@ -75,7 +75,7 @@ module.exports = {
         "version": "1.0.0",
         "id": "34cd939c-893f-4a98-9279-d76c82cbca3c",
         "name": "MonitoreApp",
-        "created_at": "2026-03-16T00:00:00Z",
+        "created_at": "2026-03-18T00:00:00Z",
         "title": "MonitoreApp versión inicial",
         "description": "Versión inicial de la aplicación MonitoreApp",
         "notas": [
