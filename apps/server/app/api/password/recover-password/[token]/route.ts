@@ -30,6 +30,11 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ token: 
             }
         });
         if (!empleado) return NextResponse.json({ status: false, message: "Empleado no encontrado" });
+        const password_expires_at = empleado.password_expires_at;
+        
+        const newDateExpiresAt = new Date(password_expires_at);
+        newDateExpiresAt.setMonth(newDateExpiresAt.getMonth() + 2);
+
         const hashedPassword = await bcrypt.hash(password, 10);
         await callDynamicPrisma({
             req,
@@ -38,10 +43,11 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ token: 
                 action: "UPDATE",
                 table: "c_empleado",
                 where: { id: token_recovery.empleadoId },
-                data: { password: hashedPassword },
+                data: { password: hashedPassword, password_expires_at: newDateExpiresAt },
                 returning: false
             }
         });
+
         await callDynamicPrisma({
             req,
             shouldVerifyAccessToken: false,
