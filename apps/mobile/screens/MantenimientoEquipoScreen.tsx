@@ -1296,6 +1296,11 @@ export default function MantenimientoEquipoScreen() {
                     console.log('Actualizamos reportes internet');
                     setReportes(list);
                     await AsyncStorage.setItem(cacheKey, JSON.stringify(list));
+                    // Sincroniza también el árbol `main_structure_cache` para que offline use los datos más recientes.
+                    void updateMainStructureCacheFromFetchedPuesto({
+                        puestoId: puestoIdForQuery,
+                        items: list,
+                    });
                 } else {
                     setError(data.message || 'Error al cargar artículos');
                     const cacheStr = await AsyncStorage.getItem(cacheKey);
@@ -1923,6 +1928,90 @@ export default function MantenimientoEquipoScreen() {
                 }
             } catch (e) {
                 console.error('Error updating main_structure_cache (ultimo_mantenimiento):', e);
+            }
+        },
+        []
+    );
+
+    // Cuando estamos online, y cargamos desde la BD: artículos del puesto + mantenimientos + movimientos,
+    // sincronizamos esos datos dentro de `main_structure_cache` para que el modo offline sea consistente.
+    const updateMainStructureCacheFromFetchedPuesto = useCallback(
+        async (params: { puestoId: number | null; items: ArticuloPuestoMantenimientoItem[] }) => {
+            const { puestoId, items } = params;
+            try {
+                if (!puestoId || !Array.isArray(items) || items.length === 0) return;
+
+                const cacheStr = await AsyncStorage.getItem('main_structure_cache');
+                if (!cacheStr) return;
+
+                const tree = JSON.parse(cacheStr);
+                if (!Array.isArray(tree)) return;
+
+                let updated = false;
+
+                for (const empresa of tree) {
+                    const clientes = empresa?.clientes || [];
+                    for (const cliente of clientes) {
+                        const divisiones = cliente?.division || [];
+                        for (const division of divisiones) {
+                            const contratos = division?.contratos || [];
+                            for (const contrato of contratos) {
+                                const sucursales = contrato?.sucursales || [];
+                                for (const sucursal of sucursales) {
+                                    const puestos = sucursal?.puestos || [];
+                                    for (const puesto of puestos) {
+                                        if (Number(puesto?.id) !== Number(puestoId)) continue;
+
+                                        const articulos = Array.isArray(puesto?.articulos) ? puesto.articulos : [];
+                                        for (const item of items) {
+                                            const expectedTipo = item.source === 'plan' ? 'Plan' : 'Asignado';
+                                            const art = articulos.find(
+                                                (a: any) =>
+                                                    Number(a?.id) === Number(item.estructura_id) &&
+                                                    String(a?.tipo) === expectedTipo
+                                            );
+                                            if (!art) continue;
+
+                                            if (Array.isArray(item.tipos_mantenimiento)) {
+                                                art.tipos_mantenimiento = item.tipos_mantenimiento;
+                                            }
+                                            if (Array.isArray(item.movimientos)) {
+                                                art.movimientos = item.movimientos;
+                                            }
+                                            if (Array.isArray(item.mantenimientos)) {
+                                                art.mantenimientos = item.mantenimientos;
+                                                const first = item.mantenimientos[0] ?? null;
+                                                if (first) {
+                                                    art.ultimo_mantenimiento = first;
+                                                    art.ultimo_registro_mantenimiento = first;
+                                                }
+                                            }
+
+                                            // Campos base por si vinieron actualizados.
+                                            // Nota: el endpoint `articulo-mantenimiento/puesto/[id]` envía `marca/serie = null`
+                                            // para artículos `asignado` (para evitar duplicar lógica). No debemos pisar
+                                            // los valores reales que ya vienen en `main_structure_cache`.
+                                            if (item.articulo_nombre !== undefined) art.nombre = item.articulo_nombre;
+                                            if (item.source === 'plan') {
+                                                if (item.marca !== undefined && item.marca !== null) art.marca = item.marca;
+                                                if (item.serie !== undefined && item.serie !== null) art.serie = item.serie;
+                                            }
+
+                                            updated = true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (updated) {
+                    console.log('Actualizamos main_structure_cache');
+                    await AsyncStorage.setItem('main_structure_cache', JSON.stringify(tree));
+                }
+            } catch (e) {
+                console.error('Error updating main_structure_cache (fetched puesto):', e);
             }
         },
         []

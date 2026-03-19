@@ -49,6 +49,7 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
   const [selectedPlazaId, setSelectedPlazaId] = useState<number | null>(null);
   const [selectedEmpleadoId, setSelectedEmpleadoId] = useState<number | null>(null);
   const [createdAt, setCreatedAt] = useState<number | null>(null);
+  const [lastCreatedAt, setLastCreatedAt] = useState<number | null>(null);
   const [activeSummary, setActiveSummary] = useState<
     'empresa' | 'cliente' | 'division' | 'contrato' | 'sucursal' | 'puesto' | 'plaza' | 'empleado' | null
   >(null);
@@ -130,6 +131,44 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
       setIsStructureLoading(false);
     }
   }, []);
+
+  // Al ingresar al módulo, consultamos la última actualización disponible.
+  useEffect(() => {
+    let isMounted = true;
+
+    const fetchLastCreatedAt = async () => {
+      try {
+        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        if (!apiUrl) return;
+
+        const isConnected = await getConnectionStatus();
+        if (!isConnected) return;
+
+        const res = await authedFetch({
+          url: `${apiUrl}/api/main-structure/last?created_at=0`,
+          init: {
+            method: 'GET',
+          },
+          refreshAccessToken,
+          logout,
+        });
+
+        if (!res) return;
+        const data = await res.json();
+        const incoming = Number(data?.created_at);
+        if (Number.isFinite(incoming) && incoming > 0 && isMounted) {
+          setLastCreatedAt(incoming);
+        }
+      } catch {
+        // Best-effort: no bloquea el módulo si falla
+      }
+    };
+
+    fetchLastCreatedAt();
+    return () => {
+      isMounted = false;
+    };
+  }, [refreshAccessToken, logout]);
 
   const refreshHierarchy = useCallback(async () => {
     const isConnected = await getConnectionStatus();
@@ -623,7 +662,10 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
         )}
 
         {createdAt && (
-            <Text style={[styles.label, { marginBottom: 0 }]}>Última actualización: {convertDateTimestampToLocalString(new Date(createdAt).toISOString())}</Text>
+            <Text style={[styles.label, { marginBottom: 0 }]}>Tú actualización: {convertDateTimestampToLocalString(new Date(createdAt).toISOString())}</Text>
+        )}
+        {lastCreatedAt && (
+            <Text style={[styles.label, { marginBottom: 0 }]}>Última actualización: {convertDateTimestampToLocalString(new Date(lastCreatedAt).toISOString())}</Text>
         )}
       </ScrollView>
     </View>
