@@ -33,12 +33,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ token: 
         if (!empleado) return NextResponse.json({ status: false, message: "Empleado no encontrado" });
         const password_expires_at = empleado.password_expires_at;
         
-        let newDateExpiresAt = new Date(password_expires_at);
-
-        if (password_expires_at < toZonedTime(new Date(), "America/Costa_Rica")) {
-            const now = toZonedTime(new Date(), "America/Costa_Rica");
-            newDateExpiresAt = toZonedTime(new Date(now.getTime() + 2 * 30 * 24 * 60 * 60 * 1000), "America/Costa_Rica");
-        }
+        const now = toZonedTime(new Date(), "America/Costa_Rica");
+        const newDateExpiresAt = toZonedTime(new Date(now.getTime() + 2 * 30 * 24 * 60 * 60 * 1000), "America/Costa_Rica");
 
         const hashedPassword = await bcrypt.hash(password, 10);
         await callDynamicPrisma({
