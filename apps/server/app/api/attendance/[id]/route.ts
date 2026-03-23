@@ -34,7 +34,10 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                 if (marcaDia.hora_entrada_digitada != null) {
                     return NextResponse.json({ status: false, message: "Ya has marcado la entrada" }, { status: 200 });
                 }
-                marcaDia.hora_entrada_digitada = new Date(horaAccion);
+                const horaAccionDate = new Date(horaAccion);
+                const time = horaAccionDate.toISOString().split('T')[1];
+                marcaDia.hora_entrada = '1970-01-01T' + time;
+                marcaDia.hora_entrada_digitada = horaAccionDate;
 
                 const empresa = await callDynamicPrisma({
                     req,
@@ -236,6 +239,9 @@ async function marcar_salida(req: NextRequest, id: number, horaAccion: string, r
             return { status: false, message: "Marca no encontrada" };
         }
 
+        const time = now.toISOString().split('T')[1];
+        marcaDia.hora_salida = '1970-01-01T' + time;
+
         marcaDia.hora_salida_digitada = now;
 
         if (!marcaDia.hora_fin || !marcaDia.hora_inicio) {
@@ -278,6 +284,8 @@ async function marcar_salida(req: NextRequest, id: number, horaAccion: string, r
         }
 
         if (salidaAnticipada) {
+        const time = now.toISOString().split('T')[1];
+        marcaDia.hora_salida = '1970-01-01T' + time;
             marcaDia.hora_salida_digitada = now;
             marcaDia.salida_anticipada_id = salidaAnticipada.id;
             const empleado = await callDynamicPrisma({

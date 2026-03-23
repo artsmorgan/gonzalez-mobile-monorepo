@@ -1507,9 +1507,9 @@ export default function PhysicalMinuteAgendaScreen() {
             <ThemedText style={styles.label}>Empresa</ThemedText>
             <View style={styles.pickerWrapper}>
               <Picker selectedValue={selectedEmpresaId} onValueChange={(v) => setSelectedEmpresaId(v)} style={styles.picker}>
-                <Picker.Item label="Seleccione empresa" value={null} />
+                <Picker.Item label="Seleccione empresa" value={null} color="#000000" />
                 {empresaOptions.map((o) => (
-                  <Picker.Item key={o.id} label={o.label} value={o.id} />
+                  <Picker.Item key={o.id} label={o.label} value={o.id} color="#000000" />
                 ))}
               </Picker>
             </View>
@@ -1522,9 +1522,9 @@ export default function PhysicalMinuteAgendaScreen() {
                 onValueChange={(v) => setSelectedClienteId(v)}
                 style={styles.picker}
               >
-                <Picker.Item label={selectedEmpresaId === null ? 'Seleccione empresa primero' : 'Seleccione cliente'} value={null} />
+                <Picker.Item label={selectedEmpresaId === null ? 'Seleccione empresa primero' : 'Seleccione cliente'} value={null} color="#000000" />
                 {clienteOptions.map((o) => (
-                  <Picker.Item key={o.id} label={o.label} value={o.id} />
+                  <Picker.Item key={o.id} label={o.label} value={o.id} color="#000000" />
                 ))}
               </Picker>
             </View>
@@ -1537,9 +1537,9 @@ export default function PhysicalMinuteAgendaScreen() {
                 onValueChange={(v) => setSelectedDivisionId(v)}
                 style={styles.picker}
               >
-                <Picker.Item label={selectedClienteId === null ? 'Seleccione cliente primero' : 'Seleccione división'} value={null} />
+                <Picker.Item label={selectedClienteId === null ? 'Seleccione cliente primero' : 'Seleccione división'} value={null} color="#000000" />
                 {divisionOptions.map((o) => (
-                  <Picker.Item key={o.id} label={o.label} value={o.id} />
+                  <Picker.Item key={o.id} label={o.label} value={o.id} color="#000000" />
                 ))}
               </Picker>
             </View>
@@ -1552,9 +1552,9 @@ export default function PhysicalMinuteAgendaScreen() {
                 onValueChange={(v) => setSelectedContratoId(v)}
                 style={styles.picker}
               >
-                <Picker.Item label={selectedDivisionId === null ? 'Seleccione división primero' : 'Seleccione contrato'} value={null} />
+                <Picker.Item label={selectedDivisionId === null ? 'Seleccione división primero' : 'Seleccione contrato'} value={null} color="#000000" />
                 {contratoOptions.map((o) => (
-                  <Picker.Item key={o.id} label={o.label} value={o.id} />
+                  <Picker.Item key={o.id} label={o.label} value={o.id} color="#000000" />
                 ))}
               </Picker>
             </View>
@@ -1567,9 +1567,9 @@ export default function PhysicalMinuteAgendaScreen() {
                 onValueChange={(v) => setSelectedSucursalId(v)}
                 style={styles.picker}
               >
-                <Picker.Item label={selectedContratoId === null ? 'Seleccione contrato primero' : 'Seleccione sucursal'} value={null} />
+                <Picker.Item label={selectedContratoId === null ? 'Seleccione contrato primero' : 'Seleccione sucursal'} value={null} color="#000000" />
                 {sucursalOptions.map((o) => (
-                  <Picker.Item key={o.id} label={o.label} value={o.id} />
+                  <Picker.Item key={o.id} label={o.label} value={o.id} color="#000000" />
                 ))}
               </Picker>
             </View>
@@ -1582,9 +1582,9 @@ export default function PhysicalMinuteAgendaScreen() {
                 onValueChange={(v) => setSelectedPuestoId(v)}
                 style={styles.picker}
               >
-                <Picker.Item label={selectedSucursalId === null ? 'Seleccione sucursal primero' : 'Seleccione puesto'} value={null} />
+                <Picker.Item label={selectedSucursalId === null ? 'Seleccione sucursal primero' : 'Seleccione puesto'} value={null} color="#000000" />
                 {puestoOptions.map((o) => (
-                  <Picker.Item key={o.id} label={o.label} value={o.id} />
+                  <Picker.Item key={o.id} label={o.label} value={o.id} color="#000000" />
                 ))}
               </Picker>
             </View>
@@ -2090,9 +2090,9 @@ export default function PhysicalMinuteAgendaScreen() {
                           }}
                           style={styles.picker}
                         >
-                          <Picker.Item label="Seleccionar..." value="" />
+                          <Picker.Item label="Seleccionar..." value="" color="#000000" />
                           {filterEmpresas.map((e: any) => (
-                            <Picker.Item key={e.id} label={e.nombre} value={e.id} />
+                            <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
                           ))}
                         </Picker>
                       </View>
@@ -2109,9 +2109,9 @@ export default function PhysicalMinuteAgendaScreen() {
                             }}
                             style={styles.picker}
                           >
-                            <Picker.Item label="Seleccionar..." value="" />
+                            <Picker.Item label="Seleccionar..." value="" color="#000000" />
                             {filterClientes.map((c: any) => (
-                              <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                              <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
                             ))}
                           </Picker>
                         </View>
@@ -2129,9 +2129,9 @@ export default function PhysicalMinuteAgendaScreen() {
                             }}
                             style={styles.picker}
                           >
-                            <Picker.Item label="Seleccionar..." value="" />
+                            <Picker.Item label="Seleccionar..." value="" color="#000000" />
                             {filterDivisiones.map((d: any) => (
-                              <Picker.Item key={d.id} label={d.nombre} value={d.id} />
+                              <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
                             ))}
                           </Picker>
                         </View>
@@ -2149,9 +2149,9 @@ export default function PhysicalMinuteAgendaScreen() {
                             }}
                             style={styles.picker}
                           >
-                            <Picker.Item label="Seleccionar..." value="" />
+                            <Picker.Item label="Seleccionar..." value="" color="#000000" />
                             {filterContratos.map((c: any) => (
-                              <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                              <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
                             ))}
                           </Picker>
                         </View>
@@ -2169,9 +2169,9 @@ export default function PhysicalMinuteAgendaScreen() {
                             }}
                             style={styles.picker}
                           >
-                            <Picker.Item label="Seleccionar..." value="" />
+                            <Picker.Item label="Seleccionar..." value="" color="#000000" />
                             {filterSucursales.map((s: any) => (
-                              <Picker.Item key={s.id} label={s.nombre} value={s.id} />
+                              <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
                             ))}
                           </Picker>
                         </View>
@@ -2187,9 +2187,9 @@ export default function PhysicalMinuteAgendaScreen() {
                             onValueChange={(value) => setFilterPuestoId(value && value !== '' ? Number(value) : null)}
                             style={styles.picker}
                           >
-                            <Picker.Item label="Seleccionar..." value="" />
+                            <Picker.Item label="Seleccionar..." value="" color="#000000" />
                             {filterPuestos.map((p: any) => (
-                              <Picker.Item key={p.id} label={p.nombre} value={p.id} />
+                              <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
                             ))}
                           </Picker>
                         </View>

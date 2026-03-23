@@ -2200,9 +2200,9 @@ export default function BitacoraVehiculosDetenidosScreen() {
                         onValueChange={(v) => setFilterTipo(v as any)}
                         style={styles.picker}
                       >
-                        <Picker.Item label="Todos los tipos" value="all" />
+                        <Picker.Item label="Todos los tipos" value="all" color="#000000" />
                         {TYPE_OPTIONS.map((t) => (
-                          <Picker.Item key={t} label={t} value={t} />
+                          <Picker.Item key={t} label={t} value={t} color="#000000" />
                         ))}
                       </Picker>
                     </ThemedView>
@@ -2362,9 +2362,9 @@ export default function BitacoraVehiculosDetenidosScreen() {
                         style={styles.picker}
                         enabled={!isPrefillMode}
                       >
-                        <Picker.Item label="Seleccione..." value={0} />
+                        <Picker.Item label="Seleccione..." value={0} color="#000000" />
                         {corporateVehicles.map((v: any) => (
-                          <Picker.Item key={`veh_${v.id}`} label={`${String(v.placa || '—')} (${String(v.tipo || '—')})`} value={Number(v.id)} />
+                          <Picker.Item key={`veh_${v.id}`} label={`${String(v.placa || '—')} (${String(v.tipo || '—')})`} value={Number(v.id)} color="#000000" />
                         ))}
                         {/* Mostrar vehículo temporal si existe y no está en la lista */}
                         {tempVehicle && !corporateVehicles.find((v: any) => Number(v.id) === Number(tempVehicle.id)) && (
@@ -2372,6 +2372,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
                             key={`veh_temp_${tempVehicle.id}`}
                             label={`${String(tempVehicle.placa || '—')} (${String(tempVehicle.tipo || '—')})`}
                             value={Number(tempVehicle.id)}
+                            color="#000000"
                           />
                         )}
                       </Picker>
@@ -2386,10 +2387,10 @@ export default function BitacoraVehiculosDetenidosScreen() {
                       style={styles.picker}
                       enabled={!isPrefillMode && !!selectedCorporateVehicleId}
                     >
-                      <Picker.Item label={selectedCorporateVehicleId ? 'Seleccione...' : 'Seleccione vehículo primero'} value={0} />
+                      <Picker.Item label={selectedCorporateVehicleId ? 'Seleccione...' : 'Seleccione vehículo primero'} value={0} color="#000000" />
                       {availableCorporateUses.map((u: any) => {
                         const label = `${String(u.nombre_conductor || '—')} - ${String(u.fecha || '').slice(0, 10)}`;
-                        return <Picker.Item key={`uso_${u.id}`} label={label} value={Number(u.id)} />;
+                        return <Picker.Item key={`uso_${u.id}`} label={label} value={Number(u.id)} color="#000000" />;
                       })}
                     </Picker>
                   </ThemedView>
@@ -2417,7 +2418,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
                   enabled={!isPrefillMode && !selectedCorporateVehicleId}
                 >
                   {TYPE_OPTIONS.map((t) => (
-                    <Picker.Item key={t} label={t} value={t} />
+                    <Picker.Item key={t} label={t} value={t} color="#000000" />
                   ))}
                 </Picker>
               </ThemedView>
@@ -2499,9 +2500,9 @@ export default function BitacoraVehiculosDetenidosScreen() {
                       onValueChange={(v) => setVehTipoAutoria(String(v))}
                       style={styles.picker}
                     >
-                      <Picker.Item label="Seleccionar..." value="" />
-                      <Picker.Item label="Cliente" value="Cliente" />
-                      <Picker.Item label="Corporativo" value="Corporativo" />
+                      <Picker.Item label="Seleccionar..." value="" color="#000000" />
+                      <Picker.Item label="Cliente" value="Cliente" color="#000000" />
+                      <Picker.Item label="Corporativo" value="Corporativo" color="#000000"  />
                     </Picker>
                   </ThemedView>
                 </ThemedView>
@@ -2643,7 +2644,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
                         >
                           <Picker.Item label="Seleccionar..." value="" />
                           {(f.options || []).map((o) => (
-                            <Picker.Item key={o} label={o} value={o} />
+                            <Picker.Item key={o} label={o} value={o} color="#000000" />
                           ))}
                         </Picker>
                       </ThemedView>
@@ -2731,7 +2732,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
                         style={styles.picker}
                       >
                         {REVIEW_OPTIONS.map((o) => (
-                          <Picker.Item key={o} label={o} value={o} />
+                          <Picker.Item key={o} label={o} value={o} color="#000000" />
                         ))}
                       </Picker>
                     </ThemedView>

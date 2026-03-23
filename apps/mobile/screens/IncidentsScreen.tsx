@@ -1726,9 +1726,9 @@ export default function IncidentsScreen() {
               }}
               style={styles.picker}
             >
-              <Picker.Item label="Seleccionar..." value={0} />
+              <Picker.Item label="Seleccionar..." value={0} color="#000000" />
               {classifications.map(c => (
-                <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
               ))}
             </Picker>
           </ThemedView>

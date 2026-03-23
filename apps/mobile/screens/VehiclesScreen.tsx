@@ -1143,8 +1143,8 @@ export default function VehiclesScreen() {
               }}
               style={styles.picker}
             >
-              <Picker.Item label="Particular" value="Particular" />
-              <Picker.Item label="Institucional" value="Institucional" />
+              <Picker.Item label="Particular" value="Particular" color="#000000" />
+              <Picker.Item label="Institucional" value="Institucional" color="#000000" />
             </Picker>
           </ThemedView>
         </ThemedView>
@@ -1828,9 +1828,9 @@ export default function VehiclesScreen() {
                       onValueChange={(value) => setSelectedTipo(value)}
                       style={styles.picker}
                     >
-                      <Picker.Item label="Todos los tipos" value="all" />
-                      <Picker.Item label="Particular" value="Particular" />
-                      <Picker.Item label="Institucional" value="Institucional" />
+                      <Picker.Item label="Todos los tipos" value="all" color="#000000" />
+                      <Picker.Item label="Particular" value="Particular" color="#000000" />
+                      <Picker.Item label="Institucional" value="Institucional" color="#000000" />
                     </Picker>
                   </ThemedView>
                 </ThemedView>

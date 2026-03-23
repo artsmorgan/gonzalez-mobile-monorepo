@@ -514,39 +514,27 @@ export default function NonConformingProductScreen() {
 
   const handleClienteChange = (clienteId: number | null) => {
     setSelectedClienteId(clienteId);
-    // división se fuerza por marca, sin recursividad
-    setSelectedDivisionId(marcaDivisionId !== null ? Number(marcaDivisionId) : null);
+    // La división debe seleccionarse manualmente
+    setSelectedDivisionId(null);
     setSelectedContratoId(null);
     setSelectedSucursalId(null);
   };
 
-  // mantener división fija (marca)
-  useEffect(() => {
-    if (marcaDivisionId !== null) {
-      setSelectedDivisionId(Number(marcaDivisionId));
-    }
-  }, [marcaDivisionId]);
-
-  // preselección por marca (cliente/corpo) cuando haya estructura
+  // preselección parcial por marca (empresa/cliente) cuando haya estructura.
+  // División, contrato y sucursal se seleccionan manualmente.
   useEffect(() => {
     if (!structure.length) return;
-    if (!marcaClienteId || !marcaCorpoId) return;
-    if (!marcaDivisionId) return;
+    if (!marcaClienteId) return;
 
-    // si el usuario ya escogió manualmente, no pisar
-    if (selectedEmpresaId || selectedClienteId || selectedContratoId || selectedSucursalId) return;
+    // Si el usuario ya escogió manualmente empresa/cliente, no pisar.
+    if (selectedEmpresaId || selectedClienteId) return;
 
     const empresaFound = structure.find((e) => (e.clientes || []).some((c) => c.id === Number(marcaClienteId))) ?? null;
     const clienteFound = empresaFound?.clientes?.find((c) => c.id === Number(marcaClienteId)) ?? null;
-    const divisionFound = clienteFound?.division?.find((d) => d.id === Number(marcaDivisionId)) ?? null;
-    const contratoFound = divisionFound?.contratos?.find((ct) => (ct.sucursales || []).some((s) => s.id === Number(marcaCorpoId))) ?? null;
 
     if (empresaFound) setSelectedEmpresaId(empresaFound.id);
     if (clienteFound) setSelectedClienteId(clienteFound.id);
-    setSelectedDivisionId(Number(marcaDivisionId));
-    if (contratoFound) setSelectedContratoId(contratoFound.id);
-    setSelectedSucursalId(Number(marcaCorpoId));
-  }, [structure, marcaClienteId, marcaCorpoId, marcaDivisionId, selectedEmpresaId, selectedClienteId, selectedContratoId, selectedSucursalId]);
+  }, [structure, marcaClienteId, selectedEmpresaId, selectedClienteId]);
 
   // --------- location ---------
   useEffect(() => {
@@ -677,13 +665,10 @@ export default function NonConformingProductScreen() {
     const empresaFound = structure.find((e) => (e.clientes || []).some((c) => c.id === r.cliente_id)) ?? null;
     if (empresaFound) setSelectedEmpresaId(empresaFound.id);
     setSelectedClienteId(r.cliente_id);
-    if (marcaDivisionId) setSelectedDivisionId(Number(marcaDivisionId));
-
-    const clienteNode = empresaFound?.clientes?.find((c) => c.id === r.cliente_id);
-    const divisionNode = clienteNode?.division?.find((d) => d.id === Number(marcaDivisionId)) ?? null;
-    const contratoFound = divisionNode?.contratos?.find((ct) => (ct.sucursales || []).some((s) => s.id === r.corpo_id)) ?? null;
-    if (contratoFound) setSelectedContratoId(contratoFound.id);
-    setSelectedSucursalId(r.corpo_id);
+    // En edición, la división también debe seleccionarse manualmente.
+    setSelectedDivisionId(null);
+    setSelectedContratoId(null);
+    setSelectedSucursalId(null);
 
     const horaAccion = await getHoraAccion();
     if (!horaAccion) {
@@ -1212,9 +1197,9 @@ export default function NonConformingProductScreen() {
         <ThemedText style={styles.label}>Empresa *</ThemedText>
         <ThemedView style={styles.pickerWrapper}>
           <Picker selectedValue={selectedEmpresaId ?? 0} onValueChange={(v) => handleEmpresaChange(Number(v) || null)} style={styles.picker}>
-            <Picker.Item label="Seleccione empresa..." value={0} />
+            <Picker.Item label="Seleccione empresa..." value={0} color="#000000" />
             {empresaOptions.map((e) => (
-              <Picker.Item key={e.id} label={e.nombre} value={e.id} />
+              <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
             ))}
           </Picker>
         </ThemedView>
@@ -1227,9 +1212,9 @@ export default function NonConformingProductScreen() {
             enabled={selectedEmpresaId !== null && clienteOptions.length > 0}
             style={styles.picker}
           >
-            <Picker.Item label={selectedEmpresaId ? 'Seleccione cliente...' : 'Seleccione empresa primero'} value={0} />
+            <Picker.Item label={selectedEmpresaId ? 'Seleccione cliente...' : 'Seleccione empresa primero'} value={0} color="#000000" />
             {clienteOptions.map((c) => (
-              <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+              <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
             ))}
           </Picker>
         </ThemedView>
@@ -1250,9 +1235,10 @@ export default function NonConformingProductScreen() {
             <Picker.Item
               label={selectedClienteId ? 'Seleccione división...' : 'Seleccione cliente primero'}
               value={0}
+              color="#000000"
             />
             {divisionOptions.map((d) => (
-              <Picker.Item key={d.id} label={d.nombre} value={d.id} />
+              <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
             ))}
           </Picker>
         </ThemedView>
@@ -1269,9 +1255,9 @@ export default function NonConformingProductScreen() {
             enabled={selectedDivisionId !== null && contratoOptions.length > 0}
             style={styles.picker}
           >
-            <Picker.Item label={selectedDivisionId ? 'Seleccione contrato...' : 'Seleccione cliente primero'} value={0} />
+            <Picker.Item label={selectedDivisionId ? 'Seleccione contrato...' : 'Seleccione cliente primero'} value={0} color="#000000" />
             {contratoOptions.map((c) => (
-              <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+              <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
             ))}
           </Picker>
         </ThemedView>
@@ -1284,9 +1270,9 @@ export default function NonConformingProductScreen() {
             enabled={selectedContratoId !== null && sucursalOptions.length > 0}
             style={styles.picker}
           >
-            <Picker.Item label={selectedContratoId ? 'Seleccione sucursal...' : 'Seleccione contrato primero'} value={0} />
+            <Picker.Item label={selectedContratoId ? 'Seleccione sucursal...' : 'Seleccione contrato primero'} value={0} color="#000000" />
             {sucursalOptions.map((s) => (
-              <Picker.Item key={s.id} label={s.nombre} value={s.id} />
+              <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
             ))}
           </Picker>
         </ThemedView>
@@ -1321,9 +1307,9 @@ export default function NonConformingProductScreen() {
               onValueChange={(v) => setTipoServicioNoConforme(String(v))}
               style={styles.picker}
             >
-              <Picker.Item label="Seleccione tipo de producto no conforme..." value="" />
+              <Picker.Item label="Seleccione tipo de producto no conforme..." value="" color="#000000" />
               {tiposProductoNoConforme.map((tipo) => (
-                <Picker.Item key={tipo.id} label={tipo.nombre} value={tipo.nombre} />
+                <Picker.Item key={tipo.id} label={tipo.nombre} value={tipo.nombre} color="#000000" />
               ))}
             </Picker>
           </ThemedView>

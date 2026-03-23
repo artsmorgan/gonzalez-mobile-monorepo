@@ -1315,11 +1315,11 @@ export default function ComplaintsMasterScreen() {
               onValueChange={setMedioRecepcionQueja}
               style={styles.picker}
             >
-              <Picker.Item label="Seleccionar" value="" />
-              <Picker.Item label="Correo" value="Correo" />
-              <Picker.Item label="Teléfono" value="Telefono" />
-              <Picker.Item label="Presencial" value="Presencial" />
-              <Picker.Item label="Otro" value="Otro" />
+              <Picker.Item label="Seleccionar" value="" color="#000000" />
+              <Picker.Item label="Correo" value="Correo" color="#000000" />
+              <Picker.Item label="Teléfono" value="Telefono" color="#000000" />
+              <Picker.Item label="Presencial" value="Presencial" color="#000000" />
+              <Picker.Item label="Otro" value="Otro" color="#000000" />
             </Picker>
           </ThemedView>
         </ThemedView>
@@ -1333,10 +1333,10 @@ export default function ComplaintsMasterScreen() {
               onValueChange={setTipoQueja}
               style={styles.picker}
             >
-              <Picker.Item label="Seleccionar" value="" />
-              <Picker.Item label="Público" value="Publico" />
-              <Picker.Item label="Privado" value="Privado" />
-              <Picker.Item label="Interno" value="Interno" />
+              <Picker.Item label="Seleccionar" value="" color="#000000" />
+              <Picker.Item label="Público" value="Publico" color="#000000" />
+              <Picker.Item label="Privado" value="Privado" color="#000000" />
+              <Picker.Item label="Interno" value="Interno" color="#000000" />
             </Picker>
           </ThemedView>
         </ThemedView>
@@ -1362,10 +1362,10 @@ export default function ComplaintsMasterScreen() {
               onValueChange={setNivelQueja}
               style={styles.picker}
             >
-              <Picker.Item label="Seleccionar" value="" />
-              <Picker.Item label="Leve" value="Leve" />
-              <Picker.Item label="Moderada" value="Moderada" />
-              <Picker.Item label="Grave" value="Grave" />
+              <Picker.Item label="Seleccionar" value="" color="#000000" />
+              <Picker.Item label="Leve" value="Leve" color="#000000" />
+              <Picker.Item label="Moderada" value="Moderada" color="#000000" />
+              <Picker.Item label="Grave" value="Grave" color="#000000" />
             </Picker>
           </ThemedView>
         </ThemedView>
@@ -1487,11 +1487,11 @@ export default function ComplaintsMasterScreen() {
               onValueChange={setEstado}
               style={styles.picker}
             >
-              <Picker.Item label="Seleccionar" value="" />
-              <Picker.Item label="Pendiente" value="Pendiente" />
-              <Picker.Item label="En proceso" value="En proceso" />
-              <Picker.Item label="Resuelto" value="Resuelto" />
-              <Picker.Item label="Descartada" value="Descartada" />
+              <Picker.Item label="Seleccionar" value="" color="#000000" />
+              <Picker.Item label="Pendiente" value="Pendiente" color="#000000" />
+              <Picker.Item label="En proceso" value="En proceso" color="#000000" />
+              <Picker.Item label="Resuelto" value="Resuelto" color="#000000" />
+              <Picker.Item label="Descartada" value="Descartada" color="#000000" />
             </Picker>
           </ThemedView>
         </ThemedView>

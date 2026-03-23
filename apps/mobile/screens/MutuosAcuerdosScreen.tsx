@@ -25,6 +25,7 @@ import Constants from 'expo-constants';
 import AppHeader from '@/components/AppHeader';
 import AppFooter from '@/components/AppFooter';
 import SlideMenu from '@/components/SlideMenu';
+import { Collapsible } from '@/components/Collapsible';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import { useAuth } from '@/contexts/AuthContext';
@@ -39,6 +40,7 @@ import {
   listMutuosAcuerdosMine,
   signMutuoAcuerdoEjecutivo,
 } from '@/hooks/mutuosAcuerdosFunctions';
+import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 import type { RootStackParamList } from '../App';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'MutuosAcuerdos'>;
@@ -762,7 +764,34 @@ export default function MutuosAcuerdosScreen() {
                   {isGeneratingFirmaResponsable ? 'Generando...' : 'Generar firma digital'}
                 </ThemedText>
               </TouchableOpacity>
-              {!!firmaResponsable && <ThemedText style={styles.firmaOkText}>Firma digital generada correctamente.</ThemedText>}
+              {!firmaResponsable ? (
+                <ThemedText style={styles.signatureHintMuted}>Aún no hay firma responsable.</ThemedText>
+              ) : (
+                <ThemedView style={styles.firmaInfoBox}>
+                  <ThemedView style={{ flex: 1, paddingRight: 10 }}>
+                    <ThemedText style={styles.firmaInfoTitle}>Información de la firma:</ThemedText>
+                    {(() => {
+                      const info = decodeFirmaHash(firmaResponsable);
+                      if (!info) {
+                        return <ThemedText style={styles.firmaInfoValue}>Formato no decodificable</ThemedText>;
+                      }
+                      return (
+                        <>
+                          <ThemedText style={styles.firmaInfoValue}>Sesión: {info.sessionId || 'N/A'}</ThemedText>
+                          <ThemedText style={styles.firmaInfoValue}>Empleado: {info.empleadoId || 'N/A'}</ThemedText>
+                          <ThemedText style={styles.firmaInfoValue}>Lat: {info.latitud || 'N/A'} | Long: {info.longitud || 'N/A'}</ThemedText>
+                          <ThemedText style={styles.firmaInfoValue}>
+                            Hora: {convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}
+                          </ThemedText>
+                        </>
+                      );
+                    })()}
+                  </ThemedView>
+                  <TouchableOpacity style={styles.firmaClearButtonTiny} onPress={() => setFirmaResponsable('')} activeOpacity={0.85}>
+                    <Ionicons name="trash" size={18} color="#FFFFFF" />
+                  </TouchableOpacity>
+                </ThemedView>
+              )}
 
               <ThemedView style={styles.formActions}>
                 <TouchableOpacity
@@ -876,78 +905,111 @@ export default function MutuosAcuerdosScreen() {
 
       <Modal
         visible={signatureModalVisible}
-        animationType="slide"
-        presentationStyle="pageSheet"
+        animationType="fade"
+        transparent
         onRequestClose={closeSignatureModal}
       >
-        <ThemedView style={styles.modalContainer}>
-          <ThemedView style={styles.modalHeader}>
-            <ThemedText style={styles.modalTitle}>Firmar (Ejecutivo de cuenta)</ThemedText>
-            <TouchableOpacity onPress={closeSignatureModal}>
-              <Ionicons name="close" size={24} color="#000" />
-            </TouchableOpacity>
-          </ThemedView>
+        <View style={styles.overlay}>
+          <ThemedView style={styles.floatCard}>
+            <View style={styles.floatHeader}>
+              <ThemedText style={styles.modalTitle}>Firmar (Ejecutivo de cuenta)</ThemedText>
+              <TouchableOpacity onPress={closeSignatureModal}>
+                <Ionicons name="close" size={22} color="#333" />
+              </TouchableOpacity>
+            </View>
 
-          <ThemedView style={styles.modalDigitalRow}>
-            <TouchableOpacity
-              style={[styles.signatureBlueButton, isGeneratingFirmaEjecutivoDigital && styles.buttonDisabled]}
-              onPress={handleGenerateFirmaEjecutivoDigital}
-              disabled={isGeneratingFirmaEjecutivoDigital}
-              activeOpacity={0.85}
-            >
-              {isGeneratingFirmaEjecutivoDigital ? (
-                <ActivityIndicator size="small" color="#FFFFFF" />
-              ) : (
-                <Ionicons name="finger-print" size={18} color="#FFFFFF" />
-              )}
-              <ThemedText style={styles.signatureBlueButtonText}>Generar firma digital</ThemedText>
-            </TouchableOpacity>
-            {!!firmaEjecutivoDigital && <ThemedText style={styles.firmaOkText}>Firma digital lista.</ThemedText>}
-          </ThemedView>
+            <ScrollView style={{ maxHeight: 620 }} contentContainerStyle={{ padding: 12 }}>
+              <Collapsible title="Firma digital ejecutivo">
+                <ThemedView style={styles.modalDigitalRow}>
+                  <TouchableOpacity
+                    style={[styles.signatureBlueButton, isGeneratingFirmaEjecutivoDigital && styles.buttonDisabled]}
+                    onPress={handleGenerateFirmaEjecutivoDigital}
+                    disabled={isGeneratingFirmaEjecutivoDigital}
+                    activeOpacity={0.85}
+                  >
+                    {isGeneratingFirmaEjecutivoDigital ? (
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                      <Ionicons name="finger-print" size={18} color="#FFFFFF" />
+                    )}
+                    <ThemedText style={styles.signatureBlueButtonText}>Generar firma digital</ThemedText>
+                  </TouchableOpacity>
+                  {!firmaEjecutivoDigital ? (
+                    <ThemedText style={styles.signatureHintMuted}>Aún no hay firma digital ejecutivo.</ThemedText>
+                  ) : (
+                    <ThemedView style={styles.firmaInfoBox}>
+                      <ThemedView style={{ flex: 1, paddingRight: 10 }}>
+                        <ThemedText style={styles.firmaInfoTitle}>Información de la firma:</ThemedText>
+                        {(() => {
+                          const info = decodeFirmaHash(firmaEjecutivoDigital);
+                          if (!info) {
+                            return <ThemedText style={styles.firmaInfoValue}>Formato no decodificable</ThemedText>;
+                          }
+                          return (
+                            <>
+                              <ThemedText style={styles.firmaInfoValue}>Sesión: {info.sessionId || 'N/A'}</ThemedText>
+                              <ThemedText style={styles.firmaInfoValue}>Empleado: {info.empleadoId || 'N/A'}</ThemedText>
+                              <ThemedText style={styles.firmaInfoValue}>Lat: {info.latitud || 'N/A'} | Long: {info.longitud || 'N/A'}</ThemedText>
+                              <ThemedText style={styles.firmaInfoValue}>
+                                Hora: {convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}
+                              </ThemedText>
+                            </>
+                          );
+                        })()}
+                      </ThemedView>
+                      <TouchableOpacity style={styles.firmaClearButtonTiny} onPress={() => setFirmaEjecutivoDigital('')} activeOpacity={0.85}>
+                        <Ionicons name="trash" size={18} color="#FFFFFF" />
+                      </TouchableOpacity>
+                    </ThemedView>
+                  )}
+                </ThemedView>
+              </Collapsible>
 
-          <ThemedView style={styles.signatureContainer}>
-            <SignatureScreen
-              ref={signatureRef}
-              onOK={onManualSignatureRead}
-              onEmpty={() => {
-                setIsReadingSignature(false);
-                Alert.alert('Error', 'La firma manual está vacía');
-              }}
-              onClear={() => {
-                setIsReadingSignature(false);
-              }}
-              descriptionText=""
-              clearText="Limpiar"
-              confirmText="Guardar"
-              webStyle={signatureWebStyle}
-              key={signatureKey}
-            />
-          </ThemedView>
+              <ThemedView style={styles.signatureContainer}>
+                <SignatureScreen
+                  ref={signatureRef}
+                  onOK={onManualSignatureRead}
+                  onEmpty={() => {
+                    setIsReadingSignature(false);
+                    Alert.alert('Error', 'La firma manual está vacía');
+                  }}
+                  onClear={() => {
+                    setIsReadingSignature(false);
+                  }}
+                  descriptionText=""
+                  clearText="Limpiar"
+                  confirmText="Guardar"
+                  webStyle={signatureWebStyle}
+                  key={signatureKey}
+                />
+              </ThemedView>
 
-          <ThemedView style={styles.modalActions}>
-            <TouchableOpacity
-              style={[styles.modalClearBtn, isSigning && styles.buttonDisabled]}
-              onPress={() => {
-                signatureRef.current?.clearSignature?.();
-                setSignatureKey((k) => k + 1);
-              }}
-              activeOpacity={0.85}
-              disabled={isSigning}
-            >
-              <Ionicons name="refresh" size={18} color="#000" />
-              <ThemedText style={styles.modalClearBtnText}>Limpiar</ThemedText>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.modalAcceptBtn, (isSigning || isReadingSignature) && styles.buttonDisabled]}
-              onPress={submitSignature}
-              activeOpacity={0.85}
-              disabled={isSigning || isReadingSignature}
-            >
-              {(isSigning || isReadingSignature) ? <ActivityIndicator size="small" color="#000" /> : <Ionicons name="checkmark" size={18} color="#000" />}
-              <ThemedText style={styles.modalAcceptBtnText}>Confirmar</ThemedText>
-            </TouchableOpacity>
+              <ThemedView style={styles.modalActions}>
+                <TouchableOpacity
+                  style={[styles.modalClearBtn, isSigning && styles.buttonDisabled]}
+                  onPress={() => {
+                    signatureRef.current?.clearSignature?.();
+                    setSignatureKey((k) => k + 1);
+                  }}
+                  activeOpacity={0.85}
+                  disabled={isSigning}
+                >
+                  <Ionicons name="refresh" size={18} color="#000" />
+                  <ThemedText style={styles.modalClearBtnText}>Limpiar</ThemedText>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.modalAcceptBtn, (isSigning || isReadingSignature) && styles.buttonDisabled]}
+                  onPress={submitSignature}
+                  activeOpacity={0.85}
+                  disabled={isSigning || isReadingSignature}
+                >
+                  {(isSigning || isReadingSignature) ? <ActivityIndicator size="small" color="#000" /> : <Ionicons name="checkmark" size={18} color="#000" />}
+                  <ThemedText style={styles.modalAcceptBtnText}>Confirmar</ThemedText>
+                </TouchableOpacity>
+              </ThemedView>
+            </ScrollView>
           </ThemedView>
-        </ThemedView>
+        </View>
       </Modal>
 
       <AppFooter />
@@ -1015,6 +1077,27 @@ const styles = StyleSheet.create({
   signatureBlueButton: { marginTop: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#007AFF', borderRadius: 10, paddingVertical: 12, paddingHorizontal: 10, gap: 8 },
   signatureBlueButtonText: { color: '#FFFFFF', fontSize: 14, fontWeight: '800' },
   firmaOkText: { marginTop: 8, color: '#1B8F3A', fontWeight: '700' },
+  signatureHintMuted: { marginTop: 6, color: '#999' },
+  firmaInfoBox: {
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 10,
+    padding: 10,
+    backgroundColor: '#F7F8FA',
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  firmaInfoTitle: { fontSize: 14, fontWeight: '700', marginBottom: 8, color: '#333' },
+  firmaInfoValue: { fontSize: 13, color: '#333', marginBottom: 4 },
+  firmaClearButtonTiny: {
+    width: 38,
+    height: 38,
+    borderRadius: 8,
+    backgroundColor: '#FF3B30',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 
   formActions: { marginTop: 16, flexDirection: 'row', gap: 10, justifyContent: 'space-between' },
   formActionBtn: { flex: 1, flexDirection: 'row', gap: 10, alignItems: 'center', justifyContent: 'center', paddingVertical: 14, borderRadius: 12 },
@@ -1036,11 +1119,33 @@ const styles = StyleSheet.create({
   signBtn: { backgroundColor: '#5856D6' },
   actionBtnText: { color: '#FFFFFF', fontSize: 13, fontWeight: '700' },
 
-  modalContainer: { flex: 1, backgroundColor: '#FFFFFF' },
-  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: '#E0E0E0' },
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 16,
+  },
+  floatCard: {
+    width: '100%',
+    maxWidth: 860,
+    maxHeight: '90%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    overflow: 'hidden',
+  },
+  floatHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+  },
   modalTitle: { fontSize: 18, fontWeight: 'bold' },
   modalDigitalRow: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 4 },
-  signatureContainer: { flex: 1 },
+  signatureContainer: { height: 280, borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 8, overflow: 'hidden', marginTop: 8 },
   modalActions: { flexDirection: 'row', justifyContent: 'space-between', padding: 16, gap: 12, backgroundColor: '#FFFFFF' },
   modalClearBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 12, borderRadius: 10, backgroundColor: '#EDEDED', gap: 8 },
   modalClearBtnText: { fontWeight: '800', color: '#000' },

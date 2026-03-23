@@ -1852,9 +1852,9 @@ export default function SatisfactionSurveysScreen() {
                                   onValueChange={(value) => setFilterEmpresaId(value && value !== '' ? Number(value) : null)}
                                   style={styles.picker}
                                 >
-                                  <Picker.Item label="Seleccionar..." value="" />
+                                  <Picker.Item label="Seleccionar..." value="" color="#000000" />
                                   {filterEmpresas.map((e: any) => (
-                                    <Picker.Item key={e.id} label={e.nombre} value={e.id} />
+                                    <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
                                   ))}
                                 </Picker>
                               </View>
@@ -1869,9 +1869,9 @@ export default function SatisfactionSurveysScreen() {
                                     onValueChange={(value) => setFilterClienteId(value && value !== '' ? Number(value) : null)}
                                     style={styles.picker}
                                   >
-                                    <Picker.Item label="Seleccionar..." value="" />
+                                    <Picker.Item label="Seleccionar..." value="" color="#000000" />
                                     {filterClientes.map((c: any) => (
-                                      <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                                      <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
                                     ))}
                                   </Picker>
                                 </View>
@@ -1887,9 +1887,9 @@ export default function SatisfactionSurveysScreen() {
                                     onValueChange={(value) => setFilterDivisionId(value && value !== '' ? Number(value) : null)}
                                     style={styles.picker}
                                   >
-                                    <Picker.Item label="Seleccionar..." value="" />
+                                    <Picker.Item label="Seleccionar..." value="" color="#000000" />
                                     {filterDivisiones.map((d: any) => (
-                                      <Picker.Item key={d.id} label={d.nombre} value={d.id} />
+                                      <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
                                     ))}
                                   </Picker>
                                 </View>
@@ -1905,9 +1905,9 @@ export default function SatisfactionSurveysScreen() {
                                     onValueChange={(value) => setFilterContratoId(value && value !== '' ? Number(value) : null)}
                                     style={styles.picker}
                                   >
-                                    <Picker.Item label="Seleccionar..." value="" />
+                                    <Picker.Item label="Seleccionar..." value="" color="#000000" />
                                     {filterContratos.map((c: any) => (
-                                      <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                                      <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
                                     ))}
                                   </Picker>
                                 </View>
@@ -1923,9 +1923,9 @@ export default function SatisfactionSurveysScreen() {
                                     onValueChange={(value) => setFilterCorpoId(value && value !== '' ? Number(value) : null)}
                                     style={styles.picker}
                                   >
-                                    <Picker.Item label="Seleccionar..." value="" />
+                                    <Picker.Item label="Seleccionar..." value="" color="#000000" />
                                     {filterSucursales.map((s: any) => (
-                                      <Picker.Item key={s.id} label={s.nombre} value={s.id} />
+                                      <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
                                     ))}
                                   </Picker>
                                 </View>
@@ -1941,9 +1941,9 @@ export default function SatisfactionSurveysScreen() {
                                     onValueChange={(value) => setFilterPuestoId(value && value !== '' ? Number(value) : null)}
                                     style={styles.picker}
                                   >
-                                    <Picker.Item label="Seleccionar..." value="" />
+                                    <Picker.Item label="Seleccionar..." value="" color="#000000" />
                                     {filterPuestos.map((p: any) => (
-                                      <Picker.Item key={p.id} label={p.nombre} value={p.id} />
+                                      <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
                                     ))}
                                   </Picker>
                                 </View>
@@ -2323,9 +2323,9 @@ export default function SatisfactionSurveysScreen() {
                           }}
                           style={styles.picker}
                         >
-                          <Picker.Item label="Seleccionar..." value="" />
+                          <Picker.Item label="Seleccionar..." value="" color="#000000" />
                           {formEmpresas.map((e: any) => (
-                            <Picker.Item key={e.id} label={e.nombre} value={e.id} />
+                            <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
                           ))}
                         </Picker>
                       </View>
@@ -2364,9 +2364,9 @@ export default function SatisfactionSurveysScreen() {
                             }}
                             style={styles.picker}
                           >
-                            <Picker.Item label="Seleccionar..." value="" />
+                            <Picker.Item label="Seleccionar..." value="" color="#000000" />
                             {formClientes.map((c: any) => (
-                              <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                              <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
                             ))}
                           </Picker>
                         </View>
@@ -2416,9 +2416,9 @@ export default function SatisfactionSurveysScreen() {
                             }}
                             style={styles.picker}
                           >
-                            <Picker.Item label="Seleccionar..." value="" />
+                            <Picker.Item label="Seleccionar..." value="" color="#000000" />
                             {formDivisiones.map((d: any) => (
-                              <Picker.Item key={d.id} label={d.nombre} value={d.id} />
+                              <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
                             ))}
                           </Picker>
                         </View>
@@ -2448,9 +2448,9 @@ export default function SatisfactionSurveysScreen() {
                             }}
                             style={styles.picker}
                           >
-                            <Picker.Item label="Seleccionar..." value="" />
+                            <Picker.Item label="Seleccionar..." value="" color="#000000" />
                             {formContratos.map((c: any) => (
-                              <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                              <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
                             ))}
                           </Picker>
                         </View>
@@ -2474,9 +2474,9 @@ export default function SatisfactionSurveysScreen() {
                             }}
                             style={styles.picker}
                           >
-                            <Picker.Item label="Seleccionar..." value="" />
+                            <Picker.Item label="Seleccionar..." value="" color="#000000" />
                             {formSucursales.map((s: any) => (
-                              <Picker.Item key={s.id} label={s.nombre} value={s.id} />
+                              <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
                             ))}
                           </Picker>
                         </View>
@@ -2497,9 +2497,9 @@ export default function SatisfactionSurveysScreen() {
                             }}
                             style={styles.picker}
                           >
-                            <Picker.Item label="Seleccionar..." value="" />
+                            <Picker.Item label="Seleccionar..." value="" color="#000000" />
                             {formPuestosList.map((p: any) => (
-                              <Picker.Item key={p.id} label={p.nombre} value={p.id} />
+                              <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
                             ))}
                           </Picker>
                         </View>

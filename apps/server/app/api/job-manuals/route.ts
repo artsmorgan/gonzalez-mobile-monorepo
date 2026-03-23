@@ -396,9 +396,16 @@ export async function POST(req: NextRequest) {
             "America/Costa_Rica"
         ) as Date;
 
-        const puestosParsed: number[] = puestos
+        const puestosParsedRaw: number[] = puestos
             ? JSON.parse(puestos)
             : [marcaObj.puesto_id];
+        const puestosParsed = Array.from(
+            new Set(
+                (Array.isArray(puestosParsedRaw) ? puestosParsedRaw : [])
+                    .map((id: any) => Number(id))
+                    .filter((id: number) => Number.isFinite(id) && id > 0)
+            )
+        );
 
         let filesParsed: ManualFileInput[] = [];
         if (files) {
@@ -425,13 +432,34 @@ export async function POST(req: NextRequest) {
                 { status: 200 }
             );
         }
-        const primaryPuestoId = puestosParsed[0];
-        if (!primaryPuestoId || isNaN(primaryPuestoId)) {
+
+        // 1) Confirmar puestos existentes en BD (findMany con ids recibidos)
+        const existingPuestos = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "e_estructura_puesto",
+                operation: "findMany",
+                where: { id: { in: puestosParsed } },
+                select: { id: true },
+            },
+        });
+        const existingPuestosArray = Array.isArray(existingPuestos) ? existingPuestos : [];
+        const confirmedPuestoIds = Array.from(
+            new Set(
+                existingPuestosArray
+                    .map((p: any) => Number(p?.id))
+                    .filter((id: number) => Number.isFinite(id) && id > 0)
+            )
+        );
+
+        if (confirmedPuestoIds.length === 0) {
             return NextResponse.json(
-                { status: false, message: "Puesto inválido" },
+                { status: false, message: "No se encontraron puestos válidos" },
                 { status: 200 }
             );
         }
+        const primaryPuestoId = confirmedPuestoIds[0];
 
         const manual = await callDynamicPrisma({
             req,
@@ -453,26 +481,20 @@ export async function POST(req: NextRequest) {
         });
         const manualObj = manual as any;
 
-        // Crear relaciones en e_puestos_manual_puesto para cada puesto seleccionado
-        for (const puestoId of puestosParsed) {
-            const resp = await callDynamicPrisma({
-                req,
-                data: {
-                    action: "POST",
-                    table: "e_puestos_manual_puesto",
-                    operation: "create",
-                    data: {
-                        manual_puesto_id: manualObj.id,
-                        puesto_id: puestoId
-                    }
-                }
-            });
-
-            if (!resp.status) {
-                console.error("Error creating relationship in e_puestos_manual_puesto:", resp.message);
-                continue;
+        // 2) Crear relaciones en e_puestos_manual_puesto con una sola petición createMany
+        await callDynamicPrisma({
+            req,
+            data: {
+                action: "POST",
+                table: "e_puestos_manual_puesto",
+                operation: "createMany",
+                many: true,
+                data: confirmedPuestoIds.map((puesto_id: number) => ({
+                    manual_puesto_id: manualObj.id,
+                    puesto_id,
+                })),
             }
-        }
+        });
 
         // Guardar archivos una sola vez para el manual, delegando a /api/dynamic-prisma/files
         if (filesParsed.length > 0) {
@@ -508,6 +530,7 @@ export async function POST(req: NextRequest) {
         }
 
 
+        // 3) Buscar plazas de los puestos confirmados para notificación
         const plazas = await callDynamicPrisma({
             req,
             data: {
@@ -515,12 +538,12 @@ export async function POST(req: NextRequest) {
                 table: "e_estructura_plazas",
                 operation: "findMany",
                 where: {
-                    puesto_id: { in: puestosParsed }, deleted: null,
+                    puesto_id: { in: confirmedPuestoIds }, deleted: null,
                     OR: [
                         { fecha_inactivacion: null },
                         { fecha_inactivacion: { gte: toZonedTime(new Date(), "America/Costa_Rica") } },
                     ],
-                }, // In: puestosParsed
+                }, // In: confirmedPuestoIds
             },
         });
 

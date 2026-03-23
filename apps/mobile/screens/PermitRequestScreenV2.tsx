@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -26,7 +26,7 @@ import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { jwtDecode } from 'jwt-decode';
 import Constants from 'expo-constants';
-import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 
 import AppHeader from '@/components/AppHeader';
@@ -218,6 +218,9 @@ export default function PermitRequestScreenV2() {
   const [isReadingSignature, setIsReadingSignature] = useState(false);
   const [signatureKey, setSignatureKey] = useState(0);
   const signatureRef = useRef<any>(null);
+  const PERMIT_REQUEST_CACHE_KEY = 'permit_request_records_cache_v2';
+  const isFetchingAllRef = useRef(false);
+  const hasLoadedOnOpenRef = useRef(false);
 
   const getConnectionStatus = useCallback(async () => {
     const n = await Network.getNetworkStateAsync();
@@ -228,7 +231,7 @@ export default function PermitRequestScreenV2() {
     try {
       const cache = await AsyncStorage.getItem('current_marca');
       if (!cache) {
-        setCurrentPuestoNombre(null);
+        setCurrentPuestoNombre("Indeterminado");
         return;
       }
       const marca = JSON.parse(cache);
@@ -236,7 +239,7 @@ export default function PermitRequestScreenV2() {
         marca?.puesto?.nombre != null ? String(marca.puesto.nombre).trim() : null;
       setCurrentPuestoNombre(nombrePuesto);
     } catch {
-      setCurrentPuestoNombre(null);
+      setCurrentPuestoNombre("Indeterminado");
     }
   }, []);
 
@@ -297,7 +300,21 @@ export default function PermitRequestScreenV2() {
     return await response.json();
   };
 
+  const loadRecordsFromCache = useCallback(async () => {
+    try {
+      const cache = await AsyncStorage.getItem(PERMIT_REQUEST_CACHE_KEY);
+      if (!cache) return;
+      const parsed = JSON.parse(cache);
+      if (!Array.isArray(parsed)) return;
+      setRecords(parsed);
+    } catch {
+      // ignore cache parse errors
+    }
+  }, []);
+
   const fetchAll = useCallback(async () => {
+    if (isFetchingAllRef.current) return;
+    isFetchingAllRef.current = true;
     setIsLoading(true);
     setError(null);
     try {
@@ -305,13 +322,15 @@ export default function PermitRequestScreenV2() {
       setIsOnline(online);
       if (!online) {
         setError('Este módulo funciona únicamente con internet.');
-        setRecords([]);
+        await loadRecordsFromCache();
         return;
       }
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) throw new Error('Server URL not configured');
+      const mode = String(currentPuestoNombre || '').toLowerCase().includes('ejecutivo') ? '' : 'mine';
+      const query = mode ? `?mode=${encodeURIComponent(mode)}` : '';
       const resp = await authedFetch({
-        url: `${apiUrl}/api/permit-request`,
+        url: `${apiUrl}/api/permit-request${query}`,
         init: { method: 'GET', headers: { 'Content-Type': 'application/json' } },
         refreshAccessToken,
         logout,
@@ -319,29 +338,44 @@ export default function PermitRequestScreenV2() {
       if (!resp) throw new Error('Sesión expirada');
       const json = await resp.json().catch(() => ({}));
       if (!resp.ok || !json?.status) throw new Error(json?.message || 'No se pudieron cargar las solicitudes');
-      setRecords(Array.isArray(json.data) ? json.data : []);
+      const data = Array.isArray(json.data) ? json.data : [];
+      setRecords(data);
+      await AsyncStorage.setItem(PERMIT_REQUEST_CACHE_KEY, JSON.stringify(data));
     } catch (e: any) {
       setError(e?.message || 'Error al cargar solicitudes');
-      setRecords([]);
+      await loadRecordsFromCache();
     } finally {
       setIsLoading(false);
+      isFetchingAllRef.current = false;
     }
-  }, [getConnectionStatus, refreshAccessToken, logout]);
+  }, [getConnectionStatus, refreshAccessToken, logout, loadRecordsFromCache, currentPuestoNombre]);
 
-  useFocusEffect(
-    useCallback(() => {
-      let isActive = true;
-      (async () => {
-        if (!isActive) return;
-        await loadCurrentMarcaInfo();
-        if (!isActive) return;
-        await fetchAll();
-      })();
-      return () => {
-        isActive = false;
-      };
-    }, [fetchAll, loadCurrentMarcaInfo])
-  );
+  useEffect(() => {
+    let isMounted = true;
+    (async () => {
+      if (hasLoadedOnOpenRef.current || !isMounted) return;
+      hasLoadedOnOpenRef.current = true;
+      await loadRecordsFromCache();
+      if (!isMounted) return;
+      await loadCurrentMarcaInfo();
+      if (!isMounted) return;
+      await fetchAll();
+    })();
+    return () => {
+      isMounted = false;
+    };
+  }, [fetchAll, loadCurrentMarcaInfo, loadRecordsFromCache]);
+
+  const closeCreateFormAndReloadList = useCallback(async () => {
+    setIsCreating(false);
+    await fetchAll();
+  }, [fetchAll]);
+
+  const closeCompleteFormAndReloadList = useCallback(async () => {
+    setIsCompleteModalOpen(false);
+    setSelectedRecord(null);
+    await fetchAll();
+  }, [fetchAll]);
 
   const fetchPlazas = useCallback(async () => {
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
@@ -599,9 +633,8 @@ export default function PermitRequestScreenV2() {
       const json = await resp.json().catch(() => ({}));
       if (!resp.ok || !json?.status) throw new Error(json?.message || 'No se pudo crear');
       Alert.alert('Éxito', 'Solicitud creada correctamente');
-      setIsCreating(false);
-      resetCreateForm();
-      fetchAll();
+      await resetCreateForm();
+      await closeCreateFormAndReloadList();
     } catch (e: any) {
       Alert.alert('Error', e?.message || 'No se pudo crear la solicitud');
     } finally {
@@ -780,9 +813,7 @@ export default function PermitRequestScreenV2() {
       const json = await resp.json().catch(() => ({}));
       if (!resp.ok || !json?.status) throw new Error(json?.message || 'No se pudo completar la solicitud');
       Alert.alert('Éxito', 'Solicitud completada correctamente');
-      setIsCompleteModalOpen(false);
-      setSelectedRecord(null);
-      fetchAll();
+      await closeCompleteFormAndReloadList();
     } catch (e: any) {
       Alert.alert('Error', e?.message || 'No se pudo completar');
     } finally {
@@ -960,9 +991,9 @@ export default function PermitRequestScreenV2() {
               <ThemedText style={styles.label}>Tipo de solicitud *</ThemedText>
               <View style={styles.pickerWrap}>
                 <Picker selectedValue={tipo} onValueChange={(v) => setTipo(v as PermitType | '')}>
-                  <Picker.Item label="Seleccionar" value="" />
-                  <Picker.Item label="Con goce" value="Con goce" />
-                  <Picker.Item label="Sin goce" value="Sin goce" />
+                  <Picker.Item label="Seleccionar" value="" color="#000000" />
+                  <Picker.Item label="Con goce" value="Con goce" color="#000000" />
+                  <Picker.Item label="Sin goce" value="Sin goce" color="#000000" />
                 </Picker>
               </View>
               <ThemedText style={styles.label}>Plaza *</ThemedText>
@@ -1157,7 +1188,7 @@ export default function PermitRequestScreenV2() {
               )}
 
               <View style={styles.rowButtons}>
-                <TouchableOpacity style={[styles.secondaryButton, { backgroundColor: '#8E8E93' }]} onPress={() => setIsCreating(false)}>
+                <TouchableOpacity style={[styles.secondaryButton, { backgroundColor: '#8E8E93' }]} onPress={closeCreateFormAndReloadList}>
                   <ThemedText style={styles.secondaryButtonText}>Cancelar</ThemedText>
                 </TouchableOpacity>
                 <TouchableOpacity style={[styles.secondaryButton, { backgroundColor: '#007AFF' }]} onPress={handleCreate} disabled={isSubmitting}>
@@ -1169,12 +1200,12 @@ export default function PermitRequestScreenV2() {
         </ThemedView>
       </ScrollView>
 
-      <Modal visible={isCompleteModalOpen} transparent animationType="fade" onRequestClose={() => setIsCompleteModalOpen(false)}>
+      <Modal visible={isCompleteModalOpen} transparent animationType="fade" onRequestClose={closeCompleteFormAndReloadList}>
         <View style={styles.overlay}>
           <ThemedView style={styles.floatCard}>
             <View style={styles.floatHeader}>
               <ThemedText style={styles.modalTitle}>Completar solicitud #{selectedRecord?.id}</ThemedText>
-              <TouchableOpacity onPress={() => setIsCompleteModalOpen(false)}>
+              <TouchableOpacity onPress={closeCompleteFormAndReloadList}>
                 <Ionicons name="close" size={22} color="#333" />
               </TouchableOpacity>
             </View>
@@ -1310,7 +1341,7 @@ export default function PermitRequestScreenV2() {
               ) : null}
 
               <View style={styles.rowButtons}>
-                <TouchableOpacity style={[styles.secondaryButton, { backgroundColor: '#8E8E93' }]} onPress={() => setIsCompleteModalOpen(false)}>
+                <TouchableOpacity style={[styles.secondaryButton, { backgroundColor: '#8E8E93' }]} onPress={closeCompleteFormAndReloadList}>
                   <ThemedText style={styles.secondaryButtonText}>Cancelar</ThemedText>
                 </TouchableOpacity>
                 <TouchableOpacity style={[styles.secondaryButton, { backgroundColor: '#007AFF' }]} onPress={saveCompletion} disabled={isSavingComplete}>

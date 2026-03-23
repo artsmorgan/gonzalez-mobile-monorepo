@@ -2098,10 +2098,10 @@ export default function InductionTourRecordScreen() {
                   onValueChange={(value) => updateTema(index, 'respuesta', value)}
                   style={styles.picker}
                 >
-                  <Picker.Item label="Seleccionar..." value="" />
-                  <Picker.Item label="SI" value="SI" />
-                  <Picker.Item label="NO" value="NO" />
-                  <Picker.Item label="NA" value="NA" />
+                  <Picker.Item label="Seleccionar..." value="" color="#000000" />
+                  <Picker.Item label="SI" value="SI" color="#000000" />
+                  <Picker.Item label="NO" value="NO" color="#000000" />
+                  <Picker.Item label="NA" value="NA" color="#000000" />
                 </Picker>
               </View>
             </ThemedView>
@@ -2184,10 +2184,10 @@ export default function InductionTourRecordScreen() {
                   onValueChange={(value) => updateAspecto(index, 'respuesta', value)}
                   style={styles.picker}
                 >
-                  <Picker.Item label="Seleccionar..." value="" />
-                  <Picker.Item label="SI" value="SI" />
-                  <Picker.Item label="NO" value="NO" />
-                  <Picker.Item label="NA" value="NA" />
+                  <Picker.Item label="Seleccionar..." value="" color="#000000" />
+                  <Picker.Item label="SI" value="SI" color="#000000" />
+                  <Picker.Item label="NO" value="NO" color="#000000" />
+                  <Picker.Item label="NA" value="NA" color="#000000" />
                 </Picker>
               </View>
             </ThemedView>
@@ -2383,9 +2383,9 @@ export default function InductionTourRecordScreen() {
                         }}
                         style={styles.picker}
                       >
-                        <Picker.Item label="Seleccionar..." value="" />
+                        <Picker.Item label="Seleccionar..." value="" color="#000000" />
                         {formEmpresas.map((e: any) => (
-                          <Picker.Item key={e.id} label={e.nombre} value={e.id} />
+                          <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
                         ))}
                       </Picker>
                     </View>
@@ -2494,9 +2494,9 @@ export default function InductionTourRecordScreen() {
                         }}
                         style={styles.picker}
                       >
-                        <Picker.Item label={formContratoId ? "Seleccionar..." : "Seleccione contrato primero"} value="" />
+                        <Picker.Item label={formContratoId ? "Seleccionar..." : "Seleccione contrato primero"} value="" color="#000000" />
                         {formSucursales.map((s: any) => (
-                          <Picker.Item key={s.id} label={s.nombre} value={s.id} />
+                          <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
                         ))}
                       </Picker>
                     </View>
@@ -2514,9 +2514,9 @@ export default function InductionTourRecordScreen() {
                         }}
                         style={styles.picker}
                       >
-                        <Picker.Item label={formCorpoId ? "Seleccionar..." : "Seleccione sucursal primero"} value="" />
+                        <Picker.Item label={formCorpoId ? "Seleccionar..." : "Seleccione sucursal primero"} value="" color="#000000" />
                         {formPuestos.map((p: any) => (
-                          <Picker.Item key={p.id} label={p.nombre} value={p.id} />
+                          <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
                         ))}
                       </Picker>
                     </View>
@@ -2541,7 +2541,7 @@ export default function InductionTourRecordScreen() {
                       >
                         <Picker.Item label={formCorpoId ? (formPuestoId ? "Seleccionar..." : "Seleccione puesto primero (opcional)") : "Seleccione sucursal primero"} value="" />
                         {formPlazas.map((p: any) => (
-                          <Picker.Item key={p.id} label={p.nombre} value={p.id} />
+                          <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
                         ))}
                       </Picker>
                     </View>
@@ -2557,9 +2557,9 @@ export default function InductionTourRecordScreen() {
                         onValueChange={(value) => onEmpleadoSelected(value ? Number(value) : null)}
                         style={styles.picker}
                       >
-                        <Picker.Item label={formPlazaId ? 'Seleccionar empleado...' : 'Seleccione plaza primero'} value={0} />
+                        <Picker.Item label={formPlazaId ? 'Seleccionar empleado...' : 'Seleccione plaza primero'} value={0} color="#000000" />
                         {formEmpleados.map((emp: MainStructureEmpleado) => (
-                          <Picker.Item key={emp.id} label={`${emp.nombre || ''} ${emp.primer_apellido || ''} ${emp.segundo_apellido || ''} - ${emp.cedula}`} value={emp.id} />
+                          <Picker.Item key={emp.id} label={`${emp.nombre || ''} ${emp.primer_apellido || ''} ${emp.segundo_apellido || ''} - ${emp.cedula}`} value={emp.id} color="#000000"   />
                         ))}
                       </Picker>
                     </View>
@@ -2823,9 +2823,9 @@ export default function InductionTourRecordScreen() {
                             }}
                             style={styles.picker}
                           >
-                            <Picker.Item label="Seleccionar..." value="" />
+                            <Picker.Item label="Seleccionar..." value="" color="#000000" />
                             {filterEmpresas.map((e: any) => (
-                              <Picker.Item key={e.id} label={e.nombre} value={e.id} />
+                              <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
                             ))}
                           </Picker>
                         </View>
@@ -2846,9 +2846,9 @@ export default function InductionTourRecordScreen() {
                               }}
                               style={styles.picker}
                             >
-                              <Picker.Item label="Seleccionar..." value="" />
+                              <Picker.Item label="Seleccionar..." value="" color="#000000" />
                               {filterClientes.map((c: any) => (
-                                <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                                <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
                               ))}
                             </Picker>
                           </View>
@@ -2870,9 +2870,9 @@ export default function InductionTourRecordScreen() {
                               }}
                               style={styles.picker}
                             >
-                              <Picker.Item label="Seleccionar..." value="" />
+                              <Picker.Item label="Seleccionar..." value="" color="#000000" />
                               {filterDivisiones.map((d: any) => (
-                                <Picker.Item key={d.id} label={d.nombre} value={d.id} />
+                                <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
                               ))}
                             </Picker>
                           </View>
@@ -2892,9 +2892,9 @@ export default function InductionTourRecordScreen() {
                               }}
                               style={styles.picker}
                             >
-                              <Picker.Item label="Seleccionar..." value="" />
+                              <Picker.Item label="Seleccionar..." value="" color="#000000" />
                               {filterContratos.map((c: any) => (
-                                <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                                <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
                               ))}
                             </Picker>
                           </View>
@@ -2913,9 +2913,9 @@ export default function InductionTourRecordScreen() {
                               }}
                               style={styles.picker}
                             >
-                              <Picker.Item label="Seleccionar..." value="" />
+                              <Picker.Item label="Seleccionar..." value="" color="#000000" />
                               {filterSucursales.map((s: any) => (
-                                <Picker.Item key={s.id} label={s.nombre} value={s.id} />
+                                <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
                               ))}
                             </Picker>
                           </View>
@@ -2933,9 +2933,9 @@ export default function InductionTourRecordScreen() {
                               }}
                               style={styles.picker}
                             >
-                              <Picker.Item label="Seleccionar..." value="" />
+                              <Picker.Item label="Seleccionar..." value="" color="#000000" />
                               {filterPuestos.map((p: any) => (
-                                <Picker.Item key={p.id} label={p.nombre} value={p.id} />
+                                <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
                               ))}
                             </Picker>
                           </View>

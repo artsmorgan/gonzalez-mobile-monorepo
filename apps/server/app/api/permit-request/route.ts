@@ -118,19 +118,19 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ status: false, message: "Empleado inválido", data: [] }, { status: 400 });
     }
 
-    const queryMode = String(req.nextUrl.searchParams.get("mode") || "").trim().toLowerCase();
-    const includeExecutiveAssigned = queryMode !== "mine";
-
     const empleado = await callDynamicPrisma({
       req,
       data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: currentEmployeeId } },
     });
-    const myEjecutivoCuentaId = parseIntStrict(empleado?.supervisor_id);
+    const mySupervisorId = parseIntStrict(empleado?.supervisor_id);
 
-    const where: any = { empleado_id: currentEmployeeId };
-    if (includeExecutiveAssigned && myEjecutivoCuentaId) {
-      where.OR = [{ empleado_id: currentEmployeeId }, { ejecutivo_cuenta: myEjecutivoCuentaId }];
-    }
+    // Siempre incluir:
+    // 1) Solicitudes propias del empleado autenticado.
+    // 2) Solicitudes donde el ejecutivo_cuenta coincide con supervisor_id del empleado.
+    // Esto garantiza visibilidad cuando ejecutivo_cuenta === supervisor_id.
+    const where: any = mySupervisorId
+      ? { OR: [{ empleado_id: currentEmployeeId }, { ejecutivo_cuenta: mySupervisorId }] }
+      : { empleado_id: currentEmployeeId };
 
     const records = await callDynamicPrisma({
       req,
@@ -216,7 +216,7 @@ export async function GET(req: NextRequest) {
       // Ejecutivo: el usuario actual es el asignado (por id o por supervisor_id). Si envía a su nombre y se asigna a sí mismo, también puede completar y descargar.
       const isExecutiveForRecord =
         Number(r.ejecutivo_cuenta) === currentEmployeeId ||
-        (Boolean(myEjecutivoCuentaId) && Number(r.ejecutivo_cuenta) === Number(myEjecutivoCuentaId));
+        (Boolean(mySupervisorId) && Number(r.ejecutivo_cuenta) === Number(mySupervisorId));
       const canCompleteByExecutive =
         isExecutiveForRecord &&
         (!r.firma_ejecutivo_cuenta_digital || !r.firma_ejecutivo_cuenta_manual);
@@ -474,14 +474,18 @@ export async function POST(req: NextRequest) {
       if (empId) recipients.add(empId);
     }
     if (recipients.size > 0) {
-      await sendNotificationByEmployee(
+      // No bloquear la respuesta por notificaciones; si falla, el registro ya fue creado.
+      void sendNotificationByEmployee(
         req,
         0,
         [currentEmployeeId],
         "Nueva solicitud de permiso",
         `Se ha creado una nueva solicitud de permiso (${tipo})`,
         Array.from(recipients)
-      );
+      ).catch((error) => {
+        const msg = error instanceof Error ? error.message : "Error desconocido";
+        console.error("Error sending permit-request notifications:", msg);
+      });
     }
 
     return NextResponse.json(

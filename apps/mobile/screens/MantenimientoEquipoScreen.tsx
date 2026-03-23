@@ -2969,11 +2969,11 @@ export default function MantenimientoEquipoScreen() {
                         onValueChange={(value) => setAccion(value)}
                         style={styles.picker}
                     >
-                        <Picker.Item label="Seleccionar..." value="" />
-                        <Picker.Item label="Reemplazar" value="Reemplazar" />
-                        <Picker.Item label="Rellenar" value="Rellenar" />
-                        <Picker.Item label="Reparar en puesto" value="Reparar en puesto" />
-                        <Picker.Item label="Reparar en taller" value="Reparar en taller" />
+                        <Picker.Item label="Seleccionar..." value="" color="#000000" />
+                        <Picker.Item label="Reemplazar" value="Reemplazar" color="#000000" />
+                        <Picker.Item label="Rellenar" value="Rellenar" color="#000000" />
+                        <Picker.Item label="Reparar en puesto" value="Reparar en puesto" color="#000000" />
+                        <Picker.Item label="Reparar en taller" value="Reparar en taller" color="#000000" />
                     </Picker>
                 </View>
 
@@ -3001,9 +3001,9 @@ export default function MantenimientoEquipoScreen() {
                         onValueChange={(value) => setTipo(value)}
                         style={styles.picker}
                     >
-                        <Picker.Item label="Seleccionar..." value="" />
-                        <Picker.Item label="Preventivo" value="Preventivo" />
-                        <Picker.Item label="Correctivo" value="Correctivo" />
+                        <Picker.Item label="Seleccionar..." value="" color="#000000" />
+                        <Picker.Item label="Preventivo" value="Preventivo" color="#000000" />
+                        <Picker.Item label="Correctivo" value="Correctivo" color="#000000" />
                     </Picker>
                 </View>
 
@@ -3054,9 +3054,9 @@ export default function MantenimientoEquipoScreen() {
                                 onValueChange={(value) => setArmaTipoArma(value)}
                                 style={styles.picker}
                             >
-                                <Picker.Item label="Seleccionar..." value="" />
-                                <Picker.Item label="Letal" value="Letal" />
-                                <Picker.Item label="Menos Letal" value="Menos Letal" />
+                                <Picker.Item label="Seleccionar..." value="" color="#000000" />
+                                <Picker.Item label="Letal" value="Letal" color="#000000" />
+                                <Picker.Item label="Menos Letal" value="Menos Letal" color="#000000" />
                             </Picker>
                         </View>
 
@@ -3067,9 +3067,9 @@ export default function MantenimientoEquipoScreen() {
                                 onValueChange={(value) => setArmaMecanismo(value)}
                                 style={styles.picker}
                             >
-                                <Picker.Item label="Seleccionar..." value="" />
-                                <Picker.Item label="Pistola" value="Pistola" />
-                                <Picker.Item label="Revolver" value="Revolver" />
+                                <Picker.Item label="Seleccionar..." value="" color="#000000" />
+                                <Picker.Item label="Pistola" value="Pistola" color="#000000" />
+                                <Picker.Item label="Revolver" value="Revolver" color="#000000" />
                             </Picker>
                         </View>
 
@@ -3325,9 +3325,9 @@ export default function MantenimientoEquipoScreen() {
                         onValueChange={(value) => setTipoMantenimientoArticulo(value)}
                         style={styles.picker}
                     >
-                        <Picker.Item label="Seleccionar..." value="" />
+                        <Picker.Item label="Seleccionar..." value="" color="#000000" />
                         {(selectedReporte?.tipos_mantenimiento || []).map((t) => (
-                            <Picker.Item key={t.id} label={t.nombre} value={t.nombre} />
+                            <Picker.Item key={t.id} label={t.nombre} value={t.nombre} color="#000000" />
                         ))}
                     </Picker>
                 </View>
@@ -3453,9 +3453,9 @@ export default function MantenimientoEquipoScreen() {
                         onValueChange={(value) => setCategoriaMantenimiento(value)}
                         style={styles.picker}
                     >
-                        <Picker.Item label="Seleccionar..." value="" />
+                        <Picker.Item label="Seleccionar..." value="" color="#000000" />
                         {categoriasMantenimiento.map((cat) => (
-                            <Picker.Item key={cat.id} label={cat.nombre} value={cat.nombre} />
+                            <Picker.Item key={cat.id} label={cat.nombre} value={cat.nombre} color="#000000" />
                         ))}
                     </Picker>
                 </View>
@@ -3559,9 +3559,9 @@ export default function MantenimientoEquipoScreen() {
                                 onValueChange={(value) => setTipoMantenimientoReincidencia(value)}
                                 style={styles.picker}
                             >
-                                <Picker.Item label="Seleccionar..." value="" />
+                                <Picker.Item label="Seleccionar..." value="" color="#000000" />
                                 {(selectedReporte?.tipos_mantenimiento || []).map((t) => (
-                                    <Picker.Item key={t.id} label={t.nombre} value={t.nombre} />
+                                    <Picker.Item key={t.id} label={t.nombre} value={t.nombre} color="#000000" />
                                 ))}
                             </Picker>
                         </View>
@@ -3847,9 +3847,9 @@ export default function MantenimientoEquipoScreen() {
                                                 }}
                                                 style={styles.picker}
                                             >
-                                                <Picker.Item label="Seleccionar..." value="" />
+                                                <Picker.Item label="Seleccionar..." value="" color="#000000" />
                                                 {filterEmpresas.map((e: any) => (
-                                                    <Picker.Item key={e.id} label={e.nombre} value={e.id} />
+                                                    <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
                                                 ))}
                                             </Picker>
                                         </View>
@@ -3870,9 +3870,9 @@ export default function MantenimientoEquipoScreen() {
                                                     }}
                                                     style={styles.picker}
                                                 >
-                                                    <Picker.Item label="Seleccionar..." value="" />
+                                                    <Picker.Item label="Seleccionar..." value="" color="#000000" />
                                                     {filterClientes.map((c: any) => (
-                                                        <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                                                        <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
                                                     ))}
                                                 </Picker>
                                             </View>
@@ -3893,9 +3893,9 @@ export default function MantenimientoEquipoScreen() {
                                                     }}
                                                     style={styles.picker}
                                                 >
-                                                    <Picker.Item label="Seleccionar..." value="" />
+                                                    <Picker.Item label="Seleccionar..." value="" color="#000000" />
                                                     {filterDivisiones.map((d: any) => (
-                                                        <Picker.Item key={d.id} label={d.nombre} value={d.id} />
+                                                        <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
                                                     ))}
                                                 </Picker>
                                             </View>
@@ -3915,9 +3915,9 @@ export default function MantenimientoEquipoScreen() {
                                                     }}
                                                     style={styles.picker}
                                                 >
-                                                    <Picker.Item label="Seleccionar..." value="" />
+                                                    <Picker.Item label="Seleccionar..." value="" color="#000000" />
                                                     {filterContratos.map((c: any) => (
-                                                        <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                                                        <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
                                                     ))}
                                                 </Picker>
                                             </View>
@@ -3936,9 +3936,9 @@ export default function MantenimientoEquipoScreen() {
                                                     }}
                                                     style={styles.picker}
                                                 >
-                                                    <Picker.Item label="Seleccionar..." value="" />
+                                                    <Picker.Item label="Seleccionar..." value="" color="#000000" />
                                                     {filterSucursales.map((s: any) => (
-                                                        <Picker.Item key={s.id} label={s.nombre} value={s.id} />
+                                                        <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
                                                     ))}
                                                 </Picker>
                                             </View>
@@ -3960,9 +3960,9 @@ export default function MantenimientoEquipoScreen() {
                                                     }}
                                                     style={styles.picker}
                                                 >
-                                                    <Picker.Item label="Seleccionar..." value="" />
+                                                    <Picker.Item label="Seleccionar..." value="" color="#000000" />
                                                     {filterPuestos.map((p: any) => (
-                                                        <Picker.Item key={p.id} label={p.nombre} value={p.id} />
+                                                        <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
                                                     ))}
                                                 </Picker>
                                             </View>

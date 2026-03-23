@@ -30,11 +30,20 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                 table: "c_marca_dia",
                 operation: "findMany",
                 where: {
-                    empleadoFijo_id: empleadoId,
-                    fecha: {
-                        gte: startDate,
-                        lte: endDate,
-                    },
+                    AND: [
+                        {
+                            OR: [
+                                { empleadoFijo_id: empleadoId },
+                                { empleadoReemplaza_id: empleadoId },
+                            ],
+                        },
+                        {
+                            fecha: {
+                                gte: startDate,
+                                lte: endDate,
+                            },
+                        },
+                    ],
                 },
                 orderBy: [
                     { fecha: "asc" },

@@ -1410,9 +1410,9 @@ export default function ApreciacionVulnerabilidadScreen() {
                           setFilterPuestoId(null);
                         }}
                       >
-                        <Picker.Item label="Seleccionar empresa" value={PICKER_NONE} />
+                        <Picker.Item label="Seleccionar empresa" value={PICKER_NONE} color="#000000" />
                         {empresas.map((o) => (
-                          <Picker.Item key={String(o.id)} label={o.label} value={o.id} />
+                          <Picker.Item key={String(o.id)} label={o.label} value={o.id} color="#000000" />
                         ))}
                       </Picker>
                     </ThemedView>
@@ -1436,9 +1436,9 @@ export default function ApreciacionVulnerabilidadScreen() {
                           setFilterPuestoId(null);
                         }}
                       >
-                        <Picker.Item label="Seleccionar cliente" value={PICKER_NONE} />
+                        <Picker.Item label="Seleccionar cliente" value={PICKER_NONE} color="#000000" />
                         {filterClientes.map((o) => (
-                          <Picker.Item key={String(o.id)} label={o.label} value={o.id} />
+                          <Picker.Item key={String(o.id)} label={o.label} value={o.id} color="#000000" />
                         ))}
                       </Picker>
                     </ThemedView>
@@ -1461,9 +1461,9 @@ export default function ApreciacionVulnerabilidadScreen() {
                           setFilterPuestoId(null);
                         }}
                       >
-                        <Picker.Item label="Seleccionar división" value={PICKER_NONE} />
+                        <Picker.Item label="Seleccionar división" value={PICKER_NONE} color="#000000" />
                         {filterDivisiones.map((o) => (
-                          <Picker.Item key={String(o.id)} label={o.label} value={o.id} />
+                          <Picker.Item key={String(o.id)} label={o.label} value={o.id} color="#000000" />
                         ))}
                       </Picker>
                     </ThemedView>
@@ -1485,9 +1485,9 @@ export default function ApreciacionVulnerabilidadScreen() {
                           setFilterPuestoId(null);
                         }}
                       >
-                        <Picker.Item label="Seleccionar contrato" value={PICKER_NONE} />
+                        <Picker.Item label="Seleccionar contrato" value={PICKER_NONE} color="#000000" />
                         {filterContratos.map((o) => (
-                          <Picker.Item key={String(o.id)} label={o.label} value={o.id} />
+                          <Picker.Item key={String(o.id)} label={o.label} value={o.id} color="#000000" />
                         ))}
                       </Picker>
                     </ThemedView>
@@ -1508,9 +1508,9 @@ export default function ApreciacionVulnerabilidadScreen() {
                           setFilterPuestoId(null);
                         }}
                       >
-                        <Picker.Item label="Seleccionar sucursal (corpo)" value={PICKER_NONE} />
+                        <Picker.Item label="Seleccionar sucursal (corpo)" value={PICKER_NONE} color="#000000" />
                         {filterCorpos.map((o) => (
-                          <Picker.Item key={String(o.id)} label={o.label} value={o.id} />
+                          <Picker.Item key={String(o.id)} label={o.label} value={o.id} color="#000000" />
                         ))}
                       </Picker>
                     </ThemedView>
@@ -1530,9 +1530,9 @@ export default function ApreciacionVulnerabilidadScreen() {
                           setFilterPuestoId(id === PICKER_NONE ? null : id);
                         }}
                       >
-                        <Picker.Item label="Seleccionar puesto" value={PICKER_NONE} />
+                        <Picker.Item label="Seleccionar puesto" value={PICKER_NONE} color="#000000" />
                         {filterPuestos.map((o) => (
-                          <Picker.Item key={String(o.id)} label={o.label} value={o.id} />
+                          <Picker.Item key={String(o.id)} label={o.label} value={o.id} color="#000000"  />
                         ))}
                       </Picker>
                     </ThemedView>
@@ -1584,9 +1584,9 @@ export default function ApreciacionVulnerabilidadScreen() {
                       setPuestoId(null);
                     }}
                   >
-                    <Picker.Item label="Seleccionar empresa" value={PICKER_NONE} />
+                    <Picker.Item label="Seleccionar empresa" value={PICKER_NONE} color="#000000" />
                     {empresas.map((o) => (
-                      <Picker.Item key={String(o.id)} label={o.label} value={o.id} />
+                      <Picker.Item key={String(o.id)} label={o.label} value={o.id} color="#000000" />
                     ))}
                   </Picker>
                 </ThemedView>
@@ -1608,9 +1608,9 @@ export default function ApreciacionVulnerabilidadScreen() {
                       setPuestoId(null);
                     }}
                   >
-                    <Picker.Item label="Seleccionar cliente" value={PICKER_NONE} />
+                    <Picker.Item label="Seleccionar cliente" value={PICKER_NONE} color="#000000" />
                     {clientes.map((o) => (
-                      <Picker.Item key={String(o.id)} label={o.label} value={o.id} />
+                      <Picker.Item key={String(o.id)} label={o.label} value={o.id} color="#000000" />
                     ))}
                   </Picker>
                 </ThemedView>
@@ -1631,9 +1631,9 @@ export default function ApreciacionVulnerabilidadScreen() {
                       setPuestoId(null);
                     }}
                   >
-                    <Picker.Item label="Seleccionar división" value={PICKER_NONE} />
+                    <Picker.Item label="Seleccionar división" value={PICKER_NONE} color="#000000" />
                     {divisiones.map((o) => (
-                      <Picker.Item key={String(o.id)} label={o.label} value={o.id} />
+                      <Picker.Item key={String(o.id)} label={o.label} value={o.id} color="#000000" />
                     ))}
                   </Picker>
                 </ThemedView>
@@ -1653,9 +1653,9 @@ export default function ApreciacionVulnerabilidadScreen() {
                       setPuestoId(null);
                     }}
                   >
-                    <Picker.Item label="Seleccionar contrato" value={PICKER_NONE} />
+                    <Picker.Item label="Seleccionar contrato" value={PICKER_NONE} color="#000000" />
                     {contratos.map((o) => (
-                      <Picker.Item key={String(o.id)} label={o.label} value={o.id} />
+                      <Picker.Item key={String(o.id)} label={o.label} value={o.id} color="#000000" />
                     ))}
                   </Picker>
                 </ThemedView>
@@ -1674,9 +1674,9 @@ export default function ApreciacionVulnerabilidadScreen() {
                       setPuestoId(null);
                     }}
                   >
-                    <Picker.Item label="Seleccionar sucursal (corpo)" value={PICKER_NONE} />
+                    <Picker.Item label="Seleccionar sucursal (corpo)" value={PICKER_NONE} color="#000000" />
                     {corpos.map((o) => (
-                      <Picker.Item key={String(o.id)} label={o.label} value={o.id} />
+                      <Picker.Item key={String(o.id)} label={o.label} value={o.id} color="#000000" />
                     ))}
                   </Picker>
                 </ThemedView>
@@ -1694,9 +1694,9 @@ export default function ApreciacionVulnerabilidadScreen() {
                       setPuestoId(id === PICKER_NONE ? null : id);
                     }}
                   >
-                    <Picker.Item label="Seleccionar puesto" value={PICKER_NONE} />
+                    <Picker.Item label="Seleccionar puesto" value={PICKER_NONE} color="#000000" />
                     {puestos.map((o) => (
-                      <Picker.Item key={String(o.id)} label={o.label} value={o.id} />
+                      <Picker.Item key={String(o.id)} label={o.label} value={o.id} color="#000000" />
                     ))}
                   </Picker>
                 </ThemedView>
@@ -1727,7 +1727,7 @@ export default function ApreciacionVulnerabilidadScreen() {
                           onValueChange={(val) => setVulnerabilityLevel(normalizeVulnerabilityLevel(val))}
                         >
                           {VULNERABILITY_LEVEL_OPTIONS.map((option) => (
-                            <Picker.Item key={option.value} label={option.label} value={option.value} />
+                            <Picker.Item key={option.value} label={option.label} value={option.value} color="#000000" />
                           ))}
                         </Picker>
                       </ThemedView>

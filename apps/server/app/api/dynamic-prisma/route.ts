@@ -22,7 +22,7 @@ type DynamicPrismaPayload = {
     take?: number;
     skip?: number;
     distinct?: any;
-    operation?: string; // findMany | findFirst | findUnique | updateMany | deleteMany
+    operation?: string; // findMany | findFirst | findUnique | createMany | updateMany | deleteMany
     many?: boolean;
     returning?: boolean;
 };
@@ -217,6 +217,25 @@ export async function POST(req: NextRequest) {
         if (action === "POST") {
             if (bodyData === undefined) {
                 return NextResponse.json({ status: false, message: "body/data es obligatorio para POST" }, { status: 400 });
+            }
+
+            const createMany = payload.many === true || payload.operation === "createMany";
+            if (createMany) {
+                if (!Array.isArray(bodyData)) {
+                    return NextResponse.json(
+                        { status: false, message: "Para createMany, body/data debe ser un array de registros" },
+                        { status: 400 }
+                    );
+                }
+                if (payload.include !== undefined || payload.select !== undefined) {
+                    return NextResponse.json(
+                        { status: false, message: "createMany no soporta include/select" },
+                        { status: 400 }
+                    );
+                }
+
+                const created = await model.createMany({ data: bodyData });
+                return NextResponse.json({ status: true, action, table, count: created.count }, { status: 200 });
             }
 
             const args: any = { data: bodyData };

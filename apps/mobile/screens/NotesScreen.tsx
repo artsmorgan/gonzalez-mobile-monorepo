@@ -1586,9 +1586,9 @@ export default function NotesScreen() {
                   onValueChange={(value) => setEditingNote({ ...editingNote, categoria_id: value as number | null })}
                   style={styles.picker}
                 >
-                  <Picker.Item label="Sin categoría" value={null} />
+                  <Picker.Item label="Sin categoría" value={null} color="#000000" />
                   {categories.map((category) => (
-                    <Picker.Item key={category.id} label={category.nombre} value={category.id} />
+                    <Picker.Item key={category.id} label={category.nombre} value={category.id} color="#000000" />
                   ))}
                 </Picker>
               </ThemedView>
@@ -1602,9 +1602,9 @@ export default function NotesScreen() {
                   onValueChange={(value) => setEditingNote({ ...editingNote, relevancia: value as 'Baja' | 'Media' | 'Alta' })}
                   style={styles.picker}
                 >
-                  <Picker.Item label="Baja" value="Baja" />
-                  <Picker.Item label="Media" value="Media" />
-                  <Picker.Item label="Alta" value="Alta" />
+                  <Picker.Item label="Baja" value="Baja" color="#000000" />
+                  <Picker.Item label="Media" value="Media" color="#000000" />
+                  <Picker.Item label="Alta" value="Alta" color="#000000" />
                 </Picker>
               </ThemedView>
             </ThemedView>
@@ -1891,9 +1891,9 @@ export default function NotesScreen() {
                 onValueChange={(value) => setNewNote({ ...newNote, categoria_id: value as number | null })}
                 style={styles.picker}
               >
-                <Picker.Item label="Sin categoría" value={null} />
+                <Picker.Item label="Sin categoría" value={null} color="#000000" />
                 {categories.map((category) => (
-                  <Picker.Item key={category.id} label={category.nombre} value={category.id} />
+                  <Picker.Item key={category.id} label={category.nombre} value={category.id} color="#000000" />
                 ))}
               </Picker>
             </ThemedView>
@@ -1907,9 +1907,9 @@ export default function NotesScreen() {
                 onValueChange={(value) => setNewNote({ ...newNote, relevancia: value as 'Baja' | 'Media' | 'Alta' })}
                 style={styles.picker}
               >
-                <Picker.Item label="Baja" value="Baja" />
-                <Picker.Item label="Media" value="Media" />
-                <Picker.Item label="Alta" value="Alta" />
+                <Picker.Item label="Baja" value="Baja" color="#000000" />
+                <Picker.Item label="Media" value="Media" color="#000000" />
+                <Picker.Item label="Alta" value="Alta" color="#000000" />
               </Picker>
             </ThemedView>
           </ThemedView>
@@ -2268,10 +2268,10 @@ export default function NotesScreen() {
                       onValueChange={(value) => setSelectedCategory(value)}
                       style={styles.picker}
                     >
-                      <Picker.Item label="Todas las categorías" value="all" />
-                      <Picker.Item label="Sin categoría" value="none" />
+                      <Picker.Item label="Todas las categorías" value="all" color="#000000" />
+                      <Picker.Item label="Sin categoría" value="none" color="#000000" />
                       {categories.map((category) => (
-                        <Picker.Item key={category.id} label={category.nombre} value={category.id} />
+                        <Picker.Item key={category.id} label={category.nombre} value={category.id} color="#000000" />
                       ))}
                     </Picker>
                   </ThemedView>
@@ -2286,11 +2286,11 @@ export default function NotesScreen() {
                       onValueChange={(value) => setSelectedRelevancia(value)}
                       style={styles.picker}
                     >
-                      <Picker.Item label="Todas las relevancias" value="all" />
-                      <Picker.Item label="Sin relevancia" value="none" />
-                      <Picker.Item label="Baja" value="Baja" />
-                      <Picker.Item label="Media" value="Media" />
-                      <Picker.Item label="Alta" value="Alta" />
+                      <Picker.Item label="Todas las relevancias" value="all" color="#000000" />
+                      <Picker.Item label="Sin relevancia" value="none" color="#000000" />
+                      <Picker.Item label="Baja" value="Baja" color="#000000" />
+                      <Picker.Item label="Media" value="Media" color="#000000" />
+                      <Picker.Item label="Alta" value="Alta" color="#000000" />
                     </Picker>
                   </ThemedView>
                 </ThemedView>
@@ -2446,8 +2446,8 @@ export default function NotesScreen() {
                 <ThemedText style={styles.inputLabel}>Empresa:</ThemedText>
                 <ThemedView style={styles.pickerContainer}>
                   <Picker selectedValue={sendEmpresaId} onValueChange={(v) => { setSendEmpresaId(v); setSendClienteId(null); setSendDivisionId(null); setSendContratoId(null); setSendSucursalId(null); setSendPuestoId(null); }}>
-                    <Picker.Item label="Seleccionar empresa" value={null} />
-                    {empresaOptions.map((item) => <Picker.Item key={item.id} label={item.nombre} value={item.id} />)}
+                    <Picker.Item label="Seleccionar empresa" value={null} color="#000000" />
+                    {empresaOptions.map((item) => <Picker.Item key={item.id} label={item.nombre} value={item.id} color="#000000" />)}
                   </Picker>
                 </ThemedView>
               </ThemedView>
@@ -2456,8 +2456,8 @@ export default function NotesScreen() {
                 <ThemedText style={styles.inputLabel}>Cliente:</ThemedText>
                 <ThemedView style={styles.pickerContainer}>
                   <Picker selectedValue={sendClienteId} onValueChange={(v) => { setSendClienteId(v); setSendDivisionId(null); setSendContratoId(null); setSendSucursalId(null); setSendPuestoId(null); }} enabled={clienteOptions.length > 0}>
-                    <Picker.Item label="Seleccionar cliente" value={null} />
-                    {clienteOptions.map((item) => <Picker.Item key={item.id} label={item.nombre} value={item.id} />)}
+                    <Picker.Item label="Seleccionar cliente" value={null} color="#000000" />
+                    {clienteOptions.map((item) => <Picker.Item key={item.id} label={item.nombre} value={item.id} color="#000000" />)}
                   </Picker>
                 </ThemedView>
               </ThemedView>
@@ -2466,8 +2466,8 @@ export default function NotesScreen() {
                 <ThemedText style={styles.inputLabel}>División:</ThemedText>
                 <ThemedView style={styles.pickerContainer}>
                   <Picker selectedValue={sendDivisionId} onValueChange={(v) => { setSendDivisionId(v); setSendContratoId(null); setSendSucursalId(null); setSendPuestoId(null); }} enabled={divisionOptions.length > 0}>
-                    <Picker.Item label="Seleccionar división" value={null} />
-                    {divisionOptions.map((item) => <Picker.Item key={item.id} label={item.nombre} value={item.id} />)}
+                    <Picker.Item label="Seleccionar división" value={null} color="#000000" />
+                    {divisionOptions.map((item) => <Picker.Item key={item.id} label={item.nombre} value={item.id} color="#000000" />)}
                   </Picker>
                 </ThemedView>
               </ThemedView>
@@ -2476,8 +2476,8 @@ export default function NotesScreen() {
                 <ThemedText style={styles.inputLabel}>Contrato:</ThemedText>
                 <ThemedView style={styles.pickerContainer}>
                   <Picker selectedValue={sendContratoId} onValueChange={(v) => { setSendContratoId(v); setSendSucursalId(null); setSendPuestoId(null); }} enabled={contratoOptions.length > 0}>
-                    <Picker.Item label="Seleccionar contrato" value={null} />
-                    {contratoOptions.map((item) => <Picker.Item key={item.id} label={item.nombre} value={item.id} />)}
+                    <Picker.Item label="Seleccionar contrato" value={null} color="#000000" />
+                    {contratoOptions.map((item) => <Picker.Item key={item.id} label={item.nombre} value={item.id} color="#000000" />)}
                   </Picker>
                 </ThemedView>
               </ThemedView>
@@ -2486,8 +2486,8 @@ export default function NotesScreen() {
                 <ThemedText style={styles.inputLabel}>Sucursal:</ThemedText>
                 <ThemedView style={styles.pickerContainer}>
                   <Picker selectedValue={sendSucursalId} onValueChange={(v) => { setSendSucursalId(v); setSendPuestoId(null); }} enabled={sucursalOptions.length > 0}>
-                    <Picker.Item label="Seleccionar sucursal" value={null} />
-                    {sucursalOptions.map((item) => <Picker.Item key={item.id} label={item.nombre} value={item.id} />)}
+                    <Picker.Item label="Seleccionar sucursal" value={null} color="#000000" />
+                    {sucursalOptions.map((item) => <Picker.Item key={item.id} label={item.nombre} value={item.id} color="#000000" />)}
                   </Picker>
                 </ThemedView>
               </ThemedView>
@@ -2496,8 +2496,8 @@ export default function NotesScreen() {
                 <ThemedText style={styles.inputLabel}>Puesto:</ThemedText>
                 <ThemedView style={styles.pickerContainer}>
                   <Picker selectedValue={sendPuestoId} onValueChange={(v) => setSendPuestoId(v)} enabled={puestoOptions.length > 0}>
-                    <Picker.Item label="Seleccionar puesto" value={null} />
-                    {puestoOptions.map((item) => <Picker.Item key={item.id} label={item.nombre} value={item.id} />)}
+                    <Picker.Item label="Seleccionar puesto" value={null} color="#000000" />
+                    {puestoOptions.map((item) => <Picker.Item key={item.id} label={item.nombre} value={item.id} color="#000000" />)}
                   </Picker>
                 </ThemedView>
               </ThemedView>
