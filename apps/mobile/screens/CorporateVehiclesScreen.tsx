@@ -3097,9 +3097,9 @@ export default function CorporateVehiclesScreen() {
                         }}
                         style={styles.picker}
                       >
-                        <Picker.Item label="Seleccionar..." value="" />
+                        <Picker.Item label="Seleccionar..." value="" color="#000000" />
                         {filterEmpresas.map((e: any) => (
-                          <Picker.Item key={e.id} label={e.nombre} value={e.id} />
+                          <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
                         ))}
                       </Picker>
                     </View>
@@ -3119,9 +3119,9 @@ export default function CorporateVehiclesScreen() {
                           }}
                           style={styles.picker}
                         >
-                          <Picker.Item label="Seleccionar..." value="" />
+                          <Picker.Item label="Seleccionar..." value="" color="#000000" />
                           {filterClientes.map((c: any) => (
-                            <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                            <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
                           ))}
                         </Picker>
                       </View>
@@ -3141,9 +3141,9 @@ export default function CorporateVehiclesScreen() {
                           }}
                           style={styles.picker}
                         >
-                          <Picker.Item label="Seleccionar..." value="" />
+                          <Picker.Item label="Seleccionar..." value="" color="#000000" />
                           {filterDivisiones.map((d: any) => (
-                            <Picker.Item key={d.id} label={d.nombre} value={d.id} />
+                            <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
                           ))}
                         </Picker>
                       </View>
@@ -3162,9 +3162,9 @@ export default function CorporateVehiclesScreen() {
                           }}
                           style={styles.picker}
                         >
-                          <Picker.Item label="Seleccionar..." value="" />
+                          <Picker.Item label="Seleccionar..." value="" color="#000000" />
                           {filterContratos.map((c: any) => (
-                            <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                            <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
                           ))}
                         </Picker>
                       </View>
@@ -3182,9 +3182,9 @@ export default function CorporateVehiclesScreen() {
                           }}
                           style={styles.picker}
                         >
-                          <Picker.Item label="Seleccionar..." value="" />
+                          <Picker.Item label="Seleccionar..." value="" color="#000000" />
                           {filterSucursales.map((s: any) => (
-                            <Picker.Item key={s.id} label={s.nombre} value={s.id} />
+                            <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
                           ))}
                         </Picker>
                       </View>
@@ -3212,9 +3212,9 @@ export default function CorporateVehiclesScreen() {
               <ThemedText style={styles.label}>Empresa</ThemedText>
               <ThemedView style={styles.pickerWrapper}>
                 <Picker selectedValue={selectedEmpresaId ?? 0} onValueChange={(v) => handleEmpresaChange(Number(v) || null)} style={styles.picker}>
-                  <Picker.Item label="Seleccione..." value={0} />
+                  <Picker.Item label="Seleccione..." value={0} color="#000000" />
                   {empresas.map((e: any) => (
-                    <Picker.Item key={`emp_${e.id}`} label={String(e.nombre)} value={Number(e.id)} />
+                    <Picker.Item key={`emp_${e.id}`} label={String(e.nombre)} value={Number(e.id)} color="#000000" />
                   ))}
                 </Picker>
               </ThemedView>
@@ -3222,9 +3222,9 @@ export default function CorporateVehiclesScreen() {
               <ThemedText style={styles.label}>Cliente</ThemedText>
               <ThemedView style={styles.pickerWrapper}>
                 <Picker selectedValue={selectedClienteId ?? 0} onValueChange={(v) => handleClienteChange(Number(v) || null)} style={styles.picker} enabled={!!selectedEmpresaId}>
-                  <Picker.Item label="Seleccione..." value={0} />
+                  <Picker.Item label="Seleccione..." value={0} color="#000000" />
                   {clientes.map((c: any) => (
-                    <Picker.Item key={`cli_${c.id}`} label={String(c.nombre)} value={Number(c.id)} />
+                    <Picker.Item key={`cli_${c.id}`} label={String(c.nombre)} value={Number(c.id)} color="#000000" />
                   ))}
                 </Picker>
               </ThemedView>
@@ -3237,9 +3237,9 @@ export default function CorporateVehiclesScreen() {
                   enabled={!!selectedClienteId && divisiones.length > 0}
                   style={styles.picker}
                 >
-                  <Picker.Item label={selectedClienteId ? 'Seleccione...' : 'Seleccione cliente primero'} value={0} />
+                  <Picker.Item label={selectedClienteId ? 'Seleccione...' : 'Seleccione cliente primero'} value={0} color="#000000" />
                   {divisiones.map((d: any) => (
-                    <Picker.Item key={`div_${d.id}`} label={String(d.nombre)} value={Number(d.id)} />
+                    <Picker.Item key={`div_${d.id}`} label={String(d.nombre)} value={Number(d.id)} color="#000000" />
                   ))}
                 </Picker>
               </ThemedView>
@@ -3247,9 +3247,9 @@ export default function CorporateVehiclesScreen() {
               <ThemedText style={styles.label}>Contrato</ThemedText>
               <ThemedView style={styles.pickerWrapper}>
                 <Picker selectedValue={selectedContratoId ?? 0} onValueChange={(v) => handleContratoChange(Number(v) || null)} style={styles.picker} enabled={!!selectedDivisionId}>
-                  <Picker.Item label="Seleccione..." value={0} />
+                  <Picker.Item label="Seleccione..." value={0} color="#000000" />
                   {contratos.map((c: any) => (
-                    <Picker.Item key={`cont_${c.id}`} label={String(c.nombre)} value={Number(c.id)} />
+                    <Picker.Item key={`cont_${c.id}`} label={String(c.nombre)} value={Number(c.id)} color="#000000" />
                   ))}
                 </Picker>
               </ThemedView>
@@ -3257,9 +3257,9 @@ export default function CorporateVehiclesScreen() {
               <ThemedText style={styles.label}>Sucursal</ThemedText>
               <ThemedView style={styles.pickerWrapper}>
                 <Picker selectedValue={selectedSucursalId ?? 0} onValueChange={(v) => handleSucursalChange(Number(v) || null)} style={styles.picker} enabled={!!selectedContratoId}>
-                  <Picker.Item label="Seleccione..." value={0} />
+                  <Picker.Item label="Seleccione..." value={0} color="#000000" />
                   {sucursales.map((s: any) => (
-                    <Picker.Item key={`suc_${s.id}`} label={String(s.nombre)} value={Number(s.id)} />
+                    <Picker.Item key={`suc_${s.id}`} label={String(s.nombre)} value={Number(s.id)} color="#000000" />
                   ))}
                 </Picker>
               </ThemedView>
@@ -3271,10 +3271,10 @@ export default function CorporateVehiclesScreen() {
               <ThemedText style={styles.label}>Tipo</ThemedText>
               <ThemedView style={styles.pickerWrapper}>
                 <Picker selectedValue={tipo} onValueChange={(v) => setTipo(String(v || ''))} style={styles.picker}>
-                  <Picker.Item label="Seleccione..." value="" />
-                  <Picker.Item label="Vehículo" value="Vehículo" />
-                  <Picker.Item label="Bicicleta" value="Bicicleta" />
-                  <Picker.Item label="Motocicleta" value="Motocicleta" />
+                  <Picker.Item label="Seleccione..." value="" color="#000000" />
+                  <Picker.Item label="Vehículo" value="Vehículo" color="#000000" />
+                  <Picker.Item label="Bicicleta" value="Bicicleta" color="#000000" />
+                  <Picker.Item label="Motocicleta" value="Motocicleta" color="#000000" />
                 </Picker>
               </ThemedView>
               
@@ -3285,17 +3285,17 @@ export default function CorporateVehiclesScreen() {
                   onValueChange={(v) => setTipoAutoria(String(v || ''))}
                   style={styles.picker}
                 >
-                  <Picker.Item label="Seleccione..." value="" />
-                  <Picker.Item label="Cliente" value="Cliente" />
-                  <Picker.Item label="Corporativo" value="Corporativo" />
+                  <Picker.Item label="Seleccione..." value="" color="#000000" />
+                  <Picker.Item label="Cliente" value="Cliente" color="#000000" />
+                  <Picker.Item label="Corporativo" value="Corporativo" color="#000000" />
                 </Picker>
               </ThemedView>
 
               <ThemedText style={styles.label}>Estado</ThemedText>
               <ThemedView style={styles.pickerWrapper}>
                 <Picker selectedValue={estado} onValueChange={(v) => setEstado((String(v) as any) || 'Activo')} style={styles.picker}>
-                  <Picker.Item label="Activo" value="Activo" />
-                  <Picker.Item label="Inactivo" value="Inactivo" />
+                  <Picker.Item label="Activo" value="Activo" color="#000000" />
+                  <Picker.Item label="Inactivo" value="Inactivo" color="#000000" />
                 </Picker>
               </ThemedView>
 
@@ -3672,9 +3672,9 @@ export default function CorporateVehiclesScreen() {
                   <ThemedText style={styles.label}>Combustible inicio</ThemedText>
                   <ThemedView style={styles.pickerWrapper}>
                     <Picker selectedValue={useCombInicio} onValueChange={(v) => setUseCombInicio(String(v))} style={styles.picker}>
-                      <Picker.Item label="Seleccione combustible inicio..." value="" />
+                      <Picker.Item label="Seleccione combustible inicio..." value="" color="#000000" />
                       {COMBUSTIBLE_OPTIONS.map((opt) => (
-                        <Picker.Item key={`comb-i-${opt}`} label={opt} value={opt} />
+                        <Picker.Item key={`comb-i-${opt}`} label={opt} value={opt} color="#000000" />
                       ))}
                     </Picker>
                   </ThemedView>
@@ -3682,9 +3682,9 @@ export default function CorporateVehiclesScreen() {
                   <ThemedText style={styles.label}>Combustible fin</ThemedText>
                   <ThemedView style={styles.pickerWrapper}>
                     <Picker selectedValue={useCombFin} onValueChange={(v) => setUseCombFin(String(v))} style={styles.picker}>
-                      <Picker.Item label="Seleccione combustible fin..." value="" />
+                      <Picker.Item label="Seleccione combustible fin..." value="" color="#000000" />
                       {COMBUSTIBLE_OPTIONS.map((opt) => (
-                        <Picker.Item key={`comb-f-${opt}`} label={opt} value={opt} />
+                        <Picker.Item key={`comb-f-${opt}`} label={opt} value={opt} color="#000000" />
                       ))}
                     </Picker>
                   </ThemedView>
@@ -4105,10 +4105,10 @@ export default function CorporateVehiclesScreen() {
                   <ThemedText style={styles.label}>Tipo</ThemedText>
                   <ThemedView style={styles.pickerWrapper}>
                     <Picker selectedValue={maintenanceTipo} onValueChange={(v) => setMaintenanceTipo(String(v || ''))} style={styles.picker}>
-                      <Picker.Item label="Seleccione..." value="" />
-                      <Picker.Item label="Preventivo" value="Preventivo" />
-                      <Picker.Item label="Correctivo" value="Correctivo" />
-                      <Picker.Item label="Emergencia" value="Emergencia" />
+                      <Picker.Item label="Seleccione..." value="" color="#000000" />
+                      <Picker.Item label="Preventivo" value="Preventivo" color="#000000" />
+                      <Picker.Item label="Correctivo" value="Correctivo" color="#000000" />
+                      <Picker.Item label="Emergencia" value="Emergencia" color="#000000" />
                     </Picker>
                   </ThemedView>
 

@@ -1608,7 +1608,7 @@ export default function JobManualsScreen() {
             <ThemedText style={styles.puestoName}>{puestoActualNombre || 'No disponible'}</ThemedText>
           </ThemedView>
 
-          {!isCreating && (
+          {!isCreating && canCreate && (
             <TouchableOpacity style={styles.createButton} onPress={startCreating}>
               <Ionicons name="add-circle" size={20} color="#FFFFFF" />
               <ThemedText style={styles.createButtonText}>Crear nuevo manual</ThemedText>
@@ -1987,9 +1987,9 @@ export default function JobManualsScreen() {
                               setSelectedPuestos([]);
                             }}
                           >
-                            <Picker.Item label="Seleccione división..." value={0} />
-                            <Picker.Item label="Aseo y limpieza" value={5} />
-                            <Picker.Item label="Seguridad" value={4} />
+                            <Picker.Item label="Seleccione división..." value={0} color="#000000" />
+                            <Picker.Item label="Aseo y limpieza" value={5} color="#000000" />
+                            <Picker.Item label="Seguridad" value={4} color="#000000" />
                           </Picker>
                         </ThemedView>
                       </ThemedView>
@@ -2020,9 +2020,9 @@ export default function JobManualsScreen() {
                                 setIsSelectedPuestosExpanded(false);
                               }}
                             >
-                              <Picker.Item label="Seleccione empresa..." value={0} />
+                              <Picker.Item label="Seleccione empresa..." value={0} color="#000000" />
                               {empresaOptions.map((e) => (
-                                <Picker.Item key={e.id} label={e.nombre} value={e.id} />
+                                <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
                               ))}
                             </Picker>
                           </ThemedView>
@@ -2045,9 +2045,9 @@ export default function JobManualsScreen() {
                                 setIsSelectedPuestosExpanded(false);
                               }}
                             >
-                              <Picker.Item label={selectedEmpresaId ? 'Seleccione cliente...' : 'Seleccione empresa primero'} value={0} />
+                              <Picker.Item label={selectedEmpresaId ? 'Seleccione cliente...' : 'Seleccione empresa primero'} value={0} color="#000000" />
                               {clienteOptions.map((c) => (
-                                <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                                <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
                               ))}
                             </Picker>
                           </ThemedView>
@@ -2072,9 +2072,9 @@ export default function JobManualsScreen() {
                                 setIsSelectedPuestosExpanded(false);
                               }}
                             >
-                              <Picker.Item label={selectedClienteId ? 'Seleccione división...' : 'Seleccione cliente primero'} value={0} />
+                              <Picker.Item label={selectedClienteId ? 'Seleccione división...' : 'Seleccione cliente primero'} value={0} color="#000000" />
                               {divisionOptions.map((d) => (
-                                <Picker.Item key={d.id} label={d.nombre} value={d.id} />
+                                <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
                               ))}
                             </Picker>
                           </ThemedView>
@@ -2098,9 +2098,9 @@ export default function JobManualsScreen() {
                                 setIsSelectedPuestosExpanded(false);
                               }}
                             >
-                              <Picker.Item label={selectedDivisionId ? 'Seleccione contrato...' : 'Seleccione división primero'} value={0} />
+                              <Picker.Item label={selectedDivisionId ? 'Seleccione contrato...' : 'Seleccione división primero'} value={0} color="#000000" />
                               {contratoOptions.map((c) => (
-                                <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                                <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
                               ))}
                             </Picker>
                           </ThemedView>
@@ -2123,9 +2123,9 @@ export default function JobManualsScreen() {
                                 setIsSelectedPuestosExpanded(false);
                               }}
                             >
-                              <Picker.Item label={selectedContratoId ? 'Seleccione sucursal...' : 'Seleccione contrato primero'} value={0} />
+                              <Picker.Item label={selectedContratoId ? 'Seleccione sucursal...' : 'Seleccione contrato primero'} value={0} color="#000000" />
                               {sucursalOptions.map((s) => (
-                                <Picker.Item key={s.id} label={s.nombre} value={s.id} />
+                                <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
                               ))}
                             </Picker>
                           </ThemedView>
@@ -2147,9 +2147,9 @@ export default function JobManualsScreen() {
                                 setIsSelectedPuestosExpanded(false);
                               }}
                             >
-                              <Picker.Item label={selectedSucursalId ? 'Seleccione puesto (opcional)' : 'Seleccione sucursal primero'} value={0} />
+                              <Picker.Item label={selectedSucursalId ? 'Seleccione puesto (opcional)' : 'Seleccione sucursal primero'} value={0} color="#000000" />
                               {puestoOptions.map((p) => (
-                                <Picker.Item key={p.id} label={p.nombre} value={p.id} />
+                                <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
                               ))}
                             </Picker>
                           </ThemedView>

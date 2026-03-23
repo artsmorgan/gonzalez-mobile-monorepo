@@ -113,50 +113,63 @@ export async function sendNotificationByRole(req: NextRequest, corpoId: number, 
 }
 
 export async function sendNotificationByPlaza(req: NextRequest, marcaDiaId: number, title: string, description: string, plazaIds: number[]) {
-    const marcaDia = await callDynamicPrisma({
-        req,
-        data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: marcaDiaId } }
-    });
-    if (!marcaDia) {
-        return;
-    }
-
-    const marcaDiaObj = marcaDia as any;
-    const marcaDiaPlazaId = marcaDiaObj?.plaza_id;
-
-    if (plazaIds.length > 0) {
-        const notification = await callDynamicPrisma({
+    try {
+        const marcaDia = await callDynamicPrisma({
             req,
-            data: {
-                action: "POST",
-                table: "c_notifications",
-                data: {
-                    title: title,
-                    description: description,
-                    created_at: toZonedTime(new Date(), "America/Costa_Rica").toISOString(),
-                }
-            }
+            data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: marcaDiaId } }
         });
+        if (!marcaDia) {
+            return;
+        }
 
-        if (notification) {
-            const notificationObj = notification as any;
-            for (const plazaId of plazaIds) {
-                if (plazaId != marcaDiaPlazaId) {
+        const marcaDiaObj = marcaDia as any;
+        const marcaDiaPlazaId = marcaDiaObj?.plaza_id;
+
+        if (plazaIds.length > 0) {
+            const notification = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "POST",
+                    table: "c_notifications",
+                    data: {
+                        title: title,
+                        description: description,
+                        created_at: toZonedTime(new Date(), "America/Costa_Rica").toISOString(),
+                    }
+                }
+            });
+
+            if (notification) {
+                const notificationObj = notification as any;
+                const targetPlazaIds = Array.from(
+                    new Set(
+                        plazaIds
+                            .map((id) => Number(id))
+                            .filter((id) => Number.isFinite(id) && id > 0 && id !== Number(marcaDiaPlazaId))
+                    )
+                );
+
+                if (targetPlazaIds.length > 0) {
                     await callDynamicPrisma({
                         req,
                         data: {
                             action: "POST",
                             table: "c_plaza_notification",
-                            data: {
-                                plazaId: plazaId,
+                            operation: "createMany",
+                            many: true,
+                            data: targetPlazaIds.map((plazaId) => ({
+                                plazaId,
                                 notificationId: notificationObj.id,
                                 watched: false,
-                            }
+                            })),
                         }
                     });
                 }
             }
         }
+    } catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        console.error(errorMessage);
     }
 }
 

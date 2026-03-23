@@ -2188,9 +2188,10 @@ export default function GeneralInductionRegisterScreen() {
                               <Picker.Item
                                 label={selectedSucursalId ? 'Seleccione puesto...' : 'Seleccione sucursal primero'}
                                 value={0}
+                                color="#000000"
                               />
                               {puestosForSelectedSucursal.map((pp) => (
-                                <Picker.Item key={pp.id} label={pp.nombre} value={pp.id} />
+                                <Picker.Item key={pp.id} label={pp.nombre} value={pp.id} color="#000000" />
                               ))}
                             </Picker>
                           </ThemedView>
@@ -2342,9 +2343,9 @@ export default function GeneralInductionRegisterScreen() {
                         }}
                         style={styles.picker}
                       >
-                        <Picker.Item label="Seleccionar..." value="" />
+                        <Picker.Item label="Seleccionar..." value="" color="#000000" />
                         {filterEmpresas.map((e: any) => (
-                          <Picker.Item key={e.id} label={e.nombre} value={e.id} />
+                          <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
                         ))}
                       </Picker>
                     </View>
@@ -2361,9 +2362,9 @@ export default function GeneralInductionRegisterScreen() {
                         }}
                         style={styles.picker}
                       >
-                        <Picker.Item label="Seleccionar..." value="" />
+                        <Picker.Item label="Seleccionar..." value="" color="#000000" />
                         {filterClientes.map((c: any) => (
-                          <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                          <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
                         ))}
                       </Picker>
                     </View>
@@ -2379,9 +2380,9 @@ export default function GeneralInductionRegisterScreen() {
                         }}
                         style={styles.picker}
                       >
-                        <Picker.Item label="Seleccionar..." value="" />
+                        <Picker.Item label="Seleccionar..." value="" color="#000000" />
                         {filterSucursales.map((s: any) => (
-                          <Picker.Item key={s.id} label={s.nombre} value={s.id} />
+                          <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
                         ))}
                       </Picker>
                     </View>
@@ -2455,9 +2456,9 @@ export default function GeneralInductionRegisterScreen() {
                           enabled={!isStructureLoading && empresaOptions.length > 0}
                           style={styles.picker}
                         >
-                          <Picker.Item label="Seleccione empresa..." value={0} />
+                          <Picker.Item label="Seleccione empresa..." value={0} color="#000000" />
                           {empresaOptions.map((e) => (
-                            <Picker.Item key={e.id} label={e.nombre} value={e.id} />
+                            <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000"   />
                           ))}
                         </Picker>
                       </ThemedView>
@@ -2475,9 +2476,10 @@ export default function GeneralInductionRegisterScreen() {
                           <Picker.Item
                             label={selectedEmpresaId ? 'Seleccione cliente...' : 'Seleccione empresa primero'}
                             value={0}
+                            color="#000000"
                           />
                           {clienteOptions.map((c) => (
-                            <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                            <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
                           ))}
                         </Picker>
                       </ThemedView>
@@ -2503,9 +2505,10 @@ export default function GeneralInductionRegisterScreen() {
                           <Picker.Item
                             label={selectedClienteId ? 'Seleccione división...' : 'Seleccione cliente primero'}
                             value={0}
+                            color="#000000"
                           />
                           {divisionOptions.map((d) => (
-                            <Picker.Item key={d.id} label={d.nombre} value={d.id} />
+                            <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
                           ))}
                         </Picker>
                       </ThemedView>
@@ -2530,9 +2533,10 @@ export default function GeneralInductionRegisterScreen() {
                           <Picker.Item
                             label={selectedDivisionId ? 'Seleccione contrato...' : 'Seleccione cliente primero'}
                             value={0}
+                            color="#000000"
                           />
                           {contratoOptions.map((c) => (
-                            <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                            <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
                           ))}
                         </Picker>
                       </ThemedView>
@@ -2556,9 +2560,10 @@ export default function GeneralInductionRegisterScreen() {
                           <Picker.Item
                             label={selectedContratoId ? 'Seleccione sucursal...' : 'Seleccione contrato primero'}
                             value={0}
+                            color="#000000"
                           />
                           {sucursalOptions.map((s) => (
-                            <Picker.Item key={s.id} label={s.nombre} value={s.id} />
+                            <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
                           ))}
                         </Picker>
                       </ThemedView>

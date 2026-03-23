@@ -1719,9 +1719,9 @@ export default function StaffEvaluationsScreen() {
               onValueChange={(value) => setSelectedEmpresaId(value ? Number(value) : null)}
               style={styles.picker}
             >
-              <Picker.Item label="Seleccionar empresa..." value={0} />
+              <Picker.Item label="Seleccionar empresa..." value={0} color="#000000" />
               {structure.map((empresa) => (
-                <Picker.Item key={empresa.id} label={empresa.nombre} value={empresa.id} />
+                <Picker.Item key={empresa.id} label={empresa.nombre} value={empresa.id} color="#000000" />
               ))}
             </Picker>
           </ThemedView>
@@ -1734,9 +1734,9 @@ export default function StaffEvaluationsScreen() {
               onValueChange={(value) => setSelectedClienteId(value ? Number(value) : null)}
               style={styles.picker}
             >
-              <Picker.Item label="Seleccionar cliente..." value={0} />
+              <Picker.Item label="Seleccionar cliente..." value={0} color="#000000" />
               {clienteNodes.map((cliente) => (
-                <Picker.Item key={cliente.id} label={cliente.nombre} value={cliente.id} />
+                <Picker.Item key={cliente.id} label={cliente.nombre} value={cliente.id} color="#000000" />
               ))}
             </Picker>
           </ThemedView>
@@ -1749,9 +1749,9 @@ export default function StaffEvaluationsScreen() {
               onValueChange={(value) => setSelectedDivisionId(value ? Number(value) : null)}
               style={styles.picker}
             >
-              <Picker.Item label="Seleccionar división..." value={0} />
+              <Picker.Item label="Seleccionar división..." value={0} color="#000000" />
               {divisionNodes.map((division) => (
-                <Picker.Item key={division.id} label={division.nombre} value={division.id} />
+                <Picker.Item key={division.id} label={division.nombre} value={division.id} color="#000000" />
               ))}
             </Picker>
           </ThemedView>
@@ -1764,9 +1764,9 @@ export default function StaffEvaluationsScreen() {
               onValueChange={(value) => setSelectedContratoId(value ? Number(value) : null)}
               style={styles.picker}
             >
-              <Picker.Item label="Seleccionar contrato..." value={0} />
+              <Picker.Item label="Seleccionar contrato..." value={0} color="#000000" />
               {contratoNodes.map((contrato) => (
-                <Picker.Item key={contrato.id} label={contrato.nombre} value={contrato.id} />
+                <Picker.Item key={contrato.id} label={contrato.nombre} value={contrato.id} color="#000000" />
               ))}
             </Picker>
           </ThemedView>
@@ -1779,9 +1779,9 @@ export default function StaffEvaluationsScreen() {
               onValueChange={(value) => setSelectedCorpoId(value ? Number(value) : null)}
               style={styles.picker}
             >
-              <Picker.Item label="Seleccionar sucursal..." value={0} />
+              <Picker.Item label="Seleccionar sucursal..." value={0} color="#000000" />
               {sucursalNodes.map((sucursal) => (
-                <Picker.Item key={sucursal.id} label={sucursal.nombre} value={sucursal.id} />
+                <Picker.Item key={sucursal.id} label={sucursal.nombre} value={sucursal.id} color="#000000" />
               ))}
             </Picker>
           </ThemedView>
@@ -1794,9 +1794,9 @@ export default function StaffEvaluationsScreen() {
               onValueChange={(value) => setSelectedPuestoId(value ? Number(value) : null)}
               style={styles.picker}
             >
-              <Picker.Item label="Seleccionar puesto..." value={0} />
+              <Picker.Item label="Seleccionar puesto..." value={0} color="#000000" />
               {puestoNodes.map((puesto) => (
-                <Picker.Item key={puesto.id} label={puesto.nombre} value={puesto.id} />
+                <Picker.Item key={puesto.id} label={puesto.nombre} value={puesto.id} color="#000000" />
               ))}
             </Picker>
           </ThemedView>
@@ -1809,9 +1809,9 @@ export default function StaffEvaluationsScreen() {
               onValueChange={(value) => setSelectedPlazaId(value ? Number(value) : null)}
               style={styles.picker}
             >
-              <Picker.Item label="Seleccionar plaza..." value={0} />
+              <Picker.Item label="Seleccionar plaza..." value={0} color="#000000" />
               {plazaNodes.map((plaza) => (
-                <Picker.Item key={plaza.id} label={plaza.nombre} value={plaza.id} />
+                <Picker.Item key={plaza.id} label={plaza.nombre} value={plaza.id} color="#000000" />
               ))}
             </Picker>
           </ThemedView>
@@ -1828,9 +1828,9 @@ export default function StaffEvaluationsScreen() {
               style={styles.picker}
               itemStyle={styles.pickerItem}
             >
-              <Picker.Item label={selectedPlazaId ? 'Seleccionar empleado...' : 'Seleccione plaza primero'} value={0} />
+              <Picker.Item label={selectedPlazaId ? 'Seleccionar empleado...' : 'Seleccione plaza primero'} value={0} color="#000000" />
               {empleados.map((emp) => (
-                <Picker.Item key={emp.id} label={`${emp.nombre} - ${emp.cedula}`} value={emp.id} />
+                <Picker.Item key={emp.id} label={`${emp.nombre} - ${emp.cedula}`} value={emp.id} color="#000000" />
               ))}
             </Picker>
           </ThemedView>
@@ -2001,12 +2001,12 @@ export default function StaffEvaluationsScreen() {
                         }
                         style={styles.picker}
                       >
-                        <Picker.Item label="Seleccionar opción..." value="" />
-                        <Picker.Item label="No aplica" value="0" />
-                        <Picker.Item label="No cumple" value="1" />
-                        <Picker.Item label="Requiere mejorar" value="2" />
-                        <Picker.Item label="Cumple" value="3" />
-                        <Picker.Item label="Supera estándar" value="4" />
+                        <Picker.Item label="Seleccionar opción..." value="" color="#000000" />
+                        <Picker.Item label="No aplica" value="0" color="#000000" />
+                        <Picker.Item label="No cumple" value="1" color="#000000" />
+                        <Picker.Item label="Requiere mejorar" value="2" color="#000000" />
+                        <Picker.Item label="Cumple" value="3" color="#000000" />
+                        <Picker.Item label="Supera estándar" value="4" color="#000000" />
                       </Picker>
                     </ThemedView>
                   ) : (
@@ -2590,10 +2590,10 @@ export default function StaffEvaluationsScreen() {
                       onValueChange={(value) => setFilterTipo(value)}
                       style={styles.picker}
                     >
-                      <Picker.Item label="Todos los tipos" value="all" />
-                      <Picker.Item label="Seguridad" value="Seguridad" />
-                      <Picker.Item label="Aseo & limpieza" value="Aseo & limpieza" />
-                      <Picker.Item label="Otros" value="Otros" />
+                      <Picker.Item label="Todos los tipos" value="all" color="#000000" />
+                      <Picker.Item label="Seguridad" value="Seguridad" color="#000000" />
+                      <Picker.Item label="Aseo & limpieza" value="Aseo & limpieza" color="#000000" />
+                      <Picker.Item label="Otros" value="Otros" color="#000000" />
                     </Picker>
                   </ThemedView>
                 </ThemedView>

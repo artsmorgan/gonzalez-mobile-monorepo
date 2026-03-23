@@ -1324,8 +1324,6 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
             
-            { /* Empezamos aquí */}
-            {hasCurrentMarca && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -1350,7 +1348,6 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                   Solicitud de permiso
                 </ThemedText>
               </TouchableOpacity>
-            )}
 
             {hasCurrentMarca && hasLunchTime && (
               <TouchableOpacity
@@ -1379,7 +1376,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && (role === 'ADMINISTRATIVO' || role === 'SUPERVISOR') && (
+            {hasCurrentMarca && (
                 <TouchableOpacity
                   style={[
                     styles.menuItem,

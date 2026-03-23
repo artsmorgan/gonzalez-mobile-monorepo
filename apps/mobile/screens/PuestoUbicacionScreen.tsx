@@ -509,9 +509,9 @@ export default function PuestoUbicacionScreen() {
                                         }}
                                         style={styles.picker}
                                     >
-                                        <Picker.Item label="Seleccionar empresa..." value={null} />
+                                        <Picker.Item label="Seleccionar empresa..." value={null} color="#000000" />
                                         {filterEmpresas.map((empresa: any) => (
-                                            <Picker.Item key={empresa.id} label={empresa.nombre} value={empresa.id} />
+                                            <Picker.Item key={empresa.id} label={empresa.nombre} value={empresa.id} color="#000000" />
                                         ))}
                                     </Picker>
                                 </View>
@@ -532,9 +532,9 @@ export default function PuestoUbicacionScreen() {
                                                 }}
                                                 style={styles.picker}
                                             >
-                                                <Picker.Item label="Seleccionar cliente..." value={null} />
+                                                <Picker.Item label="Seleccionar cliente..." value={null} color="#000000" />
                                                 {filterClientes.map((cliente: any) => (
-                                                    <Picker.Item key={cliente.id} label={cliente.nombre} value={cliente.id} />
+                                                    <Picker.Item key={cliente.id} label={cliente.nombre} value={cliente.id} color="#000000" />
                                                 ))}
                                             </Picker>
                                         </View>
@@ -556,9 +556,9 @@ export default function PuestoUbicacionScreen() {
                                                 }}
                                                 style={styles.picker}
                                             >
-                                                <Picker.Item label="Seleccionar división..." value={null} />
+                                                <Picker.Item label="Seleccionar división..." value={null} color="#000000" />
                                                 {filterDivisiones.map((division: any) => (
-                                                    <Picker.Item key={division.id} label={division.nombre} value={division.id} />
+                                                    <Picker.Item key={division.id} label={division.nombre} value={division.id} color="#000000" />
                                                 ))}
                                             </Picker>
                                         </View>
@@ -579,9 +579,9 @@ export default function PuestoUbicacionScreen() {
                                                 }}
                                                 style={styles.picker}
                                             >
-                                                <Picker.Item label="Seleccionar contrato..." value={null} />
+                                                <Picker.Item label="Seleccionar contrato..." value={null} color="#000000" />
                                                 {filterContratos.map((contrato: any) => (
-                                                    <Picker.Item key={contrato.id} label={contrato.nombre} value={contrato.id} />
+                                                    <Picker.Item key={contrato.id} label={contrato.nombre} value={contrato.id} color="#000000" />
                                                 ))}
                                             </Picker>
                                         </View>
@@ -601,9 +601,9 @@ export default function PuestoUbicacionScreen() {
                                                 }}
                                                 style={styles.picker}
                                             >
-                                                <Picker.Item label="Seleccionar sucursal..." value={null} />
+                                                <Picker.Item label="Seleccionar sucursal..." value={null} color="#000000" />
                                                 {filterSucursales.map((sucursal: any) => (
-                                                    <Picker.Item key={sucursal.id} label={sucursal.nombre} value={sucursal.id} />
+                                                    <Picker.Item key={sucursal.id} label={sucursal.nombre} value={sucursal.id} color="#000000" />
                                                 ))}
                                             </Picker>
                                         </View>
@@ -622,9 +622,9 @@ export default function PuestoUbicacionScreen() {
                                                 }}
                                                 style={styles.picker}
                                             >
-                                                <Picker.Item label="Seleccionar puesto..." value={null} />
+                                                <Picker.Item label="Seleccionar puesto..." value={null} color="#000000" />
                                                 {filterPuestos.map((puesto: any) => (
-                                                    <Picker.Item key={puesto.id} label={puesto.nombre} value={puesto.id} />
+                                                    <Picker.Item key={puesto.id} label={puesto.nombre} value={puesto.id} color="#000000" />
                                                 ))}
                                             </Picker>
                                         </View>

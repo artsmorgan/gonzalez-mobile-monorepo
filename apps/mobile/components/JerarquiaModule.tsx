@@ -50,6 +50,7 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
   const [selectedEmpleadoId, setSelectedEmpleadoId] = useState<number | null>(null);
   const [createdAt, setCreatedAt] = useState<number | null>(null);
   const [lastCreatedAt, setLastCreatedAt] = useState<number | null>(null);
+  const [isLastCreatedAtLoaded, setIsLastCreatedAtLoaded] = useState(false);
   const [activeSummary, setActiveSummary] = useState<
     'empresa' | 'cliente' | 'division' | 'contrato' | 'sucursal' | 'puesto' | 'plaza' | 'empleado' | null
   >(null);
@@ -158,6 +159,7 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
         const incoming = Number(data?.created_at);
         if (Number.isFinite(incoming) && incoming > 0 && isMounted) {
           setLastCreatedAt(incoming);
+          setIsLastCreatedAtLoaded(true);
         }
       } catch {
         // Best-effort: no bloquea el módulo si falla
@@ -169,6 +171,17 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
       isMounted = false;
     };
   }, [refreshAccessToken, logout]);
+
+  const shouldEnableRefresh = useMemo(() => {
+    if (!isLastCreatedAtLoaded || lastCreatedAt == null || !Number.isFinite(lastCreatedAt) || lastCreatedAt <= 0) {
+      return false;
+    }
+
+    const currentCreatedAt = Number(createdAt ?? 0);
+    if (!Number.isFinite(currentCreatedAt)) return false;
+
+    return lastCreatedAt > currentCreatedAt;
+  }, [isLastCreatedAtLoaded, lastCreatedAt, createdAt]);
 
   const refreshHierarchy = useCallback(async () => {
     const isConnected = await getConnectionStatus();
@@ -442,9 +455,9 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
       <View style={styles.headerRow}>
         <Text style={styles.title}>Jerarquía</Text>
         <TouchableOpacity
-          style={[styles.refreshButton, (isRefreshing || isStructureLoading) && { opacity: 0.6 }]}
+          style={[styles.refreshButton, (!shouldEnableRefresh || isRefreshing || isStructureLoading) && { opacity: 0.6 }]}
           onPress={refreshHierarchy}
-          disabled={isRefreshing || isStructureLoading}
+          disabled={!shouldEnableRefresh || isRefreshing || isStructureLoading}
         >
           {isRefreshing ? (
             <ActivityIndicator size="small" color="#FFFFFF" />
@@ -478,9 +491,9 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
               onValueChange={handleEmpresaChange}
               style={styles.picker}
             >
-              <Picker.Item label="Seleccionar..." value="" />
+              <Picker.Item label="Seleccionar..." value="" color="#000000" />
               {empresas.map((e) => (
-                <Picker.Item key={String(e.id)} label={String(e.nombre)} value={e.id} />
+                <Picker.Item key={String(e.id)} label={String(e.nombre)} value={e.id} color="#000000" />
               ))}
             </Picker>
           </View>
@@ -496,9 +509,9 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
                 onValueChange={handleClienteChange}
                 style={styles.picker}
               >
-                <Picker.Item label="Seleccionar..." value="" />
+                <Picker.Item label="Seleccionar..." value="" color="#000000" />
                 {clientes.map((c: AnyNode) => (
-                  <Picker.Item key={String(c.id)} label={String(c.nombre)} value={c.id} />
+                  <Picker.Item key={String(c.id)} label={String(c.nombre)} value={c.id} color="#000000" />
                 ))}
               </Picker>
             </View>
@@ -517,9 +530,9 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
                 onValueChange={handleDivisionChange}
                 style={styles.picker}
               >
-                <Picker.Item label="Seleccionar..." value="" />
+                <Picker.Item label="Seleccionar..." value="" color="#000000" />
                 {divisiones.map((d: AnyNode) => (
-                  <Picker.Item key={String(d.id)} label={String(d.nombre)} value={d.id} />
+                  <Picker.Item key={String(d.id)} label={String(d.nombre)} value={d.id} color="#000000" />
                 ))}
               </Picker>
             </View>
@@ -538,9 +551,9 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
                 onValueChange={handleContratoChange}
                 style={styles.picker}
               >
-                <Picker.Item label="Seleccionar..." value="" />
+                <Picker.Item label="Seleccionar..." value="" color="#000000" />
                 {contratos.map((ct: AnyNode) => (
-                  <Picker.Item key={String(ct.id)} label={String(ct.nombre)} value={ct.id} />
+                  <Picker.Item key={String(ct.id)} label={String(ct.nombre)} value={ct.id} color="#000000" />
                 ))}
               </Picker>
             </View>
@@ -559,9 +572,9 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
                 onValueChange={handleSucursalChange}
                 style={styles.picker}
               >
-                <Picker.Item label="Seleccionar..." value="" />
+                <Picker.Item label="Seleccionar..." value="" color="#000000" />
                 {sucursales.map((s: AnyNode) => (
-                  <Picker.Item key={String(s.id)} label={String(s.nombre)} value={s.id} />
+                  <Picker.Item key={String(s.id)} label={String(s.nombre)} value={s.id} color="#000000" />
                 ))}
               </Picker>
             </View>
@@ -586,9 +599,9 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
                 onValueChange={handlePuestoChange}
                 style={styles.picker}
               >
-                <Picker.Item label="Seleccionar..." value="" />
+                <Picker.Item label="Seleccionar..." value="" color="#000000" />
                 {puestos.map((p: AnyNode) => (
-                  <Picker.Item key={String(p.id)} label={String(p.nombre)} value={p.id} />
+                  <Picker.Item key={String(p.id)} label={String(p.nombre)} value={p.id} color="#000000" />
                 ))}
               </Picker>
             </View>
@@ -613,9 +626,9 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
                 onValueChange={handlePlazaChange}
                 style={styles.picker}
               >
-                <Picker.Item label="Seleccionar..." value="" />
+                <Picker.Item label="Seleccionar..." value="" color="#000000" />
                 {plazas.map((pl: AnyNode) => (
-                  <Picker.Item key={String(pl.id)} label={String(pl.nombre || pl.codigo || pl.id)} value={pl.id} />
+                  <Picker.Item key={String(pl.id)} label={String(pl.nombre || pl.codigo || pl.id)} value={pl.id} color="#000000" />
                 ))}
               </Picker>
             </View>
@@ -636,7 +649,7 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
                 onValueChange={handleEmpleadoChange}
                 style={styles.picker}
               >
-                <Picker.Item label="Seleccionar..." value="" />
+                <Picker.Item label="Seleccionar..." value="" color="#000000" />
                 {empleados.map((emp: AnyNode) => (
                   <Picker.Item
                     key={String(emp.id)}
@@ -646,6 +659,7 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
                       }`.trim(),
                     )}
                     value={emp.id}
+                    color="#000000"
                   />
                 ))}
               </Picker>

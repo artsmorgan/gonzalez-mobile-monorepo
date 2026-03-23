@@ -21,9 +21,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             data: {
                 action: "GET",
                 table: "c_marca_dia",
-                operation: "findFirst",
-                where: { empleadoFijo_id: id },
-                orderBy: { id: "desc" }
+                operation: "findUnique",
+                where: { id },
             }
         });
         if (!marcaDia) {
@@ -43,19 +42,53 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             return NextResponse.json({ status: false, message: "No se encontró el empleado" }, { status: 200 });
         }
 
-        marcaDia.motivo_ausente = reason;
-
-        const updated = await callDynamicPrisma({
-            req,
-            data: {
-                action: "UPDATE",
-                table: "c_marca_dia",
-                where: { id: marcaDia.id },
-                data: marcaDia
+        console.log("Marca dia", marcaDia.id);
+        let wasUpdatedAccionPersonal = false;
+        console.log("Accion personal", marcaDia.accionPersonal_id);
+        if (marcaDia.accionPersonal_id) {
+            // Obtener la acción personal
+            const accionPersonal = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "c_accion_personal",
+                    operation: "findUnique",
+                    where: { id: marcaDia.accionPersonal_id }
+                }
+            });
+            console.log("Accion personal", accionPersonal);
+            if (accionPersonal && accionPersonal.tipoAccion_id) {
+                console.log("Accion personal", accionPersonal);
+                console.log("Tipo de acción", accionPersonal.tipoAccion_id);
+                const tipoAccion_id = await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "GET",
+                        table: "c_tipo_accion",
+                        operation: "findUnique",
+                        where: { id: accionPersonal.tipoAccion_id }
+                    }
+                });
+                if (tipoAccion_id && tipoAccion_id.nombre == "AUSENCIA") {
+                    // Update el registro de la acción personal y modificar el motivo de ausencia
+                    const updatedAccionPersonal = await callDynamicPrisma({
+                        req,
+                        data: {
+                            action: "UPDATE",
+                            table: "c_accion_personal",
+                            where: { id: marcaDia.accionPersonal_id },
+                            data: { comentarios: reason }
+                        }
+                    });
+                    if (updatedAccionPersonal) {
+                        wasUpdatedAccionPersonal = true;
+                    }
+                }
             }
-        });
+        }
 
-        if (!updated) {
+
+        if (!wasUpdatedAccionPersonal) {
             return NextResponse.json({ status: false, message: "No se pudo actualizar el motivo de ausencia" }, { status: 200 });
         }
         else {

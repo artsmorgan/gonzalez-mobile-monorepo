@@ -59,8 +59,11 @@ export async function POST(req: NextRequest) {
         });
 
         if (actividad) {
-            const plazas_ids: number[] = [];
-            const puestos_plazas_parse = Array.isArray(JSON.parse(puestos_plazas || "[]")) ? JSON.parse(puestos_plazas || "[]") : [];
+            let plazas_ids: number[] = [];
+            const puestos_plazas_parse =
+                typeof puestos_plazas === "string"
+                    ? (Array.isArray(JSON.parse(puestos_plazas || "[]")) ? JSON.parse(puestos_plazas || "[]") : [])
+                    : (Array.isArray(puestos_plazas) ? puestos_plazas : []);
             const uniquePuestoIds = Array.from(
                 new Set(
                     puestos_plazas_parse
@@ -69,38 +72,74 @@ export async function POST(req: NextRequest) {
                 )
             );
 
-            for (const puestoId of uniquePuestoIds) {
+            // 1) Confirmar puestos existentes en BD (findMany con ids recibidos)
+            const existingPuestos = uniquePuestoIds.length > 0
+                ? await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "GET",
+                        table: "e_estructura_puesto",
+                        operation: "findMany",
+                        where: { id: { in: uniquePuestoIds } },
+                        select: { id: true },
+                    },
+                })
+                : [];
+
+            const existingPuestosArray = Array.isArray(existingPuestos) ? existingPuestos : [];
+            const confirmedPuestoIds = Array.from(
+                new Set(
+                    existingPuestosArray
+                        .map((p: any) => Number(p?.id))
+                        .filter((v: number) => Number.isFinite(v) && v > 0)
+                )
+            );
+
+            // 2) Crear relación actividad-puesto en un solo createMany con ids confirmados
+            if (confirmedPuestoIds.length > 0) {
                 await callDynamicPrisma({
                     req,
                     data: {
                         action: "POST",
                         table: "e_actividades_puesto",
-                        data: { actividad_id: actividad.id, puesto_id: puestoId },
+                        operation: "createMany",
+                        many: true,
+                        data: confirmedPuestoIds.map((puesto_id: number) => ({
+                            actividad_id: actividad.id,
+                            puesto_id,
+                        })),
                     },
                 });
             }
 
-            for (const puesto of puestos_plazas_parse) {
-                const puesto_id = Number(puesto?.puesto_id || 0);
-                if (!puesto_id) continue;
-                if (Array.isArray(puesto?.plazas) && puesto.plazas.length > 0) {
-                    for (const plaza of puesto.plazas) {
-                        const plaza_id = Number(plaza?.plaza_id || 0);
-                        if (plaza_id && !plazas_ids.includes(plaza_id)) plazas_ids.push(plaza_id);
-                    }
-                } else {
-                    const plzs = await callDynamicPrisma({
+            // 3) Buscar todas las plazas de los puestos confirmados para notificar y añadir distinct para evitar duplicados
+            if (confirmedPuestoIds.length > 0) {
+                const plzs = await callDynamicPrisma({
                         req,
-                        data: { action: "GET", table: "e_estructura_plazas", operation: "findMany", where: { puesto_id } },
+                        data: {
+                            action: "GET",
+                            table: "e_estructura_plazas",
+                            operation: "findMany",
+                            where: { puesto_id: { in: confirmedPuestoIds } },
+                            select: { id: true },
+                            distinct: ["id"],
+                        },
                     });
-                    for (const plz of Array.isArray(plzs) ? plzs : []) {
-                        if (plz?.id && !plazas_ids.includes(plz.id)) plazas_ids.push(plz.id);
-                    }
-                }
+                    
+                // Extraer los ids de las plazas
+                plazas_ids = plzs.map((p: any) => p.id);
             }
 
             const frecuencia_parse = JSON.parse(frecuencia);
-            await sendNotificationByPlaza(req, marca_id, "Actividad asignada", `Se te ha asignado la actividad ${nombre_actividad}, la cual deberá realizarse "${frecuencia_parse.title}"`, plazas_ids);
+            if (plazas_ids.length > 0) {
+                await sendNotificationByPlaza(
+                    req,
+                    marca_id,
+                    "Actividad asignada",
+                    `Se te ha asignado la actividad ${nombre_actividad}, la cual deberá realizarse "${frecuencia_parse.title}"`,
+                    plazas_ids
+                );
+            }
 
             const createdBy = payload?.id ? Number(payload.id) : 0;
             await callDynamicPrisma({
@@ -124,7 +163,7 @@ export async function POST(req: NextRequest) {
                                 frecuencia,
                                 es_revision_equipo,
                                 firma_responsable,
-                                puestos_ids: uniquePuestoIds,
+                                puestos_ids: confirmedPuestoIds,
                             },
                         }]),
                         created_at: toZonedTime(new Date(), "America/Costa_Rica").toISOString(),

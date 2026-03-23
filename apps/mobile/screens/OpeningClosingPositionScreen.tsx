@@ -1950,9 +1950,10 @@ export default function OpeningClosingPositionScreen() {
                   <Picker.Item
                     label={isArticulosLoading ? 'Cargando tipos...' : 'Seleccione tipo...'}
                     value={0}
+                    color="#000000"
                   />
                   {articulosCatalog.map((a) => (
-                    <Picker.Item key={a.id} label={a.nombre} value={a.id} />
+                    <Picker.Item key={a.id} label={a.nombre} value={a.id} color="#000000" />
                   ))}
                 </Picker>
               </ThemedView>
@@ -2084,9 +2085,9 @@ export default function OpeningClosingPositionScreen() {
                           }}
                           style={styles.picker}
                         >
-                          <Picker.Item label="Seleccione empresa..." value={0} />
+                          <Picker.Item label="Seleccione empresa..." value={0} color="#000000" />
                           {empresaOptions.map((e) => (
-                            <Picker.Item key={e.id} label={e.nombre} value={e.id} />
+                            <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
                           ))}
                         </Picker>
                       </ThemedView>
@@ -2110,9 +2111,10 @@ export default function OpeningClosingPositionScreen() {
                           <Picker.Item
                             label={selectedEmpresaId ? 'Seleccione cliente...' : 'Seleccione empresa primero'}
                             value={0}
+                            color="#000000"
                           />
                           {clienteOptions.map((c) => (
-                            <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                            <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
                           ))}
                         </Picker>
                       </ThemedView>
@@ -2139,9 +2141,10 @@ export default function OpeningClosingPositionScreen() {
                           <Picker.Item
                             label={selectedClienteId ? 'Seleccione división...' : 'Seleccione cliente primero'}
                             value={0}
+                            color="#000000"
                           />
                           {divisionOptions.map((d) => (
-                            <Picker.Item key={d.id} label={d.nombre} value={d.id} />
+                            <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
                           ))}
                         </Picker>
                       </ThemedView>
@@ -2167,9 +2170,10 @@ export default function OpeningClosingPositionScreen() {
                           <Picker.Item
                             label={selectedDivisionId ? 'Seleccione contrato...' : 'Seleccione cliente primero'}
                             value={0}
+                            color="#000000"
                           />
                           {contratoOptions.map((c) => (
-                            <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                            <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
                           ))}
                         </Picker>
                       </ThemedView>
@@ -2194,9 +2198,10 @@ export default function OpeningClosingPositionScreen() {
                           <Picker.Item
                             label={selectedContratoId ? 'Seleccione sucursal...' : 'Seleccione contrato primero'}
                             value={0}
+                            color="#000000"
                           />
                           {sucursalOptions.map((s) => (
-                            <Picker.Item key={s.id} label={s.nombre} value={s.id} />
+                            <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
                           ))}
                         </Picker>
                       </ThemedView>
@@ -2217,9 +2222,10 @@ export default function OpeningClosingPositionScreen() {
                           <Picker.Item
                             label={selectedSucursalId ? 'Seleccione puesto...' : 'Seleccione sucursal primero'}
                             value={0}
+                            color="#000000"
                           />
                           {puestoOptions.map((p) => (
-                            <Picker.Item key={p.id} label={p.nombre} value={p.id} />
+                            <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
                           ))}
                         </Picker>
                       </ThemedView>
@@ -2258,8 +2264,8 @@ export default function OpeningClosingPositionScreen() {
                 <ThemedText style={styles.formLabel}>Tipo</ThemedText>
                 <ThemedView style={styles.pickerWrapper}>
                   <Picker selectedValue={tipo} onValueChange={(v) => setTipo(v)} style={styles.picker}>
-                    <Picker.Item label="Apertura" value="Apertura" />
-                    <Picker.Item label="Cierre" value="Cierre" />
+                    <Picker.Item label="Apertura" value="Apertura" color="#000000" />
+                    <Picker.Item label="Cierre" value="Cierre" color="#000000" />
                   </Picker>
                 </ThemedView>
               </ThemedView>
@@ -2558,9 +2564,9 @@ export default function OpeningClosingPositionScreen() {
                         }}
                         style={styles.picker}
                       >
-                        <Picker.Item label="Todas" value={0} />
+                        <Picker.Item label="Todas" value={0} color="#000000" />
                         {filterEmpresas.map((e) => (
-                          <Picker.Item key={e.id} label={e.nombre} value={e.id} />
+                          <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
                         ))}
                       </Picker>
                     </ThemedView>
@@ -2581,9 +2587,9 @@ export default function OpeningClosingPositionScreen() {
                         enabled={filterEmpresaId !== null && filterClientes.length > 0}
                         style={styles.picker}
                       >
-                        <Picker.Item label={filterEmpresaId !== null ? 'Todos' : 'Seleccione empresa primero'} value={0} />
+                        <Picker.Item label={filterEmpresaId !== null ? 'Todos' : 'Seleccione empresa primero'} value={0} color="#000000" />
                         {filterClientes.map((c) => (
-                          <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                          <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
                         ))}
                       </Picker>
                     </ThemedView>
@@ -2603,9 +2609,9 @@ export default function OpeningClosingPositionScreen() {
                         enabled={filterClienteId !== null && filterDivisiones.length > 0}
                         style={styles.picker}
                       >
-                        <Picker.Item label={filterClienteId !== null ? 'Todas' : 'Seleccione cliente primero'} value={0} />
+                        <Picker.Item label={filterClienteId !== null ? 'Todas' : 'Seleccione cliente primero'} value={0} color="#000000" />
                         {filterDivisiones.map((d) => (
-                          <Picker.Item key={d.id} label={d.nombre} value={d.id} />
+                          <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
                         ))}
                       </Picker>
                     </ThemedView>
@@ -2624,9 +2630,9 @@ export default function OpeningClosingPositionScreen() {
                         enabled={filterDivisionId !== null && filterContratos.length > 0}
                         style={styles.picker}
                       >
-                        <Picker.Item label={filterDivisionId !== null ? 'Todos' : 'Seleccione división primero'} value={0} />
+                        <Picker.Item label={filterDivisionId !== null ? 'Todos' : 'Seleccione división primero'} value={0} color="#000000" />
                         {filterContratos.map((c) => (
-                          <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                          <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
                         ))}
                       </Picker>
                     </ThemedView>
@@ -2645,9 +2651,9 @@ export default function OpeningClosingPositionScreen() {
                         enabled={filterContratoId !== null && filterSucursales.length > 0}
                         style={styles.picker}
                       >
-                        <Picker.Item label={filterContratoId !== null ? 'Todas' : 'Seleccione contrato primero'} value={0} />
+                        <Picker.Item label={filterContratoId !== null ? 'Todas' : 'Seleccione contrato primero'} value={0} color="#000000" />
                         {filterSucursales.map((s) => (
-                          <Picker.Item key={s.id} label={s.nombre} value={s.id} />
+                          <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
                         ))}
                       </Picker>
                     </ThemedView>

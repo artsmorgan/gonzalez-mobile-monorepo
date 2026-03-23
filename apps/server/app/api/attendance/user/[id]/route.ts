@@ -14,6 +14,8 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             );
         }
 
+        console.log("Buscamos en el endpoint de attendance/user/[id]");
+
         const resolvedParams = await context.params;
         const id = parseInt(resolvedParams.id);
 
@@ -50,20 +52,29 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                 table: "c_marca_dia",
                 operation: "findFirst",
                 where: {
-                    empleadoFijo_id: empleado.id,
-                    OR: [
+                    AND: [
                         {
-                            fecha: {
-                                gt: now,
-                            },
+                            OR: [
+                                { empleadoFijo_id: empleado.id },
+                                { empleadoReemplaza_id: empleado.id },
+                            ],
                         },
                         {
-                            fecha: {
-                                equals: currentDate,
-                            },
-                            hora_inicio: {
-                                gte: currentTime,
-                            },
+                            OR: [
+                                {
+                                    fecha: {
+                                        gt: now,
+                                    },
+                                },
+                                {
+                                    fecha: {
+                                        equals: currentDate,
+                                    },
+                                    hora_inicio: {
+                                        gte: currentTime,
+                                    },
+                                },
+                            ],
                         },
                     ],
                 },
@@ -90,20 +101,29 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                     table: "c_marca_dia",
                     operation: "findFirst",
                     where: {
-                        empleadoFijo_id: empleado.id,
-                        OR: [
+                        AND: [
                             {
-                                fecha: {
-                                    lt: now,
-                                },
+                                OR: [
+                                    { empleadoFijo_id: empleado.id },
+                                    { empleadoReemplaza_id: empleado.id },
+                                ],
                             },
                             {
-                                fecha: {
-                                    equals: currentDate,
-                                },
-                                hora_inicio: {
-                                    lt: currentTime,
-                                },
+                                OR: [
+                                    {
+                                        fecha: {
+                                            lt: now,
+                                        },
+                                    },
+                                    {
+                                        fecha: {
+                                            equals: currentDate,
+                                        },
+                                        hora_inicio: {
+                                            lt: currentTime,
+                                        },
+                                    },
+                                ],
                             },
                         ],
                     },
@@ -117,6 +137,22 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
         if (!marcaDia) {
             return NextResponse.json({ status: false, message: "No se encontró la marca del dia" }, { status: 200 });
+        }
+
+        console.log("Marca dia", marcaDia.id);
+
+        if (marcaDia.empleadoFijo_id == empleado.id && marcaDia.empleadoReemplaza_id != null) {
+            const empleadoReemplaza = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "c_empleado",
+                    operation: "findUnique",
+                    where: { id: marcaDia.empleadoReemplaza_id }
+                }
+            });
+            const nombreReemplaza = empleadoReemplaza ? empleadoReemplaza.nombre + " " + empleadoReemplaza.primer_apellido + " " + empleadoReemplaza.segundo_apellido : "con código " + empleadoReemplaza.codigo;
+            return NextResponse.json({ status: false, message: "El empleado " + nombreReemplaza + " está cubriendo tu turno" }, { status: 200 });
         }
 
         const empresa = await callDynamicPrisma({
@@ -212,7 +248,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
         const estado = marcaDia.hora_entrada_digitada != null ? "Ingresado" : "No ingresado";
         if (marcaDia.hora_salida_digitada != null) {
-            return NextResponse.json({ status: false, message: "Ya has marcado la salida", marca_id: marcaDia.id }, { status: 200 });
+            return NextResponse.json({ status: false, absent: false, message: "Ya has marcado la salida", marca_id: marcaDia.id }, { status: 200 });
         }
 
         let change_available = true;
@@ -220,18 +256,36 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         let next_time = null;
         if (marcaDia.hora_inicio && marcaDia.hora_fin) {
 
-            const horaInicioMarca = new Date(marcaDia.hora_inicio);
-            const horaFinMarca = new Date(marcaDia.hora_fin);
-            const hora_inicio = toZonedTime(new Date(), "America/Costa_Rica");
-            hora_inicio.setHours(horaInicioMarca.getHours(), horaInicioMarca.getMinutes(), horaInicioMarca.getSeconds(), 0);
-            const hora_fin = toZonedTime(new Date(), "America/Costa_Rica");
-            hora_fin.setHours(horaFinMarca.getHours(), horaFinMarca.getMinutes(), horaFinMarca.getSeconds(), 0);
+            const fecha_marca_string = marcaDia.fecha.split("T")[0];
+            const hora_inicio_string = marcaDia.hora_inicio.split("T")[1].split(".")[0];
+            const inicio_marca = new Date(fecha_marca_string + "T" + hora_inicio_string);
 
-            if (toZonedTime(new Date(), "America/Costa_Rica") > hora_fin && marcaDia.hora_entrada_digitada == null) {
-                return NextResponse.json({ status: false, absent: true, message: "No has marcado la entrada y has sido declarado como ausente" }, { status: 200 });
+            let fin_marca = null;
+            if (marcaDia.horas_duracion) {
+                const horas_duracion = parseFloat(marcaDia.horas_duracion.toString());
+                fin_marca = new Date(inicio_marca.getTime() + horas_duracion * 60 * 60 * 1000);
+            }
+            else {
+                // Definimos si marcaDia.hora_inicio es mayor a marcaDia.hora_fin, si es así, entonces la hora_fin es el siguiente día
+                if (new Date(marcaDia.hora_inicio) > new Date(marcaDia.hora_fin)) {
+                    fin_marca = new Date(marcaDia.fecha.setDate(marcaDia.fecha.getDate() + 1));
+                }
+                else {
+                    const hora_fin_string = marcaDia.hora_fin.split("T")[1].split(".")[0];
+                    fin_marca = new Date(fecha_marca_string + "T" + hora_fin_string);
+                }
             }
 
-            next_time = new Date(estado == "No ingresado" ? hora_inicio : hora_fin);
+            console.log("momento_inicio_marca", inicio_marca);
+            console.log("momento_fin_marca", fin_marca);
+
+            if (toZonedTime(new Date(), "America/Costa_Rica") > fin_marca && marcaDia.hora_entrada_digitada == null) {
+                const hora_inicio_string = inicio_marca.toISOString().split("T")[1].split(".")[0];
+                const fecha_marca_string = marcaDia.fecha.split("T")[0].split("-").reverse().join("-");
+                return NextResponse.json({ status: false, absent: true, message: "No has marcado la entrada para el turno del día " + fecha_marca_string + " a las " + hora_inicio_string, marca_id: marcaDia.id }, { status: 200 });
+            }
+
+            next_time = new Date(estado == "No ingresado" ? inicio_marca : fin_marca);
             const next_change_time = new Date(next_time.getTime());
             next_change_time.setMinutes(next_change_time.getMinutes() - 15);
             if (toZonedTime(new Date(), "America/Costa_Rica") < next_change_time) { // Si la fecha del parámetro es menor a la fecha de la marca menos 15 menos minutos

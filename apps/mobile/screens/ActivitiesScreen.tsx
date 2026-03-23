@@ -487,9 +487,9 @@ const InventoryItemComponent: React.FC<InventoryItemProps> = ({
             style={styles.pickerTable}
             itemStyle={styles.pickerItemStyle}
           >
-            <Picker.Item label="Bueno" value="Bueno" />
-            <Picker.Item label="Malo" value="Malo" />
-            <Picker.Item label="No está" value="No está" />
+            <Picker.Item label="Bueno" value="Bueno" color="#000000" />
+            <Picker.Item label="Malo" value="Malo" color="#000000" />
+            <Picker.Item label="No está" value="No está" color="#000000" />
           </Picker>
         </View>
       </View>
@@ -618,11 +618,28 @@ interface PuestoOption {
   id: number;
   nombre: string;
   plazas: PlazaOption[];
+  articulos?: PuestoArticuloOption[];
 }
 
-interface ArticuloOption {
+interface PuestoArticuloOption {
   id: number;
   nombre: string;
+  tipo?: string;
+  marca?: string | null;
+  serie?: string | null;
+  cantidad?: number | null;
+  cantidad_plan?: number | null;
+}
+
+interface ActivityInventoryArticleEntry {
+  puestoId: number;
+  puestoNombre: string;
+  articuloId: number;
+  articuloNombre: string;
+  tipo?: string;
+  marca?: string | null;
+  serie?: string | null;
+  cantidad: number;
 }
 
 interface AssignedResponsable {
@@ -632,13 +649,7 @@ interface AssignedResponsable {
   plazas: { plazaId: number; plazaNombre: string }[];
 }
 
-interface ArticuloRuleEntry {
-  articuloId: number;
-  articuloNombre: string;
-  reglas: { id: string; nombre: string; valor: string }[];
-}
-
-type MainStructurePuestoNode = { id: number; nombre: string; plazas: PlazaOption[] };
+type MainStructurePuestoNode = { id: number; nombre: string; plazas: PlazaOption[]; articulos?: PuestoArticuloOption[] };
 type MainStructureSucursalNode = { id: number; nombre: string; puestos: MainStructurePuestoNode[] };
 type MainStructureContratoNode = { id: number; nombre: string; sucursales: MainStructureSucursalNode[] };
 type MainStructureDivisionNode = { id: number; nombre: string; contratos: MainStructureContratoNode[] };
@@ -768,13 +779,10 @@ export default function ActivitiesScreen() {
   const [showStartDatePicker, setShowStartDatePicker] = useState(false);
   const [tipoActividad, setTipoActividad] = useState<'Normal' | 'Inventario'>('Normal');
   const [puestos, setPuestos] = useState<PuestoOption[]>([]);
-  const [articulosCatalog, setArticulosCatalog] = useState<ArticuloOption[]>([]);
   const [selectedPuestoId, setSelectedPuestoId] = useState<string>('');
   const [markedPlazaIds, setMarkedPlazaIds] = useState<string[]>([]);
-  const [selectedArticuloId, setSelectedArticuloId] = useState<string>('');
   const [assignedResponsables, setAssignedResponsables] = useState<AssignedResponsable[]>([]);
   const [isSelectedPuestosExpanded, setIsSelectedPuestosExpanded] = useState(false);
-  const [articuloRules, setArticuloRules] = useState<ArticuloRuleEntry[]>([]);
   const [isLoadingCatalogs, setIsLoadingCatalogs] = useState(false);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [currentMarcaId, setCurrentMarcaId] = useState<number | null>(null);
@@ -1247,9 +1255,7 @@ export default function ActivitiesScreen() {
     setTipoActividad('Normal');
     setSelectedPuestoId('');
     setMarkedPlazaIds([]);
-    setSelectedArticuloId('');
     setAssignedResponsables([]);
-    setArticuloRules([]);
     setSignatureData(null);
     setSignatureEmployeeName(null);
     setCatalogError(null);
@@ -1299,7 +1305,6 @@ export default function ActivitiesScreen() {
       }
       await Promise.all([
         loadMainStructureCache(),
-        loadArticulosCatalog(isConnected),
       ]);
     } catch (error) {
       console.error('Error preparing activity form:', error);
@@ -1385,70 +1390,6 @@ export default function ActivitiesScreen() {
         console.error('No puestos cache available:', error);
         setCatalogError('No hay información de puestos disponible sin conexión.');
         setPuestos([]);
-      }
-    }
-  };
-
-  const loadArticulosCatalog = async (isConnected: boolean) => {
-    const loadFromCache = async () => {
-      const cache = await AsyncStorage.getItem('articulos_cache');
-      if (cache) {
-        const parsed = JSON.parse(cache);
-        setArticulosCatalog(parsed);
-      } else {
-        throw new Error('No hay artículos guardados en caché');
-      }
-    };
-
-    if (isConnected) {
-      try {
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-        if (!apiUrl) {
-          throw new Error('Server URL not configured');
-        }
-
-        const response = await authedFetch({
-          url: `${apiUrl}/api/articulos`,
-          init: {
-            method: 'GET',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-          },
-          refreshAccessToken,
-          logout,
-        });
-        if (!response) return;
-
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        const data = await response.json();
-        if (data.status && data.articulos) {
-          setArticulosCatalog(data.articulos);
-          await AsyncStorage.setItem('articulos_cache', JSON.stringify(data.articulos));
-        } else {
-          throw new Error(data.message || 'No se pudieron cargar los artículos');
-        }
-      } catch (error) {
-        console.error('Error fetching articulos catalog:', error);
-        try {
-          await loadFromCache();
-          Alert.alert('Modo offline', 'No se pudo conectar al servidor. Se usarán los artículos guardados.');
-        } catch (cacheError) {
-          console.error('No articulos cache available:', cacheError);
-          setCatalogError('No hay artículos disponibles sin conexión.');
-          setArticulosCatalog([]);
-        }
-      }
-    } else {
-      try {
-        await loadFromCache();
-      } catch (error) {
-        console.error('No articulos cache available:', error);
-        setCatalogError('No hay artículos disponibles sin conexión.');
-        setArticulosCatalog([]);
       }
     }
   };
@@ -1863,80 +1804,46 @@ export default function ActivitiesScreen() {
     );
   };
 
-  const generateRuleId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-
-  const handleArticuloSelection = (value: string) => {
-    setSelectedArticuloId(value);
-    if (!value) return;
-
-    const articuloId = parseInt(value, 10);
-    if (articuloRules.some(rule => rule.articuloId === articuloId)) {
-      return;
-    }
-
-    const articulo = articulosCatalog.find(a => a.id === articuloId);
-    setArticuloRules(prev => [
-      ...prev,
-      {
-        articuloId,
-        articuloNombre: articulo?.nombre || 'Artículo',
-        reglas: [{ id: generateRuleId(), nombre: '', valor: '' }],
-      },
-    ]);
-    setSelectedArticuloId('');
+  const normalizeInventoryArticle = (articulo: any): PuestoArticuloOption | null => {
+    const articuloId = Number(articulo?.id);
+    if (!Number.isFinite(articuloId) || articuloId <= 0) return null;
+    const cantidadRaw = articulo?.cantidad_plan ?? articulo?.cantidad ?? 0;
+    const cantidad = Number(cantidadRaw);
+    return {
+      id: articuloId,
+      nombre: String(articulo?.nombre || 'Artículo'),
+      tipo: articulo?.tipo ? String(articulo.tipo) : undefined,
+      marca: articulo?.marca != null ? String(articulo.marca) : null,
+      serie: articulo?.serie != null ? String(articulo.serie) : null,
+      cantidad: Number.isFinite(cantidad) ? cantidad : 0,
+      cantidad_plan: articulo?.cantidad_plan != null && Number.isFinite(Number(articulo?.cantidad_plan))
+        ? Number(articulo.cantidad_plan)
+        : null,
+    };
   };
 
-  const handleRemoveArticulo = (articuloId: number) => {
-    setArticuloRules(prev => prev.filter(rule => rule.articuloId !== articuloId));
-  };
-
-  const handleAddRule = (articuloId: number) => {
-    setArticuloRules(prev =>
-      prev.map(rule =>
-        rule.articuloId === articuloId
-          ? {
-            ...rule,
-            reglas: [...rule.reglas, { id: generateRuleId(), nombre: '', valor: '' }],
-          }
-          : rule
-      )
-    );
-  };
-
-  const handleRuleChange = (articuloId: number, ruleId: string, field: 'nombre' | 'valor', value: string) => {
-    setArticuloRules(prev =>
-      prev.map(rule =>
-        rule.articuloId === articuloId
-          ? {
-            ...rule,
-            reglas: rule.reglas.map(r =>
-              r.id === ruleId
-                ? {
-                  ...r,
-                  [field]: value,
-                }
-                : r
-            ),
-          }
-          : rule
-      )
-    );
-  };
-
-  const handleRemoveRule = (articuloId: number, ruleId: string) => {
-    setArticuloRules(prev =>
-      prev
-        .map(rule =>
-          rule.articuloId === articuloId
-            ? {
-              ...rule,
-              reglas: rule.reglas.filter(r => r.id !== ruleId),
+  const getPuestoInventoryArticles = useCallback((puestoId: number): PuestoArticuloOption[] => {
+    const targetId = Number(puestoId);
+    if (!Number.isFinite(targetId) || targetId <= 0) return [];
+    for (const empresa of structure as any[]) {
+      for (const cliente of empresa?.clientes || []) {
+        for (const division of cliente?.division || []) {
+          for (const contrato of division?.contratos || []) {
+            for (const sucursal of contrato?.sucursales || []) {
+              for (const puesto of sucursal?.puestos || []) {
+                if (Number(puesto?.id) !== targetId) continue;
+                const source = Array.isArray(puesto?.articulos) ? puesto.articulos : [];
+                return source
+                  .map((art: any) => normalizeInventoryArticle(art))
+                  .filter((art: PuestoArticuloOption | null): art is PuestoArticuloOption => art != null);
+              }
             }
-            : rule
-        )
-        .filter(rule => rule.reglas.length > 0)
-    );
-  };
+          }
+        }
+      }
+    }
+    return [];
+  }, [structure]);
 
   const decodeSignatureHash = (hash: string) => {
     const decoded = Buffer.from(hash, 'base64').toString('utf-8');
@@ -2074,6 +1981,30 @@ export default function ActivitiesScreen() {
     await AsyncStorage.setItem('activities_actions', JSON.stringify(actions));
   };
 
+  const assignedInventoryArticleEntries = useMemo<ActivityInventoryArticleEntry[]>(() => {
+    const entries: ActivityInventoryArticleEntry[] = [];
+    const dedupe = new Set<string>();
+    for (const responsable of assignedResponsables) {
+      const puestoArticles = getPuestoInventoryArticles(responsable.puestoId);
+      for (const article of puestoArticles) {
+        const uniqueKey = `${responsable.puestoId}:${article.tipo || ''}:${article.id}`;
+        if (dedupe.has(uniqueKey)) continue;
+        dedupe.add(uniqueKey);
+        entries.push({
+          puestoId: responsable.puestoId,
+          puestoNombre: responsable.puestoNombre,
+          articuloId: article.id,
+          articuloNombre: article.nombre,
+          tipo: article.tipo,
+          marca: article.marca ?? null,
+          serie: article.serie ?? null,
+          cantidad: Number(article.cantidad_plan ?? article.cantidad ?? 0),
+        });
+      }
+    }
+    return entries;
+  }, [assignedResponsables, getPuestoInventoryArticles]);
+
   const validateCreateActivityForm = () => {
     if (!activityName.trim()) {
       return 'Debes ingresar el nombre de la actividad.';
@@ -2088,18 +2019,8 @@ export default function ActivitiesScreen() {
       return 'Las asignaciones por puesto deben incluir al menos una plaza o marcarse como puesto completo.';
     }
     if (tipoActividad === 'Inventario') {
-      if (articuloRules.length === 0) {
-        return 'Agrega al menos un artículo en la sección de reglas.';
-      }
-      for (const articulo of articuloRules) {
-        if (articulo.reglas.length === 0) {
-          return `El artículo ${articulo.articuloNombre} debe tener al menos una regla.`;
-        }
-        for (const regla of articulo.reglas) {
-          if (!regla.nombre.trim() || !regla.valor.trim()) {
-            return `Completa los campos de nombre y valor para todas las reglas del artículo ${articulo.articuloNombre}.`;
-          }
-        }
+      if (assignedInventoryArticleEntries.length === 0) {
+        return 'Los puestos seleccionados no tienen artículos de inventario en main_structure_cache.';
       }
     }
     if (!signatureData?.raw) {
@@ -2117,13 +2038,18 @@ export default function ActivitiesScreen() {
       const frequencyConfig = buildFrequencyConfig();
       const frequencyString = JSON.stringify(frequencyConfig);
 
-      const reglasPayload = articuloRules.map(rule => ({
-        id: rule.articuloId,
-        reglas: rule.reglas.map(r => ({
-          nombre: r.nombre.trim(),
-          valor: r.valor.trim(),
-        })),
-      }));
+      const reglasPayload = tipoActividad === 'Inventario'
+        ? assignedInventoryArticleEntries.map((article) => ({
+            id: article.articuloId,
+            puesto_id: article.puestoId,
+            puesto_nombre: article.puestoNombre,
+            tipo: article.tipo || null,
+            marca: article.marca || null,
+            serie: article.serie || null,
+            cantidad: Number.isFinite(Number(article.cantidad)) ? Number(article.cantidad) : 0,
+            reglas: [],
+          }))
+        : [];
 
       const puestosPayload = assignedResponsables.map(responsable => ({
         puesto_id: responsable.puestoId,
@@ -3265,9 +3191,9 @@ export default function ActivitiesScreen() {
                         onValueChange={(v) => { setSelectedEmpresaId(v ? Number(v) : null); resetHierarchyBelowEmpresa(); }}
                         style={styles.picker}
                       >
-                        <Picker.Item label="Selecciona empresa" value="" />
+                        <Picker.Item label="Selecciona empresa" value="" color="#000000" />
                         {empresasOptions.map((empresa) => (
-                          <Picker.Item key={empresa.id} label={empresa.nombre} value={String(empresa.id)} />
+                          <Picker.Item key={empresa.id} label={empresa.nombre} value={String(empresa.id)} color="#000000" />
                         ))}
                       </Picker>
                     </ThemedView>
@@ -3281,9 +3207,9 @@ export default function ActivitiesScreen() {
                             onValueChange={(v) => { setSelectedClienteId(v ? Number(v) : null); resetHierarchyBelowCliente(); }}
                             style={styles.picker}
                           >
-                            <Picker.Item label="Selecciona cliente" value="" />
+                            <Picker.Item label="Selecciona cliente" value="" color="#000000" />
                             {clientesOptions.map((cliente) => (
-                              <Picker.Item key={cliente.id} label={cliente.nombre} value={String(cliente.id)} />
+                              <Picker.Item key={cliente.id} label={cliente.nombre} value={String(cliente.id)} color="#000000" />
                             ))}
                           </Picker>
                         </ThemedView>
@@ -3299,9 +3225,9 @@ export default function ActivitiesScreen() {
                             onValueChange={(v) => { setSelectedDivisionId(v ? Number(v) : null); resetHierarchyBelowDivision(); }}
                             style={styles.picker}
                           >
-                            <Picker.Item label="Selecciona división" value="" />
+                            <Picker.Item label="Selecciona división" value="" color="#000000" />
                             {divisionesOptions.map((division) => (
-                              <Picker.Item key={division.id} label={division.nombre} value={String(division.id)} />
+                              <Picker.Item key={division.id} label={division.nombre} value={String(division.id)} color="#000000" />
                             ))}
                           </Picker>
                         </ThemedView>
@@ -3317,9 +3243,9 @@ export default function ActivitiesScreen() {
                             onValueChange={(v) => { setSelectedContratoId(v ? Number(v) : null); resetHierarchyBelowContrato(); }}
                             style={styles.picker}
                           >
-                            <Picker.Item label="Selecciona contrato" value="" />
+                            <Picker.Item label="Selecciona contrato" value="" color="#000000" />
                             {contratosOptions.map((contrato) => (
-                              <Picker.Item key={contrato.id} label={contrato.nombre} value={String(contrato.id)} />
+                              <Picker.Item key={contrato.id} label={contrato.nombre} value={String(contrato.id)} color="#000000" />
                             ))}
                           </Picker>
                         </ThemedView>
@@ -3335,9 +3261,9 @@ export default function ActivitiesScreen() {
                             onValueChange={(v) => { setSelectedSucursalId(v ? Number(v) : null); resetHierarchyBelowSucursal(); }}
                             style={styles.picker}
                           >
-                            <Picker.Item label="Selecciona sucursal" value="" />
+                            <Picker.Item label="Selecciona sucursal" value="" color="#000000" />
                             {sucursalesOptions.map((sucursal) => (
-                              <Picker.Item key={sucursal.id} label={sucursal.nombre} value={String(sucursal.id)} />
+                              <Picker.Item key={sucursal.id} label={sucursal.nombre} value={String(sucursal.id)} color="#000000" />
                             ))}
                           </Picker>
                         </ThemedView>
@@ -3358,9 +3284,9 @@ export default function ActivitiesScreen() {
                             }}
                             style={styles.picker}
                           >
-                            <Picker.Item label="Selecciona puesto" value="" />
+                            <Picker.Item label="Selecciona puesto" value="" color="#000000" />
                             {puestosOptionsFromHierarchy.map((puesto) => (
-                              <Picker.Item key={puesto.id} label={puesto.nombre} value={String(puesto.id)} />
+                              <Picker.Item key={puesto.id} label={puesto.nombre} value={String(puesto.id)} color="#000000" />
                             ))}
                           </Picker>
                         </ThemedView>
@@ -3451,6 +3377,18 @@ export default function ActivitiesScreen() {
                   />
                 )}
 
+                <ThemedText style={styles.sectionTitle}>Tipo de actividad</ThemedText>
+                <ThemedView style={styles.pickerContainer}>
+                  <Picker
+                    selectedValue={tipoActividad}
+                    onValueChange={(value) => setTipoActividad(value as 'Normal' | 'Inventario')}
+                    style={styles.picker}
+                  >
+                    <Picker.Item label="Normal" value="Normal" color="#000000" />
+                    <Picker.Item label="Inventario" value="Inventario" color="#000000" />
+                  </Picker>
+                </ThemedView>
+
                 <ThemedView style={styles.sectionCard}>
                   {catalogError ? (
                     <ThemedText style={styles.formErrorText}>{catalogError}</ThemedText>
@@ -3494,9 +3432,9 @@ export default function ActivitiesScreen() {
                             }}
                             style={styles.picker}
                           >
-                            <Picker.Item label="Selecciona división" value="" />
+                            <Picker.Item label="Selecciona división" value="" color="#000000" />
                             {divisionMassiveOptions.map((division: { id: number; nombre: string }) => (
-                              <Picker.Item key={division.id} label={division.nombre} value={String(division.id)} />
+                              <Picker.Item key={division.id} label={division.nombre} value={String(division.id)} color="#000000" />
                             ))}
                           </Picker>
                         </ThemedView>
@@ -3509,9 +3447,9 @@ export default function ActivitiesScreen() {
                               onValueChange={(v) => { setSelectedEmpresaId(v ? Number(v) : null); resetHierarchyBelowEmpresa(); }}
                               style={styles.picker}
                             >
-                              <Picker.Item label="Selecciona empresa" value="" />
+                              <Picker.Item label="Selecciona empresa" value="" color="#000000" />
                               {empresasOptions.map((empresa) => (
-                                <Picker.Item key={empresa.id} label={empresa.nombre} value={String(empresa.id)} />
+                                <Picker.Item key={empresa.id} label={empresa.nombre} value={String(empresa.id)} color="#000000" />
                               ))}
                             </Picker>
                           </ThemedView>
@@ -3522,9 +3460,9 @@ export default function ActivitiesScreen() {
                                 onValueChange={(v) => { setSelectedClienteId(v ? Number(v) : null); resetHierarchyBelowCliente(); }}
                                 style={styles.picker}
                               >
-                                <Picker.Item label="Selecciona cliente" value="" />
+                                <Picker.Item label="Selecciona cliente" value="" color="#000000" />
                                 {clientesOptions.map((cliente) => (
-                                  <Picker.Item key={cliente.id} label={cliente.nombre} value={String(cliente.id)} />
+                                  <Picker.Item key={cliente.id} label={cliente.nombre} value={String(cliente.id)} color="#000000" />
                                 ))}
                               </Picker>
                             </ThemedView>
@@ -3536,9 +3474,9 @@ export default function ActivitiesScreen() {
                                 onValueChange={(v) => { setSelectedDivisionId(v ? Number(v) : null); resetHierarchyBelowDivision(); }}
                                 style={styles.picker}
                               >
-                                <Picker.Item label="Selecciona división" value="" />
+                                <Picker.Item label="Selecciona división" value="" color="#000000" />
                                 {divisionesOptions.map((division) => (
-                                  <Picker.Item key={division.id} label={division.nombre} value={String(division.id)} />
+                                  <Picker.Item key={division.id} label={division.nombre} value={String(division.id)} color="#000000" />
                                 ))}
                               </Picker>
                             </ThemedView>
@@ -3550,9 +3488,9 @@ export default function ActivitiesScreen() {
                                 onValueChange={(v) => { setSelectedContratoId(v ? Number(v) : null); resetHierarchyBelowContrato(); }}
                                 style={styles.picker}
                               >
-                                <Picker.Item label="Selecciona contrato" value="" />
+                                <Picker.Item label="Selecciona contrato" value="" color="#000000" />
                                 {contratosOptions.map((contrato) => (
-                                  <Picker.Item key={contrato.id} label={contrato.nombre} value={String(contrato.id)} />
+                                  <Picker.Item key={contrato.id} label={contrato.nombre} value={String(contrato.id)} color="#000000" />
                                 ))}
                               </Picker>
                             </ThemedView>
@@ -3564,9 +3502,9 @@ export default function ActivitiesScreen() {
                                 onValueChange={(v) => { setSelectedSucursalId(v ? Number(v) : null); resetHierarchyBelowSucursal(); }}
                                 style={styles.picker}
                               >
-                                <Picker.Item label="Selecciona sucursal" value="" />
+                                <Picker.Item label="Selecciona sucursal" value="" color="#000000" />
                                 {sucursalesOptions.map((sucursal) => (
-                                  <Picker.Item key={sucursal.id} label={sucursal.nombre} value={String(sucursal.id)} />
+                                  <Picker.Item key={sucursal.id} label={sucursal.nombre} value={String(sucursal.id)} color="#000000" />
                                 ))}
                               </Picker>
                             </ThemedView>
@@ -3587,9 +3525,9 @@ export default function ActivitiesScreen() {
                               onValueChange={handleSelectPuesto}
                               style={styles.picker}
                             >
-                              <Picker.Item label="Selecciona un puesto" value="" />
+                              <Picker.Item label="Selecciona un puesto" value="" color="#000000" />
                               {effectivePuestos.map((puesto: any) => (
-                                <Picker.Item key={puesto.id} label={puesto.nombre} value={String(puesto.id)} />
+                                <Picker.Item key={puesto.id} label={puesto.nombre} value={String(puesto.id)} color="#000000" />
                               ))}
                             </Picker>
                           </ThemedView>
@@ -3726,6 +3664,42 @@ export default function ActivitiesScreen() {
                                       </View>
                                     ))
                                   )}
+                                  {tipoActividad === 'Inventario' && (
+                                    <ThemedView style={styles.reglasContainer}>
+                                      <ThemedText style={styles.reglasTitle}>
+                                        Artículos del puesto
+                                      </ThemedText>
+                                      {/* Aqui debe hber una línea de separación */}
+                                      <View style={styles.reglasSeparator} />
+                                      <ThemedView style={styles.reglasContent}>
+                                      {getPuestoInventoryArticles(responsable.puestoId).length === 0 ? (
+                                        <ThemedText style={styles.helperText}>
+                                          Este puesto no tiene artículos vinculados.
+                                        </ThemedText>
+                                      ) : (
+                                        getPuestoInventoryArticles(responsable.puestoId).map((articulo) => (
+                                          <View
+                                            key={`${responsable.puestoId}-${articulo.tipo || ''}-${articulo.id}`}
+                                            style={styles.reglaItem}
+                                          >
+                                            <ThemedText style={styles.reglaNombre}>
+                                              {articulo.nombre}
+                                            </ThemedText>
+                                            <ThemedText style={styles.reglaValor}>
+                                              • Marca: {articulo.marca || '-'}
+                                            </ThemedText>
+                                            <ThemedText style={styles.reglaValor}>
+                                              • Serie: {articulo.serie || '-'}
+                                            </ThemedText>
+                                            <ThemedText style={styles.reglaValor}>
+                                              • Cantidad: {Number(articulo.cantidad_plan ?? articulo.cantidad ?? 0)}
+                                            </ThemedText>
+                                          </View>
+                                        ))
+                                      )}
+                                      </ThemedView>
+                                    </ThemedView>
+                                  )}
                                 </ThemedView>
                               ))}
                           </>
@@ -3735,86 +3709,6 @@ export default function ActivitiesScreen() {
                   )}
                 </ThemedView>
 
-                <ThemedText style={styles.sectionTitle}>Tipo de actividad</ThemedText>
-                <ThemedView style={styles.pickerContainer}>
-                  <Picker
-                    selectedValue={tipoActividad}
-                    onValueChange={(value) => setTipoActividad(value as 'Normal' | 'Inventario')}
-                    style={styles.picker}
-                  >
-                    <Picker.Item label="Normal" value="Normal" />
-                    <Picker.Item label="Inventario" value="Inventario" />
-                  </Picker>
-                </ThemedView>
-
-                {tipoActividad === 'Inventario' && (
-                  <ThemedView style={styles.sectionCard}>
-                    <ThemedText style={styles.sectionTitle}>Reglas</ThemedText>
-                    <ThemedText style={styles.formLabel}>Artículos</ThemedText>
-                    <ThemedView style={styles.pickerContainer}>
-                      <Picker
-                        selectedValue={selectedArticuloId}
-                        onValueChange={handleArticuloSelection}
-                        style={styles.picker}
-                      >
-                        <Picker.Item label="Selecciona un artículo" value="" />
-                        {articulosCatalog.map(articulo => (
-                          <Picker.Item key={articulo.id} label={articulo.nombre} value={String(articulo.id)} />
-                        ))}
-                      </Picker>
-                    </ThemedView>
-
-                    {articuloRules.length === 0 ? (
-                      <ThemedText style={styles.helperText}>
-                        Selecciona un artículo para comenzar a definir reglas.
-                      </ThemedText>
-                    ) : (
-                      articuloRules.map(articulo => (
-                        <ThemedView key={articulo.articuloId} style={styles.articleCard}>
-                          <View style={styles.assignedHeader}>
-                            <ThemedText style={styles.assignedTitle}>{articulo.articuloNombre}</ThemedText>
-                            <TouchableOpacity
-                              style={styles.removeButton}
-                              onPress={() => handleRemoveArticulo(articulo.articuloId)}
-                            >
-                              <Ionicons name="trash" size={18} color="#FF3B30" />
-                            </TouchableOpacity>
-                          </View>
-                          {articulo.reglas.map(regla => (
-                            <View key={regla.id} style={styles.ruleRow}>
-                              <TextInput
-                                style={[styles.textInput, styles.ruleInput]}
-                                placeholder="Nombre"
-                                value={regla.nombre}
-                                onChangeText={text => handleRuleChange(articulo.articuloId, regla.id, 'nombre', text)}
-                              />
-                              <TextInput
-                                style={[styles.textInput, styles.ruleInput]}
-                                placeholder="Valor"
-                                value={regla.valor}
-                                onChangeText={text => handleRuleChange(articulo.articuloId, regla.id, 'valor', text)}
-                              />
-                              <TouchableOpacity
-                                style={styles.removeButton}
-                                onPress={() => handleRemoveRule(articulo.articuloId, regla.id)}
-                              >
-                                <Ionicons name="close-circle" size={20} color="#FF3B30" />
-                              </TouchableOpacity>
-                            </View>
-                          ))}
-                          <TouchableOpacity
-                            style={styles.secondaryButton}
-                            onPress={() => handleAddRule(articulo.articuloId)}
-                          >
-                            <Ionicons name="add-circle" size={18} color="#fff" />
-                            <ThemedText style={styles.secondaryButtonText}>Agregar regla</ThemedText>
-                          </TouchableOpacity>
-                        </ThemedView>
-                      ))
-                    )}
-                  </ThemedView>
-                )}
-
                 <ThemedView style={styles.sectionCard}>
                   <ThemedText style={styles.sectionTitle}>Repetición de la actividad</ThemedText>
                   <ThemedView style={styles.pickerContainer}>
@@ -3823,13 +3717,13 @@ export default function ActivitiesScreen() {
                       onValueChange={(value) => setRepetitionType(value as any)}
                       style={styles.picker}
                     >
-                      <Picker.Item label="Cada día" value="daily" />
-                      <Picker.Item label={weeklyLabel} value="weekly" />
-                      <Picker.Item label={monthlyWeekdayLabel} value="monthly-weekday" />
-                      <Picker.Item label={monthlyLastLabel} value="monthly-last" />
-                      <Picker.Item label={yearlyLabel} value="yearly" />
-                      <Picker.Item label="Todos los días laborales (lunes a viernes)" value="weekdays" />
-                      <Picker.Item label="Personalizado" value="custom" />
+                      <Picker.Item label="Cada día" value="daily" color="#000000" />
+                      <Picker.Item label={weeklyLabel} value="weekly" color="#000000" />
+                      <Picker.Item label={monthlyWeekdayLabel} value="monthly-weekday" color="#000000" />
+                      <Picker.Item label={monthlyLastLabel} value="monthly-last" color="#000000" />
+                      <Picker.Item label={yearlyLabel} value="yearly" color="#000000" />
+                      <Picker.Item label="Todos los días laborales (lunes a viernes)" value="weekdays" color="#000000" />
+                      <Picker.Item label="Personalizado" value="custom" color="#000000" />
                     </Picker>
                   </ThemedView>
 
@@ -3849,10 +3743,10 @@ export default function ActivitiesScreen() {
                             onValueChange={(value) => setCustomUnit(value as any)}
                             style={styles.picker}
                           >
-                            <Picker.Item label="día" value="day" />
-                            <Picker.Item label="semana" value="week" />
-                            <Picker.Item label="mes" value="month" />
-                            <Picker.Item label="año" value="year" />
+                            <Picker.Item label="día" value="day" color="#000000" />
+                            <Picker.Item label="semana" value="week" color="#000000" />
+                            <Picker.Item label="mes" value="month" color="#000000" />
+                            <Picker.Item label="año" value="year" color="#000000" />
                           </Picker>
                         </ThemedView>
                       </View>
@@ -3902,8 +3796,8 @@ export default function ActivitiesScreen() {
                               onValueChange={(value) => setMonthOption(value as 'day-of-month' | 'weekday-of-month')}
                               style={styles.picker}
                             >
-                              <Picker.Item label={monthDayOfMonthLabel} value="day-of-month" />
-                              <Picker.Item label={monthWeekdayOfMonthLabel} value="weekday-of-month" />
+                              <Picker.Item label={monthDayOfMonthLabel} value="day-of-month" color="#000000" />
+                              <Picker.Item label={monthWeekdayOfMonthLabel} value="weekday-of-month" color="#000000" />
                             </Picker>
                           </ThemedView>
                         </ThemedView>
@@ -3921,18 +3815,18 @@ export default function ActivitiesScreen() {
                                   onValueChange={(value) => setYearMonth(value)}
                                   style={styles.picker}
                                 >
-                                  <Picker.Item label="Enero" value="1" />
-                                  <Picker.Item label="Febrero" value="2" />
-                                  <Picker.Item label="Marzo" value="3" />
-                                  <Picker.Item label="Abril" value="4" />
-                                  <Picker.Item label="Mayo" value="5" />
-                                  <Picker.Item label="Junio" value="6" />
-                                  <Picker.Item label="Julio" value="7" />
-                                  <Picker.Item label="Agosto" value="8" />
-                                  <Picker.Item label="Septiembre" value="9" />
-                                  <Picker.Item label="Octubre" value="10" />
-                                  <Picker.Item label="Noviembre" value="11" />
-                                  <Picker.Item label="Diciembre" value="12" />
+                                  <Picker.Item label="Enero" value="1" color="#000000" />
+                                  <Picker.Item label="Febrero" value="2" color="#000000" />
+                                  <Picker.Item label="Marzo" value="3" color="#000000" />
+                                  <Picker.Item label="Abril" value="4" color="#000000" />
+                                  <Picker.Item label="Mayo" value="5" color="#000000" />
+                                  <Picker.Item label="Junio" value="6" color="#000000" />
+                                  <Picker.Item label="Julio" value="7" color="#000000" />
+                                  <Picker.Item label="Agosto" value="8" color="#000000" />
+                                  <Picker.Item label="Septiembre" value="9" color="#000000" />
+                                  <Picker.Item label="Octubre" value="10" color="#000000" />
+                                  <Picker.Item label="Noviembre" value="11" color="#000000" />
+                                  <Picker.Item label="Diciembre" value="12" color="#000000" />
                                 </Picker>
                               </ThemedView>
                             </View>
@@ -5449,25 +5343,29 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     color: '#333',
-    marginBottom: 8,
   },
-  reglaItem: {
-    flexDirection: 'row',
-    marginBottom: 4,
-    paddingVertical: 2,
+  reglasContent: {
+    width: '100%',
     backgroundColor: '#F0F8FF',
   },
+  reglasSeparator: {
+    height: 1,
+    backgroundColor: '#E0E0E0',
+    marginVertical: 10,
+  },
+  reglaItem: {
+    flexDirection: 'column'
+  },
   reglaNombre: {
-    fontSize: 13,
-    fontWeight: '500',
-    color: '#555',
-    minWidth: 80,
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#333',
+    marginBottom: 6,
   },
   reglaValor: {
     fontSize: 13,
     color: '#333',
-    flex: 1,
-    marginLeft: 8,
+    marginBottom: 2,
   },
   radioContainer: {
     flexDirection: 'row',

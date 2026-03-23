@@ -2463,9 +2463,9 @@ export default function ChecklistSupervisionScreen() {
               }}
               style={styles.picker}
             >
-              <Picker.Item label="Seleccionar opción..." value="" />
+              <Picker.Item label="Seleccionar opción..." value="" color="#000000" />
               {(input.options || []).map((opt) => (
-                <Picker.Item key={opt} label={opt} value={opt} />
+                <Picker.Item key={opt} label={opt} value={opt} color="#000000" />
               ))}
             </Picker>
           </View>
@@ -2803,9 +2803,9 @@ export default function ChecklistSupervisionScreen() {
                         }}
                         style={styles.picker}
                       >
-                        <Picker.Item label="Seleccionar..." value="" />
+                        <Picker.Item label="Seleccionar..." value="" color="#000000" />
                         {filterEmpresas.map((e: any) => (
-                          <Picker.Item key={e.id} label={e.nombre} value={e.id} />
+                          <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
                         ))}
                       </Picker>
                     </View>
@@ -2826,9 +2826,9 @@ export default function ChecklistSupervisionScreen() {
                           }}
                           style={styles.picker}
                         >
-                          <Picker.Item label="Seleccionar..." value="" />
+                          <Picker.Item label="Seleccionar..." value="" color="#000000" />
                           {filterClientes.map((c: any) => (
-                            <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                            <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
                           ))}
                         </Picker>
                       </View>
@@ -2849,9 +2849,9 @@ export default function ChecklistSupervisionScreen() {
                           }}
                           style={styles.picker}
                         >
-                          <Picker.Item label="Seleccionar..." value="" />
+                          <Picker.Item label="Seleccionar..." value="" color="#000000" />
                           {filterDivisiones.map((d: any) => (
-                            <Picker.Item key={d.id} label={d.nombre} value={d.id} />
+                            <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
                           ))}
                         </Picker>
                       </View>
@@ -2871,9 +2871,9 @@ export default function ChecklistSupervisionScreen() {
                           }}
                           style={styles.picker}
                         >
-                          <Picker.Item label="Seleccionar..." value="" />
+                          <Picker.Item label="Seleccionar..." value="" color="#000000" />
                           {filterContratos.map((c: any) => (
-                            <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                            <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
                           ))}
                         </Picker>
                       </View>
@@ -2892,9 +2892,9 @@ export default function ChecklistSupervisionScreen() {
                           }}
                           style={styles.picker}
                         >
-                          <Picker.Item label="Seleccionar..." value="" />
+                          <Picker.Item label="Seleccionar..." value="" color="#000000" />
                           {filterSucursales.map((s: any) => (
-                            <Picker.Item key={s.id} label={s.nombre} value={s.id} />
+                            <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
                           ))}
                         </Picker>
                       </View>
@@ -2910,9 +2910,9 @@ export default function ChecklistSupervisionScreen() {
                           onValueChange={(value) => setFilterPuestoId(value && value !== '' ? Number(value) : null)}
                           style={styles.picker}
                         >
-                          <Picker.Item label="Seleccionar..." value="" />
+                          <Picker.Item label="Seleccionar..." value="" color="#000000" />
                           {filterPuestos.map((p: any) => (
-                            <Picker.Item key={p.id} label={p.nombre} value={p.id} />
+                            <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
                           ))}
                         </Picker>
                       </View>
@@ -2982,9 +2982,9 @@ export default function ChecklistSupervisionScreen() {
                     }}
                     style={styles.picker}
                   >
-                    <Picker.Item label="Seleccionar..." value="" />
+                    <Picker.Item label="Seleccionar..." value="" color="#000000" />
                     {empresas.map((e: any) => (
-                      <Picker.Item key={e.id} label={e.nombre} value={e.id} />
+                      <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
                     ))}
                   </Picker>
                 </View>
@@ -3005,9 +3005,9 @@ export default function ChecklistSupervisionScreen() {
                       }}
                       style={styles.picker}
                     >
-                      <Picker.Item label="Seleccionar..." value="" />
+                      <Picker.Item label="Seleccionar..." value="" color="#000000"/>
                       {clientes.map((c: any) => (
-                        <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                        <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
                       ))}
                     </Picker>
                   </View>
@@ -3031,9 +3031,9 @@ export default function ChecklistSupervisionScreen() {
                       }}
                       style={styles.picker}
                     >
-                      <Picker.Item label="Seleccionar..." value="" />
+                      <Picker.Item label="Seleccionar..." value="" color="#000000" />
                       {divisiones.map((d: any) => (
-                        <Picker.Item key={d.id} label={d.nombre} value={d.id} />
+                        <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
                       ))}
                     </Picker>
                   </View>
@@ -3056,9 +3056,9 @@ export default function ChecklistSupervisionScreen() {
                       }}
                       style={styles.picker}
                     >
-                      <Picker.Item label="Seleccionar..." value="" />
+                      <Picker.Item label="Seleccionar..." value="" color="#000000" />
                       {contratos.map((c: any) => (
-                        <Picker.Item key={c.id} label={c.nombre} value={c.id} />
+                        <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
                       ))}
                     </Picker>
                   </View>
@@ -3080,9 +3080,9 @@ export default function ChecklistSupervisionScreen() {
                       }}
                       style={styles.picker}
                     >
-                      <Picker.Item label="Seleccionar..." value="" />
+                      <Picker.Item label="Seleccionar..." value="" color="#000000" />
                       {sucursales.map((s: any) => (
-                        <Picker.Item key={s.id} label={s.nombre} value={s.id} />
+                        <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
                       ))}
                     </Picker>
                   </View>
@@ -3101,9 +3101,9 @@ export default function ChecklistSupervisionScreen() {
                       onValueChange={(value) => setSelectedPuestoId(value && value !== '' ? Number(value) : null)}
                       style={styles.picker}
                     >
-                      <Picker.Item label="Seleccionar..." value="" />
+                      <Picker.Item label="Seleccionar..." value="" color="#000000" />
                       {puestos.map((p: any) => (
-                        <Picker.Item key={p.id} label={p.nombre} value={p.id} />
+                        <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
                       ))}
                     </Picker>
                   </View>
@@ -3341,9 +3341,9 @@ export default function ChecklistSupervisionScreen() {
                                     style={styles.pickerTable}
                                     itemStyle={styles.pickerItemStyle}
                                   >
-                                    <Picker.Item label="Bueno" value="Bueno" />
-                                    <Picker.Item label="Malo" value="Malo" />
-                                    <Picker.Item label="No está" value="No está" />
+                                    <Picker.Item label="Bueno" value="Bueno" color="#000000" />
+                                    <Picker.Item label="Malo" value="Malo" color="#000000" />
+                                    <Picker.Item label="No está" value="No está" color="#000000" />
                                   </Picker>
                                 </View>
                               </View>
@@ -3824,12 +3824,12 @@ export default function ChecklistSupervisionScreen() {
                         }}
                         style={styles.picker}
                       >
-                        <Picker.Item label="Texto" value="text" />
-                        <Picker.Item label="Texto largo" value="textarea" />
-                        <Picker.Item label="Select" value="select" />
-                        <Picker.Item label="Fecha" value="date" />
-                        <Picker.Item label="Foto" value="photo" />
-                        <Picker.Item label="Checkbox" value="checkbox" />
+                        <Picker.Item label="Texto" value="text" color="#000000" />
+                        <Picker.Item label="Texto largo" value="textarea" color="#000000" />
+                        <Picker.Item label="Select" value="select" color="#000000" />
+                        <Picker.Item label="Fecha" value="date" color="#000000" />
+                        <Picker.Item label="Foto" value="photo" color="#000000" />
+                        <Picker.Item label="Checkbox" value="checkbox" color="#000000" />
                       </Picker>
                     </View>
                   </ThemedView>

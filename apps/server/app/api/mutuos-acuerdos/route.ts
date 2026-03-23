@@ -56,7 +56,9 @@ export async function GET(req: NextRequest) {
       ],
     };
     if (myEjecutivoCuentaId) {
-      where.OR.push({ ejecutivo_cuenta: myEjecutivoCuentaId, reemplaza_acepta: true, ausente_acepta: true });
+      // Incluir también los registros del ejecutivo asignado (supervisor_id del empleado),
+      // sin condicionarlos al estado de aceptación para que siempre sean visibles.
+      where.OR.push({ ejecutivo_cuenta: myEjecutivoCuentaId });
     }
 
     const records = await callDynamicPrisma({

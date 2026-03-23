@@ -1516,9 +1516,9 @@ export default function EntregaPuestosScreen() {
                                 style={styles.pickerTable}
                                 itemStyle={styles.pickerItemStyle}
                               >
-                                <Picker.Item label="Bueno" value="Bueno" />
-                                <Picker.Item label="Malo" value="Malo" />
-                                <Picker.Item label="No está" value="No está" />
+                                <Picker.Item label="Bueno" value="Bueno" color="#000000" />
+                                <Picker.Item label="Malo" value="Malo" color="#000000" />
+                                <Picker.Item label="No está" value="No está" color="#000000" />
                               </Picker>
                             </View>
                           </View>
@@ -1736,9 +1736,9 @@ export default function EntregaPuestosScreen() {
                               }}
                               style={styles.picker}
                             >
-                              <Picker.Item label="Seleccione una empresa" value={0} />
+                              <Picker.Item label="Seleccione una empresa" value={0} color="#000000" />
                               {mainStructure.map((empresa) => (
-                                <Picker.Item key={empresa.id} label={empresa.nombre} value={empresa.id} />
+                                <Picker.Item key={empresa.id} label={empresa.nombre} value={empresa.id} color="#000000" />
                               ))}
                             </Picker>
                           </View>
@@ -1759,9 +1759,9 @@ export default function EntregaPuestosScreen() {
                               }}
                               style={styles.picker}
                             >
-                              <Picker.Item label="Seleccione un cliente" value={0} />
+                              <Picker.Item label="Seleccione un cliente" value={0} color="#000000" />
                               {selectedEmpresa?.clientes.map((cliente) => (
-                                <Picker.Item key={cliente.id} label={cliente.nombre} value={cliente.id} />
+                                <Picker.Item key={cliente.id} label={cliente.nombre} value={cliente.id} color="#000000" />
                               ))}
                             </Picker>
                           </View>
@@ -1781,9 +1781,9 @@ export default function EntregaPuestosScreen() {
                               }}
                               style={styles.picker}
                             >
-                              <Picker.Item label="Seleccione una división" value={0} />
+                              <Picker.Item label="Seleccione una división" value={0} color="#000000" />
                               {selectedCliente?.division.map((division) => (
-                                <Picker.Item key={division.id} label={division.nombre} value={division.id} />
+                                <Picker.Item key={division.id} label={division.nombre} value={division.id} color="#000000" />
                               ))}
                             </Picker>
                           </View>
@@ -1802,9 +1802,9 @@ export default function EntregaPuestosScreen() {
                               }}
                               style={styles.picker}
                             >
-                              <Picker.Item label="Seleccione un contrato" value={0} />
+                              <Picker.Item label="Seleccione un contrato" value={0} color="#000000" />
                               {selectedDivision?.contratos.map((contrato) => (
-                                <Picker.Item key={contrato.id} label={contrato.nombre} value={contrato.id} />
+                                <Picker.Item key={contrato.id} label={contrato.nombre} value={contrato.id} color="#000000" />
                               ))}
                             </Picker>
                           </View>
@@ -1822,9 +1822,9 @@ export default function EntregaPuestosScreen() {
                               }}
                               style={styles.picker}
                             >
-                              <Picker.Item label="Seleccione una sucursal" value={0} />
+                              <Picker.Item label="Seleccione una sucursal" value={0} color="#000000" />
                               {selectedContrato?.sucursales.map((sucursal) => (
-                                <Picker.Item key={sucursal.id} label={sucursal.nombre} value={sucursal.id} />
+                                <Picker.Item key={sucursal.id} label={sucursal.nombre} value={sucursal.id} color="#000000" />
                               ))}
                             </Picker>
                           </View>
@@ -1842,9 +1842,9 @@ export default function EntregaPuestosScreen() {
                               }}
                               style={styles.picker}
                             >
-                              <Picker.Item label="Seleccione un puesto" value={0} />
+                              <Picker.Item label="Seleccione un puesto" value={0} color="#000000" />
                               {selectedSucursal?.puestos.map((puestoNode) => (
-                                <Picker.Item key={puestoNode.id} label={puestoNode.nombre} value={puestoNode.id} />
+                                <Picker.Item key={puestoNode.id} label={puestoNode.nombre} value={puestoNode.id} color="#000000" />
                               ))}
                             </Picker>
                           </View>

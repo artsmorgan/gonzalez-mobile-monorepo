@@ -112,6 +112,7 @@ export default function MarcarIngresoSalidaScreen() {
   const [isProcessingMark, setIsProcessingMark] = useState(false);
   const [processingType, setProcessingType] = useState<'entrada' | 'salida' | null>(null);
   const [revertMarcaId, setRevertMarcaId] = useState<number | null>(null);
+  const [absentMarcaId, setAbsentMarcaId] = useState<number | null>(null);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [exitReason, setExitReason] = useState('');
   const [showAbsentReasonForm, setShowAbsentReasonForm] = useState(false);
@@ -122,6 +123,7 @@ export default function MarcarIngresoSalidaScreen() {
   const [isMarksModalVisible, setIsMarksModalVisible] = useState(false);
   const [futureMarks, setFutureMarks] = useState<any[]>([]);
   const [isLoadingFutureMarks, setIsLoadingFutureMarks] = useState(false);
+  const hasRequestedInitialFetchRef = useRef(false);
   useEffect(() => {
     const handler = () => {
       fetchAttendanceStatus();
@@ -140,17 +142,31 @@ export default function MarcarIngresoSalidaScreen() {
     }
   }, [isAuthenticated, isLoading, navigation]);
 
-  // Fetch attendance status every 30 segundos (solo cuando no se está procesando una marca)
+  // Fetch inicial del estado de asistencia
   useEffect(() => {
-    if (isAuthenticated && employee && !isProcessingMark) {
+    if (!isAuthenticated || !employee) {
+      hasRequestedInitialFetchRef.current = false;
+      return;
+    }
+
+    if (isProcessingMark) return;
+
+    if (!hasRequestedInitialFetchRef.current) {
+      hasRequestedInitialFetchRef.current = true;
+      fetchAttendanceStatus();
+    }
+  }, [isAuthenticated, employee, isProcessingMark, isLoadingData, attendanceData]);
+
+  // Polling cada 30 segundos:
+  // - se detiene cuando inicia carga (isLoadingData=true)
+  // - se reactiva cuando ya hay marca en pantalla (attendanceData disponible)
+  useEffect(() => {
+    if (isAuthenticated && employee && !isProcessingMark && !isLoadingData && !!attendanceData) {
       // Limpiar cualquier intervalo previo
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
         intervalRef.current = null;
       }
-
-      // Fetch inmediato
-      fetchAttendanceStatus();
 
       // Intervalo cada 30 segundos
       intervalRef.current = setInterval(() => {
@@ -167,14 +183,19 @@ export default function MarcarIngresoSalidaScreen() {
     }
 
     // Si se está procesando una marca, limpiar intervalo
-    if (isProcessingMark && intervalRef.current) {
+    if ((isProcessingMark || isLoadingData || !attendanceData) && intervalRef.current) {
       clearInterval(intervalRef.current);
       intervalRef.current = null;
     }
-  }, [isAuthenticated, employee, isProcessingMark]);
+  }, [isAuthenticated, employee, isProcessingMark, isLoadingData, attendanceData]);
 
   const fetchAttendanceStatus = async () => {
     try {
+      // Cuando inicia carga, detenemos cualquier temporizador activo.
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
 
       const horaAccionValue = await getHoraAccion();
       if (horaAccionValue) {
@@ -265,9 +286,7 @@ export default function MarcarIngresoSalidaScreen() {
           throw new Error(`HTTP error! status: ${response.status}`);
         }
 
-
         data = await response.json();
-
 
         console.log("Response got from the server");
 
@@ -318,12 +337,14 @@ export default function MarcarIngresoSalidaScreen() {
         }
       }
 
-      if (marca_send && marca_send.puesto && marca_send.puesto.ubicacion && marca_send.puesto.ubicacion.lat && marca_send.puesto.ubicacion.lng) {
+      if (false && marca_send && marca_send.puesto && marca_send.puesto.ubicacion && marca_send.puesto.ubicacion.lat && marca_send.puesto.ubicacion.lng) {
         const distance = getDistanceFromLatLonInMeters(lat, long, marca_send.puesto.ubicacion.lat, marca_send.puesto.ubicacion.lng);
         if (distance > 50) {
           result = false;
+          const marca_ubicacion = marca_send.puesto.ubicacion.lat + ', ' + marca_send.puesto.ubicacion.lng;
+          const ubicacion_actual = lat + ', ' + long;
           marca_send = null;
-          data = { status: false, message: 'Ubicación no válida' };
+          data = { status: false, message: 'Ubicación no válida \n\nDebes estar dentro del radio de 50 metros del puesto para marcar la asistencia.\n\nPuesto: ' + marca_ubicacion + '\nTu ubicación: ' + ubicacion_actual };
         }
       }
 
@@ -336,13 +357,15 @@ export default function MarcarIngresoSalidaScreen() {
 
         // Si viene absent:true, mostramos el formulario de ausencia
         if (errorData && typeof errorData === 'object' && errorData.absent === true) {
+          console.log("Error data", errorData);
+          setAbsentMarcaId(errorData.marca_id ?? null);
           setShowAbsentReasonForm(true);
           setErrorMessage(errorData.message);
           return;
         }
 
         // Si viene un marca_id junto con status:false, habilitamos el botón de "Revertir salida"
-        if (errorData && errorData.marca_id !== undefined && errorData.marca_id !== null) {
+        if (errorData && errorData.absent === false && errorData.marca_id !== undefined && errorData.marca_id !== null) {
           console.log("Marca ID", errorData.marca_id);
           setRevertMarcaId(errorData.marca_id);
         }
@@ -549,9 +572,13 @@ export default function MarcarIngresoSalidaScreen() {
               getJobManuals(attendanceData.marca.id),
               getLlaves(attendanceData.marca.id),
               getLlaveros(attendanceData.marca.id),
-              getCategoriesMantenimiento(),
-              await getMainStructure()
+              getCategoriesMantenimiento()
             ]);
+
+            const shouldUpdateMainStructure = await shouldUpdateMainStructureCache();
+            if (shouldUpdateMainStructure) {
+              await getMainStructure();
+            }
           }
         }
         else {
@@ -665,8 +692,48 @@ export default function MarcarIngresoSalidaScreen() {
     const data = await response.json();
     if (data.status) {
       await AsyncStorage.setItem('main_structure_cache', JSON.stringify(data.structure));
+      if (data.created_at !== undefined && data.created_at !== null) {
+        await AsyncStorage.setItem('main_structure_created_at', String(data.created_at));
+      }
     }
   }
+
+  const shouldUpdateMainStructureCache = async (): Promise<boolean> => {
+    try {
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) return false;
+
+      const networkState = await Network.getNetworkStateAsync();
+      if (!networkState.isConnected || !networkState.isInternetReachable) return false;
+
+      const response = await authedFetch({
+        url: `${apiUrl}/api/main-structure/last?created_at=0`,
+        init: {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        },
+        refreshAccessToken,
+        logout,
+      });
+
+      if (!response || !response.ok) return false;
+
+      const data = await response.json();
+      const lastCreatedAt = Number(data?.created_at ?? 0);
+      if (!Number.isFinite(lastCreatedAt) || lastCreatedAt <= 0) return false;
+
+      const localCreatedAtStr = await AsyncStorage.getItem('main_structure_created_at');
+      const localCreatedAt = Number(localCreatedAtStr ?? 0);
+      const normalizedLocal = Number.isFinite(localCreatedAt) ? localCreatedAt : 0;
+
+      return lastCreatedAt > normalizedLocal;
+    } catch (error) {
+      console.error('Error validating main_structure_cache update:', error);
+      return false;
+    }
+  };
 
   const getBitacoraVehiculoDetenido = async (marcaId: number) => {
     // Eliminar actions
@@ -1361,25 +1428,23 @@ export default function MarcarIngresoSalidaScreen() {
   };
 
   const submitAbsentReason = async (reason: string) => {
-    if (!employee?.id) {
-      Alert.alert('Error', 'No se encontró el ID del empleado.');
+    console.log("submitAbsentReason", reason, absentMarcaId);
+    if (!employee?.id || !absentMarcaId) {
+      Alert.alert('Error', 'No se encontró el ID del empleado o la marca de ausencia.');
       return;
     }
 
     try {
-      if (!attendanceData || !attendanceData.marca || !attendanceData.marca.id) {
-        throw new Error('No se encontró la marca');
-      }
 
       const networkState = await Network.getNetworkStateAsync();
 
       let data = null;
 
       if (networkState.isConnected && networkState.isInternetReachable) {
-        data = await saveAbsentReason({ reason, marcaId: attendanceData.marca.id, refreshAccessToken, logout });
+        data = await saveAbsentReason({ reason, marcaId: Number(absentMarcaId), refreshAccessToken, logout });
       }
       else {
-        await AsyncStorage.setItem('absent_reason_cache', JSON.stringify({ reason, marcaId: attendanceData.marca.id }));
+        await AsyncStorage.setItem('absent_reason_cache', JSON.stringify({ reason, marcaId: Number(absentMarcaId) }));
         data = { status: true, message: 'Motivo de ausencia registrado correctamente' };
       }
 

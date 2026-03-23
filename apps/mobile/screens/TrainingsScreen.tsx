@@ -1469,7 +1469,7 @@ export default function TrainingsScreen() {
                   }}
                   style={styles.picker}
                 >
-                  <Picker.Item label="Seleccionar empleado..." value={undefined} />
+                  <Picker.Item label="Seleccionar empleado..." value={undefined} color="#000000" />
                   {empleados
                     .filter(e => !selectedEmpleados.find(se => se.id === e.id))
                     .map((empleado) => (
@@ -1477,6 +1477,7 @@ export default function TrainingsScreen() {
                         key={empleado.id}
                         label={`${empleado.nombre} - ${empleado.cedula}`}
                         value={empleado.id}
+                        color="#000000"
                       />
                     ))}
                 </Picker>
@@ -1513,7 +1514,7 @@ export default function TrainingsScreen() {
                   }}
                   style={styles.picker}
                 >
-                  <Picker.Item label="Seleccionar puesto..." value={undefined} />
+                  <Picker.Item label="Seleccionar puesto..." value={undefined} color="#000000" />
                   {puestos
                     .filter(p => !selectedPuestos.find(sp => sp.id === p.id))
                     .map((puesto) => (
@@ -1521,6 +1522,7 @@ export default function TrainingsScreen() {
                         key={puesto.id}
                         label={puesto.nombre}
                         value={puesto.id}
+                        color="#000000"
                       />
                     ))}
                 </Picker>

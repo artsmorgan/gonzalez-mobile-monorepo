@@ -1967,9 +1967,9 @@ export default function VisitorsScreen() {
                     onValueChange={(value) => updateActivo(activoIndex, 'tipo_id', value, isEditing)}
                     style={styles.picker}
                   >
-                    <Picker.Item label="Seleccione un tipo" value={null} />
+                    <Picker.Item label="Seleccione un tipo" value={null} color="#000000" />
                     {tipoActivos.map((tipo) => (
-                      <Picker.Item key={tipo.id} label={tipo.nombre} value={tipo.id} />
+                      <Picker.Item key={tipo.id} label={tipo.nombre} value={tipo.id} color="#000000" />
                     ))}
                   </Picker>
                 </View>
@@ -2406,9 +2406,9 @@ export default function VisitorsScreen() {
                         onValueChange={(value) => setSelectedTipoVisitante(value)}
                         style={styles.picker}
                       >
-                        <Picker.Item label="Todos los tipos" value="all" />
-                        <Picker.Item label="Visitante" value="visitante" />
-                        <Picker.Item label="Funcionario" value="funcionario" />
+                        <Picker.Item label="Todos los tipos" value="all" color="#000000" />
+                        <Picker.Item label="Visitante" value="visitante" color="#000000" />
+                        <Picker.Item label="Funcionario" value="funcionario" color="#000000" />
                       </Picker>
                     </ThemedView>
                   </ThemedView>
