@@ -31,6 +31,11 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     });
     if (!existing) return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
 
+    const estadoActual = String((existing as any)?.estado || "").trim().toLowerCase() || "pendiente";
+    if (estadoActual !== "pendiente") {
+      return NextResponse.json({ status: false, message: "Solo se puede aprobar un mutuo acuerdo pendiente" }, { status: 400 });
+    }
+
     if (existing.firma_ejecutivo_cuenta_digital || existing.firma_ejecutivo_cuenta_manual) {
       return NextResponse.json(
         { status: false, message: "Este mutuo acuerdo ya fue firmado por el ejecutivo" },
@@ -64,6 +69,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         data: {
           firma_ejecutivo_cuenta_manual: firmaManual,
           firma_ejecutivo_cuenta_digital: firmaDigital,
+          estado: "aprobado",
         },
       },
     });
@@ -94,6 +100,34 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       });
 
       if (marca_ausente && marca_reemplaza) {
+
+        // Update marca_reemplaza.empleadoReemplaza_id to the current employee id
+        await callDynamicPrisma({
+          req,
+          data: {
+            action: "UPDATE",
+            table: "c_marca_dia",
+            operation: "update",
+            where: { id: marca_reemplaza.id },
+            data: {
+              empleadoReemplaza_id: marca_ausente.empleadoFijo_id,
+            },
+          },
+        });
+
+        // Update marca_ausente.empleadoReemplaza_id to the current employee id
+        await callDynamicPrisma({
+          req,
+          data: {
+            action: "UPDATE",
+            table: "c_marca_dia",
+            operation: "update",
+            where: { id: marca_ausente.id },
+            data: {
+              empleadoReemplaza_id: marca_reemplaza.empleadoFijo_id,
+            },
+          },
+        });
 
         let turno_reemplaza = "Diurno";
         switch (marca_reemplaza.tipo_turno) {
@@ -133,13 +167,35 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
           data: { action: "GET", table: "c_cambio_guardia", operation: "findFirst", where: { tipo: 'MUT', id: { gt: 0 } }, orderBy: { id: 'desc' } },
         });
 
-        let consecutivo = 'MUT-CG-000001';
+        const empresa_ausente = await callDynamicPrisma({
+          req,
+          data: { action: "GET", table: "e_estructura_empresa", operation: "findUnique", where: { id: marca_ausente.empresa_id } },
+        });
+
+        if (!empresa_ausente) {
+          return NextResponse.json({ status: false, message: "Empresa del ausente no encontrada" }, { status: 400 });
+        }
+
+        let consecutivo = null;
         if (lastMutation) {
           const separated = lastMutation.consecutivo?.split("-");
+          console.log(separated);
           if (separated && separated.length > 1) {
-            const count = Number(separated[1]) + 1; // Debe tener 0 hasta alcanzar una extensión de 6 dígitos
-            const countStr = count.toString().padStart(6, '0');
-            consecutivo = `${separated[0]}-${separated[1]}-${countStr}`;
+            const result = (parseInt(separated[2], 10) + 1)
+              .toString()
+              .padStart(separated[2].length, "0");
+
+              let corp = "CG";
+              switch (empresa_ausente.id) {
+                case 9:
+                  corp = "CG";
+                  break;
+                case 10:
+                  corp = "CH";
+                  break;
+              }
+
+            consecutivo = `${separated[0]}-${corp}-${result}`;
           }
         }
 
@@ -162,9 +218,9 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
               empleadoAusente_id: marca_ausente.empleadoFijo_id,
               plazaAusente_id: marca_ausente.plaza_id,
               marcaDiaAusente_id: marca_ausente.id,
-              coordinador_id: 3,
               tipo: 'MUT',
               consecutivo: consecutivo,
+              coordinadoPor_id: 3,
               mobile_upload: true,
             },
           },
@@ -237,6 +293,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
           cambios: JSON.stringify([
             { prop: "firma_ejecutivo_cuenta_manual", before: existing.firma_ejecutivo_cuenta_manual || null, after: firmaManual },
             { prop: "firma_ejecutivo_cuenta_digital", before: existing.firma_ejecutivo_cuenta_digital || null, after: firmaDigital },
+            { prop: "estado", before: (existing as any)?.estado || null, after: "aprobado" },
           ]),
           created_at: now,
           created_by: currentEmployeeId,

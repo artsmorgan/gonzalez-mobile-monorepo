@@ -1,5 +1,6 @@
 export type MarcaDiaResumen = {
   id: number;
+  fecha?: string | null;
   cliente_id: number | null;
   corpo_id: number | null;
   plaza_id: number | null;
@@ -15,6 +16,7 @@ export type MarcaDiaResumen = {
 
 export type MutuoAcuerdo = {
   id: number;
+  estado?: string | null;
   cliente_id: number;
   corpo_id: number;
   ejecutivo_cuenta: number;
@@ -50,6 +52,7 @@ export type MutuoAcuerdo = {
   can_accept_reemplaza?: boolean;
   can_accept_ausente?: boolean;
   can_sign_ejecutivo?: boolean;
+  can_reject_ejecutivo?: boolean;
 };
 
 export type ListMutuosAcuerdosResponse = {

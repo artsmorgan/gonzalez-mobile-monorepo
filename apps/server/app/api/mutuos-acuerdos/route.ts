@@ -16,6 +16,7 @@ const marcaResumen = (marca: any) => {
   if (!marca) return null;
   return {
     id: marca.id,
+    fecha: marca.fecha ? new Date(marca.fecha).toISOString() : null,
     cliente_id: marca.cliente_id ?? null,
     corpo_id: marca.corpo_id ?? null,
     plaza_id: marca.plaza_id ?? null,
@@ -160,6 +161,8 @@ export async function GET(req: NextRequest) {
     const mapped = (records || []).map((r: any) => {
       const marcaAusente = marcaById.get(r.marcaDiaAusente_id);
       const marcaReemplaza = marcaById.get(r.marcaDiaReemplaza_id);
+      const estado = String(r?.estado || "").trim().toLowerCase() || "pendiente";
+      const pending = estado === "pendiente";
 
       return {
         ...r,
@@ -177,6 +180,15 @@ export async function GET(req: NextRequest) {
         can_accept_ausente: Number(r.empleadoAusente_id) === currentEmployeeId && !r.ausente_acepta,
         can_accept_reemplaza: Number(r.empleadoReemplaza_id) === currentEmployeeId && !r.reemplaza_acepta,
         can_sign_ejecutivo:
+          pending &&
+          Boolean(myEjecutivoCuentaId) &&
+          Number(r.ejecutivo_cuenta) === Number(myEjecutivoCuentaId) &&
+          r.ausente_acepta === true &&
+          r.reemplaza_acepta === true &&
+          !r.firma_ejecutivo_cuenta_digital &&
+          !r.firma_ejecutivo_cuenta_manual,
+        can_reject_ejecutivo:
+          pending &&
           Boolean(myEjecutivoCuentaId) &&
           Number(r.ejecutivo_cuenta) === Number(myEjecutivoCuentaId) &&
           r.ausente_acepta === true &&
@@ -250,10 +262,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ status: false, message: "Las marcas seleccionadas no tienen cliente/sucursal válidos" }, { status: 400 });
     }
 
-    if (Number(marcaAusente.cliente_id) !== Number(marcaReemplaza.cliente_id) || Number(marcaAusente.corpo_id) !== Number(marcaReemplaza.corpo_id)) {
-      return NextResponse.json({ status: false, message: "Las marcas deben pertenecer al mismo cliente y sucursal" }, { status: 400 });
-    }
-
     // Obtener ejecutivo_cuenta desde la sucursal (corpo_id) asociada a las marcas
     const sucursal = await callDynamicPrisma({
       req,
@@ -302,6 +310,7 @@ export async function POST(req: NextRequest) {
         data: {
           cliente_id: Number(marcaAusente.cliente_id),
           corpo_id: Number(marcaAusente.corpo_id),
+          estado: "pendiente",
           ejecutivo_cuenta,
           empleadoReemplaza_id: Number(marcaReemplaza.empleadoFijo_id),
           plazaReemplaza_id: Number(marcaReemplaza.plaza_id),

@@ -217,8 +217,10 @@ export async function GET(req: NextRequest) {
       const isExecutiveForRecord =
         Number(r.ejecutivo_cuenta) === currentEmployeeId ||
         (Boolean(mySupervisorId) && Number(r.ejecutivo_cuenta) === Number(mySupervisorId));
+      const estado = String((r as any)?.estado || "").trim().toLowerCase();
       const canCompleteByExecutive =
         isExecutiveForRecord &&
+        estado === "pendiente" &&
         (!r.firma_ejecutivo_cuenta_digital || !r.firma_ejecutivo_cuenta_manual);
       return {
         ...r,
@@ -388,6 +390,7 @@ export async function POST(req: NextRequest) {
           empleado_id: currentEmployeeId,
           plaza_id: plazaId,
           tipo,
+          estado: "pendiente",
           fecha_inicio: fechaInicio,
           fecha_fin: fechaFin,
           ejecutivo_cuenta: ejecutivoCuenta,
