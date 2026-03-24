@@ -40,41 +40,45 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 200 });
         }
 
-        const now = toZonedTime(new Date(), "America/Costa_Rica");
+
+        let now = toZonedTime(new Date(), "America/Costa_Rica");
+        //now = new Date(now.getTime() - 6 * 60 * 60 * 1000); // Restarle 6 horas para que sea en la zona horaria de Costa Rica
         const nowPlus15 = new Date(now.getTime() + 15 * 60 * 1000);
         const currentDate = new Date(now.toISOString().split("T")[0]);
         const currentTime = new Date("1970-01-01 " + now.toTimeString().slice(0, 8));
 
-        const proximo = await callDynamicPrisma({
+        const employeeWhere = {
+            OR: [
+                { empleadoFijo_id: empleado.id },
+                { empleadoReemplaza_id: empleado.id },
+            ],
+        };
+
+        const buildMarcaDateTime = (marca: { fecha: Date; hora_inicio: Date | null }) => {
+            if (!marca.hora_inicio) return null;
+            const fechaIso = new Date(marca.fecha).toISOString().split("T")[0];
+            const horaIso = new Date(marca.hora_inicio).toISOString().split("T")[1];
+            return new Date(`${fechaIso}T${horaIso}`);
+        };
+
+        console.log("now", now);
+        console.log("nowPlus15", nowPlus15);
+        console.log("currentDate", currentDate);
+        console.log("currentTime", currentTime);
+
+        const proximasMarcas = await callDynamicPrisma({
             req,
             data: {
                 action: "GET",
                 table: "c_marca_dia",
-                operation: "findFirst",
+                operation: "findMany",
                 where: {
                     AND: [
+                        employeeWhere,
                         {
-                            OR: [
-                                { empleadoFijo_id: empleado.id },
-                                { empleadoReemplaza_id: empleado.id },
-                            ],
-                        },
-                        {
-                            OR: [
-                                {
-                                    fecha: {
-                                        gt: now,
-                                    },
-                                },
-                                {
-                                    fecha: {
-                                        equals: currentDate,
-                                    },
-                                    hora_inicio: {
-                                        gte: currentTime,
-                                    },
-                                },
-                            ],
+                            fecha: {
+                                gte: currentDate,
+                            },
                         },
                     ],
                 },
@@ -82,48 +86,39 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                     { fecha: "asc" },
                     { hora_inicio: "asc" },
                 ],
+                take: 24,
             }
         });
 
         let marcaDia = null;
-        if (proximo) {
-            const proximoDateTime = new Date(`${proximo.fecha}T${proximo.hora_inicio}`);
-            if (proximoDateTime <= nowPlus15) {
-                marcaDia = proximo;
+        if (Array.isArray(proximasMarcas)) {
+            for (const marca of proximasMarcas) {
+                const marcaDateTime = buildMarcaDateTime(marca);
+                if (!marcaDateTime) {
+                    continue;
+                }
+                if (marcaDateTime >= now && marcaDateTime <= nowPlus15) {
+                    marcaDia = marca;
+                    console.log("Usaremos próximo en ventana +15 min");
+                    break;
+                }
             }
         }
 
         if (!marcaDia) {
-            marcaDia = await callDynamicPrisma({
+            const ultimasMarcas = await callDynamicPrisma({
                 req,
                 data: {
                     action: "GET",
                     table: "c_marca_dia",
-                    operation: "findFirst",
+                    operation: "findMany",
                     where: {
                         AND: [
+                            employeeWhere,
                             {
-                                OR: [
-                                    { empleadoFijo_id: empleado.id },
-                                    { empleadoReemplaza_id: empleado.id },
-                                ],
-                            },
-                            {
-                                OR: [
-                                    {
-                                        fecha: {
-                                            lt: now,
-                                        },
-                                    },
-                                    {
-                                        fecha: {
-                                            equals: currentDate,
-                                        },
-                                        hora_inicio: {
-                                            lt: currentTime,
-                                        },
-                                    },
-                                ],
+                                fecha: {
+                                    lte: currentDate,
+                                },
                             },
                         ],
                     },
@@ -131,8 +126,24 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                         { fecha: "desc" },
                         { hora_inicio: "desc" },
                     ],
+                    take: 24,
                 }
             });
+
+            if (Array.isArray(ultimasMarcas)) {
+                for (const marca of ultimasMarcas) {
+                    const marcaDateTime = buildMarcaDateTime(marca);
+                    console.log("marcaDateTime", marcaDateTime);
+                    if (!marcaDateTime) {
+                        continue;
+                    }
+                    if (marcaDateTime < now) {
+                        marcaDia = marca;
+                        console.log("Usaremos última anterior al momento actual");
+                        break;
+                    }
+                }
+            }
         }
 
         if (!marcaDia) {
@@ -245,6 +256,31 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         if (!horario) {
             return NextResponse.json({ status: false, message: "Horario no encontrado" }, { status: 200 });
         }
+        
+        // Obtener las solicitudes de permiso aprobadas del empleado cuyo rango de fechas contenga la fecha de la marca
+        const solicitudesPermiso = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_solicitud_permiso",
+                operation: "findMany",
+                where: {
+                    empleado_id: empleado.id,
+                    plaza_id: marcaDia.plaza_id,
+                    fecha_inicio: {
+                        lte: marcaDia.fecha
+                    },
+                    fecha_fin: {
+                        gte: marcaDia.fecha
+                    },
+                    estado: "aprobado"
+                }
+            }
+        });
+
+        if (solicitudesPermiso.length > 0) {
+            return NextResponse.json({ status: false, message: "Tienes un permiso aprobado para el puesto " + puesto.nombre + " para el día " + marcaDia.fecha.toISOString().split("T")[0] }, { status: 200 });
+        }
 
         const estado = marcaDia.hora_entrada_digitada != null ? "Ingresado" : "No ingresado";
         if (marcaDia.hora_salida_digitada != null) {
@@ -257,7 +293,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         if (marcaDia.hora_inicio && marcaDia.hora_fin) {
 
             const fecha_marca_string = marcaDia.fecha.split("T")[0];
-            const hora_inicio_string = marcaDia.hora_inicio.split("T")[1].split(".")[0];
+            const hora_inicio_string = marcaDia.hora_inicio.split("T")[1];
             const inicio_marca = new Date(fecha_marca_string + "T" + hora_inicio_string);
 
             let fin_marca = null;
@@ -271,7 +307,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                     fin_marca = new Date(marcaDia.fecha.setDate(marcaDia.fecha.getDate() + 1));
                 }
                 else {
-                    const hora_fin_string = marcaDia.hora_fin.split("T")[1].split(".")[0];
+                    const hora_fin_string = marcaDia.hora_fin.split("T")[1];
                     fin_marca = new Date(fecha_marca_string + "T" + hora_fin_string);
                 }
             }

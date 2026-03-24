@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -13,6 +13,7 @@ import {
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import { Picker } from '@react-native-picker/picker';
 import SignatureScreen from 'react-native-signature-canvas';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -38,6 +39,7 @@ import {
   createMutuoAcuerdo,
   listMarcasParaMutuo,
   listMutuosAcuerdosMine,
+  rejectMutuoAcuerdoEjecutivo,
   signMutuoAcuerdoEjecutivo,
 } from '@/hooks/mutuosAcuerdosFunctions';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
@@ -94,6 +96,40 @@ const formatTime = (raw?: string | null) => {
     return afterT.replace(/\.\d+Z?$/i, '').trim() || str;
   }
   return str.replace(/\.\d+Z?$/i, '').trim();
+};
+
+const formatDateFromIsoToDMY = (raw?: string | null) => {
+  if (!raw) return '—';
+  const ymd = String(raw).split('T')[0];
+  const parsed = ymd.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!parsed) return ymd || '—';
+  return `${parsed[3]}-${parsed[2]}-${parsed[1]}`;
+};
+
+const normalizeDateToYMD = (value: string): string => {
+  const raw = String(value || '').trim().split('T')[0];
+  if (!raw) return '';
+  const ymd = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (ymd) return `${ymd[1]}-${ymd[2].padStart(2, '0')}-${ymd[3].padStart(2, '0')}`;
+  const dmy = raw.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
+  if (dmy) return `${dmy[3]}-${dmy[2].padStart(2, '0')}-${dmy[1].padStart(2, '0')}`;
+  return '';
+};
+
+const localDateFromYmd = (ymd: string): Date => {
+  const normalized = normalizeDateToYMD(ymd);
+  if (!normalized) return new Date();
+  const [y, m, d] = normalized.split('-').map((x) => parseInt(x, 10));
+  if (Number.isNaN(y) || Number.isNaN(m) || Number.isNaN(d)) return new Date();
+  return new Date(y, m - 1, d);
+};
+
+const estadoBucketMutuo = (r: MutuoAcuerdo): 'pendiente' | 'aprobado' | 'rechazado' => {
+  const estado = String(r?.estado || '').trim().toLowerCase();
+  if (!estado || estado === 'pendiente') return 'pendiente';
+  if (estado === 'rechazado') return 'rechazado';
+  if (estado === 'aprobado' || estado === 'completado') return 'aprobado';
+  return 'pendiente';
 };
 
 type AttachedDocument = {
@@ -163,6 +199,15 @@ export default function MutuosAcuerdosScreen() {
   const [signatureKey, setSignatureKey] = useState(0);
   const signatureRef = useRef<any>(null);
 
+  const [isFiltersExpanded, setIsFiltersExpanded] = useState(false);
+  const [filterEstado, setFilterEstado] = useState<'all' | 'pendiente' | 'aprobado' | 'rechazado'>('all');
+  const [filterNombreSolicitante, setFilterNombreSolicitante] = useState('');
+  const [filterFechaAusente, setFilterFechaAusente] = useState<string | null>(null);
+  const [filterFechaReemplaza, setFilterFechaReemplaza] = useState<string | null>(null);
+  const [showFilterFechaAusentePicker, setShowFilterFechaAusentePicker] = useState(false);
+  const [showFilterFechaReemplazaPicker, setShowFilterFechaReemplazaPicker] = useState(false);
+  const [filterMotivo, setFilterMotivo] = useState('');
+
   const getConnectionStatus = async (): Promise<boolean> => {
     try {
       const state = await Network.getNetworkStateAsync();
@@ -209,6 +254,46 @@ export default function MutuosAcuerdosScreen() {
       fetchRecords();
     }, [fetchRecords])
   );
+
+  const resetMutuosFilters = useCallback(() => {
+    setFilterEstado('all');
+    setFilterNombreSolicitante('');
+    setFilterFechaAusente(null);
+    setFilterFechaReemplaza(null);
+    setShowFilterFechaAusentePicker(false);
+    setShowFilterFechaReemplazaPicker(false);
+    setFilterMotivo('');
+  }, []);
+
+  const filteredRecords = useMemo(() => {
+    const qNombre = String(filterNombreSolicitante || '').trim().toLowerCase();
+    const qMotivo = String(filterMotivo || '').trim().toLowerCase();
+    const fechaAusenteYmd = filterFechaAusente ? normalizeDateToYMD(filterFechaAusente) : '';
+    const fechaReemplazaYmd = filterFechaReemplaza ? normalizeDateToYMD(filterFechaReemplaza) : '';
+
+    return records.filter((r) => {
+      const estado = estadoBucketMutuo(r);
+      const matchesEstado = filterEstado === 'all' || estado === filterEstado;
+
+      const nombreAusente = String(r.empleado_ausente_nombre || '').trim().toLowerCase();
+      const nombreReemplaza = String(r.empleado_reemplaza_nombre || '').trim().toLowerCase();
+      const matchesNombre =
+        !qNombre ||
+        nombreAusente.includes(qNombre) ||
+        nombreReemplaza.includes(qNombre) ||
+        String(r.empleadoAusente_id || '').includes(qNombre) ||
+        String(r.empleadoReemplaza_id || '').includes(qNombre);
+
+      const matchesMotivo = !qMotivo || String(r.motivo || '').toLowerCase().includes(qMotivo);
+
+      const recordFechaAusente = normalizeDateToYMD(String(r.marca_ausente?.fecha || ''));
+      const recordFechaReemplaza = normalizeDateToYMD(String(r.marca_reemplaza?.fecha || ''));
+      const matchesFechaAusente = !fechaAusenteYmd || recordFechaAusente === fechaAusenteYmd;
+      const matchesFechaReemplaza = !fechaReemplazaYmd || recordFechaReemplaza === fechaReemplazaYmd;
+
+      return matchesEstado && matchesNombre && matchesMotivo && matchesFechaAusente && matchesFechaReemplaza;
+    });
+  }, [records, filterEstado, filterNombreSolicitante, filterFechaAusente, filterFechaReemplaza, filterMotivo]);
 
   const getEmpleadoById = async (id: number) => {
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
@@ -507,6 +592,20 @@ export default function MutuosAcuerdosScreen() {
       await fetchRecords();
     } catch (e: any) {
       Alert.alert('Error', e?.message || 'No se pudo registrar la aceptación');
+    }
+  };
+
+  const handleRejectByExecutive = async (recordId: number) => {
+    try {
+      const response = await rejectMutuoAcuerdoEjecutivo({ id: recordId, refreshAccessToken, logout });
+      if (!response.status) {
+        Alert.alert('Error', response.message || 'No se pudo rechazar el mutuo acuerdo');
+        return;
+      }
+      Alert.alert('Exito', response.message || 'Mutuo acuerdo rechazado');
+      await fetchRecords();
+    } catch (e: any) {
+      Alert.alert('Error', e?.message || 'No se pudo rechazar el mutuo acuerdo');
     }
   };
 
@@ -827,6 +926,141 @@ export default function MutuosAcuerdosScreen() {
 
           {!isCreating && (
             <>
+              <ThemedView style={styles.filtersContainer}>
+                <ThemedView style={styles.filtersHeader}>
+                  <TouchableOpacity
+                    style={styles.filterToggleButton}
+                    onPress={() => setIsFiltersExpanded(!isFiltersExpanded)}
+                    activeOpacity={0.85}
+                  >
+                    <ThemedText style={styles.filtersTitle}>Filtros</ThemedText>
+                    <Ionicons
+                      name={isFiltersExpanded ? 'chevron-up' : 'chevron-down'}
+                      size={20}
+                      color="#007AFF"
+                    />
+                  </TouchableOpacity>
+
+                  {isFiltersExpanded ? (
+                    <TouchableOpacity
+                      style={styles.resetFiltersButton}
+                      onPress={resetMutuosFilters}
+                      activeOpacity={0.85}
+                    >
+                      <Ionicons name="refresh" size={16} color="#FF3B30" />
+                      <ThemedText style={styles.resetFiltersText}>Reiniciar</ThemedText>
+                    </TouchableOpacity>
+                  ) : null}
+                </ThemedView>
+                {isFiltersExpanded ? (
+                  <ThemedView style={styles.filtersContent}>
+                    <ThemedView style={styles.filterGroupSearch}>
+                      <ThemedText style={styles.filterLabel}>Estado:</ThemedText>
+                      <View style={styles.pickerWrapper}>
+                        <Picker selectedValue={filterEstado} onValueChange={(v) => setFilterEstado(v)} style={styles.picker}>
+                          <Picker.Item label="Todos" value="all" color="#000000" />
+                          <Picker.Item label="Pendiente" value="pendiente" color="#000000" />
+                          <Picker.Item label="Aprobado" value="aprobado" color="#000000" />
+                          <Picker.Item label="Rechazado" value="rechazado" color="#000000" />
+                        </Picker>
+                      </View>
+                    </ThemedView>
+
+                    <ThemedView style={styles.filterGroupSearch}>
+                      <ThemedText style={styles.filterLabel}>Nombre del solicitante (ausente o reemplaza):</ThemedText>
+                      <TextInput
+                        style={styles.input}
+                        value={filterNombreSolicitante}
+                        onChangeText={setFilterNombreSolicitante}
+                        placeholder="Buscar por nombre o ID..."
+                        placeholderTextColor="#999"
+                      />
+                    </ThemedView>
+
+                    <ThemedView style={styles.filterGroupSearch}>
+                      <ThemedText style={styles.filterLabel}>Fecha empleado ausente:</ThemedText>
+                      <TouchableOpacity
+                        style={styles.dateButton}
+                        onPress={() => setShowFilterFechaAusentePicker(true)}
+                        activeOpacity={0.85}
+                      >
+                        <ThemedText style={styles.dateButtonText}>
+                          {filterFechaAusente ? formatDateFromIsoToDMY(filterFechaAusente) : 'Seleccionar fecha'}
+                        </ThemedText>
+                        <Ionicons name="calendar-outline" size={18} color="#007AFF" />
+                      </TouchableOpacity>
+                      {filterFechaAusente ? (
+                        <TouchableOpacity onPress={() => setFilterFechaAusente(null)} activeOpacity={0.85}>
+                          <ThemedText style={styles.filterClearText}>Quitar filtro de fecha ausente</ThemedText>
+                        </TouchableOpacity>
+                      ) : null}
+                      {showFilterFechaAusentePicker ? (
+                        <DateTimePicker
+                          value={filterFechaAusente ? localDateFromYmd(filterFechaAusente) : new Date()}
+                          mode="date"
+                          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                          onChange={(event: { type?: string }, d?: Date) => {
+                            if (Platform.OS === 'android') {
+                              setShowFilterFechaAusentePicker(false);
+                              if (event?.type === 'dismissed') return;
+                            } else {
+                              setShowFilterFechaAusentePicker(false);
+                            }
+                            if (d) setFilterFechaAusente(dateToYmd(d));
+                          }}
+                        />
+                      ) : null}
+                    </ThemedView>
+
+                    <ThemedView style={styles.filterGroupSearch}>
+                      <ThemedText style={styles.filterLabel}>Fecha empleado reemplaza:</ThemedText>
+                      <TouchableOpacity
+                        style={styles.dateButton}
+                        onPress={() => setShowFilterFechaReemplazaPicker(true)}
+                        activeOpacity={0.85}
+                      >
+                        <ThemedText style={styles.dateButtonText}>
+                          {filterFechaReemplaza ? formatDateFromIsoToDMY(filterFechaReemplaza) : 'Seleccionar fecha'}
+                        </ThemedText>
+                        <Ionicons name="calendar-outline" size={18} color="#007AFF" />
+                      </TouchableOpacity>
+                      {filterFechaReemplaza ? (
+                        <TouchableOpacity onPress={() => setFilterFechaReemplaza(null)} activeOpacity={0.85}>
+                          <ThemedText style={styles.filterClearText}>Quitar filtro de fecha reemplaza</ThemedText>
+                        </TouchableOpacity>
+                      ) : null}
+                      {showFilterFechaReemplazaPicker ? (
+                        <DateTimePicker
+                          value={filterFechaReemplaza ? localDateFromYmd(filterFechaReemplaza) : new Date()}
+                          mode="date"
+                          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                          onChange={(event: { type?: string }, d?: Date) => {
+                            if (Platform.OS === 'android') {
+                              setShowFilterFechaReemplazaPicker(false);
+                              if (event?.type === 'dismissed') return;
+                            } else {
+                              setShowFilterFechaReemplazaPicker(false);
+                            }
+                            if (d) setFilterFechaReemplaza(dateToYmd(d));
+                          }}
+                        />
+                      ) : null}
+                    </ThemedView>
+
+                    <ThemedView style={styles.filterGroupSearch}>
+                      <ThemedText style={styles.filterLabel}>Motivo:</ThemedText>
+                      <TextInput
+                        style={styles.input}
+                        value={filterMotivo}
+                        onChangeText={setFilterMotivo}
+                        placeholder="Filtrar por motivo..."
+                        placeholderTextColor="#999"
+                      />
+                    </ThemedView>
+                  </ThemedView>
+                ) : null}
+              </ThemedView>
+
               {isLoading ? (
                 <ThemedView style={styles.loadingContainer}>
                   <ActivityIndicator size="large" color="#007AFF" />
@@ -836,19 +1070,24 @@ export default function MutuosAcuerdosScreen() {
                 <ThemedView style={styles.emptyContainer}>
                   <ThemedText style={styles.emptyText}>No hay registros</ThemedText>
                 </ThemedView>
+              ) : filteredRecords.length === 0 ? (
+                <ThemedView style={styles.emptyContainer}>
+                  <ThemedText style={styles.emptyText}>No hay resultados para los filtros seleccionados</ThemedText>
+                </ThemedView>
               ) : (
                 <ThemedView style={styles.listContainer}>
-                  {records.map((r) => (
+                  {filteredRecords.map((r) => (
                     <ThemedView key={`mutuo-${r.id}`} style={styles.card}>
                       <ThemedText style={styles.cardTitle}>{r.cliente_nombre || '-'} | {r.corpo_nombre || '-'}</ThemedText>
                       <ThemedText style={styles.cardLine}><ThemedText style={styles.cardLabel}>Ejecutivo: </ThemedText>{r.ejecutivo_nombre || r.ejecutivo_cuenta}</ThemedText>
+                      <ThemedText style={styles.cardLine}><ThemedText style={styles.cardLabel}>Estado: </ThemedText>{String(r.estado || 'pendiente')}</ThemedText>
                       <ThemedText style={styles.cardLine}><ThemedText style={styles.cardLabel}>Motivo: </ThemedText>{r.motivo || '-'}</ThemedText>
 
                       <ThemedText style={styles.sectionTitle}>Empleado ausente</ThemedText>
                       <ThemedText style={styles.cardLine}>{r.empleado_ausente_nombre || `ID ${r.empleadoAusente_id}`}</ThemedText>
                       <ThemedText style={styles.cardLine}>Puesto: {r.marca_ausente?.puesto || r.puesto_ausente_nombre || '-'}</ThemedText>
                       <ThemedText style={styles.cardLine}>
-                        Horario: {formatTime(r.marca_ausente?.hora_inicio)} - {formatTime(r.marca_ausente?.hora_fin)} ({r.marca_ausente?.tipo_turno_texto || 'Sin definir'})
+                        Fecha/Horario: {formatDateFromIsoToDMY(r.marca_ausente?.fecha)} {formatTime(r.marca_ausente?.hora_inicio)} - {formatTime(r.marca_ausente?.hora_fin)} ({r.marca_ausente?.tipo_turno_texto || 'Sin definir'})
                       </ThemedText>
                       <ThemedText style={styles.cardLine}>Acepta: {r.ausente_acepta ? 'Sí' : 'No'}</ThemedText>
 
@@ -856,7 +1095,7 @@ export default function MutuosAcuerdosScreen() {
                       <ThemedText style={styles.cardLine}>{r.empleado_reemplaza_nombre || `ID ${r.empleadoReemplaza_id}`}</ThemedText>
                       <ThemedText style={styles.cardLine}>Puesto: {r.marca_reemplaza?.puesto || r.puesto_reemplaza_nombre || '-'}</ThemedText>
                       <ThemedText style={styles.cardLine}>
-                        Horario: {formatTime(r.marca_reemplaza?.hora_inicio)} - {formatTime(r.marca_reemplaza?.hora_fin)} ({r.marca_reemplaza?.tipo_turno_texto || 'Sin definir'})
+                        Fecha/Horario: {formatDateFromIsoToDMY(r.marca_reemplaza?.fecha)} {formatTime(r.marca_reemplaza?.hora_inicio)} - {formatTime(r.marca_reemplaza?.hora_fin)} ({r.marca_reemplaza?.tipo_turno_texto || 'Sin definir'})
                       </ThemedText>
                       <ThemedText style={styles.cardLine}>Acepta: {r.reemplaza_acepta ? 'Sí' : 'No'}</ThemedText>
 
@@ -888,9 +1127,27 @@ export default function MutuosAcuerdosScreen() {
                             activeOpacity={0.85}
                           >
                             <Ionicons name="create-outline" size={18} color="#FFFFFF" />
-                            <ThemedText style={styles.actionBtnText}>
-                              {r.firma_ejecutivo_cuenta_digital ? 'Re-firmar' : 'Firmar'}
-                            </ThemedText>
+                            <ThemedText style={styles.actionBtnText}>Aprobar</ThemedText>
+                          </TouchableOpacity>
+                        ) : null}
+                        {r.can_reject_ejecutivo ? (
+                          <TouchableOpacity
+                            style={[styles.actionBtn, styles.rejectBtn]}
+                            onPress={() =>
+                              Alert.alert(
+                                'Confirmar rechazo',
+                                'Este mutuo acuerdo sera rechazado. Deseas continuar?',
+                                [
+                                  { text: 'Cancelar', style: 'cancel' },
+                                  { text: 'Rechazar', style: 'destructive', onPress: () => handleRejectByExecutive(r.id) },
+                                ],
+                                { cancelable: true }
+                              )
+                            }
+                            activeOpacity={0.85}
+                          >
+                            <Ionicons name="close-circle-outline" size={18} color="#FFFFFF" />
+                            <ThemedText style={styles.actionBtnText}>Rechazar</ThemedText>
                           </TouchableOpacity>
                         ) : null}
                       </ThemedView>
@@ -912,7 +1169,7 @@ export default function MutuosAcuerdosScreen() {
         <View style={styles.overlay}>
           <ThemedView style={styles.floatCard}>
             <View style={styles.floatHeader}>
-              <ThemedText style={styles.modalTitle}>Firmar (Ejecutivo de cuenta)</ThemedText>
+              <ThemedText style={styles.modalTitle}>Aprobar (Ejecutivo de cuenta)</ThemedText>
               <TouchableOpacity onPress={closeSignatureModal}>
                 <Ionicons name="close" size={22} color="#333" />
               </TouchableOpacity>
@@ -1038,6 +1295,74 @@ const styles = StyleSheet.create({
   createButton: { backgroundColor: '#007AFF', paddingVertical: 12, borderRadius: 8, alignItems: 'center', marginBottom: 16 },
   createButtonText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
 
+  filtersContainer: {
+    width: '100%',
+    marginBottom: 16,
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    overflow: 'hidden',
+  },
+  filtersHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+    backgroundColor: '#F8F9FA',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+  },
+  filterToggleButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    padding: 8,
+    borderRadius: 6,
+    backgroundColor: '#F8F9FA',
+  },
+  filtersTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#007AFF',
+  },
+  filtersContent: {
+    padding: 16,
+    gap: 10,
+    backgroundColor: '#F8F9FA',
+  },
+  filterGroupSearch: {
+    flex: 1,
+    backgroundColor: '#F8F9FA',
+  },
+  filterLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 8,
+    color: '#333',
+  },
+  resetFiltersButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    padding: 8,
+    borderRadius: 6,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#FF3B30',
+  },
+  resetFiltersText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#FF3B30',
+  },
+  filterClearText: {
+    marginTop: 6,
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#007AFF',
+  },
+
   formCard: { marginTop: 12, backgroundColor: '#fff', borderRadius: 10, padding: 14, borderWidth: 1, borderColor: '#E0E0E0' },
   formTitle: { fontSize: 18, fontWeight: '800', marginBottom: 10, color: '#000' },
   sectionTitle: { marginTop: 14, marginBottom: 8, fontSize: 15, fontWeight: '800', color: '#007AFF' },
@@ -1117,6 +1442,7 @@ const styles = StyleSheet.create({
   actionBtn: { minWidth: 150, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 10, paddingHorizontal: 12, borderRadius: 8, gap: 8 },
   acceptBtn: { backgroundColor: '#34C759' },
   signBtn: { backgroundColor: '#5856D6' },
+  rejectBtn: { backgroundColor: '#FF3B30' },
   actionBtnText: { color: '#FFFFFF', fontSize: 13, fontWeight: '700' },
 
   overlay: {

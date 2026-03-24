@@ -56,6 +56,10 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
         for (const marca of marcas) {
 
+            if (marca.empleadoFijo_id == empleadoId && marca.empleadoReemplaza_id != null) {
+                continue;
+            }
+
             const empresa = await callDynamicPrisma({
                 req,
                 data: { action: "GET", table: "e_estructura_empresa", operation: "findUnique", where: { id: marca.empresa_id ?? 0 } }

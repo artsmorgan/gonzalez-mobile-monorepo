@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
+import { createAccionPersonal } from "../../../../utils/createAccionPersonal";
 
 export async function PUT(
     req: NextRequest,
@@ -44,7 +45,12 @@ export async function PUT(
             Number(existing.ejecutivo_cuenta) === currentEmployeeId ||
             (myEjecutivoCuentaId != null && Number(existing.ejecutivo_cuenta) === myEjecutivoCuentaId);
         if (!isExecutive) {
-            return NextResponse.json({ status: false, message: "No autorizado para completar esta solicitud" }, { status: 403 });
+            return NextResponse.json({ status: false, message: "No autorizado para aprobar esta solicitud" }, { status: 403 });
+        }
+
+        const estadoActual = String((existing as any)?.estado || "").trim().toLowerCase();
+        if (estadoActual !== "pendiente") {
+            return NextResponse.json({ status: false, message: "Solo se pueden aprobar solicitudes pendientes" }, { status: 400 });
         }
 
         if (existing.firma_ejecutivo_cuenta_digital || existing.firma_ejecutivo_cuenta_manual) {
@@ -90,6 +96,50 @@ export async function PUT(
             };
         });
 
+        for (const turno of turnosUpdated) {
+            if (!turno.id || !turno.reemplazo_id) continue;
+            const reemplazo = await callDynamicPrisma({
+                req,
+                data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: turno.reemplazo_id } },
+            });
+            if (!reemplazo) continue;
+            await callDynamicPrisma({
+                req,
+                data: { action: "UPDATE", table: "c_marca_dia", operation: "update", where: { id: turno.id }, data: { empleadoReemplaza_id: turno.reemplazo_id } },
+            });
+
+            // Crear un permiso con goce o sin goce dependiendo del tipo de permiso
+
+            let tipoAccionId = 6;
+            let permisoId = null;
+            switch (existing.tipo) {
+                case "Con goce":
+                    tipoAccionId = 6;
+                    // Crear un registro con la tabla c_permiso_con_goce
+                    const permisoConGoce = await callDynamicPrisma({
+                        req,
+                        data: { action: "POST", table: "c_permiso_con_goce", operation: "create", data: {} },
+                    });
+                    if (permisoConGoce) {
+                        permisoId = permisoConGoce.id;
+                    }
+                    break;
+                case "Sin goce":
+                    tipoAccionId = 7;
+                    // Crear un registro con la tabla c_permiso_sin_goce
+                    const permisoSinGoce = await callDynamicPrisma({
+                        req,
+                        data: { action: "POST", table: "c_permiso_sin_goce", operation: "create", data: {} },
+                    });
+                    if (permisoSinGoce) {
+                        permisoId = permisoSinGoce.id;
+                    }
+                    break;
+            }
+
+            await createAccionPersonal(req, turno.id, tipoAccionId, permisoId);
+        }
+
         const nowIso = toZonedTime(new Date(), "America/Costa_Rica").toISOString();
         const updatedRecord = await callDynamicPrisma({
             req,
@@ -103,6 +153,7 @@ export async function PUT(
                     turnos: JSON.stringify(turnosUpdated),
                     firma_ejecutivo_cuenta_digital: firmaDigital,
                     firma_ejecutivo_cuenta_manual: firmaManual,
+                    estado: "aprobado",
                 },
             },
         });
@@ -121,6 +172,7 @@ export async function PUT(
                         { prop: "turnos", before: existing.turnos, after: JSON.stringify(turnosUpdated) },
                         { prop: "firma_ejecutivo_cuenta_digital", before: existing.firma_ejecutivo_cuenta_digital || null, after: firmaDigital },
                         { prop: "firma_ejecutivo_cuenta_manual", before: existing.firma_ejecutivo_cuenta_manual || null, after: firmaManual },
+                        { prop: "estado", before: (existing as any)?.estado || null, after: "aprobado" },
                     ]),
                     created_at: nowIso,
                     created_by: currentEmployeeId,

@@ -186,6 +186,34 @@ export const signMutuoAcuerdoEjecutivo = async ({
   }
 };
 
+export const rejectMutuoAcuerdoEjecutivo = async ({
+  id,
+  refreshAccessToken,
+  logout,
+}: { id: number } & CommonAuth): Promise<BasicResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) throw new Error('Server URL not configured');
+    const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
+
+    const response = await authedFetch({
+      url: `${apiUrl}/api/mutuos-acuerdos/${id}/reject`,
+      init: {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      },
+      refreshAccessToken: refresh,
+      logout: doLogout,
+    });
+    if (!response) return { status: false, message: 'Sesión expirada' };
+    return (await response.json()) as BasicResponse;
+  } catch (error: any) {
+    return { status: false, message: error?.message || 'Error al rechazar mutuo acuerdo' };
+  }
+};
+
 // Compatibilidad con referencias viejas (App sync legacy)
 export const listMutuosAcuerdosByCorpo = listMutuosAcuerdosMine;
 export const updateMutuoAcuerdo = async (): Promise<MutuoAcuerdoUpsertResponse> => ({ status: false, message: 'Operación no soportada en modo online' });

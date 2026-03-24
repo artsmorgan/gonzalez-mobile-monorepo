@@ -61,6 +61,7 @@ type Turno = {
 type PermitRecord = {
   id: number;
   empleado_id: number;
+  estado?: string | null;
   tipo: string;
   fecha_inicio: string;
   fecha_fin: string;
@@ -124,6 +125,52 @@ const formatDateDMY = (value?: string | null) => {
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return String(value);
   return `${String(d.getDate()).padStart(2, '0')}-${String(d.getMonth() + 1).padStart(2, '0')}-${d.getFullYear()}`;
+};
+
+/** Acepta YYYY-MM-DD o DD-MM-YYYY (mismo criterio que VisitorsScreen). */
+const normalizeDateToYMD = (value: string): string => {
+  const raw = String(value || '').trim().split('T')[0];
+  if (!raw) return '';
+  const ymd = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (ymd) return `${ymd[1]}-${ymd[2].padStart(2, '0')}-${ymd[3].padStart(2, '0')}`;
+  const dmy = raw.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
+  if (dmy) return `${dmy[3]}-${dmy[2].padStart(2, '0')}-${dmy[1].padStart(2, '0')}`;
+  return '';
+};
+
+const permitRecordDateYmd = (value?: string | null): string => {
+  if (!value) return '';
+  try {
+    const onlyDate = String(value).split('T')[0];
+    return normalizeDateToYMD(onlyDate);
+  } catch {
+    return '';
+  }
+};
+
+/** Fecha local medianoche desde YYYY-MM-DD (evita desfases al abrir el picker). */
+const localDateFromYmd = (ymd: string): Date => {
+  const normalized = normalizeDateToYMD(ymd);
+  if (!normalized) return new Date();
+  const [y, m, d] = normalized.split('-').map((x) => parseInt(x, 10));
+  if (Number.isNaN(y) || Number.isNaN(m) || Number.isNaN(d)) return new Date();
+  return new Date(y, m - 1, d);
+};
+
+const formatYmdStringAsDMY = (ymd: string) => {
+  const normalized = normalizeDateToYMD(ymd);
+  if (!normalized) return '-';
+  const [y, m, d] = normalized.split('-');
+  return `${d}-${m}-${y}`;
+};
+
+/** Bucket para el filtro UI: pendiente | aprobado | rechazado */
+const permitEstadoFilterBucket = (record: PermitRecord): 'pendiente' | 'aprobado' | 'rechazado' => {
+  const raw = String(record?.estado || '').trim().toLowerCase();
+  if (!raw || raw === 'pendiente') return 'pendiente';
+  if (raw === 'rechazado') return 'rechazado';
+  if (raw === 'completado' || raw === 'aprobado') return 'aprobado';
+  return 'pendiente';
 };
 
 const decodeFirmaHash = (hash?: string | null): { sessionId: string; empleadoId: string; latitud: string; longitud: string; timestamp: string } | null => {
@@ -221,6 +268,26 @@ export default function PermitRequestScreenV2() {
   const PERMIT_REQUEST_CACHE_KEY = 'permit_request_records_cache_v2';
   const isFetchingAllRef = useRef(false);
   const hasLoadedOnOpenRef = useRef(false);
+
+  const [isFiltersExpanded, setIsFiltersExpanded] = useState(false);
+  const [filterEstado, setFilterEstado] = useState<'all' | 'pendiente' | 'aprobado' | 'rechazado'>('all');
+  const [filterNombreSolicitante, setFilterNombreSolicitante] = useState('');
+  /** YYYY-MM-DD o null; primitivos para que el listado filtrado se recalcule siempre. */
+  const [filterFechaDesde, setFilterFechaDesde] = useState<string | null>(null);
+  const [filterFechaHasta, setFilterFechaHasta] = useState<string | null>(null);
+  const [showFilterDesdePicker, setShowFilterDesdePicker] = useState(false);
+  const [showFilterHastaPicker, setShowFilterHastaPicker] = useState(false);
+  const [filterTipoListado, setFilterTipoListado] = useState<'all' | PermitType>('all');
+
+  const resetPermitFilters = useCallback(() => {
+    setFilterEstado('all');
+    setFilterNombreSolicitante('');
+    setFilterFechaDesde(null);
+    setFilterFechaHasta(null);
+    setShowFilterDesdePicker(false);
+    setShowFilterHastaPicker(false);
+    setFilterTipoListado('all');
+  }, []);
 
   const getConnectionStatus = useCallback(async () => {
     const n = await Network.getNetworkStateAsync();
@@ -811,13 +878,36 @@ export default function PermitRequestScreenV2() {
       });
       if (!resp) throw new Error('Sesión expirada');
       const json = await resp.json().catch(() => ({}));
-      if (!resp.ok || !json?.status) throw new Error(json?.message || 'No se pudo completar la solicitud');
-      Alert.alert('Éxito', 'Solicitud completada correctamente');
+      if (!resp.ok || !json?.status) throw new Error(json?.message || 'No se pudo aprobar la solicitud');
+      Alert.alert('Éxito', 'Solicitud aprobada correctamente');
       await closeCompleteFormAndReloadList();
     } catch (e: any) {
-      Alert.alert('Error', e?.message || 'No se pudo completar');
+      Alert.alert('Error', e?.message || 'No se pudo aprobar');
     } finally {
       setIsSavingComplete(false);
+    }
+  };
+
+  const rejectRecord = async (record: PermitRecord) => {
+    try {
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) throw new Error('Server URL not configured');
+      const resp = await authedFetch({
+        url: `${apiUrl}/api/permit-request/${record.id}/reject`,
+        init: {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+        },
+        refreshAccessToken,
+        logout,
+      });
+      if (!resp) throw new Error('Sesión expirada');
+      const json = await resp.json().catch(() => ({}));
+      if (!resp.ok || !json?.status) throw new Error(json?.message || 'No se pudo rechazar la solicitud');
+      Alert.alert('Éxito', 'Solicitud rechazada correctamente');
+      await fetchAll();
+    } catch (e: any) {
+      Alert.alert('Error', e?.message || 'No se pudo rechazar');
     }
   };
 
@@ -850,7 +940,41 @@ export default function PermitRequestScreenV2() {
     });
   };
 
-  const listRecords = useMemo(() => records, [records]);
+  const filteredRecords = useMemo(() => {
+    const desdeYmd = filterFechaDesde ? normalizeDateToYMD(filterFechaDesde) : '';
+    const hastaYmd = filterFechaHasta ? normalizeDateToYMD(filterFechaHasta) : '';
+    const qNombre = filterNombreSolicitante.trim().toLowerCase();
+
+    return records.filter((r) => {
+      const bucket = permitEstadoFilterBucket(r);
+      const matchesEstado = filterEstado === 'all' || bucket === filterEstado;
+
+      const nombre = String(r.empleado_nombre || '').trim().toLowerCase();
+      const matchesNombre =
+        !qNombre ||
+        nombre.includes(qNombre) ||
+        String(r.empleado_id || '').includes(filterNombreSolicitante.trim());
+
+      const tipoRec = String(r.tipo || '').trim().toLowerCase();
+      const matchesTipo =
+        filterTipoListado === 'all' || tipoRec === filterTipoListado.toLowerCase().trim();
+
+      const inicioYmd = permitRecordDateYmd(r.fecha_inicio);
+      const finYmd = permitRecordDateYmd(r.fecha_fin);
+      let matchesRangoFechas = true;
+      if (desdeYmd || hastaYmd) {
+        if (!inicioYmd || !finYmd) {
+          matchesRangoFechas = false;
+        } else {
+          const afterDesde = !desdeYmd || finYmd >= desdeYmd;
+          const beforeHasta = !hastaYmd || inicioYmd <= hastaYmd;
+          matchesRangoFechas = afterDesde && beforeHasta;
+        }
+      }
+
+      return matchesEstado && matchesNombre && matchesTipo && matchesRangoFechas;
+    });
+  }, [records, filterEstado, filterNombreSolicitante, filterFechaDesde, filterFechaHasta, filterTipoListado]);
 
   return (
     <ThemedView style={styles.container}>
@@ -873,39 +997,189 @@ export default function PermitRequestScreenV2() {
             </ThemedView>
           )}
 
-          {!isCreating && !isLoading && (
-            <TouchableOpacity
-              style={[styles.createButton, !isOnline && styles.disabledButton]}
-              disabled={!isOnline}
-              onPress={() => {
-                resetCreateForm();
-                setIsCreating(true);
-                fetchPlazas();
-              }}
-              activeOpacity={0.85}
-            >
-              <ThemedText style={styles.createButtonText}>
-                <Ionicons name="add" size={20} color="#FFFFFF" /> Nueva solicitud
-              </ThemedText>
-            </TouchableOpacity>
-          )}
 
           {!isCreating && (
             <>
+              <ThemedView style={styles.filtersContainer}>
+                <ThemedView style={styles.filtersHeader}>
+                  <TouchableOpacity
+                    style={styles.filterToggleButton}
+                    onPress={() => setIsFiltersExpanded(!isFiltersExpanded)}
+                    activeOpacity={0.85}
+                  >
+                    <ThemedText style={styles.filtersTitle}>Filtros</ThemedText>
+                    <Ionicons
+                      name={isFiltersExpanded ? 'chevron-up' : 'chevron-down'}
+                      size={20}
+                      color="#007AFF"
+                    />
+                  </TouchableOpacity>
+                  {isFiltersExpanded ? (
+                    <TouchableOpacity style={styles.resetFiltersButton} onPress={resetPermitFilters} activeOpacity={0.85}>
+                      <Ionicons name="refresh" size={16} color="#FF3B30" />
+                      <ThemedText style={styles.resetFiltersText}>Reiniciar</ThemedText>
+                    </TouchableOpacity>
+                  ) : null}
+                </ThemedView>
+                {isFiltersExpanded ? (
+                  <ThemedView style={styles.filtersContent}>
+                    <ThemedView style={styles.filterGroupSearch}>
+                      <ThemedText style={styles.filterLabel}>Estado:</ThemedText>
+                      <ThemedView style={styles.pickerContainer}>
+                        <Picker
+                          selectedValue={filterEstado}
+                          onValueChange={(v) => setFilterEstado(v as typeof filterEstado)}
+                          style={styles.picker}
+                        >
+                          <Picker.Item label="Todos" value="all" color="#000000" />
+                          <Picker.Item label="Pendiente" value="pendiente" color="#000000" />
+                          <Picker.Item label="Aprobado" value="aprobado" color="#000000" />
+                          <Picker.Item label="Rechazado" value="rechazado" color="#000000" />
+                        </Picker>
+                      </ThemedView>
+                    </ThemedView>
+                    <ThemedView style={styles.filterGroupSearch}>
+                      <ThemedText style={styles.filterLabel}>Nombre del solicitante:</ThemedText>
+                      <TextInput
+                        style={styles.searchInput}
+                        value={filterNombreSolicitante}
+                        onChangeText={setFilterNombreSolicitante}
+                        placeholder="Buscar por nombre o código de empleado..."
+                        placeholderTextColor="#999"
+                      />
+                    </ThemedView>
+                    <ThemedView style={styles.filterGroupSearch}>
+                      <ThemedText style={styles.filterLabel}>Desde — período de la solicitud:</ThemedText>
+                      <TouchableOpacity
+                        style={styles.dateBtn}
+                        onPress={() => setShowFilterDesdePicker(true)}
+                        activeOpacity={0.85}
+                      >
+                        <ThemedText style={styles.filterDateBtnText}>
+                          {filterFechaDesde ? formatYmdStringAsDMY(filterFechaDesde) : 'Tocar para elegir fecha'}
+                        </ThemedText>
+                      </TouchableOpacity>
+                      {filterFechaDesde ? (
+                        <TouchableOpacity onPress={() => setFilterFechaDesde(null)} style={styles.filterClearLinkWrap}>
+                          <ThemedText style={styles.filterClearLink}>Quitar filtro de fecha</ThemedText>
+                        </TouchableOpacity>
+                      ) : null}
+                      {showFilterDesdePicker ? (
+                        <DateTimePicker
+                          value={filterFechaDesde ? localDateFromYmd(filterFechaDesde) : new Date()}
+                          mode="date"
+                          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                          onChange={(event: { type?: string }, d?: Date) => {
+                            if (Platform.OS === 'android') {
+                              setShowFilterDesdePicker(false);
+                              if (event?.type === 'dismissed') {
+                                return;
+                              }
+                            } else {
+                              setShowFilterDesdePicker(false);
+                            }
+                            if (d) {
+                              setFilterFechaDesde(formatDateYMD(d));
+                            }
+                          }}
+                        />
+                      ) : null}
+                    </ThemedView>
+                    <ThemedView style={styles.filterGroupSearch}>
+                      <ThemedText style={styles.filterLabel}>Hasta — período de la solicitud:</ThemedText>
+                      <TouchableOpacity
+                        style={styles.dateBtn}
+                        onPress={() => setShowFilterHastaPicker(true)}
+                        activeOpacity={0.85}
+                      >
+                        <ThemedText style={styles.filterDateBtnText}>
+                          {filterFechaHasta ? formatYmdStringAsDMY(filterFechaHasta) : 'Tocar para elegir fecha'}
+                        </ThemedText>
+                      </TouchableOpacity>
+                      {filterFechaHasta ? (
+                        <TouchableOpacity onPress={() => setFilterFechaHasta(null)} style={styles.filterClearLinkWrap}>
+                          <ThemedText style={styles.filterClearLink}>Quitar filtro de fecha</ThemedText>
+                        </TouchableOpacity>
+                      ) : null}
+                      {showFilterHastaPicker ? (
+                        <DateTimePicker
+                          value={filterFechaHasta ? localDateFromYmd(filterFechaHasta) : new Date()}
+                          mode="date"
+                          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                          onChange={(event: { type?: string }, d?: Date) => {
+                            if (Platform.OS === 'android') {
+                              setShowFilterHastaPicker(false);
+                              if (event?.type === 'dismissed') {
+                                return;
+                              }
+                            } else {
+                              setShowFilterHastaPicker(false);
+                            }
+                            if (d) {
+                              setFilterFechaHasta(formatDateYMD(d));
+                            }
+                          }}
+                        />
+                      ) : null}
+                    </ThemedView>
+                    <ThemedView style={styles.filterGroupSearch}>
+                      <ThemedText style={styles.filterLabel}>Tipo de solicitud:</ThemedText>
+                      <ThemedView style={styles.pickerContainer}>
+                        <Picker
+                          selectedValue={filterTipoListado}
+                          onValueChange={(v) => setFilterTipoListado(v as typeof filterTipoListado)}
+                          style={styles.picker}
+                        >
+                          <Picker.Item label="Todos" value="all" color="#000000" />
+                          <Picker.Item label="Con goce" value="Con goce" color="#000000" />
+                          <Picker.Item label="Sin goce" value="Sin goce" color="#000000" />
+                        </Picker>
+                      </ThemedView>
+                    </ThemedView>
+                  </ThemedView>
+                ) : null}
+              </ThemedView>
+
+              {!isLoading ? (
+                <TouchableOpacity
+                  style={[styles.createButton, !isOnline && styles.disabledButton]}
+                  disabled={!isOnline}
+                  onPress={() => {
+                    resetCreateForm();
+                    setIsCreating(true);
+                    fetchPlazas();
+                  }}
+                  activeOpacity={0.85}
+                >
+                  <ThemedText style={styles.createButtonText}>
+                    <Ionicons name="add" size={20} color="#FFFFFF" /> Nueva solicitud
+                  </ThemedText>
+                </TouchableOpacity>
+              ) : null}
+
               {isLoading ? (
                 <ThemedView style={styles.loadingContainer}>
                   <ActivityIndicator size="large" color="#007AFF" />
                   <ThemedText style={styles.loadingText}>Cargando...</ThemedText>
                 </ThemedView>
-              ) : !listRecords.length ? (
+              ) : !records.length ? (
                 <ThemedView style={styles.emptyContainer}>
                   <ThemedText style={styles.emptyText}>No hay solicitudes registradas</ThemedText>
                 </ThemedView>
+              ) : !filteredRecords.length ? (
+                <ThemedView style={styles.emptyContainer}>
+                  <ThemedText style={styles.emptyText}>No hay solicitudes que coincidan con los filtros actuales</ThemedText>
+                </ThemedView>
               ) : (
                 <ThemedView style={styles.listContainer}>
-                  {listRecords.map((r) => (
+                  {filteredRecords.map((r) => (
                     <ThemedView key={r.id} style={styles.card}>
-                      <ThemedText style={styles.cardTitle}>Solicitud #{r.id}</ThemedText>
+                      <ThemedText style={styles.cardTitle}>
+                        Solicitud de {String(r.empleado_nombre || `empleado #${r.empleado_id}`)}
+                      </ThemedText>
+                      <ThemedText style={styles.cardLine}>
+                        <ThemedText style={styles.cardLabel}>Estado: </ThemedText>{String(r.estado || '-')}
+                      </ThemedText>
                       <ThemedText style={styles.cardLine}>
                         <ThemedText style={styles.cardLabel}>Tipo: </ThemedText>{r.tipo}
                       </ThemedText>
@@ -963,14 +1237,34 @@ export default function PermitRequestScreenV2() {
 
                       <ThemedView style={styles.actionsRow}>
                         {Boolean(r.can_complete_by_executive) && (
-                          <TouchableOpacity
-                            style={[styles.actionBtn, styles.completeBtn]}
-                            onPress={() => openCompleteModal(r)}
-                            activeOpacity={0.85}
-                          >
-                            <Ionicons name="checkmark-circle-outline" size={18} color="#FFFFFF" />
-                            <ThemedText style={styles.actionBtnText}>Completar</ThemedText>
-                          </TouchableOpacity>
+                          <>
+                            <TouchableOpacity
+                              style={[styles.actionBtn, styles.completeBtn]}
+                              onPress={() => openCompleteModal(r)}
+                              activeOpacity={0.85}
+                            >
+                              <Ionicons name="checkmark-circle-outline" size={18} color="#FFFFFF" />
+                              <ThemedText style={styles.actionBtnText}>Aprobar</ThemedText>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              style={[styles.actionBtn, styles.rejectBtn]}
+                              onPress={() =>
+                                Alert.alert(
+                                  'Confirmar rechazo',
+                                  'Esta solicitud será rechazada. ¿Deseas continuar?',
+                                  [
+                                    { text: 'Cancelar', style: 'cancel' },
+                                    { text: 'Rechazar', style: 'destructive', onPress: () => rejectRecord(r) },
+                                  ],
+                                  { cancelable: true }
+                                )
+                              }
+                              activeOpacity={0.85}
+                            >
+                              <Ionicons name="close-circle-outline" size={18} color="#FFFFFF" />
+                              <ThemedText style={styles.actionBtnText}>Rechazar</ThemedText>
+                            </TouchableOpacity>
+                          </>
                         )}
                       </ThemedView>
                     </ThemedView>
@@ -1204,7 +1498,7 @@ export default function PermitRequestScreenV2() {
         <View style={styles.overlay}>
           <ThemedView style={styles.floatCard}>
             <View style={styles.floatHeader}>
-              <ThemedText style={styles.modalTitle}>Completar solicitud #{selectedRecord?.id}</ThemedText>
+              <ThemedText style={styles.modalTitle}>Aprobar solicitud #{selectedRecord?.id}</ThemedText>
               <TouchableOpacity onPress={closeCompleteFormAndReloadList}>
                 <Ionicons name="close" size={22} color="#333" />
               </TouchableOpacity>
@@ -1388,7 +1682,7 @@ export default function PermitRequestScreenV2() {
         </View>
       </Modal>
 
-      {/* Cámara pantalla completa (mismo patrón que ActivitiesScreen) */}
+      {/* Cámara pantalla aprobar (mismo patrón que ActivitiesScreen) */}
       <Modal visible={isCameraVisible} animationType="slide" onRequestClose={() => setIsCameraVisible(false)}>
         <ThemedView style={{ flex: 1, backgroundColor: '#000' }}>
           <CameraView ref={cameraRef} style={{ flex: 1 }} facing="back">
@@ -1438,6 +1732,101 @@ const styles = StyleSheet.create({
   createButtonText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
   disabledButton: { opacity: 0.6 },
 
+  filtersContainer: {
+    width: '100%',
+    marginBottom: 16,
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    overflow: 'hidden',
+  },
+  filtersHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+    backgroundColor: '#F8F9FA',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+  },
+  filterToggleButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    padding: 8,
+    borderRadius: 6,
+    backgroundColor: '#F8F9FA',
+  },
+  filtersTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#007AFF',
+  },
+  filtersContent: {
+    padding: 16,
+    gap: 10,
+    backgroundColor: '#F8F9FA',
+  },
+  filterGroupSearch: {
+    flex: 1,
+    backgroundColor: '#F8F9FA',
+  },
+  filterLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 8,
+    color: '#333',
+  },
+  filterDateBtnText: {
+    fontSize: 16,
+    color: '#000',
+  },
+  filterClearLinkWrap: {
+    marginTop: 6,
+  },
+  filterClearLink: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#007AFF',
+  },
+  searchInput: {
+    width: '100%',
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    fontSize: 16,
+    backgroundColor: '#F9F9F9',
+    color: '#000000',
+  },
+  resetFiltersButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    padding: 8,
+    borderRadius: 6,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#FF3B30',
+  },
+  resetFiltersText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#FF3B30',
+  },
+  pickerContainer: {
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    backgroundColor: '#F9F9F9',
+    overflow: 'hidden',
+  },
+  picker: {
+    width: '100%',
+    height: 50,
+  },
+
   listContainer: {},
   card: { backgroundColor: '#FFFFFF', borderRadius: 8, padding: 16, marginBottom: 12, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 4, elevation: 2 },
   cardTitle: { fontSize: 16, fontWeight: '800', marginBottom: 10, color: '#000' },
@@ -1447,6 +1836,7 @@ const styles = StyleSheet.create({
   actionsRow: { marginTop: 12, flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
   actionBtn: { minWidth: 150, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 10, paddingHorizontal: 12, borderRadius: 8, gap: 8 },
   completeBtn: { backgroundColor: '#007AFF' },
+  rejectBtn: { backgroundColor: '#FF3B30' },
   downloadBtn: { backgroundColor: '#34C759' },
   actionBtnText: { color: '#FFFFFF', fontSize: 13, fontWeight: '700' },
 
