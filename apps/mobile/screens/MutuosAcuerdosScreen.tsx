@@ -804,14 +804,6 @@ export default function MutuosAcuerdosScreen() {
             <ThemedText style={styles.subtitle}>Módulo exclusivamente online</ThemedText>
           </ThemedView>
 
-          {!isCreating && !isLoading && (
-            <TouchableOpacity style={styles.createButton} onPress={startCreate} activeOpacity={0.85}>
-              <ThemedText style={styles.createButtonText}>
-                <Ionicons name="add" size={20} color="#FFFFFF" /> Nuevo registro
-              </ThemedText>
-            </TouchableOpacity>
-          )}
-
           {isCreating && (
             <ThemedView style={styles.formCard}>
               <ThemedText style={styles.formTitle}>Nuevo registro</ThemedText>
@@ -1060,6 +1052,14 @@ export default function MutuosAcuerdosScreen() {
                   </ThemedView>
                 ) : null}
               </ThemedView>
+
+              {!isLoading && (
+                <TouchableOpacity style={styles.createButton} onPress={startCreate} activeOpacity={0.85}>
+                  <ThemedText style={styles.createButtonText}>
+                    <Ionicons name="add" size={20} color="#FFFFFF" /> Nuevo registro
+                  </ThemedText>
+                </TouchableOpacity>
+              )}
 
               {isLoading ? (
                 <ThemedView style={styles.loadingContainer}>
