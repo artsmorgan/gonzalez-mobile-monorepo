@@ -2,8 +2,9 @@ import { NextRequest } from "next/server";
 import { toZonedTime } from "date-fns-tz";
 import { callDynamicPrisma } from "./callDynamicPrisma";
 
-export async function createAccionPersonal(req: NextRequest, marcaId: number, tipo_accion_id: number, permiso_id: number) {
+export async function createAccionPersonal(req: NextRequest, marcaId: number, tipo_accion_id: number, permiso_id: number, ausencia_id: number, salida_anticipada_id: number, comentarios: string | null, coordinadoPor_id: number) {
 
+    console.log("Procedemos a crear la acción personal");
     try {
         const marcaDia = await callDynamicPrisma({
             req,
@@ -162,13 +163,15 @@ export async function createAccionPersonal(req: NextRequest, marcaId: number, ti
                     fecha_fin: marcaDia.fecha,
                     fecha_insercion: toZonedTime(new Date(), "America/Costa_Rica"),
                     salario: salario,
-                    comentarios: '[Acción personal creada por el sistema MonitoreApp]',
+                    comentarios: comentarios ? comentarios : '[Acción personal creada por el sistema MonitoreApp]',
                     fecha_actualizacion: toZonedTime(new Date(), "America/Costa_Rica"),
                     tipoAccion_id: tipo_accion_id,
                     reemplazo_id: marcaDia.empleadoReemplaza_id,
+                    salida_anticipada_id: tipo_accion_id === 13 ? salida_anticipada_id : null,
+                    ausencia_id: tipo_accion_id === 5 ? ausencia_id : null,
                     permiso_sin_goce_id: tipo_accion_id === 7 ? permiso_id : null,
                     permiso_con_goce_id: tipo_accion_id === 6 ? permiso_id : null,
-                    reversible: true,
+                    reversible: false,
                     salario_base_mensual: categoriaSalarial.salario_mes,
                     numero_hed: categoriaSalarial.horas_extras_diurnas,
                     numero_hem: categoriaSalarial.horas_extras_mixtas,
@@ -178,7 +181,7 @@ export async function createAccionPersonal(req: NextRequest, marcaId: number, ti
                     salario_base_diario: categoriaSalarial.salario_dia,
                     fecha_vence_subir_adjunto: futureDateString,
                     tipoContratacion_id: tipoContratacionId,
-                    coordinadoPor_id: 3,
+                    coordinadoPor_id: coordinadoPor_id,
                     usuario_insercion: 'monitoreApp',
                     mobile_upload: true,
                 }

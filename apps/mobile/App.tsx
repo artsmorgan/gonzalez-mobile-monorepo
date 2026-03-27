@@ -8,7 +8,7 @@ import { useFonts } from 'expo-font';
 import { StatusBar } from 'expo-status-bar';
 import * as Linking from 'expo-linking';
 import Constants from 'expo-constants';
-import { Alert } from 'react-native';
+import { Alert, Animated } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AuthProvider } from './contexts/AuthContext';
 import { useColorScheme } from './hooks/useColorScheme';
@@ -123,6 +123,12 @@ import ChecklistSupervisionScreen from './screens/ChecklistSupervisionScreen';
 import PuestoUbicacionScreen from './screens/PuestoUbicacionScreen';
 import JerarquiaScreen from './screens/JerarquiaScreen';
 import { createStaffEvaluation, deleteStaffEvaluation } from './hooks/staffEvaluationsFunctions';
+import {
+  runCorporateEvaluationsSync,
+  CORPORATE_EVALUATION_TYPES,
+  BITACORA_VEHICULO_DETENIDO_EVAL_TYPE,
+} from './hooks/corporateEvaluationsSync';
+import { CacheSyncActionsOverlay } from './components/CacheSyncActionsOverlay';
 
 export type RootStackParamList = {
   Home: undefined;
@@ -212,8 +218,10 @@ export type RootStackParamList = {
       division_id?: number;
       contrato_id?: number;
       sucursal_id: number;
-      vehiculo_id: number;
-      uso_id: number;
+      vehiculo_id?: number;
+      uso_id?: number;
+      vehiculo_id_local?: string;
+      uso_id_local?: string;
       vehiculo_tipo?: string;
       vehiculo_placa?: string;
     };
@@ -345,6 +353,22 @@ function AppContent() {
   const routeNameRef = useRef<string | undefined>(undefined);
   // 🆕 Variable de estado para conexión a internet
   const [isConnected, setIsConnected] = React.useState<boolean | null>(null);
+  const [cacheSyncModalVisible, setCacheSyncModalVisible] = React.useState(false);
+  const cacheSyncFadeAnim = useRef(new Animated.Value(0));
+  const cacheSyncOverlayActiveRef = useRef(false);
+
+  const dismissCacheSyncOverlayOnly = useCallback(() => {
+    Animated.timing(cacheSyncFadeAnim.current, {
+      toValue: 0,
+      duration: 250,
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (finished) {
+        cacheSyncOverlayActiveRef.current = false;
+        setCacheSyncModalVisible(false);
+      }
+    });
+  }, []);
 
   const ACTION_STORAGE_KEYS = [
     'lunch_time_actions',
@@ -499,35 +523,72 @@ function AppContent() {
         }
 
         console.log(' -------------------------- sincronizando cachés');
-        await Promise.all([
-          checkLunchTimeActionsCache(),
-          checkActivitiesActionsCache(),
-          checkChecklistSupervisionActionsCache(),
-          checkVehiclesActionsCache(),
-          checkBitacoraVehiculoDetenidoActionsCache(),
-          checkLlavesActionsCache(),
-          checkMovimientosLlavesActionsCache(),
-          checkLlaverosActionsCache(),
-          checkMovimientosLlaverosActionsCache(),
-          checkArticuloMantenimientoActionsCache(),
-          checkMovimientosArticulosMantenimientoActionsCache(),
-          checkDocumentosEntregadosActionsCache(),
-          checkApreciacionVulnerabilidadActionsCache(),
-          checkNotificationsActionsCache(),
-          checkVisitorsActionsCache(),
-          checkNotesActionsCache(),
-          checkEvaluationsActionsCache(),
-          checkSurveysActionsCache(),
-          checkTrainingsActionsCache(),
-          checkIncidentsActionsCache(),
-          checkMutuosAcuerdosActionsCache(),
-          checkIncidentContributionsActionsCache(),
-          checkVoiceNotesActionsCache(),
-          checkStaffEvaluationsActionsCache(),
-          checkJobManualsActionsCache(),
-        ]);
+        cacheSyncOverlayActiveRef.current = true;
+        setCacheSyncModalVisible(true);
+        cacheSyncFadeAnim.current.setValue(0);
+        requestAnimationFrame(() => {
+          Animated.timing(cacheSyncFadeAnim.current, {
+            toValue: 1,
+            duration: 220,
+            useNativeDriver: true,
+          }).start();
+        });
 
-        eventBus.emit('connectionRestored');
+        let actionsSyncError: unknown = null;
+        try {
+          await Promise.all([
+            checkLunchTimeActionsCache(),
+            checkActivitiesActionsCache(),
+            checkChecklistSupervisionActionsCache(),
+            checkVehiclesActionsCache(),
+            checkBitacoraVehiculoDetenidoActionsCache(),
+            checkLlavesActionsCache(),
+            checkMovimientosLlavesActionsCache(),
+            checkLlaverosActionsCache(),
+            checkMovimientosLlaverosActionsCache(),
+            checkArticuloMantenimientoActionsCache(),
+            checkMovimientosArticulosMantenimientoActionsCache(),
+            checkDocumentosEntregadosActionsCache(),
+            checkApreciacionVulnerabilidadActionsCache(),
+            checkNotificationsActionsCache(),
+            checkVisitorsActionsCache(),
+            checkNotesActionsCache(),
+            checkEvaluationsActionsCache(),
+            checkSurveysActionsCache(),
+            checkTrainingsActionsCache(),
+            checkIncidentsActionsCache(),
+            checkMutuosAcuerdosActionsCache(),
+            checkIncidentContributionsActionsCache(),
+            checkVoiceNotesActionsCache(),
+            checkStaffEvaluationsActionsCache(),
+            checkJobManualsActionsCache(),
+          ]);
+          eventBus.emit('connectionRestored');
+        } catch (e) {
+          actionsSyncError = e;
+          console.error('[syncCaches] Error sincronizando acciones en caché:', e);
+        } finally {
+          const finishOverlay = () => {
+            if (cacheSyncOverlayActiveRef.current) {
+              Animated.timing(cacheSyncFadeAnim.current, {
+                toValue: 0,
+                duration: 300,
+                useNativeDriver: true,
+              }).start(({ finished }) => {
+                if (finished) {
+                  cacheSyncOverlayActiveRef.current = false;
+                  setCacheSyncModalVisible(false);
+                  if (!actionsSyncError) {
+                    Alert.alert('Sincronización completada');
+                  }
+                }
+              });
+            } else if (!actionsSyncError) {
+              Alert.alert('Sincronización completada');
+            }
+          };
+          finishOverlay();
+        }
       } finally {
         slot.inFlight = null;
       }
@@ -934,6 +995,40 @@ function AppContent() {
   const checkBitacoraVehiculoDetenidoActionsCache = async () => {
     if (!employee) return;
 
+    try {
+      const legacyBitStr = await AsyncStorage.getItem('bitacora_vehiculo_detenido_actions');
+      if (legacyBitStr) {
+        const legacy = JSON.parse(legacyBitStr);
+        if (Array.isArray(legacy)) {
+          const creates = legacy.filter((a: any) => a.type === 'create' && a.requestData);
+          if (creates.length > 0) {
+            const evStr0 = await AsyncStorage.getItem('evaluations_actions');
+            const ev0: any[] = evStr0 ? JSON.parse(evStr0) : [];
+            for (const c of creates) {
+              if (
+                !ev0.some(
+                  (e: any) =>
+                    e.id === c.id && e.action === 'create' && e.type === BITACORA_VEHICULO_DETENIDO_EVAL_TYPE
+                )
+              ) {
+                ev0.push({
+                  id: c.id,
+                  action: 'create',
+                  type: BITACORA_VEHICULO_DETENIDO_EVAL_TYPE,
+                  payload: c.requestData,
+                });
+              }
+            }
+            await AsyncStorage.setItem('evaluations_actions', JSON.stringify(ev0));
+            const rest = legacy.filter((a: any) => a.type !== 'create');
+            await AsyncStorage.setItem('bitacora_vehiculo_detenido_actions', JSON.stringify(rest));
+          }
+        }
+      }
+    } catch (e) {
+      console.error('Migración bitácora (cola) → evaluations_actions:', e);
+    }
+
     const actionsStr = await AsyncStorage.getItem('bitacora_vehiculo_detenido_actions');
     if (!actionsStr) return;
 
@@ -945,31 +1040,8 @@ function AppContent() {
     for (const action of actions) {
       try {
         if (action.type === 'create') {
-          const result = await createBitacoraVehiculoDetenido({
-            requestData: action.requestData,
-            refreshAccessToken,
-            logout,
-          });
-
-          if (result.status) {
-            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'create'));
-            await AsyncStorage.setItem('bitacora_vehiculo_detenido_actions', JSON.stringify(updatedActions));
-
-            // Reemplazar id_local por id real en cache
-            if (result.id) {
-              const cacheStr = await AsyncStorage.getItem('bitacora_vehiculo_detenido_cache');
-              if (cacheStr) {
-                const cache = JSON.parse(cacheStr);
-                const updatedCache = cache.map((b: any) => {
-                  if (b.id_local && b.id_local === action.id) {
-                    return { ...b, id: result.id, id_local: '' };
-                  }
-                  return b;
-                });
-                await AsyncStorage.setItem('bitacora_vehiculo_detenido_cache', JSON.stringify(updatedCache));
-              }
-            }
-          }
+          // La creación offline se sincroniza en runCorporateEvaluationsSync (tras vehículo/uso corporativo).
+          continue;
         } else if (action.type === 'update') {
           const result = await updateBitacoraVehiculoDetenido({
             id: action.id,
@@ -2119,6 +2191,41 @@ function AppContent() {
   const checkEvaluationsActionsCache = async () => {
     if (!employee) return;
 
+    // Bitácora (crear) pasó a evaluations_actions + corporateEvaluationsSync; migrar cola antigua.
+    try {
+      const legacyBitStr = await AsyncStorage.getItem('bitacora_vehiculo_detenido_actions');
+      if (legacyBitStr) {
+        const legacy = JSON.parse(legacyBitStr);
+        if (Array.isArray(legacy)) {
+          const creates = legacy.filter((a: any) => a.type === 'create' && a.requestData);
+          if (creates.length > 0) {
+            const evStr0 = await AsyncStorage.getItem('evaluations_actions');
+            const ev0: any[] = evStr0 ? JSON.parse(evStr0) : [];
+            for (const c of creates) {
+              if (
+                !ev0.some(
+                  (e: any) =>
+                    e.id === c.id && e.action === 'create' && e.type === BITACORA_VEHICULO_DETENIDO_EVAL_TYPE
+                )
+              ) {
+                ev0.push({
+                  id: c.id,
+                  action: 'create',
+                  type: BITACORA_VEHICULO_DETENIDO_EVAL_TYPE,
+                  payload: c.requestData,
+                });
+              }
+            }
+            await AsyncStorage.setItem('evaluations_actions', JSON.stringify(ev0));
+            const rest = legacy.filter((a: any) => a.type !== 'create');
+            await AsyncStorage.setItem('bitacora_vehiculo_detenido_actions', JSON.stringify(rest));
+          }
+        }
+      }
+    } catch (e) {
+      console.error('Migración bitácora → evaluations_actions:', e);
+    }
+
     const actionsStr = await AsyncStorage.getItem('evaluations_actions');
     if (!actionsStr) return;
 
@@ -2127,9 +2234,15 @@ function AppContent() {
 
     console.log('Sincronizando acciones de evaluaciones:', actions.length);
 
-    // Procesar acciones una por una
+    // Procesar acciones una por una (vehículos corporativos al final vía runCorporateEvaluationsSync)
     for (const action of actions) {
       try {
+        if (CORPORATE_EVALUATION_TYPES.has(action.type)) {
+          continue;
+        }
+        if (action.type === BITACORA_VEHICULO_DETENIDO_EVAL_TYPE) {
+          continue;
+        }
         if (action.action === 'create') {
           if (action.type === 'mileage_control') {
             console.log('Creando control de kilometraje:', action.id);
@@ -2261,97 +2374,6 @@ function AppContent() {
                     return { ...item, synced: true, id: result.data?.id || item.id };
                   }
                   return item;
-                });
-                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-              }
-            }
-          } else if (action.type === 'corporate_vehicle') {
-            console.log('Creando vehículo corporativo:', action.id);
-            const { createCorporateVehicle } = await import('@/hooks/evaluationFunctions');
-            const result = await createCorporateVehicle({
-              requestData: action.payload,
-              refreshAccessToken,
-              logout,
-            });
-
-            if (result.status) {
-              console.log('Vehículo corporativo creado correctamente');
-              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'corporate_vehicle'));
-              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-
-              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-              if (cacheStr) {
-                const cache = JSON.parse(cacheStr);
-                const updatedCache = cache.map((item: any) => {
-                  if (item.id_local === action.id && item.type === 'corporate_vehicle') {
-                    return {
-                      ...item,
-                      synced: true,
-                      id: result.data?.id || item.id,
-                      images: result.data?.images || item.images || [],
-                    };
-                  }
-                  return item;
-                });
-                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-              }
-            }
-          } else if (action.type === 'corporate_vehicle_use') {
-            console.log('Creando uso de vehículo corporativo:', action.id);
-            const { createCorporateVehicleUse } = await import('@/hooks/evaluationFunctions');
-
-            const payload = action.payload || {};
-            const vehiculoIdRaw = payload.vehiculo_id;
-            let vehiculoId = typeof vehiculoIdRaw === 'number' ? vehiculoIdRaw : Number(vehiculoIdRaw || 0);
-
-            // Si el vehículo es local, intentamos resolverlo desde cache
-            if (!vehiculoId || String(vehiculoIdRaw || '').startsWith('local-')) {
-              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-              const cache = cacheStr ? JSON.parse(cacheStr) : [];
-              const found = cache.find(
-                (item: any) => item.type === 'corporate_vehicle' && String(item.id_local) === String(vehiculoIdRaw) && typeof item.id === 'number'
-              );
-              if (!found?.id) {
-                // Aún no se ha sincronizado el vehículo; dejamos esta acción para el siguiente ciclo
-                continue;
-              }
-              vehiculoId = Number(found.id);
-            }
-
-            // requestData sin vehiculo_id
-            const { vehiculo_id: _ignore, ...requestData } = payload;
-            const result = await createCorporateVehicleUse({
-              vehiculo_id: String(vehiculoId),
-              requestData,
-              refreshAccessToken,
-              logout,
-            });
-
-            if (result.status) {
-              const updatedActions = actions.filter(
-                (a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'corporate_vehicle_use')
-              );
-              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-
-              // Actualizar cache: marcar uso como sincronizado + reemplazar id_local -> id
-              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-              if (cacheStr) {
-                const cache = JSON.parse(cacheStr);
-                const updatedCache = cache.map((item: any) => {
-                  if (item.type !== 'corporate_vehicle') return item;
-                  const matchVehicle =
-                    (typeof item.id === 'number' && Number(item.id) === Number(vehiculoId)) ||
-                    String(item.id_local) === String(vehiculoIdRaw);
-                  if (!matchVehicle) return item;
-
-                  const usos = Array.isArray(item.usos) ? item.usos : [];
-                  const newUsos = usos.map((u: any) => {
-                    if (String(u.id) === String(action.id) || String(u.id_local) === String(action.id)) {
-                      return { ...u, ...result.data, id: result.data?.id || u.id, synced: true };
-                    }
-                    return u;
-                  });
-                  return { ...item, usos: newUsos };
                 });
                 await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
               }
@@ -3358,99 +3380,6 @@ function AppContent() {
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'non_conforming_product'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
             }
-          } else if (action.type === 'corporate_vehicle') {
-            console.log('Actualizando vehículo corporativo:', action.id);
-            const { updateCorporateVehicle } = await import('@/hooks/evaluationFunctions');
-            const result = await updateCorporateVehicle({
-              id: action.id,
-              requestData: action.payload,
-              refreshAccessToken,
-              logout,
-            });
-
-            if (result.status) {
-              console.log('Vehículo corporativo actualizado correctamente');
-              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'corporate_vehicle'));
-              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-
-              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-              if (cacheStr) {
-                const cache = JSON.parse(cacheStr);
-                const updatedCache = cache.map((item: any) => {
-                  if (item.type !== 'corporate_vehicle') return item;
-                  if (String(item.id) === String(action.id) || String(item.id_local) === String(action.id)) {
-                    return {
-                      ...item,
-                      ...action.payload,
-                      synced: true,
-                      images: result.data?.images || item.images || [],
-                    };
-                  }
-                  return item;
-                });
-                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-              }
-            }
-          } else if (action.type === 'corporate_vehicle_use') {
-            console.log('Actualizando uso de vehículo corporativo:', action.id);
-            const { updateCorporateVehicleUse } = await import('@/hooks/evaluationFunctions');
-
-            let useId: string | number = action.id;
-            const isLocalUse = String(useId).startsWith('local-');
-            const payload = action.payload || {};
-
-            // Si el uso es local, intentamos mapearlo al ID real usando el cache
-            if (isLocalUse) {
-              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-              const cache = cacheStr ? JSON.parse(cacheStr) : [];
-              let foundServerUseId: number | null = null;
-              for (const item of cache) {
-                if (item.type !== 'corporate_vehicle') continue;
-                const usos = Array.isArray(item.usos) ? item.usos : [];
-                const foundUse = usos.find((u: any) => String(u.id_local) === String(useId) && typeof u.id === 'number');
-                if (foundUse?.id) {
-                  foundServerUseId = Number(foundUse.id);
-                  break;
-                }
-              }
-              if (!foundServerUseId) {
-                // Aún no se ha sincronizado el create de este uso; lo dejamos para el siguiente ciclo
-                continue;
-              }
-              useId = String(foundServerUseId);
-            }
-
-            const { vehiculo_id: _ignore, ...requestData } = payload;
-            const result = await updateCorporateVehicleUse({
-              use_id: String(useId),
-              requestData,
-              refreshAccessToken,
-              logout,
-            });
-
-            if (result.status) {
-              const updatedActions = actions.filter(
-                (a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'corporate_vehicle_use')
-              );
-              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-
-              // Actualizar cache: aplicar cambios al uso y marcar como synced
-              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-              if (cacheStr) {
-                const cache = JSON.parse(cacheStr);
-                const updatedCache = cache.map((item: any) => {
-                  if (item.type !== 'corporate_vehicle') return item;
-                  const usos = Array.isArray(item.usos) ? item.usos : [];
-                  const newUsos = usos.map((u: any) => {
-                    const matches = String(u.id) === String(useId) || String(u.id_local) === String(action.id);
-                    if (!matches) return u;
-                    return { ...u, ...payload, id: u.id, synced: true };
-                  });
-                  return { ...item, usos: newUsos };
-                });
-                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-              }
-            }
           } else if (action.type === 'complaints_master') {
             console.log('Actualizando queja:', action.id);
             const { updateComplaintsMaster } = await import('@/hooks/evaluationFunctions');
@@ -3525,6 +3454,48 @@ function AppContent() {
                       return item;
                     });
                     await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                  }
+
+                  // Mantener main_structure_cache sincronizado con las coordenadas nuevas del puesto
+                  const mainStructureCacheStr = await AsyncStorage.getItem('main_structure_cache');
+                  if (mainStructureCacheStr) {
+                    const mainStructure = JSON.parse(mainStructureCacheStr);
+                    const puestoId = Number(action?.puesto_id);
+                    const lat = String(action?.payload?.latitud ?? '');
+                    const lng = String(action?.payload?.longitud ?? '');
+                    if (puestoId > 0 && lat && lng && Array.isArray(mainStructure)) {
+                      const updatedMainStructure = mainStructure.map((empresa: any) => ({
+                        ...empresa,
+                        clientes: Array.isArray(empresa?.clientes)
+                          ? empresa.clientes.map((cliente: any) => ({
+                            ...cliente,
+                            division: Array.isArray(cliente?.division)
+                              ? cliente.division.map((division: any) => ({
+                                ...division,
+                                contratos: Array.isArray(division?.contratos)
+                                  ? division.contratos.map((contrato: any) => ({
+                                    ...contrato,
+                                    sucursales: Array.isArray(contrato?.sucursales)
+                                      ? contrato.sucursales.map((sucursal: any) => ({
+                                        ...sucursal,
+                                        puestos: Array.isArray(sucursal?.puestos)
+                                          ? sucursal.puestos.map((puesto: any) =>
+                                            Number(puesto?.id) === puestoId
+                                              ? { ...puesto, ubicacion: { lat, lng } }
+                                              : puesto
+                                          )
+                                          : [],
+                                      }))
+                                      : [],
+                                  }))
+                                  : [],
+                              }))
+                              : [],
+                          }))
+                          : [],
+                      }));
+                      await AsyncStorage.setItem('main_structure_cache', JSON.stringify(updatedMainStructure));
+                    }
                   }
                 }
               }
@@ -4146,84 +4117,6 @@ function AppContent() {
               if (cacheStr) {
                 const cache = JSON.parse(cacheStr);
                 const updatedCache = cache.filter((item: any) => !(item.id === action.id || item.id_local === action.id));
-                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-              }
-            }
-          } else if (action.type === 'corporate_vehicle') {
-            console.log('Eliminando vehículo corporativo:', action.id);
-            const { deleteCorporateVehicle } = await import('@/hooks/evaluationFunctions');
-            const result = await deleteCorporateVehicle({
-              id: action.id,
-              refreshAccessToken,
-              logout,
-            });
-
-            if (result.status) {
-              console.log('Vehículo corporativo eliminado correctamente');
-              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'corporate_vehicle'));
-              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-
-              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-              if (cacheStr) {
-                const cache = JSON.parse(cacheStr);
-                const updatedCache = cache.filter((item: any) => !(item.type === 'corporate_vehicle' && (String(item.id) === String(action.id) || String(item.id_local) === String(action.id))));
-                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-              }
-            }
-          } else if (action.type === 'corporate_vehicle_use') {
-            console.log('Eliminando uso de vehículo corporativo:', action.id);
-            const { deleteCorporateVehicleUse } = await import('@/hooks/evaluationFunctions');
-
-            let useId: string | number = action.id;
-            const isLocalUse = String(useId).startsWith('local-');
-            const payload = action.payload || {};
-
-            // Si es local y nunca se sincronizó, no llamamos al server: solo limpiamos cache + acciones
-            if (isLocalUse) {
-              const updatedActions = actions.filter(
-                (a: any) =>
-                  !(
-                    (a.id === action.id && a.action === 'delete' && a.type === 'corporate_vehicle_use') ||
-                    (a.id === action.id && a.type === 'corporate_vehicle_use') // limpia create/update del mismo uso local
-                  )
-              );
-              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-
-              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-              if (cacheStr) {
-                const cache = JSON.parse(cacheStr);
-                const updatedCache = cache.map((item: any) => {
-                  if (item.type !== 'corporate_vehicle') return item;
-                  const usos = Array.isArray(item.usos) ? item.usos : [];
-                  return { ...item, usos: usos.filter((u: any) => String(u.id) !== String(useId) && String(u.id_local) !== String(useId)) };
-                });
-                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-              }
-              continue;
-            }
-
-            // Si no es local, intentamos eliminar en server
-            const result = await deleteCorporateVehicleUse({
-              use_id: String(useId),
-              refreshAccessToken,
-              logout,
-            });
-
-            if (result.status) {
-              const updatedActions = actions.filter(
-                (a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'corporate_vehicle_use')
-              );
-              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-
-              // Actualizar cache: remover uso
-              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-              if (cacheStr) {
-                const cache = JSON.parse(cacheStr);
-                const updatedCache = cache.map((item: any) => {
-                  if (item.type !== 'corporate_vehicle') return item;
-                  const usos = Array.isArray(item.usos) ? item.usos : [];
-                  return { ...item, usos: usos.filter((u: any) => String(u.id) !== String(useId)) };
-                });
                 await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
               }
             }
@@ -4931,6 +4824,8 @@ function AppContent() {
         console.error('Error procesando acción de evaluación:', error);
       }
     }
+
+    await runCorporateEvaluationsSync({ refreshAccessToken, logout } as Parameters<typeof runCorporateEvaluationsSync>[0]);
   }
 
   const checkSurveysActionsCache = async () => {
@@ -5798,6 +5693,11 @@ function AppContent() {
         <RootNavigator />
         <StatusBar style="auto" />
       </NavigationContainer>
+      <CacheSyncActionsOverlay
+        visible={cacheSyncModalVisible}
+        fadeAnim={cacheSyncFadeAnim.current}
+        onRequestClose={dismissCacheSyncOverlayOnly}
+      />
     </GestureHandlerRootView>
   );
 }

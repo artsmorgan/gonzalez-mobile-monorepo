@@ -29,6 +29,11 @@ import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '@/App';
 import { eventBus } from '@/hooks/eventBus';
+import {
+  removeVehicleFromCorpoCache,
+  setVehicleUsosInCorpoCache,
+  upsertVehicleInCorpoCache,
+} from '@/hooks/corporateVehiclesCorpoCache';
 import { useQRScanner } from '@/hooks/useQRScanner';
 import authedFetch from '@/hooks/authedFetch';
 import DateTimePicker from '@react-native-community/datetimepicker';
@@ -1663,6 +1668,7 @@ export default function CorporateVehiclesScreen() {
       return { ...item, usos };
     });
     await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+    await setVehicleUsosInCorpoCache(vehicleKey, usos);
   }, []);
 
   const openUsesModal = useCallback(
@@ -1842,6 +1848,13 @@ export default function CorporateVehiclesScreen() {
     return found && typeof found.id === 'number' ? found.id : null;
   };
 
+  /** id_local del vehículo padre cuando el registro aún no está sincronizado (para usos/mantenimientos). */
+  const getVehiculoIdLocalForChildPayload = (v: VehicleRecord): string | undefined => {
+    if (v.id_local != null && String(v.id_local).trim() !== '') return String(v.id_local);
+    if (typeof v.id === 'string' && v.id.startsWith('local-')) return v.id;
+    return undefined;
+  };
+
   const saveUseRecord = async () => {
     const errMsg = validateUseForm();
     if (errMsg) {
@@ -1878,6 +1891,7 @@ export default function CorporateVehiclesScreen() {
       }
       const isConnected = await getConnectionStatus();
       const vehicleIdForAction = String(vehicle.id_local || vehicle.id);
+      const vehiculoIdLocal = getVehiculoIdLocalForChildPayload(vehicle);
 
       if (!isConnected) {
         const actionsStr = await AsyncStorage.getItem('evaluations_actions');
@@ -1889,7 +1903,12 @@ export default function CorporateVehiclesScreen() {
             id: localUseId,
             action: 'create',
             type: 'corporate_vehicle_use',
-            payload: { vehiculo_id: vehicleIdForAction, ...requestData },
+            payload: {
+              vehiculo_id: vehicleIdForAction,
+              id_local: localUseId,
+              ...(vehiculoIdLocal ? { vehiculo_id_local: vehiculoIdLocal } : {}),
+              ...requestData,
+            },
             synced: false,
           });
           await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
@@ -2037,22 +2056,51 @@ export default function CorporateVehiclesScreen() {
     ]);
   };
 
+  const resolveCorporateServerNumericId = (raw: number | string | undefined): number | undefined => {
+    if (raw === undefined || raw === null) return undefined;
+    if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) return raw;
+    const s = String(raw);
+    if (s.startsWith('local-')) return undefined;
+    const n = Number(s);
+    return Number.isFinite(n) && n > 0 ? n : undefined;
+  };
+
+  const resolveCorporateLocalKey = (record: { id?: number | string; id_local?: string }): string | undefined => {
+    if (record.id_local != null && String(record.id_local).trim() !== '') return String(record.id_local);
+    if (typeof record.id === 'string' && record.id.startsWith('local-')) return record.id;
+    return undefined;
+  };
+
   const handleAssignEstado = async (u: VehicleUse) => {
     try {
       if (!usesVehicle) return;
-      // Requerimos IDs reales para vincular a bitácora
-      if (typeof usesVehicle.id !== 'number') {
-        Alert.alert('Sincronización requerida', 'Este vehículo aún no está sincronizado.');
-        return;
-      }
-      if (typeof u.id !== 'number') {
-        Alert.alert('Sincronización requerida', 'Este uso aún no está sincronizado.');
-        return;
-      }
       if ((u as any)?.bitacora_id != null) {
         Alert.alert('Info', 'Este uso ya tiene una bitácora asignada.');
         return;
       }
+
+      const vehIdNum = resolveCorporateServerNumericId(usesVehicle.id);
+      const vehLocal = resolveCorporateLocalKey(usesVehicle);
+      if (!vehIdNum && !vehLocal) {
+        Alert.alert('Error', 'No se pudo identificar el vehículo.');
+        return;
+      }
+
+      const usoIdNum = resolveCorporateServerNumericId(u.id);
+      const usoLocal = resolveCorporateLocalKey(u);
+      if (!usoIdNum && !usoLocal) {
+        Alert.alert('Error', 'No se pudo identificar el uso.');
+        return;
+      }
+
+      await upsertVehicleInCorpoCache(
+        {
+          ...usesVehicle,
+          usos: useRecords,
+          c_usos_vehiculos_corporativos: useRecords,
+        } as any,
+        { synced: usesVehicle.synced !== false }
+      );
 
       await fetchMainStructure();
       const path = findPathForSucursal(Number(usesVehicle.cliente_id), Number(usesVehicle.corpo_id));
@@ -2070,8 +2118,10 @@ export default function CorporateVehiclesScreen() {
           empresa_id: Number(usesVehicle.empresa_id || 0),
           cliente_id: Number(usesVehicle.cliente_id),
           sucursal_id: Number(usesVehicle.corpo_id),
-          vehiculo_id: Number(usesVehicle.id),
-          uso_id: Number(u.id),
+          ...(vehIdNum != null ? { vehiculo_id: vehIdNum } : {}),
+          ...(usoIdNum != null ? { uso_id: usoIdNum } : {}),
+          ...(vehLocal ? { vehiculo_id_local: vehLocal } : {}),
+          ...(usoLocal ? { uso_id_local: usoLocal } : {}),
           vehiculo_tipo: String(usesVehicle.tipo || ''),
           vehiculo_placa: String(usesVehicle.placa || ''),
         },
@@ -2292,6 +2342,7 @@ export default function CorporateVehiclesScreen() {
       const requestData = buildMaintenanceRequestData();
       const isConnected = await getConnectionStatus();
       const vehicleIdForAction = String(vehicle.id_local || vehicle.id);
+      const vehiculoIdLocal = getVehiculoIdLocalForChildPayload(vehicle);
 
       if (!isConnected) {
         const actionsStr = await AsyncStorage.getItem('evaluations_actions');
@@ -2303,7 +2354,12 @@ export default function CorporateVehiclesScreen() {
             id: localMaintenanceId,
             action: 'create',
             type: 'corporate_vehicle_maintenance',
-            payload: { vehiculo_id: vehicleIdForAction, ...requestData },
+            payload: {
+              vehiculo_id: vehicleIdForAction,
+              id_local: localMaintenanceId,
+              ...(vehiculoIdLocal ? { vehiculo_id_local: vehiculoIdLocal } : {}),
+              ...requestData,
+            },
             synced: false,
           });
           await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
@@ -2859,7 +2915,13 @@ export default function CorporateVehiclesScreen() {
         const actions = actionsStr ? JSON.parse(actionsStr) : [];
 
         if (!editing) {
-          actions.push({ id: localId, action: 'create', type: 'corporate_vehicle', payload: requestData, synced: false });
+          actions.push({
+            id: localId,
+            action: 'create',
+            type: 'corporate_vehicle',
+            payload: { ...requestData, id_local: localId },
+            synced: false,
+          });
         } else {
           const recordId = String(editing.id).startsWith('local-') ? String(editing.id) : String(editing.id);
           actions.push({ id: recordId, action: 'update', type: 'corporate_vehicle', payload: requestData, synced: false });
@@ -2906,6 +2968,8 @@ export default function CorporateVehiclesScreen() {
             })),
           };
           cache.push(localItem);
+          await upsertVehicleInCorpoCache(localItem as any, { synced: false });
+          await AsyncStorage.setItem('evaluations_cache', JSON.stringify(cache));
         } else {
           const recordId = editing.id;
           const updatedCache = cache.map((item: any) => {
@@ -2926,9 +2990,14 @@ export default function CorporateVehiclesScreen() {
             return item;
           });
           await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+          const merged = updatedCache.find(
+            (item: any) =>
+              item.type === 'corporate_vehicle' &&
+              (String(item.id) === String(recordId) || String(item.id_local) === String(editing.id_local))
+          );
+          if (merged) await upsertVehicleInCorpoCache(merged, { synced: false });
         }
 
-        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(cache));
         Alert.alert('Éxito', 'Se guardó el registro en el dispositivo. Se sincronizará al reconectar.');
         setTimeout(async () => {
           setIsCreating(false);
@@ -2942,12 +3011,40 @@ export default function CorporateVehiclesScreen() {
       if (!editing) {
         const res = await createCorporateVehicle({ requestData, refreshAccessToken, logout });
         if (!res.status) throw new Error(res.message || 'No se pudo crear');
+        const newId = Number((res as any).data?.id ?? 0);
+        if (newId && requestData.corpo_id) {
+          await upsertVehicleInCorpoCache(
+            {
+              ...requestData,
+              ...(typeof (res as any).data === 'object' ? (res as any).data : {}),
+              id: newId,
+              corpo_id: requestData.corpo_id,
+              usos: [],
+              images: (res as any).data?.images,
+            },
+            { synced: true }
+          );
+        }
         Alert.alert('Éxito', res.message || 'Registro guardado correctamente');
       } else {
         const idToUpdate = String(editing.id);
         const serverId = idToUpdate.startsWith('local-') ? String(editing.id_local || '') : idToUpdate;
         const res = await updateCorporateVehicle({ id: serverId, requestData, refreshAccessToken, logout });
         if (!res.status) throw new Error(res.message || 'No se pudo actualizar');
+        const vid = Number(
+          String(editing.id).startsWith('local-') ? (res as any).data?.id ?? editing.id : editing.id
+        );
+        if (requestData.corpo_id) {
+          await upsertVehicleInCorpoCache(
+            {
+              ...requestData,
+              id: vid,
+              corpo_id: requestData.corpo_id,
+              images: (res as any).data?.images,
+            },
+            { synced: true }
+          );
+        }
         Alert.alert('Éxito', res.message || 'Registro guardado correctamente');
       }
 
@@ -2989,12 +3086,14 @@ export default function CorporateVehiclesScreen() {
                 (item: any) => !(item.type === 'corporate_vehicle' && (String(item.id) === recordId || String(item.id_local) === recordId))
               );
               await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              await removeVehicleFromCorpoCache({ id: r.id, id_local: r.id_local });
               await fetchRecords();
               return;
             }
 
             const res = await deleteCorporateVehicle({ id: recordId, refreshAccessToken, logout });
             if (!res.status) throw new Error(res.message || 'No se pudo eliminar');
+            await removeVehicleFromCorpoCache({ id: r.id, id_local: r.id_local });
             await fetchRecords();
           } catch (e: any) {
             Alert.alert('Error', e?.message || 'No se pudo eliminar');

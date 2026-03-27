@@ -150,12 +150,14 @@ export const signMutuoAcuerdoEjecutivo = async ({
   id,
   firma_ejecutivo_cuenta_manual,
   firma_ejecutivo_cuenta_digital,
+  hora_accion,
   refreshAccessToken,
   logout,
 }: {
   id: number;
   firma_ejecutivo_cuenta_manual: string;
   firma_ejecutivo_cuenta_digital: string;
+  hora_accion?: string;
 } & CommonAuth): Promise<BasicResponse> => {
   try {
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
@@ -165,6 +167,7 @@ export const signMutuoAcuerdoEjecutivo = async ({
     const payload = {
       firma_ejecutivo_cuenta_manual: normalizeBase64(String(firma_ejecutivo_cuenta_manual || '')),
       firma_ejecutivo_cuenta_digital: String(firma_ejecutivo_cuenta_digital || '').trim(),
+      hora_accion: hora_accion || undefined,
     };
 
     const response = await authedFetch({
@@ -188,9 +191,10 @@ export const signMutuoAcuerdoEjecutivo = async ({
 
 export const rejectMutuoAcuerdoEjecutivo = async ({
   id,
+  hora_accion,
   refreshAccessToken,
   logout,
-}: { id: number } & CommonAuth): Promise<BasicResponse> => {
+}: { id: number; hora_accion?: string } & CommonAuth): Promise<BasicResponse> => {
   try {
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) throw new Error('Server URL not configured');
@@ -203,6 +207,9 @@ export const rejectMutuoAcuerdoEjecutivo = async ({
         headers: {
           'Content-Type': 'application/json',
         },
+        body: JSON.stringify({
+          hora_accion: hora_accion || undefined,
+        }),
       },
       refreshAccessToken: refresh,
       logout: doLogout,

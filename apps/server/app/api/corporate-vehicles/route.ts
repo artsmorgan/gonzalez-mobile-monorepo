@@ -347,6 +347,7 @@ export async function POST(req: NextRequest) {
         status: true,
         message: "Vehículo corporativo creado correctamente",
         data: {
+          id: fullRecordObj?.id ?? newRecordObj.id,
           ...(fullRecordObj ?? newRecordObj),
           id_local: "",
           images: imagenesArray.map((i: any) => ({

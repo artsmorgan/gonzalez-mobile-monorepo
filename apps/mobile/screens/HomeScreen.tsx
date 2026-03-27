@@ -487,6 +487,16 @@ export default function HomeScreen() {
                 <ThemedText style={styles.buttonText}>Jerarquía</ThemedText>
               </TouchableOpacity>
             </View>
+
+            <View style={styles.buttonsRow}>
+              <TouchableOpacity
+                style={[styles.quickAccessButton, styles.syncPendingButton]}
+                onPress={handleOpenSyncModal}
+              >
+                <Ionicons name="cloud-upload-outline" size={30} color="#fff" />
+                <ThemedText style={styles.buttonText}>Sincronizaciones</ThemedText>
+              </TouchableOpacity>
+            </View>
           </ThemedView>
         </ThemedView>
       </ScrollView>
@@ -502,7 +512,7 @@ export default function HomeScreen() {
         <View style={styles.overlay}>
           <ThemedView style={styles.floatModalCardMovimientos}>
             <ThemedView style={styles.floatModalHeader}>
-              <ThemedText style={styles.modalTitle}>Sincronizaciones pendientes	</ThemedText>
+              <ThemedText style={styles.modalTitle}>Sincronizaciones pendientes</ThemedText>
               <TouchableOpacity onPress={handleCloseSyncModal}>
                 <Ionicons name="close" size={24} color="#333" />
               </TouchableOpacity>
@@ -798,6 +808,10 @@ const styles = StyleSheet.create({
   },
   scanButton: {
     backgroundColor: '#34C759', // Verde para distinguir el botón de escaneo
+  },
+  syncPendingButton: {
+    backgroundColor: '#5856D6',
+    flex: 1,
   },
   loadingText: {
     textAlign: 'center',

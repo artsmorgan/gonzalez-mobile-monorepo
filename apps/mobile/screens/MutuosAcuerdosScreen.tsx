@@ -496,11 +496,18 @@ export default function MutuosAcuerdosScreen() {
 
     setIsSubmitting(true);
     try {
+      const horaAccion = await getHoraAccion();
+      if (!horaAccion) {
+        Alert.alert('Error', 'No se pudo obtener la hora de la acción');
+        return;
+      }
+
       const response = await createMutuoAcuerdo({
         requestData: {
           marcaDiaAusente_id: ausente.selectedMarcaId,
           marcaDiaReemplaza_id: reemplaza.selectedMarcaId,
           motivo: motivo.trim(),
+          hora_accion: horaAccion,
           firma_responsable: firmaResponsable.trim(),
           ...(attachedDocument
             ? {
@@ -597,7 +604,17 @@ export default function MutuosAcuerdosScreen() {
 
   const handleRejectByExecutive = async (recordId: number) => {
     try {
-      const response = await rejectMutuoAcuerdoEjecutivo({ id: recordId, refreshAccessToken, logout });
+      const horaAccion = await getHoraAccion();
+      if (!horaAccion) {
+        Alert.alert('Error', 'No se pudo obtener la hora de la acción');
+        return;
+      }
+      const response = await rejectMutuoAcuerdoEjecutivo({
+        id: recordId,
+        hora_accion: new Date(horaAccion).toISOString(),
+        refreshAccessToken,
+        logout,
+      });
       if (!response.status) {
         Alert.alert('Error', response.message || 'No se pudo rechazar el mutuo acuerdo');
         return;
@@ -665,11 +682,17 @@ export default function MutuosAcuerdosScreen() {
         Alert.alert('Error', 'La firma manual está vacía');
         return;
       }
+      const horaAccion = await getHoraAccion();
+      if (!horaAccion) {
+        Alert.alert('Error', 'No se pudo obtener la hora de la acción');
+        return;
+      }
       setIsSigning(true);
       const response = await signMutuoAcuerdoEjecutivo({
         id: signingRecordId,
         firma_ejecutivo_cuenta_manual: formatted,
         firma_ejecutivo_cuenta_digital: firmaEjecutivoDigital,
+        hora_accion: new Date(horaAccion).toISOString(),
         refreshAccessToken,
         logout,
       });

@@ -3,6 +3,7 @@ import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
 import { toZonedTime } from "date-fns-tz";
+import { sendNotificationByEmployee } from "../../../utils/sendNotification";
 
 const turnoTexto = (tipoTurno?: string | null) => {
   const first = String(tipoTurno || "").trim().charAt(0).toUpperCase();
@@ -34,6 +35,15 @@ const marcaResumen = (marca: any) => {
 const parseIntStrict = (value: any) => {
   const n = parseInt(String(value), 10);
   return Number.isNaN(n) ? null : n;
+};
+
+const parseDateInputToDate = (input: unknown): Date | null => {
+  if (!input) return null;
+  if (input instanceof Date) return isNaN(input.getTime()) ? null : input;
+  const s = String(input).trim();
+  if (!s) return null;
+  const parsed = new Date(s);
+  return isNaN(parsed.getTime()) ? null : parsed;
 };
 
 export async function GET(req: NextRequest) {
@@ -214,6 +224,7 @@ export async function POST(req: NextRequest) {
     const marcaDiaAusente_id = parseIntStrict(body?.marcaDiaAusente_id);
     const marcaDiaReemplaza_id = parseIntStrict(body?.marcaDiaReemplaza_id);
     const motivo = String(body?.motivo || "").trim();
+    const horaAccion = parseDateInputToDate(body?.hora_accion);
     const firma_responsable = String(body?.firma_responsable || "").trim();
     const file_base64 = String(body?.file_base64 || "").trim();
     const extension = String(body?.extension || "").replace(".", "").trim();
@@ -300,7 +311,7 @@ export async function POST(req: NextRequest) {
     }
 
     const createdBy = parseIntStrict((payload as any)?.id) || 0;
-    const createdAt = toZonedTime(new Date(), "America/Costa_Rica");
+    const createdAt = horaAccion ? horaAccion : toZonedTime(new Date(), "America/Costa_Rica");
 
     const record = await callDynamicPrisma({
       req,
@@ -384,6 +395,161 @@ export async function POST(req: NextRequest) {
         },
       },
     });
+
+    const empleadoAusente = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "c_empleado",
+        operation: "findUnique",
+        where: { id: Number(marcaAusente.empleadoFijo_id) },
+      },
+    });
+    const empleadoReemplaza = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "c_empleado",
+        operation: "findUnique",
+        where: { id: Number(marcaReemplaza.empleadoFijo_id) },
+      },
+    });
+
+    const recipients = new Set<number>();
+    const employeePlazas = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "c_empleado_plaza",
+        operation: "findMany",
+        where: { ejecutivoCuenta_id: ejecutivo_cuenta },
+        select: { empleado_id: true },
+      },
+    });
+    for (const row of Array.isArray(employeePlazas) ? employeePlazas : []) {
+      const empId = parseIntStrict((row as any)?.empleado_id);
+      if (empId) recipients.add(empId);
+    }
+
+    if (recipients.size > 0) {
+      const empleados_ejecutivos = await callDynamicPrisma({
+        req,
+        data: {
+          action: "GET",
+          table: "c_empleado",
+          operation: "findMany",
+          where: { supervisor_id: ejecutivo_cuenta },
+        },
+      });
+
+      const puestoAusente = await callDynamicPrisma({
+        req,
+        data: {
+          action: "GET",
+          table: "e_estructura_puesto",
+          operation: "findUnique",
+          where: { id: marcaAusente.puesto_id },
+        },
+      });
+
+      let sucursalNombreAusente = "Desconocida";
+      let clienteNombreAusente = "Desconocido";
+      if (puestoAusente) {
+        const sucursalAusente = await callDynamicPrisma({
+          req,
+          data: {
+            action: "GET",
+            table: "e_estructura_sucursal",
+            operation: "findUnique",
+            where: { id: marcaAusente.corpo_id },
+          },
+        });
+        if (sucursalAusente) {
+          sucursalNombreAusente = sucursalAusente.nombre;
+          let clienteAusente = await callDynamicPrisma({
+            req,
+            data: {
+              action: "GET",
+              table: "e_estructura_cliente",
+              operation: "findUnique",
+              where: { id: marcaAusente.cliente_id },
+            },
+          });
+          if (clienteAusente) {
+            clienteNombreAusente = clienteAusente.nombre;
+          }
+        }
+      }
+
+      const puestoReemplaza = await callDynamicPrisma({
+        req,
+        data: {
+          action: "GET",
+          table: "e_estructura_puesto",
+          operation: "findUnique",
+          where: { id: marcaReemplaza.puesto_id },
+        },
+      });
+
+      let sucursalNombreReemplaza = "Desconocida";
+      let clienteNombreReemplaza = "Desconocido";
+      if (puestoReemplaza) {
+        const sucursalReemplaza = await callDynamicPrisma({
+          req,
+          data: {
+            action: "GET",
+            table: "e_estructura_sucursal",
+            operation: "findUnique",
+            where: { id: marcaReemplaza.corpo_id },
+          },
+        });
+        if (sucursalReemplaza) {
+          sucursalNombreReemplaza = sucursalReemplaza.nombre;
+          let clienteReemplaza = await callDynamicPrisma({
+            req,
+            data: {
+              action: "GET",
+              table: "e_estructura_cliente",
+              operation: "findUnique",
+              where: { id: marcaReemplaza.cliente_id },
+            },
+          });
+          if (clienteReemplaza) {
+            clienteNombreReemplaza = clienteReemplaza.nombre;
+          }
+        }
+      }
+
+      const puestoNombreAusente = puestoAusente ? puestoAusente.nombre : "Desconocido";
+      const puestoNombreReemplaza = puestoReemplaza ? puestoReemplaza.nombre : "Desconocido";
+      const ausenteNombre = empleadoAusente
+        ? `${empleadoAusente.nombre ?? ""} ${empleadoAusente.primer_apellido ?? ""} ${empleadoAusente.segundo_apellido ?? ""}`.trim()
+        : `ID ${marcaAusente.empleadoFijo_id}`;
+      const reemplazaNombre = empleadoReemplaza
+        ? `${empleadoReemplaza.nombre ?? ""} ${empleadoReemplaza.primer_apellido ?? ""} ${empleadoReemplaza.segundo_apellido ?? ""}`.trim()
+        : `ID ${marcaReemplaza.empleadoFijo_id}`;
+      const ausenteCedula = String((empleadoAusente as any)?.cedula ?? "");
+      const reemplazaCedula = String((empleadoReemplaza as any)?.cedula ?? "");
+      const fecha = createdAt.toISOString().split("T")[0];
+      const hora = createdAt.toISOString().split("T")[1];
+
+      const fecha_ausente_cambio = marcaAusente.fecha ? new Date(marcaAusente.fecha).toISOString().split("T")[0] : '-Sin fecha-';
+      const fecha_reemplaza_cambio = marcaReemplaza.fecha ? new Date(marcaReemplaza.fecha).toISOString().split("T")[0] : '-Sin fecha-';
+      const hora_inicio_ausente = marcaAusente.hora_inicio ? new Date(marcaAusente.hora_inicio).toISOString().split("T")[1].split(".")[0] : '-Sin hora-';
+      const hora_inicio_reemplaza = marcaReemplaza.hora_inicio ? new Date(marcaReemplaza.hora_inicio).toISOString().split("T")[1].split(".")[0] : '-Sin hora-';
+
+      await sendNotificationByEmployee(
+        req,
+        0,
+        Array.from(recipients),
+        `Nuevo mutuo acuerdo`,
+        `Se creó un mutuo acuerdo el día ${fecha} a las ${hora}. El empleado ${ausenteNombre} (cédula ${ausenteCedula || "N/A"}) acuerda cambiar el turno del día ${fecha_ausente_cambio} a las ${hora_inicio_ausente} para el puesto ${puestoNombreAusente} (Sucursal ${sucursalNombreAusente} del cliente ${clienteNombreAusente}) por el turno del día ${fecha_reemplaza_cambio} a las ${hora_inicio_reemplaza} para el puesto ${puestoNombreReemplaza} (Sucursal ${sucursalNombreReemplaza} del cliente ${clienteNombreReemplaza}) del empleado ${reemplazaNombre} (cédula ${reemplazaCedula || "N/A"}).`,
+        (Array.isArray(empleados_ejecutivos) ? empleados_ejecutivos : []).map((e: any) => e.id)
+      ).catch((error) => {
+        const msg = error instanceof Error ? error.message : "Error desconocido";
+        console.error("Error sending mutuos-acuerdos notifications:", msg);
+      });
+    }
 
     return NextResponse.json({ status: true, message: "Mutuo acuerdo creado correctamente", data: finalRecord }, { status: 200 });
   } catch (error: unknown) {

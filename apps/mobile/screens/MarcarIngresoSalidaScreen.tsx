@@ -35,6 +35,8 @@ interface AttendanceSuccessResponse {
     id: number;
     hora_entrada_digitada: string | null;
     hora_salida_digitada: string | null;
+    // Recibido desde el endpoint de asistencia (necesario para flujos que dependen del empleado fijo).
+    empleadoFijo_id?: number | null;
     hora_inicio: string;
     hora_fin: string;
     fecha: string;
@@ -94,6 +96,7 @@ interface AttendanceErrorResponse {
   status: false;
   message: string;
   absent?: boolean; // Dato absent puede ser opcional
+  should_response?: boolean;
   marca_id?: number;
 }
 
@@ -116,7 +119,9 @@ export default function MarcarIngresoSalidaScreen() {
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [exitReason, setExitReason] = useState('');
   const [showAbsentReasonForm, setShowAbsentReasonForm] = useState(false);
+  const [shouldResponseAbsentReason, setShouldResponseAbsentReason] = useState(false);
   const [absentReason, setAbsentReason] = useState('');
+  const [isSubmittingAbsentReason, setIsSubmittingAbsentReason] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const navigation = useNavigation<MarcarIngresoSalidaScreenNavigationProp>();
   const [horaAccion, setHoraAccion] = useState<number | null>(null);
@@ -268,6 +273,7 @@ export default function MarcarIngresoSalidaScreen() {
       let result = null;
       let data = null;
 
+      let shouldUpdateData = false;
       if (networkState.isConnected && networkState.isInternetReachable) {
         const response = await authedFetch({
           url: `${apiUrl}/api/attendance/user/${employee.id}?lat=${lat}&long=${long}`,
@@ -288,7 +294,7 @@ export default function MarcarIngresoSalidaScreen() {
 
         data = await response.json();
 
-        console.log("Response got from the server");
+        console.log("Response got from the server", data);
 
         result = data.status;
 
@@ -313,7 +319,12 @@ export default function MarcarIngresoSalidaScreen() {
           }
 
           // Si la marca tiene hora_salida_digitada null, guardarla en current_marca
-          if (marca_send.hora_salida_digitada === null) {
+          if (marca_send && marca_send.hora_entrada_digitada !== null && marca_send.hora_salida_digitada === null) {
+            const current_marca = await AsyncStorage.getItem('current_marca');
+            console.log("current_marca", current_marca);
+            if (!current_marca || current_marca.trim() === '') {
+              shouldUpdateData = true;
+            }
             await AsyncStorage.setItem('current_marca', JSON.stringify(marca_send));
           }
         }
@@ -337,8 +348,8 @@ export default function MarcarIngresoSalidaScreen() {
         }
       }
 
-      if (false && marca_send && marca_send.puesto && marca_send.puesto.ubicacion && marca_send.puesto.ubicacion.lat && marca_send.puesto.ubicacion.lng) {
-        const distance = getDistanceFromLatLonInMeters(lat, long, marca_send.puesto.ubicacion.lat, marca_send.puesto.ubicacion.lng);
+      if (marca_send.hora_entrada_digitada === null && marca_send.puesto && marca_send.puesto.ubicacion && marca_send.puesto.ubicacion.lat && marca_send.puesto.ubicacion.lng) {
+        const distance = 25; //getDistanceFromLatLonInMeters(lat, long, marca_send.puesto.ubicacion.lat, marca_send.puesto.ubicacion.lng);
         if (distance > 50) {
           result = false;
           const marca_ubicacion = marca_send.puesto.ubicacion.lat + ', ' + marca_send.puesto.ubicacion.lng;
@@ -352,6 +363,18 @@ export default function MarcarIngresoSalidaScreen() {
         // Si la actualización periódica fue exitosa, limpiamos cualquier posible marca pendiente de revertir
         setRevertMarcaId(null);
         await setCurrentAttendanceData(marca_send, horaAccionValue);
+        console.log("shouldUpdateData", shouldUpdateData);
+        if (shouldUpdateData && marca_send) {
+          // Mostrar el mismo loader y mensaje de espera que al marcar entrada manualmente
+          setIsProcessingMark(true);
+          setProcessingType('entrada');
+          try {
+            await hydrateAfterEntrada(marca_send, horaAccionValue, false);
+          } finally {
+            setIsProcessingMark(false);
+            setProcessingType(null);
+          }
+        }
       } else {
         const errorData = data as AttendanceErrorResponse;
 
@@ -359,6 +382,7 @@ export default function MarcarIngresoSalidaScreen() {
         if (errorData && typeof errorData === 'object' && errorData.absent === true) {
           console.log("Error data", errorData);
           setAbsentMarcaId(errorData.marca_id ?? null);
+          setShouldResponseAbsentReason(errorData.should_response === true);
           setShowAbsentReasonForm(true);
           setErrorMessage(errorData.message);
           return;
@@ -369,6 +393,7 @@ export default function MarcarIngresoSalidaScreen() {
           console.log("Marca ID", errorData.marca_id);
           setRevertMarcaId(errorData.marca_id);
         }
+        setShouldResponseAbsentReason(false);
 
         setErrorMessage(errorData.message);
       }
@@ -501,7 +526,7 @@ export default function MarcarIngresoSalidaScreen() {
         }
       }
 
-      confirmAction(type);
+      confirmAction(type, '', false);
     } catch (error) {
       console.error('Error updating attendance:', error);
       Alert.alert('Error', 'No se pudo actualizar el estado de asistencia. Por favor, intenta nuevamente.');
@@ -510,7 +535,61 @@ export default function MarcarIngresoSalidaScreen() {
     }
   };
 
-  const confirmAction = async (type: string, reason: string = '') => {
+  const hydrateAfterEntrada = async (marca: any, horaAccionValue: number, shouldRefreshStatus: boolean) => {
+    try {
+      await cleanAsyncStorage();
+
+      const updatedMarca = {
+        ...marca,
+        hora_entrada_digitada: new Date(horaAccionValue).toISOString(),
+      };
+
+      await AsyncStorage.setItem('current_marca', JSON.stringify(updatedMarca));
+
+      await Promise.all([
+        getLunchTimeConfig(updatedMarca.id),
+        getActivities(updatedMarca.id),
+        getNotes(updatedMarca.id),
+        getCategories(),
+        getTiposProductoNoConforme(),
+        getTipoActivo(),
+        getEmployeesCorpo(updatedMarca.corpo.id),
+        getIncidentsClassifications(),
+        getDocumentTypes(),
+        getExecutives(),
+        getPuestosCorpo(updatedMarca.corpo.id),
+        getCorporateVehicles(updatedMarca.corpo.id),
+        getVoiceNotes(updatedMarca.id),
+        getArticulos(),
+        getJobManuals(updatedMarca.id),
+        getLlaves(updatedMarca.id),
+        getLlaveros(updatedMarca.id),
+        getCategoriesMantenimiento(),
+      ]);
+
+      const shouldUpdateMainStructure = await shouldUpdateMainStructureCache();
+      if (shouldUpdateMainStructure) {
+        await getMainStructure();
+      }
+
+      setAttendanceData((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          estado: 'Ingresado',
+          marca: updatedMarca,
+        } as AttendanceSuccessResponse;
+      });
+
+      if (shouldRefreshStatus) {
+        await fetchAttendanceStatus();
+      }
+    } catch (storageError) {
+      console.error('Error hydrating entrada context:', storageError);
+    }
+  };
+
+  const confirmAction = async (type: string, reason: string, isUpdate: boolean) => {
     // Desactivar el polling mientras se procesa la marca
     setIsProcessingMark(true);
     setProcessingType(type === 'salida' ? 'salida' : 'entrada');
@@ -532,13 +611,11 @@ export default function MarcarIngresoSalidaScreen() {
     let data = null;
     if (networkState.isConnected && networkState.isInternetReachable) {
       data = await saveMarca({ data_params: { type, reason, horaAccion: horaAccion }, marcaId: attendanceData.marca.id, refreshAccessToken, logout });
-    }
-    else {
+    } else {
       if (type === 'salida') {
         await AsyncStorage.setItem('marca_cache', JSON.stringify({ marcaId: attendanceData.marca.id, type, reason, horaAccion: horaAccion }));
         data = { status: true, message: 'Salida registrada correctamente' };
-      }
-      else {
+      } else {
         data = { status: false, message: 'No hay conexión a internet. Por favor, intenta nuevamente.' };
       }
     }
@@ -549,47 +626,15 @@ export default function MarcarIngresoSalidaScreen() {
       try {
         if (type === 'entrada') {
           if (attendanceData) {
-            await cleanAsyncStorage();
-            const main_structure_cache = await AsyncStorage.getItem('main_structure_cache') || '';
-
-            attendanceData.marca.hora_entrada_digitada = new Date(horaAccion).toISOString();
-            await AsyncStorage.setItem('current_marca', JSON.stringify(attendanceData.marca));
-            await Promise.all([
-              getLunchTimeConfig(attendanceData.marca.id),
-              getActivities(attendanceData.marca.id),
-              getNotes(attendanceData.marca.id),
-              getCategories(),
-              getTiposProductoNoConforme(),
-              getTipoActivo(),
-              getEmployeesCorpo(attendanceData.marca.corpo.id),
-              getIncidentsClassifications(),
-              getDocumentTypes(),
-              getExecutives(),
-              getPuestosCorpo(attendanceData.marca.corpo.id),
-              getCorporateVehicles(attendanceData.marca.corpo.id),
-              getVoiceNotes(attendanceData.marca.id),
-              getArticulos(),
-              getJobManuals(attendanceData.marca.id),
-              getLlaves(attendanceData.marca.id),
-              getLlaveros(attendanceData.marca.id),
-              getCategoriesMantenimiento()
-            ]);
-
-            const shouldUpdateMainStructure = await shouldUpdateMainStructureCache();
-            if (shouldUpdateMainStructure) {
-              await getMainStructure();
-            }
+            await hydrateAfterEntrada(attendanceData.marca, horaAccion, true);
           }
-        }
-        else {
+        } else {
           await AsyncStorage.removeItem('current_marca');
+          await fetchAttendanceStatus();
         }
       } catch (storageError) {
         console.error('Error with storage or status refresh:', storageError);
       }
-
-      // Refresh the status after updating
-      await fetchAttendanceStatus();
 
       Alert.alert(
         'Éxito',
@@ -1402,7 +1447,7 @@ export default function MarcarIngresoSalidaScreen() {
     }
 
     setIsModalVisible(false);
-    confirmAction('salida', exitReason.trim());
+    confirmAction('salida', exitReason.trim(), false);
     setExitReason('');
   };
 
@@ -1417,24 +1462,28 @@ export default function MarcarIngresoSalidaScreen() {
       return;
     }
 
-    setShowAbsentReasonForm(false);
-    await submitAbsentReason(absentReason.trim());
-    setAbsentReason('');
+    const ok = await submitAbsentReason(absentReason.trim());
+    if (ok) {
+      setShowAbsentReasonForm(false);
+      setAbsentReason('');
+    }
   };
 
   const handleAbsentReasonCancel = () => {
     setShowAbsentReasonForm(false);
+    setShouldResponseAbsentReason(false);
     setAbsentReason('');
   };
 
-  const submitAbsentReason = async (reason: string) => {
+  const submitAbsentReason = async (reason: string): Promise<boolean> => {
     console.log("submitAbsentReason", reason, absentMarcaId);
     if (!employee?.id || !absentMarcaId) {
       Alert.alert('Error', 'No se encontró el ID del empleado o la marca de ausencia.');
-      return;
+      return false;
     }
 
     try {
+      setIsSubmittingAbsentReason(true);
 
       const networkState = await Network.getNetworkStateAsync();
 
@@ -1452,12 +1501,17 @@ export default function MarcarIngresoSalidaScreen() {
         Alert.alert('Éxito', 'Motivo de ausencia registrado correctamente');
         // Refresh the attendance status
         await fetchAttendanceStatus();
+        setShouldResponseAbsentReason(false);
+        return true;
       } else {
         throw new Error(data.message || 'Error al registrar el motivo de ausencia');
       }
     } catch (error) {
       console.error('Error submitting absent reason:', error);
       Alert.alert('Error', 'No se pudo registrar el motivo de ausencia. Por favor, intenta nuevamente.');
+      return false;
+    } finally {
+      setIsSubmittingAbsentReason(false);
     }
   };
 
@@ -2135,10 +2189,17 @@ export default function MarcarIngresoSalidaScreen() {
                 Cargando datos de asistencia...
               </ThemedText>
             </ThemedView>
+          ) : isSubmittingAbsentReason ? (
+            <ThemedView style={styles.loadingContainer}>
+              <ActivityIndicator size="large" color="#007AFF" />
+              <ThemedText style={styles.loadingDataText}>
+                Enviando motivo de ausencia, por favor no cierre la ventana...
+              </ThemedText>
+            </ThemedView>
           ) : errorMessage ? (
             <ThemedView style={styles.errorContainer}>
               {/* Absent Reason Form */}
-              {showAbsentReasonForm && (
+              {showAbsentReasonForm && shouldResponseAbsentReason && (
                 <ThemedView style={styles.absentReasonContainer}>
                   <ThemedText style={styles.absentReasonTitle}>
                     Motivo de ausencia
@@ -2156,16 +2217,17 @@ export default function MarcarIngresoSalidaScreen() {
                     multiline={true}
                     numberOfLines={3}
                     textAlignVertical="top"
+                    editable={!isSubmittingAbsentReason}
                   />
 
                   <ThemedView style={styles.absentReasonButtons}>
-
                     <TouchableOpacity
                       style={[styles.absentReasonButton, styles.absentReasonSubmitButton]}
                       onPress={handleAbsentReasonSubmit}
+                      disabled={isSubmittingAbsentReason}
                     >
                       <ThemedText style={styles.absentReasonSubmitButtonText}>
-                        {getActionIcon('confirm')}
+                        {isSubmittingAbsentReason ? 'Enviando...' : getActionIcon('confirm')}
                       </ThemedText>
                     </TouchableOpacity>
                   </ThemedView>

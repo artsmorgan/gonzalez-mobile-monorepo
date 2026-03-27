@@ -276,7 +276,11 @@ export async function POST(
       }
     }
 
-    return NextResponse.json({ status: true, data: useToApiShape(createdObj) }, { status: 201 });
+    const shaped = useToApiShape(createdObj) as Record<string, unknown>;
+    return NextResponse.json(
+      { status: true, data: { id: createdObj?.id, ...shaped } },
+      { status: 201 }
+    );
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in POST /api/corporate-vehicles/[id]/uses:", errorMessage);

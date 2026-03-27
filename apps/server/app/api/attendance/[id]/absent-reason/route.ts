@@ -3,6 +3,8 @@ import { toZonedTime } from "date-fns-tz";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { sendNotificationByRole } from "../../../../../utils/sendNotification";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
+import { createAccionPersonal } from "../../../../../utils/createAccionPersonal";
+import { getCoordinadoPorId } from "../../../../../utils/getCoordinadoPorId";
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
@@ -42,12 +44,11 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             return NextResponse.json({ status: false, message: "No se encontró el empleado" }, { status: 200 });
         }
 
-        console.log("Marca dia", marcaDia.id);
         let wasUpdatedAccionPersonal = false;
-        console.log("Accion personal", marcaDia.accionPersonal_id);
+        let accionPersonal: any = null;
         if (marcaDia.accionPersonal_id) {
             // Obtener la acción personal
-            const accionPersonal = await callDynamicPrisma({
+            accionPersonal = await callDynamicPrisma({  
                 req,
                 data: {
                     action: "GET",
@@ -56,33 +57,73 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                     where: { id: marcaDia.accionPersonal_id }
                 }
             });
-            console.log("Accion personal", accionPersonal);
-            if (accionPersonal && accionPersonal.tipoAccion_id) {
-                console.log("Accion personal", accionPersonal);
-                console.log("Tipo de acción", accionPersonal.tipoAccion_id);
-                const tipoAccion_id = await callDynamicPrisma({
-                    req,
-                    data: {
-                        action: "GET",
-                        table: "c_tipo_accion",
-                        operation: "findUnique",
-                        where: { id: accionPersonal.tipoAccion_id }
-                    }
-                });
-                if (tipoAccion_id && tipoAccion_id.nombre == "AUSENCIA") {
-                    // Update el registro de la acción personal y modificar el motivo de ausencia
-                    const updatedAccionPersonal = await callDynamicPrisma({
+        }
+
+        console.log(1);
+        if (!accionPersonal) {
+            // Crear una un registro en la tabla c_ausencia
+            const ausencia = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "POST",
+                    table: "c_ausencia",
+                    data: { tipo: "JUS" }
+                }
+            });
+            console.log(2);
+            if (ausencia) {
+                // Crear la acción personal
+                const coordinadoPorId = await getCoordinadoPorId(req, marcaDia);
+                console.log(3);
+                const response = await createAccionPersonal(req, marcaDia.id, 5, 0, ausencia.id, 0, reason, coordinadoPorId);
+                console.log(4);
+                if (response.status) {
+                    accionPersonal = response.data;
+
+                    // Update marca dia con la acción personal
+                    const updatedMarcaDia = await callDynamicPrisma({
                         req,
                         data: {
                             action: "UPDATE",
-                            table: "c_accion_personal",
-                            where: { id: marcaDia.accionPersonal_id },
-                            data: { comentarios: reason }
+                            operation: "update",
+                            table: "c_marca_dia",
+                            where: { id: marcaDia.id },
+                            data: { accionPersonal_id: accionPersonal.id }
                         }
                     });
-                    if (updatedAccionPersonal) {
-                        wasUpdatedAccionPersonal = true;
-                    }
+                    console.log(5);
+                }
+            }
+        }
+        
+        if (accionPersonal && accionPersonal.tipoAccion_id) {
+            console.log("Accion personal", accionPersonal);
+            console.log("Tipo de acción", accionPersonal.tipoAccion_id);
+            const tipoAccion_id = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "c_tipo_accion",
+                    operation: "findUnique",
+                    where: { id: accionPersonal.tipoAccion_id }
+                }
+            });
+            console.log(6);
+            if (tipoAccion_id && tipoAccion_id.nombre == "AUSENCIA") {
+                // Update el registro de la acción personal y modificar el motivo de ausencia
+                const updatedAccionPersonal = await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "UPDATE",
+                        operation: "update",
+                        table: "c_accion_personal",
+                        where: { id: accionPersonal.id },
+                        data: { comentarios: reason }
+                        }
+                    });
+                console.log(7);
+                if (updatedAccionPersonal) {
+                    wasUpdatedAccionPersonal = true;
                 }
             }
         }

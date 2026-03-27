@@ -85,6 +85,50 @@ export default function PuestoUbicacionScreen() {
         return networkState.isConnected && networkState.isInternetReachable ? true : false;
     };
 
+    const buildStructureWithUpdatedPuestoCoords = useCallback(
+        (source: MainStructureTree, puestoId: number, lat: string, lng: string): MainStructureTree => {
+            return (Array.isArray(source) ? source : []).map((empresa) => ({
+                ...empresa,
+                clientes: (empresa.clientes || []).map((cliente) => ({
+                    ...cliente,
+                    division: (cliente.division || []).map((division) => ({
+                        ...division,
+                        contratos: (division.contratos || []).map((contrato) => ({
+                            ...contrato,
+                            sucursales: (contrato.sucursales || []).map((sucursal) => ({
+                                ...sucursal,
+                                puestos: (sucursal.puestos || []).map((puesto) =>
+                                    Number(puesto.id) === Number(puestoId)
+                                        ? {
+                                            ...puesto,
+                                            ubicacion: {
+                                                lat,
+                                                lng,
+                                            },
+                                        }
+                                        : puesto
+                                ),
+                            })),
+                        })),
+                    })),
+                })),
+            }));
+        },
+        []
+    );
+
+    const updatePuestoCoordsInMainStructureCache = useCallback(
+        async (puestoId: number, lat: string, lng: string) => {
+            const cacheStr = await AsyncStorage.getItem('main_structure_cache');
+            if (!cacheStr) return;
+            const parsed = JSON.parse(cacheStr);
+            const updated = buildStructureWithUpdatedPuestoCoords(parsed, puestoId, lat, lng);
+            await AsyncStorage.setItem('main_structure_cache', JSON.stringify(updated));
+            setStructure(updated);
+        },
+        [buildStructureWithUpdatedPuestoCoords]
+    );
+
     // Cargar estructura principal desde main-structure
     const fetchMainStructure = useCallback(async () => {
         try {
@@ -321,14 +365,17 @@ export default function PuestoUbicacionScreen() {
 
                 const data = await response.json();
                 if (data.status) {
+                    const lat = String(deviceLocation.latitude);
+                    const lng = String(deviceLocation.longitude);
+
+                    await updatePuestoCoordsInMainStructureCache(filterPuestoId, lat, lng);
+
                     Alert.alert('Éxito', data.message || 'Ubicación del puesto actualizada correctamente');
                     // Actualizar datos locales
                     setPuestoData({
-                        lat: String(deviceLocation.latitude),
-                        lng: String(deviceLocation.longitude),
+                        lat,
+                        lng,
                     });
-                    // Recargar estructura para obtener datos actualizados
-                    await fetchMainStructure();
                 } else {
                     Alert.alert('Error', data.message || 'Error al actualizar la ubicación');
                 }
@@ -372,10 +419,14 @@ export default function PuestoUbicacionScreen() {
                 });
                 await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
 
+                const lat = String(deviceLocation.latitude);
+                const lng = String(deviceLocation.longitude);
+                await updatePuestoCoordsInMainStructureCache(filterPuestoId, lat, lng);
+
                 // Actualizar UI localmente
                 setPuestoData({
-                    lat: String(deviceLocation.latitude),
-                    lng: String(deviceLocation.longitude),
+                    lat,
+                    lng,
                 });
 
                 Alert.alert('Éxito', 'Ubicación guardada localmente. Se sincronizará cuando haya conexión.');
@@ -386,7 +437,7 @@ export default function PuestoUbicacionScreen() {
         } finally {
             setIsUpdating(false);
         }
-    }, [filterPuestoId, deviceLocation, fetchMainStructure, refreshAccessToken, logout]);
+    }, [filterPuestoId, deviceLocation, refreshAccessToken, logout, updatePuestoCoordsInMainStructureCache]);
 
     // Sincronizar acciones offline cuando se restaura la conexión
     useEffect(() => {
@@ -394,7 +445,7 @@ export default function PuestoUbicacionScreen() {
             const actionsStr = await AsyncStorage.getItem('evaluations_actions');
             if (!actionsStr) return;
 
-            const actions = JSON.parse(actionsStr);
+            let actions = JSON.parse(actionsStr);
             const puestoUbicacionActions = actions.filter(
                 (a: any) => a.type === 'puesto_ubicacion' && !a.synced
             );
@@ -426,9 +477,25 @@ export default function PuestoUbicacionScreen() {
                     if (response) {
                         const data = await response.json();
                         if (data.status) {
+                            const lat = String(action?.payload?.latitud ?? '');
+                            const lng = String(action?.payload?.longitud ?? '');
+                            if (!lat || !lng) {
+                                continue;
+                            }
+
+                            await updatePuestoCoordsInMainStructureCache(
+                                action.puesto_id,
+                                lat,
+                                lng
+                            );
+
+                            if (Number(filterPuestoId) === Number(action.puesto_id)) {
+                                setPuestoData({ lat, lng });
+                            }
+
                             // Marcar como sincronizado
-                            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'puesto_ubicacion'));
-                            await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+                            actions = actions.filter((a: any) => !(a.id === action.id && a.type === 'puesto_ubicacion'));
+                            await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
 
                             // Actualizar cache
                             const cacheStr = await AsyncStorage.getItem('evaluations_cache');
@@ -457,7 +524,7 @@ export default function PuestoUbicacionScreen() {
         return () => {
             eventBus.off('connectionRestored', handler);
         };
-    }, [fetchMainStructure, refreshAccessToken, logout]);
+    }, [fetchMainStructure, refreshAccessToken, logout, updatePuestoCoordsInMainStructureCache]);
 
     useFocusEffect(
         useCallback(() => {

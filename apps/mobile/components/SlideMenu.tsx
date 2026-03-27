@@ -45,6 +45,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
   const [expandedSections, setExpandedSections] = React.useState<{ [key: string]: boolean }>({});
   const [permissions, setPermissions] = React.useState<Permission[]>([{ nombre: 'Acciones', actions: [] }]);
   const [hasLunchTime, setHasLunchTime] = React.useState<boolean>(false);
+  const [isDev, setIsDev] = React.useState<boolean>(false);
 
   React.useEffect(() => {
     if (isVisible) {
@@ -1297,7 +1298,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
             
-            {hasCurrentMarca && role === 'OPERATIVO' && division === 'Seguridad' && (
+            {hasCurrentMarca && (division === 'Seguridad' || division === 'Administrativos') && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
