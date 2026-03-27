@@ -3,10 +3,20 @@ import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenBy
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { fetchDynamicFile, uploadDynamicFiles } from "../../../../../utils/callDynamicFilesApi";
 import { toZonedTime } from "date-fns-tz";
+import { sendNotificationByEmployee } from "../../../../../utils/sendNotification";
 
 const parseIntStrict = (value: any) => {
   const n = parseInt(String(value), 10);
   return Number.isNaN(n) ? null : n;
+};
+
+const parseDateInputToDate = (input: unknown): Date | null => {
+  if (!input) return null;
+  if (input instanceof Date) return isNaN(input.getTime()) ? null : input;
+  const s = String(input).trim();
+  if (!s) return null;
+  const parsed = new Date(s);
+  return isNaN(parsed.getTime()) ? null : parsed;
 };
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
@@ -21,6 +31,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     const body = await req.json();
     const firmaDigital = String(body?.firma_ejecutivo_cuenta_digital || "").trim();
     const firmaManual = String(body?.firma_ejecutivo_cuenta_manual || "").trim();
+    const horaAccion = parseDateInputToDate(body?.hora_accion);
     if (!firmaDigital || firmaDigital.length < 10 || !firmaManual || firmaManual.length < 10) {
       return NextResponse.json({ status: false, message: "Se requiere la firma digital y la firma manual del ejecutivo" }, { status: 400 });
     }
@@ -74,7 +85,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       },
     });
 
-    const now = toZonedTime(new Date(), "America/Costa_Rica").toISOString();
+    const now = horaAccion ? horaAccion.toISOString() : toZonedTime(new Date(), "America/Costa_Rica").toISOString();
 
     if (updated) {
       const marca_ausente = await callDynamicPrisma({
@@ -86,8 +97,6 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
           where: { id: updated.marcaDiaAusente_id },
         },
       });
-
-      console.log(marca_ausente);
 
       const marca_reemplaza = await callDynamicPrisma({
         req,
@@ -139,10 +148,11 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             break;
         }
 
-        const hora_inicio_reemplaza = marca_reemplaza.hora_inicio.split("T")[1].split(":");
-        const hora_fin_reemplaza = marca_reemplaza.hora_fin.split("T")[1].split(":");
-        const hora_inicio_reemplaza_text = `${hora_inicio_reemplaza[0]}:${hora_inicio_reemplaza[1]}`;
-        const hora_fin_reemplaza_text = `${hora_fin_reemplaza[0]}:${hora_fin_reemplaza[1]}`;
+        const hora_inicio_reemplaza = marca_reemplaza.hora_inicio ? marca_reemplaza.hora_inicio.split("T")[1].split(":") : '-Sin hora-';
+        const hora_fin_reemplaza = marca_reemplaza.hora_fin ? marca_reemplaza.hora_fin.split("T")[1].split(":") : '-Sin hora-';
+        console.log(1);
+        const hora_inicio_reemplaza_text = hora_inicio_reemplaza !== '-Sin hora-' ? `${hora_inicio_reemplaza[0]}:${hora_inicio_reemplaza[1]}` : '-Sin hora-';
+        const hora_fin_reemplaza_text = hora_fin_reemplaza !== '-Sin hora-' ? `${hora_fin_reemplaza[0]}:${hora_fin_reemplaza[1]}` : '-Sin hora-';
         const turno_reemplaza_text = `${turno_reemplaza} ${hora_inicio_reemplaza_text} - ${hora_fin_reemplaza_text}`;
         
         let turno_ausente = "Diurno";
@@ -157,6 +167,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
         const hora_inicio_ausente = marca_ausente.hora_inicio.split("T")[1].split(":");
         const hora_fin_ausente = marca_ausente.hora_fin.split("T")[1].split(":");
+        console.log(2);
         const hora_inicio_ausente_text = `${hora_inicio_ausente[0]}:${hora_inicio_ausente[1]}`;
         const hora_fin_ausente_text = `${hora_fin_ausente[0]}:${hora_fin_ausente[1]}`;
         const turno_ausente_text = `${turno_ausente} ${hora_inicio_ausente_text} - ${hora_fin_ausente_text}`;
@@ -179,7 +190,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         let consecutivo = null;
         if (lastMutation) {
           const separated = lastMutation.consecutivo?.split("-");
-          console.log(separated);
+          console.log(3);
           if (separated && separated.length > 1) {
             const result = (parseInt(separated[2], 10) + 1)
               .toString()
@@ -236,6 +247,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             const ext = String(existing.file_name).includes(".")
               ? String(existing.file_name).split(".").pop() || "dat"
               : "dat";
+            console.log(4);
             const copiedName = String(existing.file_name);
             const uploadResp = await uploadDynamicFiles({
               req,
@@ -300,6 +312,87 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         },
       },
     });
+
+    const empleadoAusenteId = Number((existing as any)?.empleadoAusente_id || 0);
+    const empleadoReemplazaId = Number((existing as any)?.empleadoReemplaza_id || 0);
+    const recipients = Array.from(new Set([empleadoAusenteId, empleadoReemplazaId].filter((x) => Number(x) > 0)));
+    if (recipients.length > 0) {
+      const [empleadoAusente, empleadoReemplaza, ejecutivo, marcaAusenteNotif, marcaReemplazaNotif] = await Promise.all([
+        empleadoAusenteId
+          ? callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: empleadoAusenteId } },
+          })
+          : null,
+        empleadoReemplazaId
+          ? callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: empleadoReemplazaId } },
+          })
+          : null,
+        callDynamicPrisma({
+          req,
+          data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: currentEmployeeId } },
+        }),
+        callDynamicPrisma({
+          req,
+          data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: Number((existing as any)?.marcaDiaAusente_id || 0) } },
+        }),
+        callDynamicPrisma({
+          req,
+          data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: Number((existing as any)?.marcaDiaReemplaza_id || 0) } },
+        }),
+      ]);
+      const [puestoAusente, puestoReemplaza] = await Promise.all([
+        (marcaAusenteNotif as any)?.puesto_id
+          ? callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "e_estructura_puesto", operation: "findUnique", where: { id: Number((marcaAusenteNotif as any)?.puesto_id) } },
+          })
+          : null,
+        (marcaReemplazaNotif as any)?.puesto_id
+          ? callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "e_estructura_puesto", operation: "findUnique", where: { id: Number((marcaReemplazaNotif as any)?.puesto_id) } },
+          })
+          : null,
+      ]);
+
+      const ausenteNombre = empleadoAusente
+        ? `${empleadoAusente.nombre ?? ""} ${empleadoAusente.primer_apellido ?? ""} ${empleadoAusente.segundo_apellido ?? ""}`.trim()
+        : `ID ${empleadoAusenteId}`;
+      const reemplazaNombre = empleadoReemplaza
+        ? `${empleadoReemplaza.nombre ?? ""} ${empleadoReemplaza.primer_apellido ?? ""} ${empleadoReemplaza.segundo_apellido ?? ""}`.trim()
+        : `ID ${empleadoReemplazaId}`;
+      const ejecutivoNombre = ejecutivo
+        ? `${ejecutivo.nombre ?? ""} ${ejecutivo.primer_apellido ?? ""} ${ejecutivo.segundo_apellido ?? ""}`.trim()
+        : `ID ${currentEmployeeId}`;
+
+      const ausenteCedula = String((empleadoAusente as any)?.cedula ?? "");
+      const reemplazaCedula = String((empleadoReemplaza as any)?.cedula ?? "");
+      const fecha = now.split("T")[0];
+      const hora = now.split("T")[1]?.replace("Z", "") || "";
+      console.log(5);
+
+      const fechaAusente = (marcaAusenteNotif as any)?.fecha ? new Date((marcaAusenteNotif as any).fecha).toISOString().split("T")[0] : fecha;
+      const fechaReemplaza = (marcaReemplazaNotif as any)?.fecha ? new Date((marcaReemplazaNotif as any).fecha).toISOString().split("T")[0] : fecha;
+      const horaInicioAusente = (marcaAusenteNotif as any)?.hora_inicio ? new Date((marcaAusenteNotif as any).hora_inicio).toISOString().split("T")[1] : hora;
+      const horaInicioReemplaza = (marcaReemplazaNotif as any)?.hora_inicio ? new Date((marcaReemplazaNotif as any).hora_inicio).toISOString().split("T")[1] : hora;
+      const puestoNombreAusente = (puestoAusente as any)?.nombre || "Desconocido";
+      const puestoNombreReemplaza = (puestoReemplaza as any)?.nombre || "Desconocido";
+      console.log(6);
+      await sendNotificationByEmployee(
+        req,
+        0,
+        [currentEmployeeId],
+        `Mutuo acuerdo aprobado`,
+        `El mutuo acuerdo fue aprobado por ${ejecutivoNombre} el día ${fecha} a las ${hora}. El empleado ${ausenteNombre} (cédula ${ausenteCedula || "N/A"}) acordó cambiar el turno del día ${fechaAusente} a las ${horaInicioAusente} para el puesto ${puestoNombreAusente} por el turno del día ${fechaReemplaza} a las ${horaInicioReemplaza} para el puesto ${puestoNombreReemplaza} del empleado ${reemplazaNombre} (cédula ${reemplazaCedula || "N/A"}).`,
+        recipients
+      ).catch((error) => {
+        const msg = error instanceof Error ? error.message : "Error desconocido";
+        console.error("Error sending mutuos-acuerdos firma-ejecutivo notification:", msg);
+      });
+    }
 
     return NextResponse.json(
       {

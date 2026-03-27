@@ -24,6 +24,33 @@ function normalizeToStringifiedJson(value: any): string {
   return JSON.stringify(value ?? []);
 }
 
+/** Placa no vacía tras trim; para comparar suele normalizarse a mayúsculas. */
+function normalizePlacaForMatch(value: unknown): string {
+  return String(value ?? "").trim().toUpperCase();
+}
+
+function isValidPlaca(value: unknown): boolean {
+  return normalizePlacaForMatch(value).length > 0;
+}
+
+/** Tipo de vehículo (no confundir con `tipo` de la bitácora): trim y no vacío. */
+function normalizeTipoVehiculoForMatch(value: unknown): string {
+  return String(value ?? "").trim();
+}
+
+function isValidTipoVehiculo(value: unknown): boolean {
+  return normalizeTipoVehiculoForMatch(value).length > 0;
+}
+
+/** Tipo de vehículo (no confundir con `tipo` de la bitácora): trim y no vacío. */
+function normalizeTipoAutoriaVehiculoForMatch(value: unknown): string {
+  return String(value ?? "").trim();
+}
+
+function isValidTipoAutoriaVehiculo(value: unknown): boolean {
+  return normalizeTipoAutoriaVehiculoForMatch(value).length > 0;
+}
+
 export async function GET(req: NextRequest) {
   try {
     const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
@@ -175,7 +202,8 @@ export async function POST(req: NextRequest) {
     const createdAt = toZonedTime(new Date(), "America/Costa_Rica") as Date;
     const createdBy = parseInt(String((payload as any)?.id ?? 0)) || 0;
 
-    // Si no hay vehiculo_id pero sí se solicitó registrar vehículo, crear primero el vehículo corporativo
+    // Si no hay vehiculo_id pero sí se solicitó registrar vehículo: validar placa/tipo del vehículo,
+    // reutilizar vehículo corporativo de la misma sucursal si ya existe, o crear uno nuevo.
     let finalVehiculoId: number | null = vehiculo_id ? Number(vehiculo_id) : null;
     if (!finalVehiculoId && register_vehicle) {
       try {
@@ -192,37 +220,71 @@ export async function POST(req: NextRequest) {
           marchamo,
         } = register_vehicle as any;
 
-        const newVehicle = await callDynamicPrisma({
-          req,
-          data: {
-            action: "POST",
-            table: "c_vehiculos_corporativos",
-            operation: "create",
-            data: {
-              empresa_id: empresaId,
-              cliente_id: clienteId,
-              sucursal_id: sucursalId,
-              placa: String(placa ?? ""),
-              tipo: String(vehTipo ?? tipo ?? ""),
-              tipo_autoria: String(tipo_autoria ?? ""),
-              estado: "Activo",
-              kilometraje: Number(kilometraje ?? 0),
-              prox_cambio_aceite: Number(prox_cambio_aceite ?? 0),
-              modelo: String(modelo ?? ""),
-              anno: Number(anno ?? 0),
-              descripcion: "-",
-              titulo_propiedad: Boolean(titulo_propiedad ?? true),
-              rtv: Boolean(rtv ?? true),
-              marchamo: Boolean(marchamo ?? true),
-              firma_responsable: String(firma_responsable ?? ""),
-              created_by: createdBy,
-              created_at: createdAt.toISOString(),
-            },
-          },
-        });
+        // Solo datos del vehículo en register_vehicle (no `tipo` de la bitácora).
+        const tipoVehiculoRaw = vehTipo ?? (register_vehicle as any).tipo;
+        if (isValidPlaca(placa) && isValidTipoVehiculo(tipoVehiculoRaw) && isValidTipoAutoriaVehiculo(tipo_autoria)) {
 
-        if (newVehicle && (newVehicle as any).id) {
-          finalVehiculoId = Number((newVehicle as any).id);
+          const placaNorm = normalizePlacaForMatch(placa);
+          const tipoVehNorm = normalizeTipoVehiculoForMatch(tipoVehiculoRaw);
+          const tipoAutoriaNorm = normalizeTipoAutoriaVehiculoForMatch(tipo_autoria);
+
+          const corporateFleet = await callDynamicPrisma({
+            req,
+            data: {
+              action: "GET",
+              table: "c_vehiculos_corporativos",
+              operation: "findMany",
+              where: { sucursal_id: sucursalId, placa: placa, tipo: tipoVehiculoRaw, tipo_autoria: tipoAutoriaNorm },
+            },
+          });
+
+          const existingVehicle = Array.isArray(corporateFleet)
+            ? (corporateFleet as any[]).find(
+                (v: any) =>
+                  normalizePlacaForMatch(v?.placa) === placaNorm &&
+                  normalizeTipoVehiculoForMatch(v?.tipo).toLowerCase() === tipoVehNorm.toLowerCase() &&
+                  normalizeTipoAutoriaVehiculoForMatch(v?.tipo_autoria).toLowerCase() === tipoAutoriaNorm.toLowerCase()
+              )
+            : null;
+
+            if (existingVehicle && existingVehicle.id != null) {
+              finalVehiculoId = Number(existingVehicle.id);
+            }
+        }
+
+        if (!finalVehiculoId) {
+          const newVehicle = await callDynamicPrisma({
+            req,
+            data: {
+              action: "POST",
+              table: "c_vehiculos_corporativos",
+              operation: "create",
+              data: {
+                empresa_id: empresaId,
+                cliente_id: clienteId,
+                sucursal_id: sucursalId,
+                placa: String(placa ?? ""),
+                tipo: String(tipoVehiculoRaw ?? ""),
+                tipo_autoria: String(tipo_autoria ?? ""),
+                estado: "Activo",
+                kilometraje: Number(kilometraje ?? 0),
+                prox_cambio_aceite: Number(prox_cambio_aceite ?? 0),
+                modelo: String(modelo ?? ""),
+                anno: Number(anno ?? 0),
+                descripcion: "-",
+                titulo_propiedad: Boolean(titulo_propiedad ?? true),
+                rtv: Boolean(rtv ?? true),
+                marchamo: Boolean(marchamo ?? true),
+                firma_responsable: String(firma_responsable ?? ""),
+                created_by: createdBy,
+                created_at: createdAt.toISOString(),
+              },
+            },
+          });
+
+          if (newVehicle && (newVehicle as any).id) {
+            finalVehiculoId = Number((newVehicle as any).id);
+          }
         }
       } catch (vehError) {
         console.error("Error creando vehículo corporativo desde bitácora:", vehError);

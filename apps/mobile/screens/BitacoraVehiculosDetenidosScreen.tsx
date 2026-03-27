@@ -45,6 +45,7 @@ import {
   updateBitacoraVehiculoDetenido,
 } from '@/hooks/bitacoraVehiculoDetenidoFunctions';
 import { listCorporateVehiclesByCorpo } from '@/hooks/evaluationFunctions';
+import { BITACORA_VEHICULO_DETENIDO_EVAL_TYPE } from '@/hooks/corporateEvaluationsSync';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'BitacoraVehiculosDetenidos'>;
 
@@ -508,6 +509,9 @@ export default function BitacoraVehiculosDetenidosScreen() {
   // Vehículo corporativo / Uso (vinculación bitácora)
   const [selectedCorporateVehicleId, setSelectedCorporateVehicleId] = useState<number | null>(null);
   const [selectedCorporateUseId, setSelectedCorporateUseId] = useState<number | null>(null);
+  /** IDs locales (offline) para payload y pickers cuando `id` no es numérico de servidor. */
+  const [selectedCorporateVehicleIdLocal, setSelectedCorporateVehicleIdLocal] = useState<string | null>(null);
+  const [selectedCorporateUseIdLocal, setSelectedCorporateUseIdLocal] = useState<string | null>(null);
   const [corporateVehicles, setCorporateVehicles] = useState<any[]>([]);
   const [availableCorporateUses, setAvailableCorporateUses] = useState<any[]>([]);
   const [isLoadingVehicles, setIsLoadingVehicles] = useState(false);
@@ -763,6 +767,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
   };
 
   const getConnectionStatus = async (): Promise<boolean> => {
+    //return false;
     const state = await Network.getNetworkStateAsync();
     return !!(state.isConnected && state.isInternetReachable);
   };
@@ -996,6 +1001,18 @@ export default function BitacoraVehiculosDetenidosScreen() {
     }
   }, [refreshAccessToken, logout]);
 
+  const getCorporateVehiclesForCorpo = useCallback(async (corpoId: number) => {
+    const cacheStr = await AsyncStorage.getItem('corporate_vehicles_corpo_cache');
+    if (!cacheStr) return [];
+    try {
+      const cached = JSON.parse(cacheStr);
+      if (!Array.isArray(cached)) return [];
+      return cached.filter((v: any) => Number(v?.corpo_id ?? v?.sucursal_id) === Number(corpoId));
+    } catch {
+      return [];
+    }
+  }, []);
+
   const fetchCorporateVehicleUses = useCallback(
     async (vehiculoId: number, attempt = 0): Promise<any[] | null> => {
       try {
@@ -1033,38 +1050,40 @@ export default function BitacoraVehiculosDetenidosScreen() {
       corpoId: number | null;
       vehiculoId: number | null;
       usoId: number | null;
+      vehiculoIdLocal?: string | null;
+      usoIdLocal?: string | null;
       vehicleMeta?: { placa?: string; tipo?: string; empresa_id?: number; cliente_id?: number; sucursal_id?: number; corpo_id?: number };
     }) => {
-      const { corpoId, vehiculoId, usoId, vehicleMeta } = params;
+      const { corpoId, vehiculoId, usoId, vehiculoIdLocal, usoIdLocal, vehicleMeta } = params;
       isPreloadingVehiculoUsoRef.current = true;
       try {
-        // 1) Cargar vehículos (para que el Picker tenga items)
         if (corpoId) {
           await fetchCorporateVehicles(Number(corpoId));
         }
+        const list = corpoId ? await getCorporateVehiclesForCorpo(Number(corpoId)) : [];
 
-        // 2) Seleccionar vehículo
+        const applyVehicleFields = (vehiculo: any) => {
+          setVehKilometraje(String(vehiculo?.kilometraje ?? ''));
+          setVehProxCambioAceite(String(vehiculo?.prox_cambio_aceite ?? ''));
+          setVehModelo(String(vehiculo?.modelo ?? ''));
+          setVehAnno(String(vehiculo?.anno ?? ''));
+          setVehTipoAutoria(String(vehiculo?.tipo_autoria ?? ''));
+          setVehTituloPropiedad(vehiculo?.titulo_propiedad ?? false);
+          setVehRTV(vehiculo?.rtv ?? false);
+          setVehMarchamo(vehiculo?.marchamo ?? false);
+        };
+
         if (vehiculoId && Number(vehiculoId) > 0) {
           setSelectedCorporateVehicleId(Number(vehiculoId));
+          setSelectedCorporateVehicleIdLocal(null);
 
-          const vehiculo = corporateVehicles.find((v: any) => Number(v.id) === Number(vehiculoId));
+          const vehiculo = list.find((v: any) => Number(v.id) === Number(vehiculoId));
 
           if (vehiculo) {
-            setVehKilometraje(String(vehiculo?.kilometraje ?? ''));
-            setVehProxCambioAceite(String(vehiculo?.prox_cambio_aceite ?? ''));
-            setVehModelo(String(vehiculo?.modelo ?? ''));
-            setVehAnno(String(vehiculo?.anno ?? ''));
-            setVehTipoAutoria(String(vehiculo?.tipo_autoria ?? ''));
-            setVehTituloPropiedad(vehiculo?.titulo_propiedad ?? false);
-            setVehRTV(vehiculo?.rtv ?? false);
-            setVehMarchamo(vehiculo?.marchamo ?? false);
+            applyVehicleFields(vehiculo);
           }
-        }
 
-        // 3) Cargar usos del vehículo seleccionado (para que el Picker de usos pueda listar/seleccionar)
-        if (vehiculoId && Number(vehiculoId) > 0) {
           const usos = await fetchCorporateVehicleUses(Number(vehiculoId));
-
           if (Array.isArray(usos)) {
             setTempVehicle((prev: any) => ({
               ...(prev && Number(prev?.id) === Number(vehiculoId) ? prev : {}),
@@ -1073,71 +1092,149 @@ export default function BitacoraVehiculosDetenidosScreen() {
               usos,
               c_usos_vehiculos_corporativos: usos,
             }));
+          } else {
+            const v2 = vehiculo ?? list.find((v: any) => Number(v.id) === Number(vehiculoId));
+            const embedded = v2?.usos || v2?.c_usos_vehiculos_corporativos || [];
+            const usosEmb = Array.isArray(embedded) ? embedded : [];
+            if (v2 && usosEmb.length) {
+              setTempVehicle({
+                ...v2,
+                ...(vehicleMeta || {}),
+                id: Number(vehiculoId),
+                usos: usosEmb,
+                c_usos_vehiculos_corporativos: usosEmb,
+              });
+            }
           }
         }
 
-        // 4) Seleccionar uso
-        if (usoId && Number(usoId) > 0) {
+        // Vehículo/uso solo con claves locales (aún no sincronizados) — usos vienen del caché corporativo
+        if (!(vehiculoId && Number(vehiculoId) > 0) && vehiculoIdLocal) {
+          const vehiculo = list.find((v: any) => String(v.id ?? v.id_local) === vehiculoIdLocal);
+          if (vehiculo) {
+            setSelectedCorporateVehicleIdLocal(vehiculoIdLocal);
+            setSelectedCorporateVehicleId(null);
+            applyVehicleFields(vehiculo);
+            const usosRaw = vehiculo.usos || vehiculo.c_usos_vehiculos_corporativos || [];
+            const usosArr = Array.isArray(usosRaw) ? usosRaw : [];
+            setTempVehicle({
+              ...vehiculo,
+              id: vehiculo.id ?? vehiculo.id_local,
+              id_local: vehiculo.id_local,
+              usos: usosArr,
+              c_usos_vehiculos_corporativos: usosArr,
+              ...(vehicleMeta || {}),
+            });
+          }
+        }
+
+        if (usoIdLocal) {
+          setSelectedCorporateUseId(null);
+          setSelectedCorporateUseIdLocal(usoIdLocal);
+        } else if (usoId && Number(usoId) > 0) {
           setSelectedCorporateUseId(Number(usoId));
+          setSelectedCorporateUseIdLocal(null);
         }
       } finally {
-        // liberar en el siguiente tick para no pelear con effects de filtrado
         setTimeout(() => {
           isPreloadingVehiculoUsoRef.current = false;
         }, 0);
       }
     },
-    [fetchCorporateVehicles, fetchCorporateVehicleUses]
+    [fetchCorporateVehicles, fetchCorporateVehicleUses, getCorporateVehiclesForCorpo]
   );
 
   // Obtener usos disponibles del vehículo seleccionado
   const selectedCorporateVehicle = useMemo(() => {
-    if (!selectedCorporateVehicleId) return null;
-    // Primero buscar en la lista de vehículos cargados
-    const found = corporateVehicles.find((v: any) => Number(v.id) === Number(selectedCorporateVehicleId));
+    const key =
+      selectedCorporateVehicleIdLocal ??
+      (selectedCorporateVehicleId != null && selectedCorporateVehicleId > 0
+        ? String(selectedCorporateVehicleId)
+        : '');
+    if (!key) return null;
+    const found = corporateVehicles.find((v: any) => String(v.id ?? v.id_local) === key);
     if (found) return found;
-    // Si no está en la lista, usar el vehículo temporal (del prefill)
-    if (tempVehicle && Number(tempVehicle.id) === Number(selectedCorporateVehicleId)) {
-      return tempVehicle;
-    }
+    if (tempVehicle && String(tempVehicle.id ?? tempVehicle.id_local) === key) return tempVehicle;
     return null;
-  }, [corporateVehicles, selectedCorporateVehicleId, tempVehicle]);
+  }, [
+    corporateVehicles,
+    selectedCorporateVehicleId,
+    selectedCorporateVehicleIdLocal,
+    tempVehicle,
+  ]);
 
   // Actualizar usos disponibles cuando cambia el vehículo seleccionado
   useEffect(() => {
     if (!selectedCorporateVehicle) {
       setAvailableCorporateUses([]);
-      setSelectedCorporateUseId(null); // Limpiar uso cuando no hay vehículo
+      setSelectedCorporateUseId(null);
+      setSelectedCorporateUseIdLocal(null);
       return;
     }
     const usos = (selectedCorporateVehicle as any)?.usos || (selectedCorporateVehicle as any)?.c_usos_vehiculos_corporativos || [];
     const list = Array.isArray(usos) ? usos : [];
     const lockedUsoId = isPrefillMode
-      ? (prefill?.uso_id ? Number(prefill.uso_id) : null)
-      : (editing?.uso_id ? Number(editing.uso_id) : null);
+      ? prefill?.uso_id && prefill.uso_id > 0
+        ? Number(prefill.uso_id)
+        : null
+      : editing?.uso_id
+        ? Number(editing.uso_id)
+        : null;
+    const lockedUsoLocal =
+      isPrefillMode && prefill?.uso_id_local ? String(prefill.uso_id_local) : null;
     // Solo los que NO tienen bitácora asignada, pero mantener el uso "actual" (prefill o edición) aunque tenga bitácora.
-    const filtered = list.filter((u: any) => u?.bitacora_id == null || (lockedUsoId && Number(u?.id) === Number(lockedUsoId)));
+    const filtered = list.filter(
+      (u: any) =>
+        u?.bitacora_id == null ||
+        (lockedUsoId != null && Number(u?.id) === Number(lockedUsoId)) ||
+        (lockedUsoLocal != null && String(u.id ?? u.id_local) === lockedUsoLocal)
+    );
     setAvailableCorporateUses(filtered);
     // Limpiar uso seleccionado si no está en la nueva lista
-    if (selectedCorporateUseId) {
-      const stillAvailable = filtered.some((u: any) => Number(u.id) === Number(selectedCorporateUseId));
+    if (selectedCorporateUseId != null || selectedCorporateUseIdLocal) {
+      const stillAvailable = filtered.some(
+        (u: any) =>
+          (selectedCorporateUseId != null && Number(u.id) === Number(selectedCorporateUseId)) ||
+          (selectedCorporateUseIdLocal != null &&
+            String(u.id ?? u.id_local) === String(selectedCorporateUseIdLocal))
+      );
       if (!stillAvailable && !isPreloadingVehiculoUsoRef.current) {
         setSelectedCorporateUseId(null);
+        setSelectedCorporateUseIdLocal(null);
       }
     }
-  }, [selectedCorporateVehicle, selectedCorporateUseId, isPrefillMode, prefill, editing]);
+  }, [
+    selectedCorporateVehicle,
+    selectedCorporateUseId,
+    selectedCorporateUseIdLocal,
+    isPrefillMode,
+    prefill,
+    editing,
+  ]);
 
   // Cargar información del vehículo y uso en modo prefill cuando se actualizan los vehículos
   useEffect(() => {
     if (!isPrefillMode || !prefill) return;
 
-    // Solo armar info para display (sin hacer fetch aquí; el fetch lo hace preloadVehiculoYUso)
+    const vehKey = prefill.vehiculo_id_local
+      ? String(prefill.vehiculo_id_local)
+      : prefill.vehiculo_id != null && prefill.vehiculo_id > 0
+        ? String(prefill.vehiculo_id)
+        : null;
+
     const vehicle =
-      corporateVehicles.find((v: any) => Number(v.id) === Number(prefill.vehiculo_id)) ||
-      (tempVehicle && Number(tempVehicle.id) === Number(prefill.vehiculo_id) ? tempVehicle : null);
+      (vehKey &&
+        corporateVehicles.find((v: any) => String(v.id ?? v.id_local) === vehKey)) ||
+      (vehKey && tempVehicle && String(tempVehicle.id ?? tempVehicle.id_local) === vehKey ? tempVehicle : null);
 
     const usos = (vehicle as any)?.usos || (vehicle as any)?.c_usos_vehiculos_corporativos || [];
-    const uso = Array.isArray(usos) ? usos.find((u: any) => Number(u.id) === Number(prefill.uso_id)) : null;
+    const uso = Array.isArray(usos)
+      ? usos.find((u: any) => {
+          if (prefill.uso_id_local) return String(u.id ?? u.id_local) === String(prefill.uso_id_local);
+          if (prefill.uso_id != null && prefill.uso_id > 0) return Number(u.id) === Number(prefill.uso_id);
+          return false;
+        })
+      : null;
     setPrefillVehicleInfo({ vehiculo: vehicle || undefined, uso: uso || undefined });
   }, [isPrefillMode, prefill, corporateVehicles, tempVehicle]);
 
@@ -1278,12 +1375,17 @@ export default function BitacoraVehiculosDetenidosScreen() {
 
         // Secuencia requerida: cargar vehículos -> seleccionar vehículo -> cargar usos -> seleccionar uso
         const corpoId = prefill.sucursal_id ? Number(prefill.sucursal_id) : null;
-        const vehiculoId = prefill.vehiculo_id ? Number(prefill.vehiculo_id) : null;
-        const usoId = prefill.uso_id ? Number(prefill.uso_id) : null;
+        const vehiculoId =
+          prefill.vehiculo_id != null && prefill.vehiculo_id > 0 ? Number(prefill.vehiculo_id) : null;
+        const usoId = prefill.uso_id != null && prefill.uso_id > 0 ? Number(prefill.uso_id) : null;
+        const vehiculoIdLocal = prefill.vehiculo_id_local ? String(prefill.vehiculo_id_local) : null;
+        const usoIdLocal = prefill.uso_id_local ? String(prefill.uso_id_local) : null;
         await preloadVehiculoYUso({
           corpoId,
           vehiculoId,
           usoId,
+          vehiculoIdLocal,
+          usoIdLocal,
           vehicleMeta: {
             placa: String(prefill.vehiculo_placa || ''),
             tipo: String(prefill.vehiculo_tipo || ''),
@@ -1362,6 +1464,10 @@ export default function BitacoraVehiculosDetenidosScreen() {
     setIsCreating(true);
     setEditing(null);
     setPrefillVehicleInfo(null);
+    setSelectedCorporateVehicleId(null);
+    setSelectedCorporateUseId(null);
+    setSelectedCorporateVehicleIdLocal(null);
+    setSelectedCorporateUseIdLocal(null);
     await resetForm('Vehículo');
 
     // Cargar vehículos corporativos cuando se abre el formulario en modo normal
@@ -1526,6 +1632,8 @@ export default function BitacoraVehiculosDetenidosScreen() {
     setEditing(null);
     setSelectedCorporateVehicleId(null);
     setSelectedCorporateUseId(null);
+    setSelectedCorporateVehicleIdLocal(null);
+    setSelectedCorporateUseIdLocal(null);
     setPrefillVehicleInfo(null);
     if (returnTo) {
       navigation.goBack();
@@ -1626,7 +1734,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
     }
 
     // Validación específica cuando se desea registrar un vehículo nuevo
-    if (!selectedCorporateVehicleId && shouldRegisterVehicle) {
+    if (!selectedCorporateVehicleId && !selectedCorporateVehicleIdLocal && shouldRegisterVehicle) {
       if (
         !vehKilometraje.trim() ||
         !vehProxCambioAceite.trim() ||
@@ -1761,7 +1869,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
 
     // Datos para registro opcional de vehículo nuevo (cuando no hay vehiculo_id seleccionado)
     let registerVehiclePayload: any = undefined;
-    if (!selectedCorporateVehicleId && shouldRegisterVehicle) {
+    if (!selectedCorporateVehicleId && !selectedCorporateVehicleIdLocal && shouldRegisterVehicle) {
       const placa = generalValues.numero_placa || "";
       const tipoVeh = generalValues.tipo_vehiculo || tipoRef.current || "";
       registerVehiclePayload = {
@@ -1778,13 +1886,60 @@ export default function BitacoraVehiculosDetenidosScreen() {
       };
     }
 
+    let vehiculo_id: number | null = selectedCorporateVehicleId;
+    let uso_id: number | null = selectedCorporateUseId;
+    let vehiculo_id_local: string | undefined;
+    let uso_id_local: string | undefined;
+
+    if (selectedCorporateVehicleIdLocal) {
+      vehiculo_id = null;
+      vehiculo_id_local = selectedCorporateVehicleIdLocal;
+    } else if (selectedCorporateVehicle) {
+      const veh = selectedCorporateVehicle as any;
+      const vl = veh.id_local;
+      const vid = veh.id;
+      if (typeof vid === 'string' && String(vid).startsWith('local-')) {
+        vehiculo_id = null;
+        vehiculo_id_local = String(vid);
+      } else if (vl && String(vl).startsWith('local-')) {
+        vehiculo_id_local = String(vl);
+        if (!(typeof vid === 'number' && vid > 0)) vehiculo_id = null;
+      }
+    }
+
+    if (selectedCorporateUseIdLocal) {
+      uso_id = null;
+      uso_id_local = selectedCorporateUseIdLocal;
+    } else if (selectedCorporateUseId != null && selectedCorporateVehicle) {
+      const usos =
+        (selectedCorporateVehicle as any)?.usos ||
+        (selectedCorporateVehicle as any)?.c_usos_vehiculos_corporativos ||
+        [];
+      const u = (Array.isArray(usos) ? usos : []).find(
+        (x: any) => Number(x.id) === Number(selectedCorporateUseId)
+      );
+      if (u) {
+        const ul = u.id_local;
+        const uid = u.id;
+        if (typeof uid === 'string' && String(uid).startsWith('local-')) {
+          uso_id = null;
+          uso_id_local = String(uid);
+        } else if (ul && String(ul).startsWith('local-')) {
+          uso_id_local = String(ul);
+          if (!(typeof uid === 'number' && uid > 0)) uso_id = null;
+        }
+      }
+    }
+
     return {
       ...(marca_id ? { marca_id } : {}),
       empresa_id: marcaEmpresaId,
       cliente_id: marcaClienteId,
       sucursal_id: marcaCorpoId,
-      vehiculo_id: selectedCorporateVehicleId, // Incluir vehiculo_id en el payload (opcional)
-      uso_id: selectedCorporateUseId,
+      vehiculo_id,
+      uso_id,
+      ...(vehiculo_id_local ? { vehiculo_id_local } : {}),
+      ...(uso_id_local ? { uso_id_local } : {}),
       tipo: tipoRef.current,
       informacion_general: infoGeneralArr,
       informacion_revision: infoRevisionArr,
@@ -1842,16 +1997,23 @@ export default function BitacoraVehiculosDetenidosScreen() {
     []
   );
 
-  const upsertOfflineCreateAction = async (localId: string, requestData: any) => {
-    const actionsStr = await AsyncStorage.getItem('bitacora_vehiculo_detenido_actions');
+  /** Cola de creación offline: va en evaluations_actions y se envía tras sync de vehículo/uso en corporateEvaluationsSync. */
+  const upsertOfflineBitacoraCreateInEvaluations = async (localId: string, requestData: any) => {
+    const actionsStr = await AsyncStorage.getItem('evaluations_actions');
     const actions = actionsStr ? JSON.parse(actionsStr) : [];
-    const existingIdx = actions.findIndex((a: any) => a.type === 'create' && a.id === localId);
-    if (existingIdx !== -1) {
-      actions[existingIdx].requestData = requestData;
-    } else {
-      actions.push({ id: localId, type: 'create', requestData });
-    }
-    await AsyncStorage.setItem('bitacora_vehiculo_detenido_actions', JSON.stringify(actions));
+    const existingIdx = actions.findIndex(
+      (a: any) =>
+        a.action === 'create' && a.type === BITACORA_VEHICULO_DETENIDO_EVAL_TYPE && a.id === localId
+    );
+    const entry = {
+      id: localId,
+      action: 'create',
+      type: BITACORA_VEHICULO_DETENIDO_EVAL_TYPE,
+      payload: requestData,
+    };
+    if (existingIdx !== -1) actions[existingIdx] = entry;
+    else actions.push(entry);
+    await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
   };
 
   const handleSave = async () => {
@@ -1878,11 +2040,13 @@ export default function BitacoraVehiculosDetenidosScreen() {
           if (!res.status) throw new Error(res.message || 'No se pudo crear');
 
           // si se vinculó a un uso, reflejarlo en main_structure_cache
-          if (selectedCorporateVehicleId && selectedCorporateUseId) {
+          const vMain = selectedCorporateVehicleIdLocal == null ? selectedCorporateVehicleId : null;
+          const uMain = selectedCorporateUseIdLocal == null ? selectedCorporateUseId : null;
+          if (vMain && uMain) {
             await updateMainStructureCacheUseBitacora({
               sucursalId: marcaCorpoId,
-              vehiculoId: selectedCorporateVehicleId,
-              usoId: selectedCorporateUseId,
+              vehiculoId: vMain,
+              usoId: uMain,
               bitacora: {
                 id: res.id,
                 tipo: tipoRef.current,
@@ -1902,7 +2066,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
 
         // Offline create
         const id_local = editing?.id_local && editing.id_local.length > 0 ? editing.id_local : generateRandomId();
-        await upsertOfflineCreateAction(id_local, requestData);
+        await upsertOfflineBitacoraCreateInEvaluations(id_local, requestData);
 
         const cacheStr = await AsyncStorage.getItem('bitacora_vehiculo_detenido_cache');
         const cache = cacheStr ? JSON.parse(cacheStr) : [];
@@ -1927,11 +2091,13 @@ export default function BitacoraVehiculosDetenidosScreen() {
         };
 
         // reflejar vínculo en main_structure_cache aun en offline (bitácora local)
-        if (selectedCorporateVehicleId && selectedCorporateUseId) {
+        const vMainOff = selectedCorporateVehicleIdLocal == null ? selectedCorporateVehicleId : null;
+        const uMainOff = selectedCorporateUseIdLocal == null ? selectedCorporateUseId : null;
+        if (vMainOff && uMainOff) {
           await updateMainStructureCacheUseBitacora({
             sucursalId: marcaCorpoId,
-            vehiculoId: selectedCorporateVehicleId,
-            usoId: selectedCorporateUseId,
+            vehiculoId: vMainOff,
+            usoId: uMainOff,
             bitacora: {
               id: 0,
               id_local,
@@ -2014,6 +2180,20 @@ export default function BitacoraVehiculosDetenidosScreen() {
               const actions = actionsStr ? JSON.parse(actionsStr) : [];
               const updatedActions = actions.filter((a: any) => !(a.type === 'create' && a.id === item.id_local));
               await AsyncStorage.setItem('bitacora_vehiculo_detenido_actions', JSON.stringify(updatedActions));
+
+              const evStr = await AsyncStorage.getItem('evaluations_actions');
+              if (evStr) {
+                const ev = JSON.parse(evStr);
+                const nextEv = ev.filter(
+                  (e: any) =>
+                    !(
+                      e.type === BITACORA_VEHICULO_DETENIDO_EVAL_TYPE &&
+                      e.action === 'create' &&
+                      e.id === item.id_local
+                    )
+                );
+                await AsyncStorage.setItem('evaluations_actions', JSON.stringify(nextEv));
+              }
               Alert.alert('Éxito', 'Registro eliminado localmente');
               return;
             }
@@ -2267,27 +2447,38 @@ export default function BitacoraVehiculosDetenidosScreen() {
                   ) : (
                     <ThemedView style={styles.pickerContainer}>
                       <Picker
-                        selectedValue={selectedCorporateVehicleId ?? 0}
+                        selectedValue={
+                          selectedCorporateVehicleIdLocal ??
+                          (selectedCorporateVehicleId != null && selectedCorporateVehicleId > 0
+                            ? String(selectedCorporateVehicleId)
+                            : '0')
+                        }
                         onValueChange={async (v) => {
-                          const newVehicleId = Number(v) || null;
-                          setSelectedCorporateVehicleId(newVehicleId);
-                          // Limpiar el uso seleccionado cuando cambia el vehículo
-                          if (newVehicleId !== selectedCorporateVehicleId) {
+                          const s = String(v);
+                          if (!s || s === '0') {
+                            setSelectedCorporateVehicleId(null);
+                            setSelectedCorporateVehicleIdLocal(null);
                             setSelectedCorporateUseId(null);
-                          }
-
-                          // Si se deselecciona el vehículo, no hacemos nada más
-                          if (!newVehicleId) {
+                            setSelectedCorporateUseIdLocal(null);
                             return;
                           }
+                          if (s.startsWith('local-')) {
+                            setSelectedCorporateVehicleIdLocal(s);
+                            setSelectedCorporateVehicleId(null);
+                          } else {
+                            setSelectedCorporateVehicleIdLocal(null);
+                            setSelectedCorporateVehicleId(Number(s));
+                          }
+                          setSelectedCorporateUseId(null);
+                          setSelectedCorporateUseIdLocal(null);
 
-                          // Buscar primero en la lista de vehículos cargados
-                          let selectedVehicle = corporateVehicles.find(
-                            (veh: any) => Number(veh.id) === Number(newVehicleId)
-                          );
-                          // Si no está en la lista, buscar en el vehículo temporal
-                          if (!selectedVehicle && tempVehicle && Number(tempVehicle.id) === Number(newVehicleId)) {
-                            selectedVehicle = tempVehicle;
+                          const selectedVehicle =
+                            corporateVehicles.find((veh: any) => String(veh.id ?? veh.id_local) === s) ||
+                            (tempVehicle && String(tempVehicle.id ?? tempVehicle.id_local) === s ? tempVehicle : null);
+
+                          // Si se deselecciona el vehículo, no hacemos nada más
+                          if (!selectedVehicle) {
+                            return;
                           }
 
                           if (selectedVehicle) {
@@ -2362,16 +2553,23 @@ export default function BitacoraVehiculosDetenidosScreen() {
                         style={styles.picker}
                         enabled={!isPrefillMode}
                       >
-                        <Picker.Item label="Seleccione..." value={0} color="#000000" />
+                        <Picker.Item label="Seleccione..." value="0" color="#000000" />
                         {corporateVehicles.map((v: any) => (
-                          <Picker.Item key={`veh_${v.id}`} label={`${String(v.placa || '—')} (${String(v.tipo || '—')})`} value={Number(v.id)} color="#000000" />
-                        ))}
-                        {/* Mostrar vehículo temporal si existe y no está en la lista */}
-                        {tempVehicle && !corporateVehicles.find((v: any) => Number(v.id) === Number(tempVehicle.id)) && (
                           <Picker.Item
-                            key={`veh_temp_${tempVehicle.id}`}
+                            key={`veh_${v.id ?? v.id_local}`}
+                            label={`${String(v.placa || '—')} (${String(v.tipo || '—')})${v.synced === false ? ' (offline)' : ''}`}
+                            value={String(v.id ?? v.id_local)}
+                            color="#000000"
+                          />
+                        ))}
+                        {tempVehicle &&
+                          !corporateVehicles.find(
+                            (v: any) => String(v.id ?? v.id_local) === String(tempVehicle.id ?? tempVehicle.id_local)
+                          ) && (
+                          <Picker.Item
+                            key={`veh_temp_${tempVehicle.id ?? tempVehicle.id_local}`}
                             label={`${String(tempVehicle.placa || '—')} (${String(tempVehicle.tipo || '—')})`}
-                            value={Number(tempVehicle.id)}
+                            value={String(tempVehicle.id ?? tempVehicle.id_local)}
                             color="#000000"
                           />
                         )}
@@ -2382,15 +2580,52 @@ export default function BitacoraVehiculosDetenidosScreen() {
                   <ThemedText style={styles.label}>Uso (solo sin bitácora)</ThemedText>
                   <ThemedView style={styles.pickerContainer}>
                     <Picker
-                      selectedValue={selectedCorporateUseId ?? 0}
-                      onValueChange={(v) => setSelectedCorporateUseId(Number(v) || null)}
+                      selectedValue={
+                        selectedCorporateUseIdLocal ??
+                        (selectedCorporateUseId != null && selectedCorporateUseId > 0
+                          ? String(selectedCorporateUseId)
+                          : '0')
+                      }
+                      onValueChange={(v) => {
+                        const s = String(v);
+                        if (!s || s === '0') {
+                          setSelectedCorporateUseId(null);
+                          setSelectedCorporateUseIdLocal(null);
+                          return;
+                        }
+                        if (s.startsWith('local-')) {
+                          setSelectedCorporateUseIdLocal(s);
+                          setSelectedCorporateUseId(null);
+                        } else {
+                          setSelectedCorporateUseIdLocal(null);
+                          setSelectedCorporateUseId(Number(s));
+                        }
+                      }}
                       style={styles.picker}
-                      enabled={!isPrefillMode && !!selectedCorporateVehicleId}
+                      enabled={
+                        !isPrefillMode &&
+                        !!(selectedCorporateVehicleId ?? selectedCorporateVehicleIdLocal)
+                      }
                     >
-                      <Picker.Item label={selectedCorporateVehicleId ? 'Seleccione...' : 'Seleccione vehículo primero'} value={0} color="#000000" />
+                      <Picker.Item
+                        label={
+                          selectedCorporateVehicleId || selectedCorporateVehicleIdLocal
+                            ? 'Seleccione...'
+                            : 'Seleccione vehículo primero'
+                        }
+                        value="0"
+                        color="#000000"
+                      />
                       {availableCorporateUses.map((u: any) => {
-                        const label = `${String(u.nombre_conductor || '—')} - ${String(u.fecha || '').slice(0, 10)}`;
-                        return <Picker.Item key={`uso_${u.id}`} label={label} value={Number(u.id)} color="#000000" />;
+                        const label = `${String(u.nombre_conductor || '—')} - ${String(u.fecha || '').slice(0, 10)}${u.synced === false ? ' (offline)' : ''}`;
+                        return (
+                          <Picker.Item
+                            key={`uso_${u.id ?? u.id_local}`}
+                            label={label}
+                            value={String(u.id ?? u.id_local)}
+                            color="#000000"
+                          />
+                        );
                       })}
                     </Picker>
                   </ThemedView>
@@ -2403,8 +2638,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
                 <Picker
                   selectedValue={tipo}
                   onValueChange={(v) => {
-                    // No permitir cambiar el tipo si hay un vehículo seleccionado
-                    if (selectedCorporateVehicleId) return;
+                    if (selectedCorporateVehicleId || selectedCorporateVehicleIdLocal) return;
                     const next = v as TipoBitacora;
                     if (editing) {
                       // no recreamos completamente en edición, solo cambiamos config (pero mantiene valores)
@@ -2415,14 +2649,14 @@ export default function BitacoraVehiculosDetenidosScreen() {
                     resetForm(next);
                   }}
                   style={styles.picker}
-                  enabled={!isPrefillMode && !selectedCorporateVehicleId}
+                  enabled={!isPrefillMode && !selectedCorporateVehicleId && !selectedCorporateVehicleIdLocal}
                 >
                   {TYPE_OPTIONS.map((t) => (
                     <Picker.Item key={t} label={t} value={t} color="#000000" />
                   ))}
                 </Picker>
               </ThemedView>
-              {selectedCorporateVehicleId && (
+              {(selectedCorporateVehicleId || selectedCorporateVehicleIdLocal) && (
                 <ThemedText style={styles.infoText}>
                   El tipo se establece automáticamente según el vehículo seleccionado
                 </ThemedText>
@@ -2431,7 +2665,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
               {/* Información adicional del vehículo (opcional) */}
               <ThemedView style={styles.vehicleExtraContainer}>
                 {/* Checkbox "Registrar vehículo" solo si NO hay vehículo seleccionado */}
-                {!selectedCorporateVehicleId && (
+                {!selectedCorporateVehicleId && !selectedCorporateVehicleIdLocal && (
                   <TouchableOpacity
                     style={styles.registerVehicleRow}
                     onPress={() => setShouldRegisterVehicle((prev) => !prev)}

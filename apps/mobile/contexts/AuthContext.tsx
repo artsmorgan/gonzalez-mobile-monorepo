@@ -191,6 +191,31 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         eventBus.emit('syncCachesRequested');
       });
 
+      const currentMarca = await AsyncStorage.getItem('current_marca');
+      if (currentMarca) {
+        const currentMarcaData = JSON.parse(currentMarca);
+        if (currentMarcaData.empleadoFijo_id !== employeeData.id) {
+          const exceptions = [
+            'access_token',
+            'employee_data',
+            'refresh_token',
+            'token_created_at',
+            'disconnected_info',
+            'remembered_cedula',
+            'server_time',
+            'main_structure_cache',
+            'main_structure_created_at',
+          ];
+          const keys = await AsyncStorage.getAllKeys();
+    
+          const keysToDelete = keys.filter(
+            key => !exceptions.includes(key)
+          );
+    
+          await AsyncStorage.multiRemove(keysToDelete);
+        }
+      }
+
       return { success: true, passwordExpired: false };
     } catch (error) {
       console.error('Login error:', error);

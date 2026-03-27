@@ -3,6 +3,8 @@ import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import { sendNotificationByRole } from "../../../../utils/sendNotification";
 import { getActivities } from "../../../../utils/createActivities";
 import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
+import { getCoordinadoPorId } from "../../../../utils/getCoordinadoPorId";
+import { createAccionPersonal } from "../../../../utils/createAccionPersonal";
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
@@ -253,19 +255,20 @@ async function marcar_salida(req: NextRequest, id: number, horaAccion: string, r
         }
 
         const fechaMarca = new Date(marcaDia.fecha);
-        const horaInicioMarca = new Date(marcaDia.hora_inicio);
         const horaFinMarca = new Date(marcaDia.hora_fin);
-        const endDate = new Date(horaFinMarca);
-        endDate.setFullYear(
-            fechaMarca.getFullYear(),
-            fechaMarca.getMonth(),
-            horaInicioMarca.getTime() > horaFinMarca.getTime() ? fechaMarca.getDate() + 1 : fechaMarca.getDate()
-        );
+        const endDate = new Date(fechaMarca.toISOString().split('T')[0]+'T'+horaFinMarca.toISOString().split('T')[1]);
+
+        console.log("endDate", endDate);
 
         let salidaAnticipada = null;
         if (now.getTime() < (endDate.getTime() - 15 * 60 * 1000)) {
-            const horaInicio = new Date(marcaDia.hora_inicio);
-            const horaFin = new Date(marcaDia.hora_fin);
+            let horaInicio = new Date(marcaDia.hora_inicio).toISOString().split('T')[1];
+            let horaFin = new Date(marcaDia.hora_fin).toISOString().split('T')[1];
+            horaInicio = horaInicio.split('.')[0];
+            horaFin = horaFin.split('.')[0];
+            let horaInicioSplit = horaInicio.split(':');
+            let horaFinSplit = horaFin.split(':');
+
             salidaAnticipada = await callDynamicPrisma({
                 req,
                 data: {
@@ -273,7 +276,7 @@ async function marcar_salida(req: NextRequest, id: number, horaAccion: string, r
                     table: "c_salida_anticipada",
                     data: {
                         tipo_turno: marcaDia.tipo_turno,
-                        horario_str: `${horaInicio.getHours().toString().padStart(2, '0')}:${horaInicio.getMinutes().toString().padStart(2, '0')}-${horaFin.getHours().toString().padStart(2, '0')}:${horaFin.getMinutes().toString().padStart(2, '0')}`,
+                        horario_str: `${horaInicioSplit[0]}:${horaInicioSplit[1]}-${horaFinSplit[0]}:${horaFinSplit[1]}`,
                         cantidad_horas: marcaDia.horas_duracion || 0,
                         hora_salida_anticipada: now.toISOString(),
                         minutos_descuento: (endDate.getTime() - now.getTime()) / 60000,
@@ -284,10 +287,15 @@ async function marcar_salida(req: NextRequest, id: number, horaAccion: string, r
         }
 
         if (salidaAnticipada) {
-        const time = now.toISOString().split('T')[1];
-        marcaDia.hora_salida = '1970-01-01T' + time;
+            const coordinadoPorId = await getCoordinadoPorId(req, marcaDia);
+            const accionPersonal_response = await createAccionPersonal(req, marcaDia.id, 13, 0, 0, salidaAnticipada.id, reason, coordinadoPorId);
+            if (accionPersonal_response.status) {
+                const accionPersonal = accionPersonal_response.data;
+                marcaDia.accionPersonal_id = accionPersonal.id;
+            }
+            const time = now.toISOString().split('T')[1];
+            marcaDia.hora_salida = '1970-01-01T' + time;
             marcaDia.hora_salida_digitada = now;
-            marcaDia.salida_anticipada_id = salidaAnticipada.id;
             const empleado = await callDynamicPrisma({
                 req,
                 data: {

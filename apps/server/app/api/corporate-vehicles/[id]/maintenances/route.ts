@@ -216,7 +216,11 @@ export async function POST(
                 await sendNotificationByRole(req, vehiculoObj.sucursal_id, [Number(payload?.id ?? "0")], "Mantenimiento de vehículo corporativo registrado", descriptionNotificacion, ["ADMINISTRATIVO", "SUPERVISOR"]);
             }
         }
-        return NextResponse.json({ status: true, data: created }, { status: 201 });
+        const c = createdObj as { id?: number };
+        return NextResponse.json(
+            { status: true, data: { id: c?.id, ...(typeof created === "object" && created !== null ? created : {}) } },
+            { status: 201 }
+        );
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error("Error in POST /api/corporate-vehicles/[id]/maintenances:", errorMessage);

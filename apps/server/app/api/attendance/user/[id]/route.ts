@@ -42,7 +42,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
 
         let now = toZonedTime(new Date(), "America/Costa_Rica");
-        //now = new Date(now.getTime() - 6 * 60 * 60 * 1000); // Restarle 6 horas para que sea en la zona horaria de Costa Rica
+        now = new Date(now.getTime() - 6 * 60 * 60 * 1000); // Restarle 6 horas para que sea en la zona horaria de Costa Rica
         const nowPlus15 = new Date(now.getTime() + 15 * 60 * 1000);
         const currentDate = new Date(now.toISOString().split("T")[0]);
         const currentTime = new Date("1970-01-01 " + now.toTimeString().slice(0, 8));
@@ -315,10 +315,44 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             console.log("momento_inicio_marca", inicio_marca);
             console.log("momento_fin_marca", fin_marca);
 
-            if (toZonedTime(new Date(), "America/Costa_Rica") > fin_marca && marcaDia.hora_entrada_digitada == null) {
+            if (now > fin_marca && marcaDia.hora_entrada_digitada == null) {
                 const hora_inicio_string = inicio_marca.toISOString().split("T")[1].split(".")[0];
                 const fecha_marca_string = marcaDia.fecha.split("T")[0].split("-").reverse().join("-");
-                return NextResponse.json({ status: false, absent: true, message: "No has marcado la entrada para el turno del día " + fecha_marca_string + " a las " + hora_inicio_string, marca_id: marcaDia.id }, { status: 200 });
+
+                let should_response = true;
+                let extra_reason = "";
+                if (marcaDia.accionPersonal_id != null) {
+                    const accionPersonal = await callDynamicPrisma({
+                        req,
+                        data: {
+                            action: "GET",
+                            table: "c_accion_personal",
+                            operation: "findUnique",
+                            where: { id: marcaDia.accionPersonal_id }
+                        }
+                    });
+                    if (accionPersonal) {
+                        if (accionPersonal.tipoAccion_id == 5 && accionPersonal.ausencia_id != null) {
+                            const ausencia = await callDynamicPrisma({
+                                req,
+                                data: {
+                                    action: "GET",
+                                    table: "c_ausencia",
+                                    operation: "findUnique",
+                                    where: { id: accionPersonal.ausencia_id }
+                                }
+                            });
+                            if (ausencia) {
+                                if (ausencia.tipo == "JUS") {
+                                    should_response = false;
+                                    extra_reason = " Razon: " + accionPersonal.comentarios;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                return NextResponse.json({ status: false, absent: true, should_response, message: "No has marcado la entrada para el turno del día " + fecha_marca_string + " a las " + hora_inicio_string + "." + extra_reason, marca_id: marcaDia.id }, { status: 200 });
             }
 
             next_time = new Date(estado == "No ingresado" ? inicio_marca : fin_marca);
@@ -438,6 +472,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             tipo_turno: marcaDia.tipo_turno,
             horas_duracion: marcaDia.horas_duracion,
             roleDivision: roleDivision,
+            empleadoFijo_id: empleado.id,
             empresa: {
                 id: empresa.id,
                 nombre: empresa.nombre

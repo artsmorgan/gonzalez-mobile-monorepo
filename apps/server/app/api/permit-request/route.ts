@@ -257,6 +257,7 @@ export async function POST(req: NextRequest) {
 
     const fechaInicio = `${body?.fecha_inicio}T00:00:00.000Z`;
     const fechaFin = `${body?.fecha_fin}T00:00:00.000Z`;
+    const horaAccion = parseDateInputToDate(body?.hora_accion);
     const comentarios = String(body?.comentarios || "").trim();
     const firmaResponsable = String(body?.firma_responsable || "").trim();
 
@@ -341,7 +342,6 @@ export async function POST(req: NextRequest) {
         table: "e_estructura_puesto",
         operation: "findFirst",
         where: { id: plazaPuestoId },
-        select: { sucursal_id: true },
       },
     });
 
@@ -363,6 +363,32 @@ export async function POST(req: NextRequest) {
       },
     });
 
+    const contrato = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "e_estructura_contrato",
+        operation: "findFirst",
+        where: { id: sucursalId },
+      },
+    });
+
+    let nombre_cliente = "";
+    if (contrato) {
+      const cliente = await callDynamicPrisma({
+        req,
+        data: {
+          action: "GET",
+          table: "e_estructura_cliente",
+          operation: "findFirst",
+          where: { id: contrato.cliente_id },
+        },
+      });
+      if (cliente) {
+        nombre_cliente = cliente.nombre;
+      }
+    }
+
     const ejecutivoCuenta = parseIntStrict((sucursal as any)?.ejecutivoCuenta_id);
     if (!ejecutivoCuenta) {
       return NextResponse.json(
@@ -379,7 +405,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const now = toZonedTime(new Date(), "America/Costa_Rica").toISOString();
+    const now = horaAccion ? horaAccion.toISOString() : toZonedTime(new Date(), "America/Costa_Rica").toISOString();
     const created = await callDynamicPrisma({
       req,
       data: {
@@ -478,17 +504,55 @@ export async function POST(req: NextRequest) {
     }
     if (recipients.size > 0) {
       // No bloquear la respuesta por notificaciones; si falla, el registro ya fue creado.
-      void sendNotificationByEmployee(
+
+      const empleado = await callDynamicPrisma({
         req,
-        0,
-        [currentEmployeeId],
-        "Nueva solicitud de permiso",
-        `Se ha creado una nueva solicitud de permiso (${tipo})`,
-        Array.from(recipients)
-      ).catch((error) => {
-        const msg = error instanceof Error ? error.message : "Error desconocido";
-        console.error("Error sending permit-request notifications:", msg);
+        data: {
+          action: "GET",
+          table: "c_empleado",
+          operation: "findUnique",
+          where: { id: currentEmployeeId },
+        },
       });
+
+      if (empleado) {
+        const empleados_ejecutivos = await callDynamicPrisma({
+          req,
+          data: {
+            action: "GET",
+            table: "c_empleado",
+            operation: "findMany",
+            where: { supervisor_id: ejecutivoCuenta },
+          },
+        });
+
+        let empleado_nombre = "";
+        if (empleado) {
+          empleado_nombre = `${empleado.nombre??"" } ${empleado.primer_apellido??""} ${empleado.segundo_apellido??""}`;
+        }
+
+        let tipo_lowercase = tipo.toLowerCase();
+
+        let fecha = now.split("T")[0];
+        let hora = now.split("T")[1];
+
+        let fecha_desde = fechaInicio.split("T")[0];
+        let fecha_hasta = fechaFin.split("T")[0];
+
+        console.log("puesto", puesto);
+
+        await sendNotificationByEmployee(
+          req,
+          0,
+          Array.from(recipients),
+          `Nueva solicitud de permiso ${tipo_lowercase}`,
+          `El empleado ${empleado_nombre} con cédula ${empleado.cedula??""} ha creado una nueva solicitud de permiso ${tipo_lowercase} para el puesto ${puesto.nombre} (Sucursal ${sucursal.nombre} del cliente ${nombre_cliente}) en las fechas desde ${fecha_desde} hasta ${fecha_hasta} el día ${fecha} a las ${hora}`,
+           empleados_ejecutivos.map((e: any) => e.id),
+        ).catch((error) => {
+          const msg = error instanceof Error ? error.message : "Error desconocido";
+          console.error("Error sending permit-request notifications:", msg);
+        });
+      }
     }
 
     return NextResponse.json(

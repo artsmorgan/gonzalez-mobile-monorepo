@@ -668,6 +668,9 @@ export default function PermitRequestScreenV2() {
 
     setIsSubmitting(true);
     try {
+      const horaAccion = await getHoraAccion();
+      if (!horaAccion) throw new Error('No se pudo obtener la hora de la acción');
+
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) throw new Error('Server URL not configured');
       const payload: any = {
@@ -675,6 +678,7 @@ export default function PermitRequestScreenV2() {
         tipo,
         fecha_inicio: formatDateYMD(fechaInicio),
         fecha_fin: formatDateYMD(fechaFin),
+        hora_accion: horaAccion,
         comentarios: comentarios.trim() || undefined,
         firma_responsable: firmaResponsable,
         files: attachedDocuments.map((f) => ({
@@ -859,6 +863,9 @@ export default function PermitRequestScreenV2() {
 
     setIsSavingComplete(true);
     try {
+      const horaAccion = await getHoraAccion();
+      if (!horaAccion) throw new Error('No se pudo obtener la hora de la acción');
+
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) throw new Error('Server URL not configured');
       const resp = await authedFetch({
@@ -871,6 +878,7 @@ export default function PermitRequestScreenV2() {
             turnos: turnosComplete.map((t) => ({ id: t.id, reemplazo_id: t.reemplazo_id ?? null })),
             firma_ejecutivo_cuenta_digital: firmaEjecutivoDigital,
             firma_ejecutivo_cuenta_manual: firmaEjecutivoManual,
+            hora_accion: horaAccion,
           }),
         },
         refreshAccessToken,
@@ -890,6 +898,9 @@ export default function PermitRequestScreenV2() {
 
   const rejectRecord = async (record: PermitRecord) => {
     try {
+      const horaAccion = await getHoraAccion();
+      if (!horaAccion) throw new Error('No se pudo obtener la hora de la acción');
+
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) throw new Error('Server URL not configured');
       const resp = await authedFetch({
@@ -897,6 +908,9 @@ export default function PermitRequestScreenV2() {
         init: {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            hora_accion: horaAccion,
+          }),
         },
         refreshAccessToken,
         logout,
