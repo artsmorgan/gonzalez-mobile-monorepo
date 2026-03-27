@@ -419,7 +419,6 @@ model c_marca_dia {
   usuario_marca_entrada                                             String?                        @db.VarChar(20)
   usuario_marca_salida                                              String?                        @db.VarChar(20)
   usuarioMarcaEntrada                                               String?
-  salida_anticipada_id                                              Int?
   is_cubierto_como_comodin                                          Boolean?
   c_horas_extras                                                    c_horas_extras[]
   n_motivo_marcar_horario_plaza                                     n_motivo_marcar_horario_plaza? @relation(fields: [motivoMarcarHorarioPlaza_id], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "FK_583C45E52F4E077F")
