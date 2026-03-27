@@ -388,6 +388,16 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
     return currentRoute === route;
   };
 
+  const hasPermissionRole = (roles: string[]) => {
+    // roles será un array de strings con los nombres de los roles que tendrán permitidos y el sistema deberá verificar si la variable role está en el array de roles
+    return roles.some((roleArray: string) => role === roleArray);
+  };
+  
+  const hasPermissionDivision = (divisions: string[]) => {
+    // divisions será un array de strings con los nombres de las divisiones que tendrán permitidos y el sistema deberá verificar si la variable division está en el array de divisions
+    return divisions.some((divisionArray: string) => division === divisionArray);
+  };
+
   if (!shouldRender) {
     return null;
   }
@@ -594,7 +604,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
 
             <ThemedView style={styles.menuSeparator} />
 
-            {hasCurrentMarca && (role === 'ADMINISTRATIVO' || role === 'SUPERVISOR') && division === 'Aseo y Limpieza' && (
+            {hasCurrentMarca && hasPermissionRole(['ADMINISTRATIVO', 'SUPERVISOR']) && hasPermissionDivision(['Aseo y Limpieza', 'Administrativos']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -648,7 +658,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && (role === 'ADMINISTRATIVO' || role === 'SUPERVISOR') && (
+            {hasCurrentMarca && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -702,7 +712,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && (
+            {hasCurrentMarca && hasPermissionRole(['ADMINISTRATIVO', 'SUPERVISOR']) && hasPermissionDivision(['Administrativos', 'Seguridad']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -783,7 +793,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && role === 'OPERATIVO' && division === 'Seguridad' && (
+            {hasCurrentMarca && hasPermissionRole(['OPERATIVO']) && hasPermissionDivision(['Seguridad', 'Administrativos']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -810,7 +820,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && (role === 'ADMINISTRATIVO' || role === 'SUPERVISOR') && (
+            {hasCurrentMarca && hasPermissionRole(['ADMINISTRATIVO', 'SUPERVISOR']) && hasPermissionDivision(['Administrativos', 'Seguridad', 'Aseo y Limpieza']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -837,7 +847,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
             
-            {hasCurrentMarca && (role === 'OPERATIVO' || role === 'SUPERVISOR') && division === 'Seguridad' && (
+            {hasCurrentMarca && hasPermissionRole(['OPERATIVO', 'SUPERVISOR']) && hasPermissionDivision(['Seguridad', 'Administrativos']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -864,7 +874,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && role === 'SUPERVISOR' && division === 'Seguridad' && (
+            {hasCurrentMarca && hasPermissionRole(['SUPERVISOR']) && hasPermissionDivision(['Seguridad', 'Administrativos']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -891,7 +901,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
             
-            {hasCurrentMarca && role === 'OPERATIVO' && division === 'Seguridad' && (
+            {hasCurrentMarca && hasPermissionRole(['OPERATIVO', 'SUPERVISOR', 'ADMINISTRATIVO']) && hasPermissionDivision(['Seguridad', 'Administrativos', 'Aseo y Limpieza']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -920,7 +930,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
 
             
             {/* Estamos aquí */}
-            {hasCurrentMarca && (role === 'ADMINISTRATIVO' || role === 'SUPERVISOR') && division === 'Seguridad' && (
+            {hasCurrentMarca && hasPermissionRole(['ADMINISTRATIVO', 'SUPERVISOR']) && hasPermissionDivision(['Seguridad', 'Administrativos']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -947,7 +957,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && (
+            {hasCurrentMarca && hasPermissionRole(['ADMINISTRATIVO', 'SUPERVISOR']) && hasPermissionDivision(['Seguridad', 'Aseo y Limpieza', 'Administrativos']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -974,7 +984,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
             
-            {hasCurrentMarca && division === 'Seguridad' && (
+            {hasCurrentMarca && hasPermissionDivision(['Seguridad', 'Administrativos', 'Aseo y Limpieza']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -1001,7 +1011,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && role === 'OPERATIVO' && division === 'Seguridad' && (
+            {hasCurrentMarca && hasPermissionRole(['OPERATIVO']) && hasPermissionDivision(['Seguridad', 'Administrativos']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -1163,7 +1173,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
             
-            {hasCurrentMarca && (role === 'ADMINISTRATIVO' || role === 'SUPERVISOR') && (
+            {hasCurrentMarca && hasPermissionRole(['ADMINISTRATIVO', 'SUPERVISOR']) && hasPermissionDivision(['Administrativos', 'Seguridad', 'Aseo y Limpieza']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -1190,7 +1200,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {(role === 'ADMINISTRATIVO' || role === 'SUPERVISOR') && division === 'Aseo y Limpieza' && (
+            {hasCurrentMarca && hasPermissionRole(['ADMINISTRATIVO', 'SUPERVISOR']) && hasPermissionDivision(['Aseo y Limpieza', 'Administrativos']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -1217,7 +1227,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
             
-            {hasCurrentMarca && (
+            {hasCurrentMarca && hasPermissionDivision(['Administrativos', 'Seguridad']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -1271,7 +1281,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && (
+            {hasCurrentMarca && hasPermissionRole(['ADMINISTRATIVO', 'SUPERVISOR']) && hasPermissionDivision(['Administrativos', 'Seguridad', 'Aseo y Limpieza']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -1298,7 +1308,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
             
-            {hasCurrentMarca && (division === 'Seguridad' || division === 'Administrativos') && (
+            {hasCurrentMarca && hasPermissionDivision(['Seguridad', 'Administrativos']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -1377,7 +1387,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && (
+            {hasCurrentMarca && hasPermissionRole(['ADMINISTRATIVO', 'SUPERVISOR']) && (
                 <TouchableOpacity
                   style={[
                     styles.menuItem,
@@ -1404,7 +1414,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                 </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && ((role === 'OPERATIVO' || role === 'SUPERVISOR') && division === 'Seguridad') && (
+            {hasCurrentMarca && hasPermissionRole(['OPERATIVO', 'SUPERVISOR', 'ADMINISTRATIVO']) && hasPermissionDivision(['Seguridad', 'Administrativos']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
