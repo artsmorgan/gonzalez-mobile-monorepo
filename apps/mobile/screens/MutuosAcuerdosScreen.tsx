@@ -183,6 +183,9 @@ export default function MutuosAcuerdosScreen() {
 
   const [isCreating, setIsCreating] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  /** `${recordId}-ausente` | `${recordId}-reemplaza` mientras se envía la aceptación */
+  const [acceptingMutuoKey, setAcceptingMutuoKey] = useState<string | null>(null);
+  const [rejectingMutuoId, setRejectingMutuoId] = useState<number | null>(null);
   const [motivo, setMotivo] = useState('');
   const [firmaResponsable, setFirmaResponsable] = useState('');
   const [isGeneratingFirmaResponsable, setIsGeneratingFirmaResponsable] = useState(false);
@@ -480,7 +483,7 @@ export default function MutuosAcuerdosScreen() {
     setIsCreating(true);
   };
 
-  const handleSave = async () => {
+  const runSaveConfirmed = async () => {
     if (!motivo.trim()) {
       Alert.alert('Error', 'El motivo es obligatorio');
       return;
@@ -537,6 +540,27 @@ export default function MutuosAcuerdosScreen() {
     }
   };
 
+  const handleSave = () => {
+    if (isSubmitting) return;
+    if (!motivo.trim()) {
+      Alert.alert('Error', 'El motivo es obligatorio');
+      return;
+    }
+    if (!firmaResponsable.trim()) {
+      Alert.alert('Error', 'La firma responsable es obligatoria');
+      return;
+    }
+    if (!ausente.selectedMarcaId || !reemplaza.selectedMarcaId) {
+      Alert.alert('Error', 'Debes seleccionar una marca para ausente y una para reemplaza');
+      return;
+    }
+
+    Alert.alert('Confirmar', '¿Desea registrar este mutuo acuerdo?', [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Aceptar', onPress: () => void runSaveConfirmed() },
+    ]);
+  };
+
   const handlePickDocument = async () => {
     try {
       const result = await DocumentPicker.getDocumentAsync({
@@ -588,7 +612,9 @@ export default function MutuosAcuerdosScreen() {
     }
   };
 
-  const handleAccept = async (recordId: number, role: 'ausente' | 'reemplaza') => {
+  const runAcceptMutuo = async (recordId: number, role: 'ausente' | 'reemplaza') => {
+    const key = `${recordId}-${role}`;
+    setAcceptingMutuoKey(key);
     try {
       const response = await acceptMutuoAcuerdo({ id: recordId, role, refreshAccessToken, logout });
       if (!response.status) {
@@ -599,10 +625,22 @@ export default function MutuosAcuerdosScreen() {
       await fetchRecords();
     } catch (e: any) {
       Alert.alert('Error', e?.message || 'No se pudo registrar la aceptación');
+    } finally {
+      setAcceptingMutuoKey(null);
     }
   };
 
-  const handleRejectByExecutive = async (recordId: number) => {
+  const handleAccept = (recordId: number, role: 'ausente' | 'reemplaza') => {
+    if (acceptingMutuoKey) return;
+    const label = role === 'ausente' ? 'empleado ausente' : 'empleado reemplaza';
+    Alert.alert('Confirmar', `¿Registrar la aceptación como ${label}?`, [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Aceptar', onPress: () => void runAcceptMutuo(recordId, role) },
+    ]);
+  };
+
+  const runRejectByExecutive = async (recordId: number) => {
+    setRejectingMutuoId(recordId);
     try {
       const horaAccion = await getHoraAccion();
       if (!horaAccion) {
@@ -619,10 +657,12 @@ export default function MutuosAcuerdosScreen() {
         Alert.alert('Error', response.message || 'No se pudo rechazar el mutuo acuerdo');
         return;
       }
-      Alert.alert('Exito', response.message || 'Mutuo acuerdo rechazado');
+      Alert.alert('Éxito', response.message || 'Mutuo acuerdo rechazado');
       await fetchRecords();
     } catch (e: any) {
       Alert.alert('Error', e?.message || 'No se pudo rechazar el mutuo acuerdo');
+    } finally {
+      setRejectingMutuoId(null);
     }
   };
 
@@ -655,7 +695,7 @@ export default function MutuosAcuerdosScreen() {
     }
   };
 
-  const submitSignature = () => {
+  const submitSignatureReadCanvas = () => {
     if (!firmaEjecutivoDigital) {
       Alert.alert('Error', 'Primero debes generar la firma digital');
       return;
@@ -667,6 +707,18 @@ export default function MutuosAcuerdosScreen() {
       setIsReadingSignature(false);
       Alert.alert('Error', 'No se pudo leer la firma manual');
     }
+  };
+
+  const submitSignature = () => {
+    if (isSigning || isReadingSignature) return;
+    if (!firmaEjecutivoDigital) {
+      Alert.alert('Error', 'Primero debes generar la firma digital');
+      return;
+    }
+    Alert.alert('Confirmar', '¿Desea aprobar este mutuo acuerdo con las firmas indicadas?', [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Aceptar', onPress: () => submitSignatureReadCanvas() },
+    ]);
   };
 
   const onManualSignatureRead = async (signature: string) => {
@@ -930,8 +982,8 @@ export default function MutuosAcuerdosScreen() {
                     <ActivityIndicator size="small" color="#fff" />
                   ) : (
                     <>
-                      <Ionicons name="save" size={18} color="#fff" />
-                      <ThemedText style={styles.saveBtnText}>Guardar</ThemedText>
+                      <Ionicons name="checkmark" size={18} color="#fff" />
+                      <ThemedText style={styles.saveBtnText}>Aceptar</ThemedText>
                     </>
                   )}
                 </TouchableOpacity>
@@ -1125,21 +1177,39 @@ export default function MutuosAcuerdosScreen() {
                       <ThemedView style={styles.actionsRow}>
                         {r.can_accept_ausente ? (
                           <TouchableOpacity
-                            style={[styles.actionBtn, styles.acceptBtn]}
+                            style={[
+                              styles.actionBtn,
+                              styles.acceptBtn,
+                              acceptingMutuoKey === `${r.id}-ausente` && styles.buttonDisabled,
+                            ]}
                             onPress={() => handleAccept(r.id, 'ausente')}
                             activeOpacity={0.85}
+                            disabled={acceptingMutuoKey !== null}
                           >
-                            <Ionicons name="checkmark-circle-outline" size={18} color="#FFFFFF" />
+                            {acceptingMutuoKey === `${r.id}-ausente` ? (
+                              <ActivityIndicator size="small" color="#FFFFFF" />
+                            ) : (
+                              <Ionicons name="checkmark-circle-outline" size={18} color="#FFFFFF" />
+                            )}
                             <ThemedText style={styles.actionBtnText}>Aceptar (ausente)</ThemedText>
                           </TouchableOpacity>
                         ) : null}
                         {r.can_accept_reemplaza ? (
                           <TouchableOpacity
-                            style={[styles.actionBtn, styles.acceptBtn]}
+                            style={[
+                              styles.actionBtn,
+                              styles.acceptBtn,
+                              acceptingMutuoKey === `${r.id}-reemplaza` && styles.buttonDisabled,
+                            ]}
                             onPress={() => handleAccept(r.id, 'reemplaza')}
                             activeOpacity={0.85}
+                            disabled={acceptingMutuoKey !== null}
                           >
-                            <Ionicons name="checkmark-circle-outline" size={18} color="#FFFFFF" />
+                            {acceptingMutuoKey === `${r.id}-reemplaza` ? (
+                              <ActivityIndicator size="small" color="#FFFFFF" />
+                            ) : (
+                              <Ionicons name="checkmark-circle-outline" size={18} color="#FFFFFF" />
+                            )}
                             <ThemedText style={styles.actionBtnText}>Aceptar (reemplaza)</ThemedText>
                           </TouchableOpacity>
                         ) : null}
@@ -1155,21 +1225,35 @@ export default function MutuosAcuerdosScreen() {
                         ) : null}
                         {r.can_reject_ejecutivo ? (
                           <TouchableOpacity
-                            style={[styles.actionBtn, styles.rejectBtn]}
-                            onPress={() =>
+                            style={[
+                              styles.actionBtn,
+                              styles.rejectBtn,
+                              rejectingMutuoId === r.id && styles.buttonDisabled,
+                            ]}
+                            onPress={() => {
+                              if (rejectingMutuoId !== null) return;
                               Alert.alert(
                                 'Confirmar rechazo',
-                                'Este mutuo acuerdo sera rechazado. Deseas continuar?',
+                                'Este mutuo acuerdo será rechazado. ¿Desea continuar?',
                                 [
                                   { text: 'Cancelar', style: 'cancel' },
-                                  { text: 'Rechazar', style: 'destructive', onPress: () => handleRejectByExecutive(r.id) },
+                                  {
+                                    text: 'Rechazar',
+                                    style: 'destructive',
+                                    onPress: () => void runRejectByExecutive(r.id),
+                                  },
                                 ],
                                 { cancelable: true }
-                              )
-                            }
+                              );
+                            }}
                             activeOpacity={0.85}
+                            disabled={rejectingMutuoId !== null}
                           >
-                            <Ionicons name="close-circle-outline" size={18} color="#FFFFFF" />
+                            {rejectingMutuoId === r.id ? (
+                              <ActivityIndicator size="small" color="#FFFFFF" />
+                            ) : (
+                              <Ionicons name="close-circle-outline" size={18} color="#FFFFFF" />
+                            )}
                             <ThemedText style={styles.actionBtnText}>Rechazar</ThemedText>
                           </TouchableOpacity>
                         ) : null}
@@ -1258,7 +1342,7 @@ export default function MutuosAcuerdosScreen() {
                   }}
                   descriptionText=""
                   clearText="Limpiar"
-                  confirmText="Guardar"
+                  confirmText="Aceptar"
                   webStyle={signatureWebStyle}
                   key={signatureKey}
                 />
@@ -1284,7 +1368,7 @@ export default function MutuosAcuerdosScreen() {
                   disabled={isSigning || isReadingSignature}
                 >
                   {(isSigning || isReadingSignature) ? <ActivityIndicator size="small" color="#000" /> : <Ionicons name="checkmark" size={18} color="#000" />}
-                  <ThemedText style={styles.modalAcceptBtnText}>Confirmar</ThemedText>
+                  <ThemedText style={styles.modalAcceptBtnText}>Aceptar</ThemedText>
                 </TouchableOpacity>
               </ThemedView>
             </ScrollView>

@@ -26,6 +26,47 @@ interface Notification {
   created_at: string;
 }
 
+/** Clave estable para React en la lista (evita hijos duplicados). No sustituye al `id` numérico de la notificación en API ni en markAsRead. */
+function notificationRowKey(notification: Notification, index: number): string {
+  const scope = notification.is_plaza ? 'plaza' : 'marca';
+  return `notif-${notification.id}-${scope}-${index}`;
+}
+
+type NotifReadRef = { id: number; is_plaza: boolean };
+
+function notifReadRefKey(r: NotifReadRef): string {
+  return `${Number(r.id)}:${r.is_plaza ? '1' : '0'}`;
+}
+
+/** API espera `{ id, is_plaza }[]`; tolera entradas antiguas con solo número (is_plaza false). */
+function parseNotifReadRef(x: any): NotifReadRef | null {
+  if (x != null && typeof x === 'object' && 'id' in x) {
+    return { id: Number(x.id), is_plaza: !!x.is_plaza };
+  }
+  if (typeof x === 'number' && Number.isFinite(x)) return { id: x, is_plaza: false };
+  return null;
+}
+
+/** Una sola acción `markAsRead` deduplicada (mínimas llamadas al reconectar). */
+function mergeMarkAsReadQueue(existingActions: any[], newRefs: NotifReadRef[]): any[] {
+  const merged = new Map<string, NotifReadRef>();
+  for (const a of existingActions) {
+    if (a.type !== 'markAsRead' || !Array.isArray(a.notificationIds)) continue;
+    for (const x of a.notificationIds) {
+      const r = parseNotifReadRef(x);
+      if (r) merged.set(notifReadRefKey(r), r);
+    }
+  }
+  for (const r of newRefs) {
+    merged.set(notifReadRefKey(r), r);
+  }
+  const rest = existingActions.filter((a: any) => a.type !== 'markAsRead');
+  if (merged.size > 0) {
+    rest.push({ type: 'markAsRead', notificationIds: Array.from(merged.values()) });
+  }
+  return rest;
+}
+
 export default function NotificationsScreen() {
   const { employee, refreshAccessToken, logout } = useAuth();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
@@ -34,6 +75,12 @@ export default function NotificationsScreen() {
   // Notifications state
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  /** Carga al marcar una sola notificación (clave id:is_plaza). */
+  const [singleMarkLoadingKey, setSingleMarkLoadingKey] = useState<string | null>(null);
+  /** Carga al marcar todas como leídas. */
+  const [markAllLoading, setMarkAllLoading] = useState(false);
+
+  const anyMarkOperationInProgress = singleMarkLoadingKey !== null || markAllLoading;
 
   useFocusEffect(
     useCallback(() => {
@@ -77,182 +124,159 @@ export default function NotificationsScreen() {
   };
 
   const getConnectionStatus = async (): Promise<boolean> => {
+    return false;
     const networkState = await Network.getNetworkStateAsync();
     return networkState.isConnected && networkState.isInternetReachable ? true : false;
   };
 
-  const markAsRead = async (notificationId: number, is_plaza: boolean) => {
-    Alert.alert(
-      'Confirmar',
-      '¿Deseas marcar esta notificación como leída?',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Marcar como leída',
-          onPress: async () => {
-            try {
-              // Verificar conectividad
-              const isConnected = await getConnectionStatus();
+  const executeMarkAsRead = async (notificationId: number, is_plaza: boolean) => {
+    setSingleMarkLoadingKey(notifReadRefKey({ id: notificationId, is_plaza }));
+    try {
+      const isConnected = await getConnectionStatus();
 
-              if (isConnected) {
-                // Con internet: llamar a la función API
-                const data = await markNotificationsAsRead({
-                  notificationIds: [{ id: notificationId, is_plaza: is_plaza } as { id: number, is_plaza: boolean }],
-                  refreshAccessToken,
-                  logout,
-                });
+      if (isConnected) {
+        const data = await markNotificationsAsRead({
+          notificationIds: [{ id: notificationId, is_plaza } as { id: number; is_plaza: boolean }],
+          refreshAccessToken,
+          logout,
+        });
 
-                if (data.status) {
-                  // Actualizar AsyncStorage
-                  const notificationsStr = await AsyncStorage.getItem('notifications');
-                  if (notificationsStr) {
-                    const notificationsData = JSON.parse(notificationsStr);
-                    const updatedNotifications = notificationsData.map((n: Notification) =>
-                      n.id === notificationId ? { ...n, watched: true } : n
-                    );
-                    await AsyncStorage.setItem('notifications', JSON.stringify(updatedNotifications));
-                    setNotifications(updatedNotifications);
+        if (data.status) {
+          const notificationsStr = await AsyncStorage.getItem('notifications');
+          if (notificationsStr) {
+            const notificationsData = JSON.parse(notificationsStr);
+            const updatedNotifications = notificationsData.map((n: Notification) =>
+              n.id === notificationId && n.is_plaza === is_plaza ? { ...n, watched: true } : n
+            );
+            await AsyncStorage.setItem('notifications', JSON.stringify(updatedNotifications));
+            setNotifications(updatedNotifications);
+            eventBus.emit('notificationsUpdated');
+            eventBus.emit('notificationsUpdatedCounter');
+          }
+          Alert.alert('Éxito', 'Notificación marcada como leída');
+        } else {
+          Alert.alert('Error', data.message || 'Error al marcar la notificación como leída');
+        }
+      } else {
+        const actionsStr = await AsyncStorage.getItem('notifications_actions');
+        const actions = actionsStr ? JSON.parse(actionsStr) : [];
+        const nextActions = mergeMarkAsReadQueue(actions, [{ id: notificationId, is_plaza }]);
+        await AsyncStorage.setItem('notifications_actions', JSON.stringify(nextActions));
 
-                    // Emitir evento para actualizar el contador en AppHeader
-                    eventBus.emit('notificationsUpdated');
-                    eventBus.emit('notificationsUpdatedCounter');
-                  }
-                  Alert.alert('Éxito', 'Notificación marcada como leída');
-                } else {
-                  Alert.alert('Error', data.message || 'Error al marcar la notificación como leída');
-                }
-              } else {
-                // Sin internet: modo offline
-                const actionsStr = await AsyncStorage.getItem('notifications_actions');
-                const actions = actionsStr ? JSON.parse(actionsStr) : [];
+        const notificationsStr = await AsyncStorage.getItem('notifications');
+        if (notificationsStr) {
+          const notificationsData = JSON.parse(notificationsStr);
+          const updatedNotifications = notificationsData.map((n: Notification) =>
+            n.id === notificationId && n.is_plaza === is_plaza ? { ...n, watched: true } : n
+          );
+          await AsyncStorage.setItem('notifications', JSON.stringify(updatedNotifications));
+          setNotifications(updatedNotifications);
+          eventBus.emit('notificationsUpdated');
+          eventBus.emit('notificationsUpdatedCounter');
+        }
 
-                // Verificar si ya existe una acción para esta notificación
-                const existingActionIndex = actions.findIndex((a: any) =>
-                  a.type === 'markAsRead' && a.notificationIds.includes(notificationId)
-                );
-
-                if (existingActionIndex === -1) {
-                  // Agregar nueva acción
-                  actions.push({
-                    type: 'markAsRead',
-                    notificationIds: [notificationId],
-                  });
-                  await AsyncStorage.setItem('notifications_actions', JSON.stringify(actions));
-                }
-
-                // Actualizar AsyncStorage
-                const notificationsStr = await AsyncStorage.getItem('notifications');
-                if (notificationsStr) {
-                  const notificationsData = JSON.parse(notificationsStr);
-                  const updatedNotifications = notificationsData.map((n: Notification) =>
-                    n.id === notificationId ? { ...n, watched: true } : n
-                  );
-                  await AsyncStorage.setItem('notifications', JSON.stringify(updatedNotifications));
-                  setNotifications(updatedNotifications);
-
-                  // Emitir evento para actualizar el contador en AppHeader
-                  eventBus.emit('notificationsUpdated');
-                  eventBus.emit('notificationsUpdatedCounter');
-                }
-
-                Alert.alert('Modo Offline', 'Notificación marcada como leída localmente. Se sincronizará cuando haya conexión.');
-              }
-            } catch (err) {
-              console.error('Error marking notification as read:', err);
-              Alert.alert('Error', 'No se pudo marcar la notificación como leída');
-            }
-          },
-        },
-      ]
-    );
+        Alert.alert(
+          'Modo Offline',
+          'Notificación marcada como leída localmente. Se sincronizará cuando haya conexión.'
+        );
+      }
+    } catch (err) {
+      console.error('Error marking notification as read:', err);
+      Alert.alert('Error', 'No se pudo marcar la notificación como leída');
+    } finally {
+      setSingleMarkLoadingKey(null);
+    }
   };
 
-  const markAllAsRead = async () => {
-    // Obtener todas las notificaciones no leídas
-    const unreadNotifications = notifications.filter(n => !n.watched);
+  const markAsRead = (notificationId: number, is_plaza: boolean) => {
+    if (anyMarkOperationInProgress) return;
+    Alert.alert('Confirmar', '¿Deseas marcar esta notificación como leída?', [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Aceptar', onPress: () => void executeMarkAsRead(notificationId, is_plaza) },
+    ]);
+  };
 
+  const executeMarkAllAsRead = async (unreadNotifications: Notification[]) => {
+    setMarkAllLoading(true);
+    try {
+      const unreadIds = unreadNotifications.map((n) => ({ id: n.id, is_plaza: n.is_plaza }));
+      const isConnected = await getConnectionStatus();
+
+      if (isConnected) {
+        const data = await markNotificationsAsRead({
+          notificationIds: unreadIds as { id: number; is_plaza: boolean }[],
+          refreshAccessToken,
+          logout,
+        });
+
+        if (data.status) {
+          const notificationsStr = await AsyncStorage.getItem('notifications');
+          if (notificationsStr) {
+            const notificationsData = JSON.parse(notificationsStr);
+            const updatedNotifications = notificationsData.map((n: Notification) => ({
+              ...n,
+              watched: true,
+            }));
+            await AsyncStorage.setItem('notifications', JSON.stringify(updatedNotifications));
+            setNotifications(updatedNotifications);
+            eventBus.emit('notificationsUpdated');
+            eventBus.emit('notificationsUpdatedCounter');
+          }
+          Alert.alert('Éxito', 'Todas las notificaciones han sido marcadas como leídas');
+        } else {
+          Alert.alert('Error', data.message || 'Error al marcar las notificaciones como leídas');
+        }
+      } else {
+        const actionsStr = await AsyncStorage.getItem('notifications_actions');
+        const actions = actionsStr ? JSON.parse(actionsStr) : [];
+        const refs: NotifReadRef[] = unreadIds.map((u) => ({
+          id: Number(u.id),
+          is_plaza: !!u.is_plaza,
+        }));
+        const nextActions = mergeMarkAsReadQueue(actions, refs);
+        await AsyncStorage.setItem('notifications_actions', JSON.stringify(nextActions));
+
+        const notificationsStr = await AsyncStorage.getItem('notifications');
+        if (notificationsStr) {
+          const notificationsData = JSON.parse(notificationsStr);
+          const updatedNotifications = notificationsData.map((n: Notification) => ({
+            ...n,
+            watched: true,
+          }));
+          await AsyncStorage.setItem('notifications', JSON.stringify(updatedNotifications));
+          setNotifications(updatedNotifications);
+          eventBus.emit('notificationsUpdated');
+          eventBus.emit('notificationsUpdatedCounter');
+        }
+
+        Alert.alert(
+          'Modo Offline',
+          'Todas las notificaciones han sido marcadas como leídas localmente. Se sincronizarán cuando haya conexión.'
+        );
+      }
+    } catch (err) {
+      console.error('Error marking all notifications as read:', err);
+      Alert.alert('Error', 'No se pudieron marcar las notificaciones como leídas');
+    } finally {
+      setMarkAllLoading(false);
+    }
+  };
+
+  const markAllAsRead = () => {
+    const unreadNotifications = notifications.filter((n) => !n.watched);
     if (unreadNotifications.length === 0) {
       Alert.alert('Información', 'No hay notificaciones sin leer');
       return;
     }
-
+    if (anyMarkOperationInProgress) return;
     Alert.alert(
       'Confirmar',
       `¿Deseas marcar todas las notificaciones (${unreadNotifications.length}) como leídas?`,
       [
         { text: 'Cancelar', style: 'cancel' },
         {
-          text: 'Marcar todas como leídas',
-          onPress: async () => {
-            try {
-              const unreadIds = unreadNotifications.map(n => ({ id: n.id, is_plaza: n.is_plaza }));
-
-              // Verificar conectividad
-              const isConnected = await getConnectionStatus();
-
-              if (isConnected) {
-                // Con internet: llamar a la función API
-                const data = await markNotificationsAsRead({
-                  notificationIds: unreadIds as { id: number, is_plaza: boolean }[],
-                  refreshAccessToken,
-                  logout,
-                });
-
-                if (data.status) {
-                  // Actualizar AsyncStorage
-                  const notificationsStr = await AsyncStorage.getItem('notifications');
-                  if (notificationsStr) {
-                    const notificationsData = JSON.parse(notificationsStr);
-                    const updatedNotifications = notificationsData.map((n: Notification) => ({
-                      ...n,
-                      watched: true,
-                    }));
-                    await AsyncStorage.setItem('notifications', JSON.stringify(updatedNotifications));
-                    setNotifications(updatedNotifications);
-
-                    // Emitir evento para actualizar el contador en AppHeader
-                    eventBus.emit('notificationsUpdated');
-                    eventBus.emit('notificationsUpdatedCounter');
-                  }
-                  Alert.alert('Éxito', 'Todas las notificaciones han sido marcadas como leídas');
-                } else {
-                  Alert.alert('Error', data.message || 'Error al marcar las notificaciones como leídas');
-                }
-              } else {
-                // Sin internet: modo offline
-                const actionsStr = await AsyncStorage.getItem('notifications_actions');
-                const actions = actionsStr ? JSON.parse(actionsStr) : [];
-
-                // Agregar nueva acción con todos los IDs no leídos
-                actions.push({
-                  type: 'markAsRead',
-                  notificationIds: unreadIds as { id: number, is_plaza: boolean }[],
-                });
-                await AsyncStorage.setItem('notifications_actions', JSON.stringify(actions));
-
-                // Actualizar AsyncStorage
-                const notificationsStr = await AsyncStorage.getItem('notifications');
-                if (notificationsStr) {
-                  const notificationsData = JSON.parse(notificationsStr);
-                  const updatedNotifications = notificationsData.map((n: Notification) => ({
-                    ...n,
-                    watched: true,
-                  }));
-                  await AsyncStorage.setItem('notifications', JSON.stringify(updatedNotifications));
-                  setNotifications(updatedNotifications);
-
-                  // Emitir evento para actualizar el contador en AppHeader
-                  eventBus.emit('notificationsUpdated');
-                  eventBus.emit('notificationsUpdatedCounter');
-                }
-
-                Alert.alert('Modo Offline', 'Todas las notificaciones han sido marcadas como leídas localmente. Se sincronizarán cuando haya conexión.');
-              }
-            } catch (err) {
-              console.error('Error marking all notifications as read:', err);
-              Alert.alert('Error', 'No se pudieron marcar las notificaciones como leídas');
-            }
-          },
+          text: 'Aceptar',
+          onPress: () => void executeMarkAllAsRead(unreadNotifications),
         },
       ]
     );
@@ -326,9 +350,21 @@ export default function NotificationsScreen() {
           </ThemedView>
 
           {/* Mark All as Read Button */}
-          {notifications.some(n => !n.watched) && (
-            <TouchableOpacity style={styles.markAllButton} onPress={markAllAsRead}>
-              <Ionicons name="checkmark-done" size={20} color="#fff" />
+          {notifications.some((n) => !n.watched) && (
+            <TouchableOpacity
+              style={[
+                styles.markAllButton,
+                (markAllLoading || singleMarkLoadingKey !== null) && styles.markAllButtonDisabled,
+              ]}
+              onPress={markAllAsRead}
+              disabled={markAllLoading || singleMarkLoadingKey !== null}
+              activeOpacity={markAllLoading || singleMarkLoadingKey !== null ? 1 : 0.2}
+            >
+              {markAllLoading ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Ionicons name="checkmark-done" size={20} color="#fff" />
+              )}
               <ThemedText style={styles.markAllButtonText}>
                 Marcar todas como leídas
               </ThemedText>
@@ -345,9 +381,9 @@ export default function NotificationsScreen() {
                 </ThemedText>
               </ThemedView>
             ) : (
-              notifications.map(notification => (
+              notifications.map((notification, index) => (
                 <ThemedView
-                  key={notification.id}
+                  key={notificationRowKey(notification, index)}
                   style={[
                     styles.notificationCard,
                     { backgroundColor: notification.watched ? '#FFF' : '#E5F1FF' }
@@ -360,13 +396,27 @@ export default function NotificationsScreen() {
                     <TouchableOpacity
                       style={styles.eyeButton}
                       onPress={() => markAsRead(notification.id, notification.is_plaza)}
-                      disabled={notification.watched}
+                      disabled={
+                        notification.watched ||
+                        markAllLoading ||
+                        singleMarkLoadingKey !== null
+                      }
                     >
-                      <Ionicons
-                        name={notification.watched ? "eye" : "eye-off"}
-                        size={24}
-                        color={notification.watched ? "#666" : "#007AFF"}
-                      />
+                      {markAllLoading && !notification.watched ? (
+                        <ActivityIndicator size="small" color="#007AFF" />
+                      ) : singleMarkLoadingKey ===
+                        notifReadRefKey({
+                          id: notification.id,
+                          is_plaza: notification.is_plaza,
+                        }) ? (
+                        <ActivityIndicator size="small" color="#007AFF" />
+                      ) : (
+                        <Ionicons
+                          name={notification.watched ? 'eye' : 'eye-off'}
+                          size={24}
+                          color={notification.watched ? '#666' : '#007AFF'}
+                        />
+                      )}
                     </TouchableOpacity>
                   </ThemedView>
 
@@ -450,6 +500,9 @@ const styles = StyleSheet.create({
     padding: 16,
     borderRadius: 8,
     marginBottom: 20,
+  },
+  markAllButtonDisabled: {
+    opacity: 0.75,
   },
   markAllButtonText: {
     color: '#fff',

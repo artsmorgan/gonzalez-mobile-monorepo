@@ -81,7 +81,7 @@ export async function POST(request: NextRequest) {
     const accessToken = jwt.sign(
       { id: empleado.id, cedula: empleado.cedula, sessionId },
       process.env.JWT_SECRET!,
-      { expiresIn: '15m' }
+      { expiresIn: '1d' }
     );
 
     const refreshToken = jwt.sign(

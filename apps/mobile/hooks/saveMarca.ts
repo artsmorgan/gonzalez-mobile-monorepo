@@ -1,4 +1,3 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import Constants from "expo-constants";
 import authedFetch from "./authedFetch";
 
@@ -55,10 +54,6 @@ export default async function saveMarca({
         }
 
         const data = await response.json();
-
-        if (data.status) {
-            await AsyncStorage.removeItem('marca_cache');
-        }
 
         return data;
     } catch (error) {

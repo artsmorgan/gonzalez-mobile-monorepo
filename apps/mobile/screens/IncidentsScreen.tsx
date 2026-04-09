@@ -26,8 +26,8 @@ import { eventBus } from '@/hooks/eventBus';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 
 import type { ExecutiveOption, Incident, IncidentClassificationOption, IncidentContribution, IncidentContributionFileInput, IncidentFileInput } from '@/hooks/incidentsTypes';
-import { createIncident, createIncidentContribution, deleteIncident, deleteIncidentContribution, deleteIncidentContributionFile, listExecutives, listIncidentClassifications, listIncidentContributions, listIncidentsByMarca, updateIncident, updateIncidentContribution } from '@/hooks/incidentsFunctions';
-import { getCurrentMarcaId, getExecutivesCache, getIncidentsCache, getIncidentsClassificationsCache, INCIDENT_CONTRIBUTIONS_ACTIONS_KEY, setExecutivesCache, setIncidentsCache, setIncidentsClassificationsCache } from '@/hooks/incidentsStorage';
+import { createIncident, createIncidentContribution, deleteIncident, deleteIncidentContribution, deleteIncidentContributionFile, listExecutives, listIncidentClassifications, listIncidentContributions, listIncidentsByCorpo, updateIncident, updateIncidentContribution } from '@/hooks/incidentsFunctions';
+import { filterIncidentsByCorpo, getCurrentMarcaCorpoId, getCurrentMarcaId, getExecutivesCache, getIncidentsCache, getIncidentsClassificationsCache, INCIDENT_CONTRIBUTIONS_ACTIONS_KEY, mergeIncidentsCacheForCorpo, setExecutivesCache, setIncidentsCache, setIncidentsClassificationsCache } from '@/hooks/incidentsStorage';
 
 type IncidentsScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Incidents'>;
 
@@ -44,6 +44,9 @@ type ManualFileLocal = {
 };
 
 const APORTE_SIGNATURE_FILE_NAME = '__firma_aporte_tercero__.png';
+
+const incidentRowKey = (i: Incident) => String(i.id_local || (i.id ?? ''));
+const aporteRowKey = (a: IncidentContribution) => String(a.id_local || (a.id ?? ''));
 
 type EditingIncident = {
   id: number | null;
@@ -196,6 +199,8 @@ export default function IncidentsScreen() {
 
   // Aportes (contribuciones)
   const [isSubmittingAporte, setIsSubmittingAporte] = useState(false);
+  const [deletingIncidentKey, setDeletingIncidentKey] = useState<string | null>(null);
+  const [deletingAporteKey, setDeletingAporteKey] = useState<string | null>(null);
   const [isAportesVisible, setIsAportesVisible] = useState(false);
   const [selectedIncidentForAportes, setSelectedIncidentForAportes] = useState<Incident | null>(null);
   const [isLoadingAportes, setIsLoadingAportes] = useState(false);
@@ -282,13 +287,14 @@ export default function IncidentsScreen() {
   };
 
   const loadFromCaches = async () => {
-    const [cachedIncidents, cachedClassifications, cachedExecutives] = await Promise.all([
+    const [cachedIncidents, cachedClassifications, cachedExecutives, corpoId] = await Promise.all([
       getIncidentsCache(),
       getIncidentsClassificationsCache(),
       getExecutivesCache(),
+      getCurrentMarcaCorpoId(),
     ]);
 
-    setIncidents(cachedIncidents || []);
+    setIncidents(filterIncidentsByCorpo(cachedIncidents || [], corpoId));
     setClassifications(cachedClassifications || []);
     setExecutives(cachedExecutives || []);
   };
@@ -314,8 +320,8 @@ export default function IncidentsScreen() {
       setError(null);
       await loadCurrentRoleFromMarca();
 
-      const marcaId = await getCurrentMarcaId();
-      if (!marcaId) {
+      const corpoId = await getCurrentMarcaCorpoId();
+      if (!corpoId) {
         setHasCurrentMarca(false);
         setIsLoading(false);
         return;
@@ -330,14 +336,16 @@ export default function IncidentsScreen() {
       }
 
       const [incidentsRes, classificationsRes, executivesRes] = await Promise.all([
-        listIncidentsByMarca({ marcaId, refreshAccessToken, logout }),
+        listIncidentsByCorpo({ corpoId, refreshAccessToken, logout }),
         listIncidentClassifications({ refreshAccessToken, logout }),
         listExecutives({ refreshAccessToken, logout }),
       ]);
 
       if (incidentsRes.status && incidentsRes.incidents) {
-        setIncidents(incidentsRes.incidents);
-        await setIncidentsCache(incidentsRes.incidents);
+        const prev = (await getIncidentsCache()) || [];
+        const merged = mergeIncidentsCacheForCorpo(prev, incidentsRes.incidents, corpoId);
+        await setIncidentsCache(merged);
+        setIncidents(filterIncidentsByCorpo(merged, corpoId));
       } else if (!incidentsRes.status) {
         setError(incidentsRes.message || 'Error al cargar incidentes');
       }
@@ -703,7 +711,7 @@ export default function IncidentsScreen() {
     }));
   };
 
-  const createLocalCacheIncident = async (marcaId: number, localId: string) => {
+  const createLocalCacheIncident = async (localId: string, corpoId: number) => {
     const exec = executives.find(e => e.id === ejecutivoRef.current) || null;
     const clas = classifications.find(c => c.id === clasificacionRef.current) || null;
     const horaAccion = await getHoraAccion();
@@ -726,6 +734,7 @@ export default function IncidentsScreen() {
 
     const incidentCache: Incident = {
       id: 0,
+      corpo_id: corpoId,
       estado: true,
       ejecutivo: { id: ejecutivoRef.current || 0, name: exec?.nombre || '' },
       fecha_incidente: fechaIncidenteRef.current,
@@ -749,7 +758,7 @@ export default function IncidentsScreen() {
 
     const cache = (await getIncidentsCache()) || [];
     await setIncidentsCache([...cache, incidentCache]);
-    setIncidents(prev => [...prev, incidentCache]);
+    setIncidents(prev => filterIncidentsByCorpo([...prev, incidentCache], corpoId));
   };
 
   const handleCreate = async () => {
@@ -801,18 +810,26 @@ export default function IncidentsScreen() {
       }
 
       // Offline
+      const corpoIdOff = await getCurrentMarcaCorpoId();
+      if (!corpoIdOff) {
+        setSubmitResponse({ type: 'error', message: 'No se encontró la sucursal (corporación) actual' });
+        setIsSubmitting(false);
+        return;
+      }
+
       const localId = generateRandomId();
       const actionsStr = await AsyncStorage.getItem('incidents_actions');
       const actions = actionsStr ? JSON.parse(actionsStr) : [];
       actions.push({
         requestData: payload,
         marcaId,
+        corpoId: corpoIdOff,
         id: localId,
         type: 'create',
       });
       await AsyncStorage.setItem('incidents_actions', JSON.stringify(actions));
 
-      await createLocalCacheIncident(marcaId, localId);
+      await createLocalCacheIncident(localId, corpoIdOff);
 
       setSubmitResponse({ type: 'success', message: 'Incidente registrado localmente. Se sincronizará cuando haya conexión.' });
       setTimeout(() => {
@@ -825,6 +842,19 @@ export default function IncidentsScreen() {
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  const handleCreateWithConfirm = () => {
+    if (isSubmitting) return;
+    const validation = validateCreate();
+    if (validation) {
+      setSubmitResponse({ type: 'error', message: validation });
+      return;
+    }
+    Alert.alert('Confirmar', '¿Estás seguro de que deseas crear este incidente?', [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Aceptar', onPress: () => void handleCreate() },
+    ]);
   };
 
   const handleUpdate = async (incidentId: number) => {
@@ -880,15 +910,30 @@ export default function IncidentsScreen() {
 
       // Offline
       const actionsStr = await AsyncStorage.getItem('incidents_actions');
-      const actions = actionsStr ? JSON.parse(actionsStr) : [];
+      let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
 
       if (editingIncident.id_local && editingIncident.id_local !== '') {
-        // si aún no está sincronizado, actualizamos el payload de la acción create
+        // No encolar "update" para borradores: fusionar en el "create" pendiente o limpiar updates huérfanos.
+        actions = actions.filter(
+          (a: any) => !(a.type === 'update' && String(a.id) === String(editingIncident.id_local))
+        );
         const actionIndex = actions.findIndex((a: any) => a.id === editingIncident.id_local && a.type === 'create');
         if (actionIndex !== -1) {
-          // No enviamos estos campos en create (según requerimiento), así que solo guardamos en cache local
-          // para que se vean en UI; al sincronizar create se enviará sin ellos.
+          const prevRd = actions[actionIndex].requestData || {};
+          actions[actionIndex] = {
+            ...actions[actionIndex],
+            requestData: {
+              ...prevRd,
+              solucion: body.solucion,
+              fecha_solucion: body.fecha_solucion,
+              fecha_real_solucion: body.fecha_real_solucion,
+              costo_asociado: body.costo_asociado,
+              consecutivo_informe: body.consecutivo_informe,
+              link_informe: body.link_informe,
+            },
+          };
         }
+        await AsyncStorage.setItem('incidents_actions', JSON.stringify(actions));
       } else {
         const filtered = actions.filter((a: any) => !(a.type === 'update' && a.id === incidentId));
         filtered.push({ requestData: body, id: incidentId, type: 'update' });
@@ -898,7 +943,9 @@ export default function IncidentsScreen() {
       // actualizar cache local (para reflejar UI offline)
       const cache = (await getIncidentsCache()) || [];
       const updated = cache.map(i => {
-        if (i.id === incidentId) {
+        const matchLocal = !!editingIncident.id_local && i.id_local === editingIncident.id_local;
+        const matchServer = !editingIncident.id_local && i.id === incidentId;
+        if (matchLocal || matchServer) {
           return {
             ...i,
             solucion: body.solucion,
@@ -912,7 +959,8 @@ export default function IncidentsScreen() {
         return i;
       });
       await setIncidentsCache(updated);
-      setIncidents(updated);
+      const corpoAfterUp = await getCurrentMarcaCorpoId();
+      setIncidents(filterIncidentsByCorpo(updated, corpoAfterUp));
 
       setSubmitResponse({ type: 'success', message: 'Incidente actualizado localmente. Se sincronizará cuando haya conexión.' });
       setTimeout(() => {
@@ -926,52 +974,65 @@ export default function IncidentsScreen() {
     }
   };
 
-  const handleDelete = async (incident: Incident) => {
+  const executeDeleteIncident = async (incident: Incident) => {
+    setDeletingIncidentKey(incidentRowKey(incident));
+    try {
+      const isConnected = await getConnectionStatus();
+      if (isConnected) {
+        const res = await deleteIncident({ incidentId: incident.id, refreshAccessToken, logout });
+        if (res.status) {
+          Alert.alert('Éxito', res.message || 'Incidente eliminado');
+          await fetchAll();
+        } else {
+          Alert.alert('Error', res.message || 'No se pudo eliminar');
+        }
+        return;
+      }
+
+      const actionsStr = await AsyncStorage.getItem('incidents_actions');
+      const actions = actionsStr ? JSON.parse(actionsStr) : [];
+
+      if (incident.id_local && incident.id_local !== '') {
+        // Borrador: quitar el "create" (y cualquier "update" con el mismo id local), no encolar "delete".
+        const filteredActions = actions.filter(
+          (a: any) =>
+            !(
+              String(a.id) === String(incident.id_local) &&
+              (a.type === 'create' || a.type === 'update')
+            )
+        );
+        await AsyncStorage.setItem('incidents_actions', JSON.stringify(filteredActions));
+        const cache = (await getIncidentsCache()) || [];
+        const updated = cache.filter((i) => i.id_local !== incident.id_local);
+        await setIncidentsCache(updated);
+        const corpoDel = await getCurrentMarcaCorpoId();
+        setIncidents(filterIncidentsByCorpo(updated, corpoDel));
+      } else {
+        actions.push({ id: incident.id, type: 'delete' });
+        await AsyncStorage.setItem('incidents_actions', JSON.stringify(actions));
+        const cache = (await getIncidentsCache()) || [];
+        const updated = cache.filter((i) => i.id !== incident.id);
+        await setIncidentsCache(updated);
+        const corpoDel2 = await getCurrentMarcaCorpoId();
+        setIncidents(filterIncidentsByCorpo(updated, corpoDel2));
+      }
+
+      Alert.alert('Modo Offline', 'Incidente eliminado localmente. Se sincronizará cuando haya conexión.');
+    } catch (e) {
+      console.error('Error deleting incident:', e);
+      Alert.alert('Error', 'No se pudo eliminar el incidente');
+    } finally {
+      setDeletingIncidentKey(null);
+    }
+  };
+
+  const handleDelete = (incident: Incident) => {
     Alert.alert('Confirmar eliminación', '¿Estás seguro de que deseas eliminar este incidente?', [
       { text: 'Cancelar', style: 'cancel' },
       {
         text: 'Eliminar',
         style: 'destructive',
-        onPress: async () => {
-          try {
-            const isConnected = await getConnectionStatus();
-            if (isConnected) {
-              const res = await deleteIncident({ incidentId: incident.id, refreshAccessToken, logout });
-              if (res.status) {
-                Alert.alert('Éxito', res.message || 'Incidente eliminado');
-                await fetchAll();
-              } else {
-                Alert.alert('Error', res.message || 'No se pudo eliminar');
-              }
-              return;
-            }
-
-            const actionsStr = await AsyncStorage.getItem('incidents_actions');
-            const actions = actionsStr ? JSON.parse(actionsStr) : [];
-
-            if (incident.id_local && incident.id_local !== '') {
-              // si era local, borramos su acción create y removemos del cache
-              const filteredActions = actions.filter((a: any) => a.id !== incident.id_local);
-              await AsyncStorage.setItem('incidents_actions', JSON.stringify(filteredActions));
-              const cache = (await getIncidentsCache()) || [];
-              const updated = cache.filter(i => i.id_local !== incident.id_local);
-              await setIncidentsCache(updated);
-              setIncidents(updated);
-            } else {
-              actions.push({ id: incident.id, type: 'delete' });
-              await AsyncStorage.setItem('incidents_actions', JSON.stringify(actions));
-              const cache = (await getIncidentsCache()) || [];
-              const updated = cache.filter(i => i.id !== incident.id);
-              await setIncidentsCache(updated);
-              setIncidents(updated);
-            }
-
-            Alert.alert('Modo Offline', 'Incidente eliminado localmente. Se sincronizará cuando haya conexión.');
-          } catch (e) {
-            console.error('Error deleting incident:', e);
-            Alert.alert('Error', 'No se pudo eliminar el incidente');
-          }
-        },
+        onPress: () => void executeDeleteIncident(incident),
       },
     ]);
   };
@@ -1002,8 +1063,8 @@ export default function IncidentsScreen() {
     });
     await setIncidentsCache(updatedCache);
 
-    // Mantener estado en memoria sincronizado para offline inmediato
-    setIncidents(updatedCache);
+    const corpoAportes = await getCurrentMarcaCorpoId();
+    setIncidents(filterIncidentsByCorpo(updatedCache, corpoAportes));
   };
 
   const getIncidentAportesFromCache = async (incidentId: number): Promise<IncidentContribution[]> => {
@@ -1258,7 +1319,65 @@ export default function IncidentsScreen() {
 
       const isConnected = await getConnectionStatus();
 
-      // EDIT
+      // EDIT aporte solo local: fusionar en el "create" pendiente (no duplicar ni encolar "update").
+      if (editingAporte && editingAporte.id_local && editingAporte.id_local !== '') {
+        const payloadFiles = buildAportePayloadWithSignature();
+        const actions = await readContributionActions();
+        const idx = actions.findIndex((x: any) => x.type === 'create' && x.id === editingAporte.id_local);
+        if (idx !== -1) {
+          const prev = actions[idx].requestData || {};
+          actions[idx] = {
+            ...actions[idx],
+            requestData: {
+              ...prev,
+              aporte: texto,
+              nombre_aporte: nombreAporte || null,
+              firma_aporte_tercero: aporteFirmaManual || null,
+              rol_aporte: prev.rol_aporte || role || 'OPERATIVO',
+              archivos: JSON.stringify(payloadFiles),
+            },
+          };
+          await writeContributionActions(actions);
+        }
+
+        const updated = aportes.map((ap) => {
+          if (ap.id_local !== editingAporte.id_local) return ap;
+          return {
+            ...ap,
+            aporte: texto,
+            nombre_aporte: nombreAporte || null,
+            firma_aporte_tercero: aporteFirmaManual ?? null,
+            files: [...payloadFiles].map((f, fidx) => ({
+              id: Date.now() + Math.random() + fidx,
+              id_local: `lf_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+              name: f.original_name || 'archivo',
+              original_name: f.original_name || 'archivo',
+              type: f.type,
+              extension: f.extension,
+              base64: f.file_base64,
+              mimeType: f.mimeType,
+            })),
+          } as any;
+        });
+        setAportes(updated);
+        await updateIncidentAportesInIncidentsCache(incidentId, () => updated);
+
+        setEditingAporte(null);
+        setShowAporteComposer(false);
+        setAporteText('');
+        setAporteNombrePersonalizado('');
+        setAporteFirmaManual(null);
+        setAporteTextFiles([]);
+        setAporteImageFiles([]);
+        setAporteAudioFiles([]);
+        setAporteVideoFiles([]);
+
+        Alert.alert('Modo Offline', 'Aporte actualizado localmente. Se sincronizará cuando haya conexión.');
+        setIsSubmittingAporte(false);
+        return;
+      }
+
+      // EDIT aporte en servidor
       if (editingAporte && editingAporte.id && editingAporte.id_local === '') {
         const can = canModifyAporte(editingAporte.rol_aporte, editingAporte.empleado_id, parseInt(String(employee.id || '0'), 10), currentRoleName);
         if (!can) {
@@ -1429,6 +1548,25 @@ export default function IncidentsScreen() {
     }
   };
 
+  const submitAporteWithConfirm = () => {
+    if (!selectedIncidentForAportes || !employee) return;
+    if (isSubmittingAporte) return;
+    const texto = (aporteText || '').trim();
+    if (texto.length === 0) {
+      Alert.alert('Error', 'Debes escribir un aporte');
+      return;
+    }
+    const isEdit = editingAporte != null;
+    Alert.alert(
+      'Confirmar',
+      isEdit ? '¿Guardar los cambios de este aporte?' : '¿Registrar este aporte?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Aceptar', onPress: () => void submitAporte() },
+      ]
+    );
+  };
+
   const startEditingAporte = async (a: IncidentContribution) => {
     setEditingAporte(a);
     setShowAporteComposer(true);
@@ -1443,10 +1581,52 @@ export default function IncidentsScreen() {
     setAporteVideoFiles([]);
   };
 
-  const deleteAporte = async (a: IncidentContribution) => {
+  const executeDeleteAporte = async (a: IncidentContribution) => {
     if (!selectedIncidentForAportes) return;
     if (!employee) return;
     const incidentId = selectedIncidentForAportes.id;
+    const rowKey = aporteRowKey(a);
+    setDeletingAporteKey(rowKey);
+    try {
+      const isConnected = await getConnectionStatus();
+      if (isConnected && a.id && a.id_local === '') {
+        const res = await deleteIncidentContribution({ incidentId, contributionId: a.id, refreshAccessToken, logout });
+        if (res.status) {
+          await fetchAportesForIncident(incidentId);
+        } else {
+          Alert.alert('Error', res.message || 'No se pudo eliminar');
+        }
+        return;
+      }
+
+      const actions = await readContributionActions();
+      if (a.id_local && a.id_local !== '') {
+        // Aporte solo local: quitar el "create" pendiente (id === id_local), no encolar "delete".
+        const filtered = actions.filter(
+          (x: any) => !(x.type === 'create' && String(x.id) === String(a.id_local))
+        );
+        await writeContributionActions(filtered);
+      } else {
+        actions.push({ type: 'delete', incidentId, contributionId: a.id });
+        await writeContributionActions(actions);
+      }
+
+      const next = aportes.filter((x) => (a.id_local ? x.id_local !== a.id_local : x.id !== a.id));
+      setAportes(next);
+      await updateIncidentAportesInIncidentsCache(incidentId, () => next);
+
+      Alert.alert('Modo Offline', 'Aporte eliminado localmente. Se sincronizará cuando haya conexión.');
+    } catch (e) {
+      console.error('Error deleting aporte:', e);
+      Alert.alert('Error', 'No se pudo eliminar el aporte');
+    } finally {
+      setDeletingAporteKey(null);
+    }
+  };
+
+  const deleteAporte = (a: IncidentContribution) => {
+    if (!selectedIncidentForAportes) return;
+    if (!employee) return;
 
     const can = canModifyAporte(a.rol_aporte, a.empleado_id, parseInt(String(employee.id || '0'), 10), currentRoleName);
     if (!can) {
@@ -1459,35 +1639,7 @@ export default function IncidentsScreen() {
       {
         text: 'Eliminar',
         style: 'destructive',
-        onPress: async () => {
-          const isConnected = await getConnectionStatus();
-          if (isConnected && a.id && a.id_local === '') {
-            const res = await deleteIncidentContribution({ incidentId, contributionId: a.id, refreshAccessToken, logout });
-            if (res.status) {
-              await fetchAportesForIncident(incidentId);
-            } else {
-              Alert.alert('Error', res.message || 'No se pudo eliminar');
-            }
-            return;
-          }
-
-          // offline
-          const actions = await readContributionActions();
-          if (a.id_local && a.id_local !== '') {
-            // remove pending create
-            const filtered = actions.filter((x: any) => x.id !== a.id_local);
-            await writeContributionActions(filtered);
-          } else {
-            actions.push({ type: 'delete', incidentId, contributionId: a.id });
-            await writeContributionActions(actions);
-          }
-
-          const next = aportes.filter((x) => (a.id_local ? x.id_local !== a.id_local : x.id !== a.id));
-          setAportes(next);
-          await updateIncidentAportesInIncidentsCache(incidentId, () => next);
-
-          Alert.alert('Modo Offline', 'Aporte eliminado localmente. Se sincronizará cuando haya conexión.');
-        },
+        onPress: () => void executeDeleteAporte(a),
       },
     ]);
   };
@@ -1939,7 +2091,7 @@ export default function IncidentsScreen() {
         <ThemedView style={styles.buttonRow}>
           <TouchableOpacity
             style={[styles.confirmButton, isSubmitting && styles.buttonDisabled]}
-            onPress={isEdit ? () => handleUpdate(incident.id!) : handleCreate}
+            onPress={isEdit ? () => handleUpdate(incident.id!) : handleCreateWithConfirm}
             disabled={isSubmitting}
           >
             {isSubmitting ? (
@@ -1949,8 +2101,9 @@ export default function IncidentsScreen() {
             )}
           </TouchableOpacity>
           <TouchableOpacity
-            style={styles.cancelButton}
+            style={[styles.cancelButton, isSubmitting && styles.buttonDisabled]}
             onPress={isEdit ? cancelEditing : cancelCreating}
+            disabled={isSubmitting}
           >
             <ThemedText style={styles.cancelButtonText}>{getActionIcon('cancel')}</ThemedText>
           </TouchableOpacity>
@@ -2106,7 +2259,7 @@ export default function IncidentsScreen() {
                 </ThemedView>
               ) : (
                 filteredIncidents.map((i) => (
-                  <ThemedView key={i.id_local || String(i.id)} style={styles.card}>
+                  <ThemedView key={incidentRowKey(i)} style={styles.card}>
                     <ThemedView style={styles.cardHeader}>
                       <ThemedText style={styles.cardTitle}>Incidente #{i.id_local ? `LOCAL-${i.id_local}` : i.id}</ThemedText>
                       <ThemedText style={styles.badge}>{i.estado ? 'Activo' : 'Inactivo'}</ThemedText>
@@ -2126,8 +2279,16 @@ export default function IncidentsScreen() {
                       <TouchableOpacity style={styles.aportesButton} onPress={() => openAportesModal(i)}>
                         <Ionicons name="chatbubble-ellipses" size={20} color="#FFFFFF" />
                       </TouchableOpacity>
-                      <TouchableOpacity style={styles.deleteButton} onPress={() => handleDelete(i)}>
-                        <ThemedText style={styles.deleteButtonText}>{getActionIcon('delete')}</ThemedText>
+                      <TouchableOpacity
+                        style={styles.deleteButton}
+                        onPress={() => handleDelete(i)}
+                        disabled={deletingIncidentKey === incidentRowKey(i)}
+                      >
+                        {deletingIncidentKey === incidentRowKey(i) ? (
+                          <ActivityIndicator size="small" color="#FFFFFF" />
+                        ) : (
+                          <ThemedText style={styles.deleteButtonText}>{getActionIcon('delete')}</ThemedText>
+                        )}
                       </TouchableOpacity>
                     </ThemedView>
                   </ThemedView>
@@ -2213,7 +2374,7 @@ export default function IncidentsScreen() {
                   <ThemedView style={styles.buttonRow}>
                     <TouchableOpacity
                       style={[styles.confirmButton, isSubmittingAporte && styles.buttonDisabled]}
-                      onPress={submitAporte}
+                      onPress={submitAporteWithConfirm}
                       disabled={isSubmittingAporte}
                     >
                       {isSubmittingAporte ? (
@@ -2270,8 +2431,15 @@ export default function IncidentsScreen() {
                         </ThemedText>
                         {can && (
                           <ThemedView style={{ flexDirection: 'row', gap: 10, backgroundColor: 'transparent' }}>
-                            <TouchableOpacity onPress={() => deleteAporte(a)}>
-                              <Ionicons name="trash" size={18} color="#FF3B30" />
+                            <TouchableOpacity
+                              onPress={() => deleteAporte(a)}
+                              disabled={deletingAporteKey === aporteRowKey(a)}
+                            >
+                              {deletingAporteKey === aporteRowKey(a) ? (
+                                <ActivityIndicator size="small" color="#FF3B30" />
+                              ) : (
+                                <Ionicons name="trash" size={18} color="#FF3B30" />
+                              )}
                             </TouchableOpacity>
                           </ThemedView>
                         )}

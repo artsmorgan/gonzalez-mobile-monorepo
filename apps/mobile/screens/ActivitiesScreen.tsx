@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, Modal, TextInput, Image, View, Platform, Dimensions } from 'react-native';
+import { StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, Modal, TextInput, Image, View, Platform, Dimensions, Animated } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
@@ -22,7 +22,7 @@ import { Buffer } from 'buffer';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import { eventBus } from '@/hooks/eventBus';
 import { useQRScanner } from '@/hooks/useQRScanner';
-import { createActivity, deleteCreatedActivity, listCreatedActivitiesByPuesto, updateCreatedActivity } from '@/hooks/activitiesFunctions';
+import { appendCreatedActivityPuestos, createActivity, deleteCreatedActivity, listCreatedActivitiesByPuesto, updateCreatedActivity } from '@/hooks/activitiesFunctions';
 import authedFetch from '@/hooks/authedFetch';
 import getValidAccessTokenOrLogout from '@/hooks/getValidAccessTokenOrLogout';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
@@ -657,6 +657,30 @@ type MainStructureClienteNode = { id: number; nombre: string; division: MainStru
 type MainStructureEmpresaNode = { id: number; nombre: string; clientes: MainStructureClienteNode[] };
 type MainStructureTree = MainStructureEmpresaNode[];
 
+const getMarcaRoleDivisionId = (current: any): number | null => {
+  const raw = current?.roleDivision?.division?.id
+    ?? current?.role_division?.division?.id
+    ?? current?.division?.id
+    ?? current?.division_id;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
+
+const resolveDivisionIdInStructure = (
+  tree: MainStructureTree,
+  empresaId: number | null,
+  clienteId: number | null,
+  divisionId: number | null
+): number | null => {
+  if (!Array.isArray(tree) || tree.length === 0 || divisionId == null) return divisionId;
+  const empresa = tree.find((e: any) => Number(e?.id) === Number(empresaId));
+  const clientes = Array.isArray(empresa?.clientes) ? empresa.clientes : [];
+  const cliente = clientes.find((c: any) => Number(c?.id) === Number(clienteId));
+  const divisiones = Array.isArray(cliente?.division) ? cliente.division : [];
+  if (divisiones.some((d: any) => Number(d?.id) === Number(divisionId))) return divisionId;
+  return null;
+};
+
 interface CreatedActivityItem {
   id: number;
   nombre_actividad: string;
@@ -712,6 +736,41 @@ interface InventoryUpdateRequest {
 interface InventoryResponse {
   status: boolean;
   message: string;
+}
+
+const AnimatedTouchable = Animated.createAnimatedComponent(TouchableOpacity);
+
+function ScalePressButton({
+  children,
+  onPress,
+  disabled,
+  style,
+}: {
+  children: React.ReactNode;
+  onPress?: () => void;
+  disabled?: boolean;
+  style?: object | object[];
+}) {
+  const scale = useRef(new Animated.Value(1)).current;
+  const pressIn = () => {
+    if (disabled) return;
+    Animated.spring(scale, { toValue: 0.94, useNativeDriver: true, friction: 6 }).start();
+  };
+  const pressOut = () => {
+    Animated.spring(scale, { toValue: 1, useNativeDriver: true, friction: 5 }).start();
+  };
+  return (
+    <AnimatedTouchable
+      activeOpacity={1}
+      disabled={disabled}
+      onPress={onPress}
+      onPressIn={pressIn}
+      onPressOut={pressOut}
+      style={[style, { transform: [{ scale }] }]}
+    >
+      {children}
+    </AnimatedTouchable>
+  );
 }
 
 export default function ActivitiesScreen() {
@@ -793,6 +852,23 @@ export default function ActivitiesScreen() {
   const [isSubmittingActivity, setIsSubmittingActivity] = useState(false);
   const [createdActivities, setCreatedActivities] = useState<CreatedActivityItem[]>([]);
   const [isLoadingCreatedActivities, setIsLoadingCreatedActivities] = useState(false);
+  const [deletingCreatedActivityId, setDeletingCreatedActivityId] = useState<number | null>(null);
+
+  /** Modal: añadir puestos vinculados (no elimina asignaciones previas) */
+  const [isUpdPuestosModalVisible, setIsUpdPuestosModalVisible] = useState(false);
+  const [updPuestosActivity, setUpdPuestosActivity] = useState<CreatedActivityItem | null>(null);
+  const [updPSubmitting, setUpdPSubmitting] = useState(false);
+  const [updPAssignAllDivision, setUpdPAssignAllDivision] = useState(false);
+  const [updPSelectedDivisionForAll, setUpdPSelectedDivisionForAll] = useState<number | null>(null);
+  const [updPEmpresaId, setUpdPEmpresaId] = useState<number | null>(null);
+  const [updPClienteId, setUpdPClienteId] = useState<number | null>(null);
+  const [updPDivisionId, setUpdPDivisionId] = useState<number | null>(null);
+  const [updPContratoId, setUpdPContratoId] = useState<number | null>(null);
+  const [updPSucursalId, setUpdPSucursalId] = useState<number | null>(null);
+  const [updPSelectedPuestoId, setUpdPSelectedPuestoId] = useState('');
+  const [updPMarkedPlazaIds, setUpdPMarkedPlazaIds] = useState<string[]>([]);
+  const [updPAssignedResponsables, setUpdPAssignedResponsables] = useState<AssignedResponsable[]>([]);
+  const [updPIsSelectedPuestosExpanded, setUpdPIsSelectedPuestosExpanded] = useState(false);
 
   // Jerarquía desde cache (sin endpoint)
   const [structure, setStructure] = useState<MainStructureTree>([]);
@@ -1314,21 +1390,55 @@ export default function ActivitiesScreen() {
     }
   };
 
-  const loadMainStructureCache = async () => {
+  const loadMainStructureCache = async (): Promise<MainStructureTree> => {
     try {
       setIsStructureLoading(true);
       const cache = await AsyncStorage.getItem('main_structure_cache');
       const parsed = cache ? JSON.parse(cache) : [];
       const empresas = Array.isArray(parsed) ? parsed : [];
       setStructure(empresas);
+      return empresas;
     } catch (error) {
       console.error('Error loading main_structure_cache:', error);
       setStructure([]);
       setCatalogError('No se pudo leer la jerarquía guardada.');
+      return [];
     } finally {
       setIsStructureLoading(false);
     }
   };
+
+  const preloadCreatedHierarchyFiltersFromMarca = useCallback(async (treeOverride?: MainStructureTree) => {
+    try {
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      if (!currentMarcaStr) return;
+      const currentMarcaData = JSON.parse(currentMarcaStr);
+      const tree = Array.isArray(treeOverride) ? treeOverride : structure;
+      if (!Array.isArray(tree) || tree.length === 0) return;
+
+      const empresaIdRaw = currentMarcaData?.empresa?.id ?? currentMarcaData?.empresa_id;
+      const clienteIdRaw = currentMarcaData?.cliente?.id ?? currentMarcaData?.cliente_id;
+      const contratoIdRaw = currentMarcaData?.contrato?.id ?? currentMarcaData?.contrato_id;
+      const sucursalIdRaw = currentMarcaData?.corpo?.id ?? currentMarcaData?.corpo_id;
+      const divisionIdRaw = getMarcaRoleDivisionId(currentMarcaData);
+
+      const empresaId = empresaIdRaw != null ? Number(empresaIdRaw) : null;
+      const clienteId = clienteIdRaw != null ? Number(clienteIdRaw) : null;
+      const contratoId = contratoIdRaw != null ? Number(contratoIdRaw) : null;
+      const sucursalId = sucursalIdRaw != null ? Number(sucursalIdRaw) : null;
+      const divisionId = resolveDivisionIdInStructure(tree, empresaId, clienteId, divisionIdRaw);
+
+      setSelectedEmpresaId(empresaId);
+      setSelectedClienteId(clienteId);
+      setSelectedDivisionId(divisionId);
+      setSelectedContratoId(contratoId);
+      setSelectedSucursalId(sucursalId);
+      setSelectedPuestoFilterId(null);
+      setCreatedActivities([]);
+    } catch (error) {
+      console.error('Error preloading hierarchy from current_marca:', error);
+    }
+  }, [structure]);
 
   const loadPuestosCatalog = async (corpoId: number, isConnected: boolean) => {
     const loadFromCache = async () => {
@@ -1596,6 +1706,11 @@ export default function ActivitiesScreen() {
     setEditingCreatedActivityId(null);
   };
 
+  useEffect(() => {
+    if (moduleStep !== 'created') return;
+    preloadCreatedHierarchyFiltersFromMarca();
+  }, [moduleStep, preloadCreatedHierarchyFiltersFromMarca]);
+
   const formatDateForDisplay = (date: Date) => {
     const year = date.getFullYear();
     const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -1647,6 +1762,22 @@ export default function ActivitiesScreen() {
     }
     
   }, [selectedPuestoId, assignedResponsables]);
+
+  useEffect(() => {
+    if (!updPSelectedPuestoId) {
+      setUpdPMarkedPlazaIds([]);
+      return;
+    }
+    const puestoId = parseInt(updPSelectedPuestoId, 10);
+    const existing = updPAssignedResponsables.find(
+      (r) => r.puestoId === puestoId && !r.assignAll
+    );
+    if (existing) {
+      setUpdPMarkedPlazaIds(existing.plazas.map((p: { plazaId: number }) => String(p.plazaId)));
+    } else {
+      setUpdPMarkedPlazaIds([]);
+    }
+  }, [updPSelectedPuestoId, updPAssignedResponsables]);
 
   const findCurrentMarca = async () => {
     const currentMarca = await AsyncStorage.getItem('current_marca');
@@ -2012,15 +2143,17 @@ export default function ActivitiesScreen() {
     if (!activityDescription.trim()) {
       return 'Debes ingresar la descripción de la actividad.';
     }
-    if (assignedResponsables.length === 0) {
-      return 'Debes asignar al menos un puesto o plaza responsable.';
-    }
-    if (assignedResponsables.some(r => !r.assignAll && r.plazas.length === 0)) {
-      return 'Las asignaciones por puesto deben incluir al menos una plaza o marcarse como puesto completo.';
-    }
-    if (tipoActividad === 'Inventario') {
-      if (assignedInventoryArticleEntries.length === 0) {
-        return 'Los puestos seleccionados no tienen artículos de inventario en main_structure_cache.';
+    if (!isEditingCreatedActivity) {
+      if (assignedResponsables.length === 0) {
+        return 'Debes asignar al menos un puesto o plaza responsable.';
+      }
+      if (assignedResponsables.some(r => !r.assignAll && r.plazas.length === 0)) {
+        return 'Las asignaciones por puesto deben incluir al menos una plaza o marcarse como puesto completo.';
+      }
+      if (tipoActividad === 'Inventario') {
+        if (assignedInventoryArticleEntries.length === 0) {
+          return 'Los puestos seleccionados no tienen artículos de inventario en main_structure_cache.';
+        }
       }
     }
     if (!signatureData?.raw) {
@@ -2092,8 +2225,13 @@ export default function ActivitiesScreen() {
         ? await updateCreatedActivity({
             activityId: editingCreatedActivityId,
             requestData: {
-              ...requestData,
-              puestos_ids: Array.from(new Set(assignedResponsables.map((r) => r.puestoId))),
+              nombre_actividad: activityName.trim(),
+              descripcion_actividad: activityDescription.trim(),
+              fecha_inicio: fechaInicioStr,
+              fecha_fin: fechaFinValue,
+              frecuencia: frequencyString,
+              es_revision_equipo: tipoActividad === 'Inventario',
+              firma_responsable: signatureData?.raw || '',
             },
             refreshAccessToken,
             logout,
@@ -2131,16 +2269,18 @@ export default function ActivitiesScreen() {
     }
 
     const selectedPuestosCount = Array.from(new Set(assignedResponsables.map((r) => r.puestoId))).length;
-    const confirmationMessage = selectedPuestosCount > 100
-      ? `Se seleccionaron ${selectedPuestosCount} puestos. El proceso puede tardar un tiempo. ¿Deseas continuar?`
-      : (isEditingCreatedActivity ? '¿Deseas actualizar esta actividad?' : '¿Deseas crear esta actividad?');
+    const confirmationMessage = isEditingCreatedActivity
+      ? '¿Deseas actualizar esta actividad?'
+      : selectedPuestosCount > 100
+        ? `Se seleccionaron ${selectedPuestosCount} puestos. El proceso puede tardar un tiempo. ¿Deseas continuar?`
+        : '¿Deseas crear esta actividad?';
 
     Alert.alert(
       'Confirmar',
       confirmationMessage,
       [
         { text: 'Cancelar', style: 'cancel' },
-        { text: isEditingCreatedActivity ? 'Actualizar' : 'Crear', onPress: submitCreateActivity },
+        { text: 'Aceptar', onPress: submitCreateActivity },
       ],
       { cancelable: false }
     );
@@ -2707,6 +2847,90 @@ export default function ActivitiesScreen() {
     ? getDivisionPuestos(selectedDivisionForAll)
     : filteredPuestos;
 
+  const updPEmpresa = empresasOptions.find((e) => e.id === updPEmpresaId) || null;
+  const updPClientesOptions = updPEmpresa?.clientes || [];
+  const updPSelectedCliente = updPClientesOptions.find((c) => c.id === updPClienteId) || null;
+  const updPDivisionesOptions = updPSelectedCliente?.division || [];
+  const updPSelectedDivision = updPDivisionesOptions.find((d) => d.id === updPDivisionId) || null;
+  const updPContratosOptions = updPSelectedDivision?.contratos || [];
+  const updPSelectedContrato = updPContratosOptions.find((c) => c.id === updPContratoId) || null;
+  const updPSucursalesOptions = updPSelectedContrato?.sucursales || [];
+  const updPSelectedSucursal = updPSucursalesOptions.find((s) => s.id === updPSucursalId) || null;
+
+  const updPFilteredPuestos = useMemo(() => {
+    if (!updPEmpresaId) return [];
+    if (updPSucursalId && updPSelectedSucursal) {
+      return getUniquePuestos(updPSelectedSucursal.puestos || []);
+    }
+    if (updPContratoId && updPSelectedContrato) {
+      const puestos = (updPSelectedContrato.sucursales || []).flatMap((sucursal: any) => sucursal?.puestos || []);
+      return getUniquePuestos(puestos);
+    }
+    if (updPDivisionId && updPSelectedDivision) {
+      const puestos = (updPSelectedDivision.contratos || [])
+        .flatMap((contrato: any) => contrato?.sucursales || [])
+        .flatMap((sucursal: any) => sucursal?.puestos || []);
+      return getUniquePuestos(puestos);
+    }
+    if (updPClienteId && updPSelectedCliente) {
+      const puestos = (updPSelectedCliente.division || [])
+        .flatMap((division: any) => division?.contratos || [])
+        .flatMap((contrato: any) => contrato?.sucursales || [])
+        .flatMap((sucursal: any) => sucursal?.puestos || []);
+      return getUniquePuestos(puestos);
+    }
+    const puestos = (updPEmpresa?.clientes || [])
+      .flatMap((cliente: any) => cliente?.division || [])
+      .flatMap((division: any) => division?.contratos || [])
+      .flatMap((contrato: any) => contrato?.sucursales || [])
+      .flatMap((sucursal: any) => sucursal?.puestos || []);
+    return getUniquePuestos(puestos);
+  }, [
+    updPEmpresaId,
+    updPSucursalId,
+    updPSelectedSucursal,
+    updPContratoId,
+    updPSelectedContrato,
+    updPDivisionId,
+    updPSelectedDivision,
+    updPClienteId,
+    updPSelectedCliente,
+    updPEmpresa,
+  ]);
+
+  const updPEffectivePuestos =
+    updPAssignAllDivision && updPSelectedDivisionForAll
+      ? getDivisionPuestos(updPSelectedDivisionForAll)
+      : updPFilteredPuestos;
+
+  const updPSelectedPuesto = updPSelectedPuestoId
+    ? updPEffectivePuestos.find((p: any) => p.id === parseInt(updPSelectedPuestoId, 10))
+    : null;
+  const updPSelectedPuestoEntry = updPSelectedPuesto
+    ? updPAssignedResponsables.find((r) => r.puestoId === updPSelectedPuesto.id)
+    : null;
+  const updPSelectedPuestoPlazas = updPSelectedPuesto?.plazas || [];
+  const updPCanAssignEntirePuesto = Boolean(updPSelectedPuesto && !updPSelectedPuestoEntry);
+
+  const resetUpdPHierarchyBelowEmpresa = () => {
+    setUpdPClienteId(null);
+    setUpdPDivisionId(null);
+    setUpdPContratoId(null);
+    setUpdPSucursalId(null);
+  };
+  const resetUpdPHierarchyBelowCliente = () => {
+    setUpdPDivisionId(null);
+    setUpdPContratoId(null);
+    setUpdPSucursalId(null);
+  };
+  const resetUpdPHierarchyBelowDivision = () => {
+    setUpdPContratoId(null);
+    setUpdPSucursalId(null);
+  };
+  const resetUpdPHierarchyBelowContrato = () => {
+    setUpdPSucursalId(null);
+  };
+
   const handleConfirmPuestosSelection = () => {
     if (assignToAllDivision && !selectedDivisionForAll) {
       Alert.alert('Validación', 'Selecciona una división para asignar todos sus puestos.');
@@ -2753,6 +2977,265 @@ export default function ActivitiesScreen() {
     Alert.alert('Listo', `Se utilizarán ${uniquePuestosCount} puestos en el formulario.`);
   };
 
+  const handleUpdPConfirmPuestosSelection = () => {
+    if (updPAssignAllDivision && !updPSelectedDivisionForAll) {
+      Alert.alert('Validación', 'Selecciona una división para asignar todos sus puestos.');
+      return;
+    }
+    const uniquePuestosCount = Array.from(new Set(updPEffectivePuestos.map((p: any) => p.id))).length;
+    if (uniquePuestosCount === 0) {
+      Alert.alert('Validación', 'Selecciona una jerarquía válida para obtener puestos.');
+      return;
+    }
+    const applyBulk = () => {
+      setUpdPAssignedResponsables(
+        updPEffectivePuestos.map((puesto: any) => ({
+          puestoId: puesto.id,
+          puestoNombre: puesto.nombre,
+          assignAll: true,
+          plazas: [],
+        }))
+      );
+      setUpdPIsSelectedPuestosExpanded(false);
+    };
+    if (uniquePuestosCount > 100) {
+      Alert.alert(
+        'Confirmación',
+        `Se seleccionarán ${uniquePuestosCount} puestos. Este proceso puede tardar más de lo normal.`,
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          { text: 'Confirmar', style: 'default', onPress: applyBulk },
+        ]
+      );
+      return;
+    }
+    applyBulk();
+    Alert.alert('Listo', `Se utilizarán ${uniquePuestosCount} puestos. Pulsa "Guardar" para vincularlos a la actividad.`);
+  };
+
+  const handleUpdPSelectPuesto = (value: string) => {
+    setUpdPSelectedPuestoId(value);
+    if (!value) {
+      setUpdPMarkedPlazaIds([]);
+      return;
+    }
+    const puestoId = parseInt(value, 10);
+    const existing = updPAssignedResponsables.find((r) => r.puestoId === puestoId && !r.assignAll);
+    if (existing) {
+      setUpdPMarkedPlazaIds(existing.plazas.map((p: { plazaId: number }) => String(p.plazaId)));
+    } else {
+      setUpdPMarkedPlazaIds([]);
+    }
+  };
+
+  const handleUpdPAddSelectedPlazas = () => {
+    if (!updPSelectedPuestoId) {
+      Alert.alert('Validación', 'Selecciona un puesto.');
+      return;
+    }
+    const puestoId = parseInt(updPSelectedPuestoId, 10);
+    const puesto = updPEffectivePuestos.find((p: any) => p.id === puestoId);
+    if (!puesto) {
+      Alert.alert('Validación', 'El puesto seleccionado no es válido.');
+      return;
+    }
+    if (updPMarkedPlazaIds.length === 0) {
+      Alert.alert('Validación', 'Selecciona al menos una plaza de la lista.');
+      return;
+    }
+    const plazasToAdd = puesto.plazas.filter((plaza: any) => updPMarkedPlazaIds.includes(String(plaza.id)));
+    if (plazasToAdd.length === 0) {
+      Alert.alert('Validación', 'Las plazas seleccionadas no son válidas para este puesto.');
+      return;
+    }
+    const assignedEntry = updPAssignedResponsables.find((r) => r.puestoId === puestoId);
+    if (assignedEntry?.assignAll) {
+      Alert.alert('Aviso', 'La actividad ya incluye este puesto completo en la selección.');
+      return;
+    }
+    const newPlazaRecords = plazasToAdd
+      .filter((plaza: any) => !(assignedEntry?.plazas.some((p) => p.plazaId === plaza.id)))
+      .map((plaza: any) => ({
+        plazaId: plaza.id,
+        plazaNombre: formatPlazaLabel(plaza),
+      }));
+    if (newPlazaRecords.length === 0) {
+      Alert.alert('Aviso', 'Las plazas seleccionadas ya fueron agregadas.');
+      return;
+    }
+    setUpdPAssignedResponsables((prev) => {
+      const existingRow = prev.find((r) => r.puestoId === puestoId);
+      if (existingRow) {
+        return prev.map((r) =>
+          r.puestoId === puestoId
+            ? { ...r, plazas: [...r.plazas, ...newPlazaRecords] }
+            : r
+        );
+      }
+      return [
+        ...prev,
+        {
+          puestoId,
+          puestoNombre: puesto.nombre,
+          assignAll: false,
+          plazas: newPlazaRecords,
+        },
+      ];
+    });
+  };
+
+  const handleUpdPAssignPuestoCompleto = () => {
+    if (!updPSelectedPuestoId) {
+      Alert.alert('Validación', 'Selecciona un puesto.');
+      return;
+    }
+    const puestoId = parseInt(updPSelectedPuestoId, 10);
+    const puesto = updPEffectivePuestos.find((p: any) => p.id === puestoId);
+    if (!puesto) {
+      Alert.alert('Validación', 'El puesto seleccionado no es válido.');
+      return;
+    }
+    if (updPAssignedResponsables.some((r) => r.puestoId === puestoId)) {
+      Alert.alert('Aviso', 'Ya agregaste plazas o este puesto completo.');
+      return;
+    }
+    setUpdPAssignedResponsables((prev) => [
+      ...prev,
+      {
+        puestoId,
+        puestoNombre: puesto.nombre,
+        assignAll: true,
+        plazas: [],
+      },
+    ]);
+  };
+
+  const toggleUpdPPlazaSelection = (plazaId: string) => {
+    if (updPSelectedPuestoEntry?.assignAll) return;
+    setUpdPMarkedPlazaIds((prev) =>
+      prev.includes(plazaId) ? prev.filter((id) => id !== plazaId) : [...prev, plazaId]
+    );
+  };
+
+  const handleUpdPRemovePuesto = (puestoId: number) => {
+    setUpdPAssignedResponsables((prev) => prev.filter((r) => r.puestoId !== puestoId));
+  };
+
+  const handleUpdPRemovePlaza = (puestoId: number, plazaId: number) => {
+    setUpdPAssignedResponsables((prev) =>
+      prev
+        .map((r) =>
+          r.puestoId === puestoId
+            ? { ...r, plazas: r.plazas.filter((p) => p.plazaId !== plazaId) }
+            : r
+        )
+        .filter((r) => r.assignAll || r.plazas.length > 0)
+    );
+  };
+
+  const closeUpdatePuestosModal = () => {
+    setIsUpdPuestosModalVisible(false);
+    setUpdPuestosActivity(null);
+    setUpdPSubmitting(false);
+  };
+
+  const openUpdatePuestosModal = async (item: CreatedActivityItem) => {
+    try {
+      const isConnected = await getConnectionStatus();
+      if (!isConnected) {
+        Alert.alert('Sin conexión', 'Este submódulo funciona exclusivamente con internet.');
+        return;
+      }
+      let tree: MainStructureTree = structure;
+      if (!Array.isArray(tree) || tree.length === 0) {
+        tree = await loadMainStructureCache();
+      }
+      setUpdPuestosActivity(item);
+      setUpdPAssignAllDivision(false);
+      setUpdPSelectedDivisionForAll(null);
+      setUpdPSelectedPuestoId('');
+      setUpdPMarkedPlazaIds([]);
+      setUpdPAssignedResponsables([]);
+      setUpdPIsSelectedPuestosExpanded(false);
+      try {
+        const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+        if (currentMarcaStr) {
+          const currentMarcaData = JSON.parse(currentMarcaStr);
+          const empresaIdRaw = currentMarcaData?.empresa?.id ?? currentMarcaData?.empresa_id;
+          const clienteIdRaw = currentMarcaData?.cliente?.id ?? currentMarcaData?.cliente_id;
+          const contratoIdRaw = currentMarcaData?.contrato?.id ?? currentMarcaData?.contrato_id;
+          const sucursalIdRaw = currentMarcaData?.corpo?.id ?? currentMarcaData?.corpo_id;
+          const divisionIdRaw = getMarcaRoleDivisionId(currentMarcaData);
+          const empresaId = empresaIdRaw != null ? Number(empresaIdRaw) : null;
+          const clienteId = clienteIdRaw != null ? Number(clienteIdRaw) : null;
+          const contratoId = contratoIdRaw != null ? Number(contratoIdRaw) : null;
+          const sucursalId = sucursalIdRaw != null ? Number(sucursalIdRaw) : null;
+          const divisionId = resolveDivisionIdInStructure(tree, empresaId, clienteId, divisionIdRaw);
+          setUpdPEmpresaId(empresaId);
+          setUpdPClienteId(clienteId);
+          setUpdPDivisionId(divisionId);
+          setUpdPContratoId(contratoId);
+          setUpdPSucursalId(sucursalId);
+        } else {
+          setUpdPEmpresaId(null);
+          resetUpdPHierarchyBelowEmpresa();
+        }
+      } catch {
+        setUpdPEmpresaId(null);
+        resetUpdPHierarchyBelowEmpresa();
+      }
+      setIsUpdPuestosModalVisible(true);
+    } catch (e) {
+      console.error('openUpdatePuestosModal', e);
+      Alert.alert('Error', 'No se pudo abrir el formulario.');
+    }
+  };
+
+  const submitUpdatePuestosModal = async () => {
+    if (!updPuestosActivity) return;
+    const ids = Array.from(new Set(updPAssignedResponsables.map((r) => r.puestoId)));
+    if (ids.length === 0) {
+      Alert.alert('Validación', 'Selecciona al menos un puesto.');
+      return;
+    }
+    try {
+      const raw = await AsyncStorage.getItem('current_marca');
+      if (!raw) {
+        Alert.alert('Error', 'No se encontró la marca actual.');
+        return;
+      }
+      const marca = JSON.parse(raw);
+      const marcaId = Number(marca?.id);
+      if (!Number.isFinite(marcaId) || marcaId <= 0) {
+        Alert.alert('Error', 'Marca inválida.');
+        return;
+      }
+      setUpdPSubmitting(true);
+      const res = await appendCreatedActivityPuestos({
+        activityId: updPuestosActivity.id,
+        marcaId,
+        puestosIds: ids,
+        refreshAccessToken,
+        logout,
+      });
+      if (res.status) {
+        Alert.alert('Éxito', res.message || 'Puestos actualizados.');
+        closeUpdatePuestosModal();
+        if (selectedPuestoFilterId) {
+          await fetchCreatedActivitiesByPuesto(selectedPuestoFilterId);
+        }
+        eventBus.emit('activitiesUpdated');
+      } else {
+        Alert.alert('Error', res.message || 'No se pudo actualizar.');
+      }
+    } catch (err) {
+      console.error('submitUpdatePuestosModal', err);
+      Alert.alert('Error', 'No se pudo completar la operación.');
+    } finally {
+      setUpdPSubmitting(false);
+    }
+  };
+
   const fetchCreatedActivitiesByPuesto = useCallback(async (puestoId: number) => {
     try {
       const isConnected = await getConnectionStatus();
@@ -2784,13 +3267,18 @@ export default function ActivitiesScreen() {
         text: 'Eliminar',
         style: 'destructive',
         onPress: async () => {
-          const response = await deleteCreatedActivity({ activityId, refreshAccessToken, logout });
-          if (!response.status) {
-            Alert.alert('Error', response.message || 'No se pudo eliminar la actividad.');
-            return;
-          }
-          if (selectedPuestoFilterId) {
-            await fetchCreatedActivitiesByPuesto(selectedPuestoFilterId);
+          try {
+            setDeletingCreatedActivityId(activityId);
+            const response = await deleteCreatedActivity({ activityId, refreshAccessToken, logout });
+            if (!response.status) {
+              Alert.alert('Error', response.message || 'No se pudo eliminar la actividad.');
+              return;
+            }
+            if (selectedPuestoFilterId) {
+              await fetchCreatedActivitiesByPuesto(selectedPuestoFilterId);
+            }
+          } finally {
+            setDeletingCreatedActivityId((prev) => (prev === activityId ? null : prev));
           }
         },
       },
@@ -2998,6 +3486,18 @@ export default function ActivitiesScreen() {
     }
     setIsCreateActivityVisible(true);
     setModuleStep('form');
+    try {
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      if (currentMarcaStr) {
+        const md = JSON.parse(currentMarcaStr);
+        const mid = md?.id != null ? Number(md.id) : NaN;
+        setCurrentMarcaId(Number.isFinite(mid) && mid > 0 ? mid : null);
+      } else {
+        setCurrentMarcaId(null);
+      }
+    } catch {
+      setCurrentMarcaId(null);
+    }
   };
 
   const selectedPuesto = selectedPuestoId ? effectivePuestos.find(p => p.id === parseInt(selectedPuestoId, 10)) : null;
@@ -3126,7 +3626,7 @@ export default function ActivitiesScreen() {
           </ThemedView>
 
           {moduleStep === 'assigned' && role !== 'OPERATIVO' && (
-            <TouchableOpacity
+            <ScalePressButton
               style={styles.createButton}
               onPress={async () => {
                 const isConnected = await getConnectionStatus();
@@ -3134,13 +3634,13 @@ export default function ActivitiesScreen() {
                   Alert.alert('Sin conexión', 'Este submódulo funciona exclusivamente con internet.');
                   return;
                 }
-                await loadMainStructureCache();
+                const tree = await loadMainStructureCache();
+                await preloadCreatedHierarchyFiltersFromMarca(tree);
                 setModuleStep('created');
               }}
-              activeOpacity={0.85}
             >
               <Ionicons name="add" size={20} color="#FFFFFF" />
-            </TouchableOpacity>
+            </ScalePressButton>
           )}
 
           {/* Activities List */}
@@ -3170,14 +3670,14 @@ export default function ActivitiesScreen() {
 
           {moduleStep === 'created' && (
             <ThemedView style={styles.repetitionModalContainer}>
-              <TouchableOpacity style={styles.secondaryButtonOutline} onPress={() => setModuleStep('assigned')}>
+              <ScalePressButton style={styles.secondaryButtonOutline} onPress={() => setModuleStep('assigned')}>
                 <Ionicons name="arrow-back" size={18} color="#007AFF" />
                 <ThemedText style={styles.secondaryButtonOutlineText}>Volver a asignadas</ThemedText>
-              </TouchableOpacity>
+              </ScalePressButton>
 
-              <TouchableOpacity style={[styles.createButton, { marginTop: 10 }]} onPress={openRepetitionModal}>
+              <ScalePressButton style={[styles.createButton, { marginTop: 10 }]} onPress={openRepetitionModal}>
                 <Ionicons name="add" size={20} color="#fff" />
-              </TouchableOpacity>
+              </ScalePressButton>
 
               <ThemedView style={styles.sectionCard}>
                 {isStructureLoading ? (
@@ -3305,26 +3805,41 @@ export default function ActivitiesScreen() {
                   <ThemedView key={item.id} style={styles.assignedItem}>
                     <ThemedText style={styles.assignedTitle}>{item.nombre_actividad}</ThemedText>
                     <ThemedText style={styles.helperText}>{item.descripcion_actividad}</ThemedText>
-                    <View style={styles.modalButtons}>
-                      <TouchableOpacity
+                    <View style={[styles.modalButtons, { flexWrap: 'wrap' }]}>
+                      <ScalePressButton
                         style={[styles.editButton, styles.createdActionButton]}
                         onPress={() => startEditCreatedActivity(item)}
                       >
                         <Ionicons name="pencil" size={18} color="#FFFFFF" />
-                      </TouchableOpacity>
-                      <TouchableOpacity
+                      </ScalePressButton>
+                      <ScalePressButton
                         style={[styles.changesButton, styles.createdActionButton]}
                         onPress={() => handleViewCreatedActivityChanges(item.id)}
                       >
                         <Ionicons name="time-outline" size={18} color="#FFFFFF" />
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={[styles.deleteButton, styles.createdActionButton]}
+                      </ScalePressButton>
+                      <ScalePressButton
+                        style={[
+                          styles.deleteButton,
+                          styles.createdActionButton,
+                          deletingCreatedActivityId === item.id && styles.modalButtonDisabled,
+                        ]}
                         onPress={() => handleDeleteCreatedActivity(item.id)}
+                        disabled={deletingCreatedActivityId === item.id}
                       >
-                        <Ionicons name="trash" size={18} color="#FFFFFF" />
-                      </TouchableOpacity>
+                        {deletingCreatedActivityId === item.id ? (
+                          <ActivityIndicator size="small" color="#FFFFFF" />
+                        ) : (
+                          <Ionicons name="trash" size={18} color="#FFFFFF" />
+                        )}
+                      </ScalePressButton>
                     </View>
+                    <ScalePressButton
+                      style={[styles.secondaryButton, styles.createdActionButton, { minWidth: 120 }]}
+                      onPress={() => openUpdatePuestosModal(item)}
+                    >
+                      <ThemedText style={styles.secondaryButtonText}>Actualizar puestos</ThemedText>
+                    </ScalePressButton>
                   </ThemedView>
                 ))
               )}
@@ -3389,6 +3904,7 @@ export default function ActivitiesScreen() {
                   </Picker>
                 </ThemedView>
 
+                {!isEditingCreatedActivity ? (
                 <ThemedView style={styles.sectionCard}>
                   {catalogError ? (
                     <ThemedText style={styles.formErrorText}>{catalogError}</ThemedText>
@@ -3708,6 +4224,13 @@ export default function ActivitiesScreen() {
                     </>
                   )}
                 </ThemedView>
+                ) : (
+                <ThemedView style={styles.sectionCard}>
+                  <ThemedText style={[styles.helperText, { textAlign: 'center' }]}>
+                    Los puestos vinculados no se editan en este formulario. En la lista de actividades creadas, usa «Actualizar puestos» para añadir más puestos. Las asignaciones ya existentes no se eliminan.
+                  </ThemedText>
+                </ThemedView>
+                )}
 
                 <ThemedView style={styles.sectionCard}>
                   <ThemedText style={styles.sectionTitle}>Repetición de la actividad</ThemedText>
@@ -3957,7 +4480,7 @@ export default function ActivitiesScreen() {
                 )}
 
                 <ThemedView style={styles.repetitionModalButtons}>
-                  <TouchableOpacity
+                  <ScalePressButton
                     style={[styles.modalButton, styles.modalCancelButton]}
                     onPress={closeRepetitionModal}
                     disabled={isSubmittingActivity}
@@ -3965,9 +4488,9 @@ export default function ActivitiesScreen() {
                     <ThemedText style={styles.modalCancelButtonText}>
                       Cancelar
                     </ThemedText>
-                  </TouchableOpacity>
+                  </ScalePressButton>
 
-                  <TouchableOpacity
+                  <ScalePressButton
                     style={[styles.modalButton, styles.modalConfirmButton, isSubmittingActivity && styles.modalButtonDisabled]}
                     onPress={handleConfirmCreateActivity}
                     disabled={isSubmittingActivity}
@@ -3976,10 +4499,10 @@ export default function ActivitiesScreen() {
                       <ActivityIndicator size="small" color="#fff" />
                     ) : (
                       <ThemedText style={styles.modalConfirmButtonText}>
-                        Crear actividad
+                        Aceptar
                       </ThemedText>
                     )}
-                  </TouchableOpacity>
+                  </ScalePressButton>
                 </ThemedView>
               </ScrollView>
             </ThemedView>
@@ -4067,6 +4590,338 @@ export default function ActivitiesScreen() {
               >
                 <ThemedText style={styles.modalConfirmButtonText}>Confirmar</ThemedText>
               </TouchableOpacity>
+            </ThemedView>
+          </ThemedView>
+        </ThemedView>
+      </Modal>
+
+      {/* Actualizar puestos (solo añade vínculos; no quita los existentes) */}
+      <Modal
+        visible={isUpdPuestosModalVisible}
+        animationType="fade"
+        transparent
+        onRequestClose={closeUpdatePuestosModal}
+      >
+        <ThemedView style={styles.modalOverlay}>
+          <ThemedView style={[styles.modalContainer, styles.updatePuestosModalContainer]}>
+            <ScrollView
+              keyboardShouldPersistTaps="handled"
+              nestedScrollEnabled
+              showsVerticalScrollIndicator
+              style={{ maxHeight: Dimensions.get('window').height * 0.72 }}
+              contentContainerStyle={{ paddingBottom: 12 }}
+            >
+              <ThemedText style={styles.modalTitle}>Actualizar puestos</ThemedText>
+              <ThemedText style={[styles.modalSubtitle, { marginBottom: 12 }]}>
+                Las asignaciones a puestos que ya tenía la actividad no se eliminan. Solo se añadirán vínculos nuevos
+                para los puestos que selecciones. Quienes reciban la actividad por primera vez recibirán una notificación.
+              </ThemedText>
+              {updPuestosActivity ? (
+                <ThemedText style={[styles.helperText, { marginBottom: 12, fontWeight: '600' }]}>
+                  {updPuestosActivity.nombre_actividad}
+                </ThemedText>
+              ) : null}
+
+              {isStructureLoading && (!structure || structure.length === 0) ? (
+                <ActivityIndicator size="small" color="#007AFF" />
+              ) : (
+                <>
+                  <ThemedView style={styles.hierarchyModeToggleContainer}>
+                    <TouchableOpacity
+                      style={styles.hierarchyModeToggleRow}
+                      onPress={() => {
+                        const next = !updPAssignAllDivision;
+                        setUpdPAssignAllDivision(next);
+                        setUpdPSelectedPuestoId('');
+                        if (!next) setUpdPSelectedDivisionForAll(null);
+                      }}
+                    >
+                      <Ionicons
+                        name={updPAssignAllDivision ? 'checkbox' : 'square-outline'}
+                        size={20}
+                        color={updPAssignAllDivision ? '#007AFF' : '#999'}
+                      />
+                      <ThemedText style={styles.hierarchyModeToggleLabel}>
+                        Asignar a todos los puestos de una división
+                      </ThemedText>
+                    </TouchableOpacity>
+                  </ThemedView>
+
+                  {updPAssignAllDivision ? (
+                    <ThemedView style={styles.pickerContainer}>
+                      <Picker
+                        selectedValue={updPSelectedDivisionForAll ? String(updPSelectedDivisionForAll) : ''}
+                        onValueChange={(v) => {
+                          setUpdPSelectedDivisionForAll(v ? Number(v) : null);
+                          setUpdPSelectedPuestoId('');
+                        }}
+                        style={styles.picker}
+                      >
+                        <Picker.Item label="Selecciona división" value="" color="#000000" />
+                        {divisionMassiveOptions.map((division: { id: number; nombre: string }) => (
+                          <Picker.Item key={division.id} label={division.nombre} value={String(division.id)} color="#000000" />
+                        ))}
+                      </Picker>
+                    </ThemedView>
+                  ) : (
+                    <>
+                      <ThemedText style={styles.formLabel}>Jerarquía para puestos</ThemedText>
+                      <ThemedView style={styles.pickerContainer}>
+                        <Picker
+                          selectedValue={updPEmpresaId ? String(updPEmpresaId) : ''}
+                          onValueChange={(v) => {
+                            setUpdPEmpresaId(v ? Number(v) : null);
+                            resetUpdPHierarchyBelowEmpresa();
+                          }}
+                          style={styles.picker}
+                        >
+                          <Picker.Item label="Selecciona empresa" value="" color="#000000" />
+                          {empresasOptions.map((empresa) => (
+                            <Picker.Item key={empresa.id} label={empresa.nombre} value={String(empresa.id)} color="#000000" />
+                          ))}
+                        </Picker>
+                      </ThemedView>
+                      {!!updPEmpresaId && (
+                        <ThemedView style={styles.pickerContainer}>
+                          <Picker
+                            selectedValue={updPClienteId ? String(updPClienteId) : ''}
+                            onValueChange={(v) => {
+                              setUpdPClienteId(v ? Number(v) : null);
+                              resetUpdPHierarchyBelowCliente();
+                            }}
+                            style={styles.picker}
+                          >
+                            <Picker.Item label="Selecciona cliente" value="" color="#000000" />
+                            {updPClientesOptions.map((cliente) => (
+                              <Picker.Item key={cliente.id} label={cliente.nombre} value={String(cliente.id)} color="#000000" />
+                            ))}
+                          </Picker>
+                        </ThemedView>
+                      )}
+                      {!!updPClienteId && (
+                        <ThemedView style={styles.pickerContainer}>
+                          <Picker
+                            selectedValue={updPDivisionId ? String(updPDivisionId) : ''}
+                            onValueChange={(v) => {
+                              setUpdPDivisionId(v ? Number(v) : null);
+                              resetUpdPHierarchyBelowDivision();
+                            }}
+                            style={styles.picker}
+                          >
+                            <Picker.Item label="Selecciona división" value="" color="#000000" />
+                            {updPDivisionesOptions.map((division) => (
+                              <Picker.Item key={division.id} label={division.nombre} value={String(division.id)} color="#000000" />
+                            ))}
+                          </Picker>
+                        </ThemedView>
+                      )}
+                      {!!updPDivisionId && (
+                        <ThemedView style={styles.pickerContainer}>
+                          <Picker
+                            selectedValue={updPContratoId ? String(updPContratoId) : ''}
+                            onValueChange={(v) => {
+                              setUpdPContratoId(v ? Number(v) : null);
+                              resetUpdPHierarchyBelowContrato();
+                            }}
+                            style={styles.picker}
+                          >
+                            <Picker.Item label="Selecciona contrato" value="" color="#000000" />
+                            {updPContratosOptions.map((contrato) => (
+                              <Picker.Item key={contrato.id} label={contrato.nombre} value={String(contrato.id)} color="#000000" />
+                            ))}
+                          </Picker>
+                        </ThemedView>
+                      )}
+                      {!!updPContratoId && (
+                        <ThemedView style={styles.pickerContainer}>
+                          <Picker
+                            selectedValue={updPSucursalId ? String(updPSucursalId) : ''}
+                            onValueChange={(v) => {
+                              setUpdPSucursalId(v ? Number(v) : null);
+                            }}
+                            style={styles.picker}
+                          >
+                            <Picker.Item label="Selecciona sucursal" value="" color="#000000" />
+                            {updPSucursalesOptions.map((sucursal) => (
+                              <Picker.Item key={sucursal.id} label={sucursal.nombre} value={String(sucursal.id)} color="#000000" />
+                            ))}
+                          </Picker>
+                        </ThemedView>
+                      )}
+                    </>
+                  )}
+                  <ThemedText style={styles.helperText}>Puestos disponibles: {updPEffectivePuestos.length}</ThemedText>
+                  <TouchableOpacity style={styles.secondaryButton} onPress={handleUpdPConfirmPuestosSelection}>
+                    <ThemedText style={styles.secondaryButtonText}>Confirmar selección de puestos</ThemedText>
+                  </TouchableOpacity>
+
+                  {!!updPSucursalId && (
+                    <>
+                      <ThemedText style={styles.formLabel}>Puestos</ThemedText>
+                      <ThemedView style={styles.pickerContainer}>
+                        <Picker
+                          selectedValue={updPSelectedPuestoId}
+                          onValueChange={handleUpdPSelectPuesto}
+                          style={styles.picker}
+                        >
+                          <Picker.Item label="Selecciona un puesto" value="" color="#000000" />
+                          {updPEffectivePuestos.map((puesto: any) => (
+                            <Picker.Item key={puesto.id} label={puesto.nombre} value={String(puesto.id)} color="#000000" />
+                          ))}
+                        </Picker>
+                      </ThemedView>
+                    </>
+                  )}
+
+                  {updPSelectedPuesto ? (
+                    <>
+                      <ThemedText style={styles.formLabel}>Plazas</ThemedText>
+                      {updPSelectedPuestoEntry?.assignAll ? (
+                        <ThemedText style={styles.helperText}>
+                          Este puesto ya está en la selección como puesto completo. Elimínalo de la lista para elegir plazas.
+                        </ThemedText>
+                      ) : updPSelectedPuestoPlazas.length === 0 ? (
+                        <ThemedText style={styles.helperText}>Este puesto no tiene plazas configuradas.</ThemedText>
+                      ) : (
+                        <>
+                          <ThemedView style={styles.plazaListContainer}>
+                            {updPSelectedPuestoPlazas.map((plaza: any, index: number) => {
+                              const plazaIdStr = String(plaza.id);
+                              const isChecked = updPMarkedPlazaIds.includes(plazaIdStr);
+                              const employeesLabel =
+                                plaza.empleados && plaza.empleados.length > 0
+                                  ? plaza.empleados.map((emp: any) => emp.nombre).join(', ')
+                                  : 'Sin empleados asignados';
+                              const isLast = index === updPSelectedPuestoPlazas.length - 1;
+                              return (
+                                <TouchableOpacity
+                                  key={plaza.id}
+                                  style={[
+                                    styles.plazaListItem,
+                                    isChecked && styles.plazaListItemSelected,
+                                    isLast && styles.plazaListItemLast,
+                                  ]}
+                                  onPress={() => toggleUpdPPlazaSelection(plazaIdStr)}
+                                  activeOpacity={0.8}
+                                >
+                                  <View style={[styles.plazaCheckbox, isChecked && styles.plazaCheckboxChecked]}>
+                                    {isChecked && <Ionicons name="checkmark" size={14} color="#fff" />}
+                                  </View>
+                                  <View style={styles.plazaInfo}>
+                                    <ThemedText style={styles.plazaName}>{plaza.nombre}</ThemedText>
+                                    <ThemedText
+                                      style={
+                                        plaza.empleados && plaza.empleados.length > 0
+                                          ? styles.plazaEmployees
+                                          : styles.plazaEmployeesEmpty
+                                      }
+                                    >
+                                      {employeesLabel}
+                                    </ThemedText>
+                                  </View>
+                                </TouchableOpacity>
+                              );
+                            })}
+                          </ThemedView>
+                          <TouchableOpacity
+                            style={[
+                              styles.secondaryButton,
+                              updPMarkedPlazaIds.length === 0 && styles.secondaryButtonDisabled,
+                            ]}
+                            onPress={handleUpdPAddSelectedPlazas}
+                            disabled={updPMarkedPlazaIds.length === 0}
+                          >
+                            <Ionicons name="add-circle" size={18} color="#fff" />
+                            <ThemedText style={styles.secondaryButtonText}>Agregar plaza</ThemedText>
+                          </TouchableOpacity>
+                        </>
+                      )}
+                      {updPCanAssignEntirePuesto && (
+                        <TouchableOpacity style={styles.secondaryButtonOutline} onPress={handleUpdPAssignPuestoCompleto}>
+                          <Ionicons name="people-circle-outline" size={18} color="#007AFF" />
+                          <ThemedText style={styles.secondaryButtonOutlineText}>Asignar a todo el puesto</ThemedText>
+                        </TouchableOpacity>
+                      )}
+                    </>
+                  ) : null}
+
+                  <ThemedView style={styles.assignedList}>
+                    {updPAssignedResponsables.length === 0 ? (
+                      <ThemedText style={styles.helperText}>Aún no has agregado puestos para vincular.</ThemedText>
+                    ) : (
+                      <>
+                        <TouchableOpacity
+                          style={styles.selectedPuestosHeader}
+                          onPress={() => setUpdPIsSelectedPuestosExpanded((p) => !p)}
+                          activeOpacity={0.85}
+                        >
+                          <ThemedText style={styles.selectedPuestosHeaderText}>
+                            Puestos a vincular ({updPAssignedResponsables.length})
+                          </ThemedText>
+                          <Ionicons
+                            name={updPIsSelectedPuestosExpanded ? 'chevron-up' : 'chevron-down'}
+                            size={18}
+                            color="#007AFF"
+                          />
+                        </TouchableOpacity>
+                        {updPIsSelectedPuestosExpanded &&
+                          updPAssignedResponsables.map((responsable) => (
+                            <ThemedView key={responsable.puestoId} style={styles.assignedItem}>
+                              <View style={styles.assignedHeader}>
+                                <ThemedText style={styles.assignedTitle}>{responsable.puestoNombre}</ThemedText>
+                                <TouchableOpacity
+                                  style={styles.removeButton}
+                                  onPress={() => handleUpdPRemovePuesto(responsable.puestoId)}
+                                >
+                                  <Ionicons name="trash" size={18} color="#FF3B30" />
+                                </TouchableOpacity>
+                              </View>
+                              {responsable.assignAll ? (
+                                <ThemedText style={styles.helperText}>Puesto completo.</ThemedText>
+                              ) : (
+                                responsable.plazas.map((plaza) => (
+                                  <View key={plaza.plazaId} style={styles.plazaChip}>
+                                    <ThemedText style={styles.plazaChipText}>{plaza.plazaNombre}</ThemedText>
+                                    <TouchableOpacity
+                                      style={styles.removeButton}
+                                      onPress={() => handleUpdPRemovePlaza(responsable.puestoId, plaza.plazaId)}
+                                    >
+                                      <Ionicons name="close-circle" size={18} color="#FF3B30" />
+                                    </TouchableOpacity>
+                                  </View>
+                                ))
+                              )}
+                            </ThemedView>
+                          ))}
+                      </>
+                    )}
+                  </ThemedView>
+                </>
+              )}
+            </ScrollView>
+            <ThemedView style={styles.modalButtons}>
+              <ScalePressButton
+                style={[styles.modalButton, styles.modalCancelButton]}
+                onPress={closeUpdatePuestosModal}
+                disabled={updPSubmitting}
+              >
+                <ThemedText style={styles.modalCancelButtonText}>Cerrar</ThemedText>
+              </ScalePressButton>
+              <ScalePressButton
+                style={[
+                  styles.modalButton,
+                  styles.modalConfirmButton,
+                  updPSubmitting && styles.modalButtonDisabled,
+                ]}
+                onPress={submitUpdatePuestosModal}
+                disabled={updPSubmitting}
+              >
+                {updPSubmitting ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <ThemedText style={styles.modalConfirmButtonText}>Guardar</ThemedText>
+                )}
+              </ScalePressButton>
             </ThemedView>
           </ThemedView>
         </ThemedView>
@@ -4487,6 +5342,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     padding: 20,
+  },
+  updatePuestosModalContainer: {
+    maxWidth: 440,
+    maxHeight: Dimensions.get('window').height * 0.92,
   },
   modalContainer: {
     backgroundColor: '#FFFFFF',

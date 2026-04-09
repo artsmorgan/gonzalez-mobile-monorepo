@@ -39,7 +39,6 @@ async function getMarcaDiaOrFail(req: NextRequest, marcaId: number) {
     }
   });
   if (!lastMarca) return { ok: false as const, marcaDia: null, message: "No se encontró la última marca" };
-  if (marcaDia.id !== lastMarca.id) return { ok: false as const, marcaDia: null, message: "Hay una nueva marca más reciente" };
   return { ok: true as const, marcaDia, message: "" };
 }
 

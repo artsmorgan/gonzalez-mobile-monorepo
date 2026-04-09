@@ -54,6 +54,24 @@ type MainStructureClienteNode = { id: number; nombre: string; division: MainStru
 type MainStructureEmpresaNode = { id: number; nombre: string; clientes: MainStructureClienteNode[] };
 type MainStructureTree = MainStructureEmpresaNode[];
 
+type HierarchyFilterPath = {
+  empresaId: number | null;
+  clienteId: number | null;
+  divisionId: number | null;
+  contratoId: number | null;
+  corpoId: number | null;
+};
+
+const toValidMarcaId = (value: unknown): number | null => {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
+
+const getMarcaRoleDivisionId = (current: unknown): number | null => {
+  const c = current as { roleDivision?: { division?: { id?: unknown } } } | null;
+  return toValidMarcaId(c?.roleDivision?.division?.id);
+};
+
 interface QRInfo {
   sessionId: string;
   empleadoId: string;
@@ -177,6 +195,7 @@ export default function AttendanceControlScreen() {
   const [filterContratoId, setFilterContratoId] = useState<number | null>(null);
   const [filterCorpoId, setFilterCorpoId] = useState<number | null>(null);
   const [isHierarchyFiltersExpanded, setIsHierarchyFiltersExpanded] = useState(false);
+  const [listRefreshKey, setListRefreshKey] = useState(0);
 
   // IDs de current_marca para inicialización
   const [marcaEmpresaId, setMarcaEmpresaId] = useState<number | null>(null);
@@ -206,6 +225,7 @@ export default function AttendanceControlScreen() {
   const [editingRecord, setEditingRecord] = useState<EditingAttendanceControl | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [deletingControlId, setDeletingControlId] = useState<string | number | null>(null);
   const [submitResponse, setSubmitResponse] = useState<{ type: 'success' | 'error', message: string } | null>(null);
 
   // Form states
@@ -236,6 +256,71 @@ export default function AttendanceControlScreen() {
   const cameraRef = useRef<CameraView | null>(null);
 
   // Expanded states
+
+  const resolveHierarchyByCorpoId = useCallback((tree: MainStructureTree, corpoId: number | null | undefined): HierarchyFilterPath | null => {
+    const target = Number(corpoId);
+    if (!Number.isFinite(target) || target <= 0 || !Array.isArray(tree)) return null;
+    for (const empresa of tree) {
+      for (const cliente of empresa?.clientes || []) {
+        for (const division of cliente?.division || []) {
+          for (const contrato of division?.contratos || []) {
+            for (const sucursal of contrato?.sucursales || []) {
+              if (Number(sucursal?.id) === target) {
+                return {
+                  empresaId: Number(empresa.id),
+                  clienteId: Number(cliente.id),
+                  divisionId: Number(division.id),
+                  contratoId: Number(contrato.id),
+                  corpoId: Number(sucursal.id),
+                };
+              }
+            }
+          }
+        }
+      }
+    }
+    return null;
+  }, []);
+
+  const buildHierarchyFromCurrentMarca = useCallback((current: any | null, tree: MainStructureTree): HierarchyFilterPath | null => {
+    if (!current) return null;
+    const roleDivId = getMarcaRoleDivisionId(current);
+    const corpoId = toValidMarcaId(current?.corpo?.id ?? current?.corpo_id);
+
+    if (corpoId) {
+      const resolved = resolveHierarchyByCorpoId(tree, corpoId);
+      if (resolved && roleDivId) {
+        return { ...resolved, divisionId: roleDivId };
+      }
+      if (resolved) return resolved;
+    }
+
+    return {
+      empresaId: toValidMarcaId(current?.empresa?.id ?? current?.empresa_id),
+      clienteId: toValidMarcaId(current?.cliente?.id ?? current?.cliente_id),
+      divisionId: roleDivId ?? toValidMarcaId(current?.division?.id ?? current?.division_id),
+      contratoId: toValidMarcaId(current?.contrato?.id ?? current?.contrato_id),
+      corpoId,
+    };
+  }, [resolveHierarchyByCorpoId]);
+
+  const applyFilterHierarchyPath = useCallback((path: HierarchyFilterPath | null) => {
+    if (!path) return;
+    setFilterEmpresaId(path.empresaId);
+    setFilterClienteId(path.clienteId);
+    setFilterDivisionId(path.divisionId);
+    setFilterContratoId(path.contratoId);
+    setFilterCorpoId(path.corpoId);
+  }, []);
+
+  const applyFormHierarchyPath = useCallback((path: HierarchyFilterPath | null) => {
+    if (!path) return;
+    setFormEmpresaId(path.empresaId);
+    setFormClienteId(path.clienteId);
+    setFormDivisionId(path.divisionId);
+    setFormContratoId(path.contratoId);
+    setFormCorpoId(path.corpoId);
+  }, []);
 
   const getConnectionStatus = async (): Promise<boolean> => {
     const networkState = await Network.getNetworkStateAsync();
@@ -558,6 +643,7 @@ export default function AttendanceControlScreen() {
     try {
       const currentMarca = await AsyncStorage.getItem('current_marca');
       if (!currentMarca) {
+        setHasCurrentMarca(false);
         setMarcaEmpresaId(null);
         setMarcaClienteId(null);
         setMarcaDivisionId(null);
@@ -566,9 +652,10 @@ export default function AttendanceControlScreen() {
         return null;
       }
       const current = JSON.parse(currentMarca);
+      setHasCurrentMarca(true);
       const empresaIdRaw = current?.empresa?.id ?? current?.empresa_id;
       const clienteIdRaw = current?.cliente?.id ?? current?.cliente_id;
-      const divisionIdRaw = current?.division?.id ?? current?.division_id;
+      const divisionIdRaw = getMarcaRoleDivisionId(current) ?? current?.division?.id ?? current?.division_id;
       const contratoIdRaw = current?.contrato?.id ?? current?.contrato_id;
       const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
       setMarcaEmpresaId(empresaIdRaw ? Number(empresaIdRaw) : null);
@@ -578,6 +665,7 @@ export default function AttendanceControlScreen() {
       setMarcaCorpoId(corpoIdRaw ? Number(corpoIdRaw) : null);
       return current;
     } catch {
+      setHasCurrentMarca(false);
       setMarcaEmpresaId(null);
       setMarcaClienteId(null);
       setMarcaDivisionId(null);
@@ -587,27 +675,31 @@ export default function AttendanceControlScreen() {
     }
   }, []);
 
-  const fetchMainStructure = useCallback(async () => {
+  const fetchMainStructure = useCallback(async (): Promise<MainStructureTree> => {
     setIsStructureLoading(true);
+    let loaded: MainStructureTree = [];
     try {
       const cacheStr = await AsyncStorage.getItem('main_structure_cache');
       if (cacheStr) {
         try {
           const parsed = JSON.parse(cacheStr);
-          if (Array.isArray(parsed)) setStructure(parsed);
+          if (Array.isArray(parsed)) {
+            setStructure(parsed);
+            loaded = parsed;
+          }
         } catch {
           // ignore
         }
       }
       const isConnected = await getConnectionStatus();
       if (!isConnected) {
-        setIsStructureLoading(false);
-        return;
+        return loaded;
       }
       // La estructura ya se guarda desde otras pantallas, aquí solo usamos cache
     } finally {
       setIsStructureLoading(false);
     }
+    return loaded;
   }, []);
 
   const fetchControls = useCallback(async () => {
@@ -628,7 +720,7 @@ export default function AttendanceControlScreen() {
       // Obtener IDs de current_marca directamente sin usar estados
       const empresaIdRaw = current?.empresa?.id ?? current?.empresa_id;
       const clienteIdRaw = current?.cliente?.id ?? current?.cliente_id;
-      const divisionIdRaw = current?.division?.id ?? current?.division_id;
+      const divisionIdRaw = getMarcaRoleDivisionId(current) ?? current?.division?.id ?? current?.division_id;
       const contratoIdRaw = current?.contrato?.id ?? current?.contrato_id;
       const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
 
@@ -684,6 +776,9 @@ export default function AttendanceControlScreen() {
       setIsLoading(false);
     }
   }, [refreshAccessToken, logout, filterEmpresaId, filterClienteId, filterDivisionId, filterContratoId, filterCorpoId]);
+
+  const fetchControlsRef = useRef(fetchControls);
+  fetchControlsRef.current = fetchControls;
 
   // En modo online actual, la lista de colaboradores se calcula desde c_marca_dia en backend.
 
@@ -786,44 +881,38 @@ export default function AttendanceControlScreen() {
     return sucursales;
   }, [formClientes, formClienteId, formContratoId]);
 
-  // Inicializar filtros jerárquicos con current_marca (solo una vez cuando se carga la estructura)
+  // Recargar lista solo cuando cambia la sucursal (corpo_id) del filtro (o al reenfocar la pantalla vía listRefreshKey)
   useEffect(() => {
-    if (!structure || structure.length === 0) return;
-    // Solo inicializar si los filtros no están establecidos
-    if (marcaEmpresaId && filterEmpresaId === null) setFilterEmpresaId(marcaEmpresaId);
-    if (marcaClienteId && filterClienteId === null) setFilterClienteId(marcaClienteId);
-    if (marcaDivisionId && filterDivisionId === null) setFilterDivisionId(marcaDivisionId);
-    if (marcaContratoId && filterContratoId === null) setFilterContratoId(marcaContratoId);
-    if (marcaCorpoId && filterCorpoId === null) setFilterCorpoId(marcaCorpoId);
-  }, [structure, marcaEmpresaId, marcaClienteId, marcaDivisionId, marcaContratoId, marcaCorpoId, filterEmpresaId, filterClienteId, filterDivisionId, filterContratoId, filterCorpoId]);
-
-  // Trigger fetch cuando cambien los filtros jerárquicos
-  useEffect(() => {
-    if (structure && structure.length > 0 && (filterEmpresaId || filterClienteId || filterDivisionId || filterContratoId || filterCorpoId)) {
-      fetchControls();
+    if (!filterCorpoId) {
+      setControls([]);
+      setIsLoading(false);
+      setError(null);
+      return;
     }
-  }, [filterEmpresaId, filterClienteId, filterDivisionId, filterContratoId, filterCorpoId, structure, fetchControls]);
-
-  // Inicializar jerarquía del formulario con current_marca
-  useEffect(() => {
-    if (!structure || structure.length === 0) return;
-    if (marcaEmpresaId && !formEmpresaId) setFormEmpresaId(marcaEmpresaId);
-    if (marcaClienteId && !formClienteId) setFormClienteId(marcaClienteId);
-    if (marcaDivisionId && !formDivisionId) setFormDivisionId(marcaDivisionId);
-    if (marcaContratoId && !formContratoId) setFormContratoId(marcaContratoId);
-    if (marcaCorpoId && !formCorpoId) setFormCorpoId(marcaCorpoId);
-  }, [structure, marcaEmpresaId, marcaClienteId, marcaDivisionId, marcaContratoId, marcaCorpoId]);
+    fetchControlsRef.current();
+  }, [filterCorpoId, listRefreshKey]);
 
   useFocusEffect(
     useCallback(() => {
-      fetchMainStructure();
-      loadMarcaContext();
-      fetchControls();
-      eventBus.on('connectionRestored', fetchControls);
-      return () => {
-        eventBus.off('connectionRestored', fetchControls);
+      let cancelled = false;
+      (async () => {
+        const tree = await fetchMainStructure();
+        const marca = await loadMarcaContext();
+        if (cancelled) return;
+        const path = buildHierarchyFromCurrentMarca(marca, tree);
+        applyFilterHierarchyPath(path);
+        setListRefreshKey((k) => k + 1);
+      })();
+
+      const onRestore = () => {
+        setListRefreshKey((k) => k + 1);
       };
-    }, [fetchControls, fetchMainStructure, loadMarcaContext])
+      eventBus.on('connectionRestored', onRestore);
+      return () => {
+        cancelled = true;
+        eventBus.off('connectionRestored', onRestore);
+      };
+    }, [fetchMainStructure, loadMarcaContext, buildHierarchyFromCurrentMarca, applyFilterHierarchyPath])
   );
 
   const generateRandomId = (): string => {
@@ -936,6 +1025,27 @@ export default function AttendanceControlScreen() {
     setIsCreating(true);
     setEditingRecord(null);
     await resetForm();
+
+    try {
+      const raw = await AsyncStorage.getItem('current_marca');
+      const current = raw ? JSON.parse(raw) : null;
+      let formTree: MainStructureTree = structure;
+      if (!formTree?.length) {
+        const cacheStr = await AsyncStorage.getItem('main_structure_cache');
+        if (cacheStr) {
+          try {
+            const parsed = JSON.parse(cacheStr);
+            if (Array.isArray(parsed)) formTree = parsed;
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+      const path = buildHierarchyFromCurrentMarca(current, formTree);
+      applyFormHierarchyPath(path);
+    } catch {
+      /* ignore */
+    }
 
     // Request location permissions (firma)
     (async () => {
@@ -1105,12 +1215,33 @@ export default function AttendanceControlScreen() {
     setTurno(record.turno || '');
     setTotalPresentes(record.total_presentes !== null && record.total_presentes !== undefined ? String(record.total_presentes) : '');
     setColaboradores(colaboradoresArray);
-    // Cargar jerarquía del registro
-    if (record.empresa_id) setFormEmpresaId(Number(record.empresa_id));
-    if (record.cliente_id) setFormClienteId(Number(record.cliente_id));
-    if (record.division_id) setFormDivisionId(Number(record.division_id));
-    if (record.contrato_id) setFormContratoId(Number(record.contrato_id));
-    if (record.corpo_id) setFormCorpoId(Number(record.corpo_id));
+    // Cargar jerarquía desde corpo_id en el árbol (empresa → sucursal)
+    let editTree: MainStructureTree = structure;
+    if (!editTree?.length) {
+      try {
+        const cacheStr = await AsyncStorage.getItem('main_structure_cache');
+        if (cacheStr) {
+          const parsed = JSON.parse(cacheStr);
+          if (Array.isArray(parsed)) editTree = parsed;
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    const corpoNum =
+      record.corpo_id != null && record.corpo_id !== ''
+        ? Number(record.corpo_id)
+        : null;
+    const resolvedForm = resolveHierarchyByCorpoId(editTree, corpoNum);
+    if (resolvedForm) {
+      applyFormHierarchyPath(resolvedForm);
+    } else {
+      if (record.empresa_id) setFormEmpresaId(Number(record.empresa_id));
+      if (record.cliente_id) setFormClienteId(Number(record.cliente_id));
+      if (record.division_id) setFormDivisionId(Number(record.division_id));
+      if (record.contrato_id) setFormContratoId(Number(record.contrato_id));
+      if (record.corpo_id) setFormCorpoId(Number(record.corpo_id));
+    }
     // Cargar imágenes
     setImagenesRemote(record.images || []);
     setImagenesLocal(record.images_local || []);
@@ -1312,10 +1443,27 @@ export default function AttendanceControlScreen() {
     }
   };
 
-  const saveControlHandler = async () => {
+  const handleConfirmSaveControl = () => {
+    Alert.alert('Confirmar', '¿Desea crear el control de asistencia?', [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Aceptar', onPress: () => void submitSaveControl() },
+    ]);
+  };
+
+  const submitSaveControl = async () => {
     const currentMarca = await AsyncStorage.getItem('current_marca');
     if (!currentMarca) {
       Alert.alert('Error', 'No se encontró la marca actual');
+      return;
+    }
+
+    if (!firmaResponsableHash) {
+      Alert.alert('Error', 'Debes generar la firma del responsable antes de guardar');
+      return;
+    }
+
+    if (!formEmpresaId || !formClienteId || !formDivisionId || !formContratoId || !formCorpoId) {
+      Alert.alert('Error', 'Debe seleccionar Empresa, Cliente, División, Contrato y Sucursal');
       return;
     }
 
@@ -1324,19 +1472,6 @@ export default function AttendanceControlScreen() {
 
     try {
       const currentMarcaData = JSON.parse(currentMarca);
-
-      if (!firmaResponsableHash) {
-        Alert.alert('Error', 'Debes generar la firma del responsable antes de guardar');
-        setIsSubmitting(false);
-        return;
-      }
-
-      // Validar campos jerárquicos
-      if (!formEmpresaId || !formClienteId || !formDivisionId || !formContratoId || !formCorpoId) {
-        Alert.alert('Error', 'Debe seleccionar Empresa, Cliente, División, Contrato y Sucursal');
-        setIsSubmitting(false);
-        return;
-      }
 
       const imagenesStr =
         imagenesLocal.length > 0
@@ -1392,32 +1527,36 @@ export default function AttendanceControlScreen() {
     }
   };
 
-  const updateControlHandler = async () => {
+  const handleConfirmUpdateControl = () => {
+    Alert.alert('Confirmar', '¿Desea actualizar el control de asistencia?', [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Aceptar', onPress: () => void submitUpdateControl() },
+    ]);
+  };
+
+  const submitUpdateControl = async () => {
     if (!editingRecord) return;
+
+    const recordId = editingRecord.id || editingRecord.id_local;
+    if (!recordId) {
+      Alert.alert('Error', 'ID de registro no encontrado para actualizar');
+      return;
+    }
+
+    if (!firmaResponsableHash) {
+      Alert.alert('Error', 'Debes generar la firma del responsable antes de actualizar');
+      return;
+    }
+
+    if (!formEmpresaId || !formClienteId || !formDivisionId || !formContratoId || !formCorpoId) {
+      Alert.alert('Error', 'Debe seleccionar Empresa, Cliente, División, Contrato y Sucursal');
+      return;
+    }
 
     setIsSubmitting(true);
     setSubmitResponse(null);
 
     try {
-      const recordId = editingRecord.id || editingRecord.id_local;
-      if (!recordId) {
-        Alert.alert('Error', 'ID de registro no encontrado para actualizar');
-        setIsSubmitting(false);
-        return;
-      }
-
-      if (!firmaResponsableHash) {
-        Alert.alert('Error', 'Debes generar la firma del responsable antes de actualizar');
-        setIsSubmitting(false);
-        return;
-      }
-
-      // Validar campos jerárquicos
-      if (!formEmpresaId || !formClienteId || !formDivisionId || !formContratoId || !formCorpoId) {
-        Alert.alert('Error', 'Debe seleccionar Empresa, Cliente, División, Contrato y Sucursal');
-        setIsSubmitting(false);
-        return;
-      }
 
       const imagenesStr =
         imagenesLocal.length > 0
@@ -1484,14 +1623,18 @@ export default function AttendanceControlScreen() {
       return;
     }
 
+    const deleteKey = recordId;
+
     Alert.alert(
       'Confirmar',
       '¿Estás seguro de que deseas eliminar este control de asistencia?',
       [
         { text: 'Cancelar', style: 'cancel' },
         {
-          text: 'Confirmar',
+          text: 'Eliminar',
+          style: 'destructive',
           onPress: async () => {
+            setDeletingControlId(deleteKey);
             try {
               const isConnected = await getConnectionStatus();
 
@@ -1514,6 +1657,8 @@ export default function AttendanceControlScreen() {
             } catch (err) {
               console.error('Error deleting control:', err);
               Alert.alert('Error', 'No se pudo eliminar el control de asistencia');
+            } finally {
+              setDeletingControlId((prev) => (prev === deleteKey ? null : prev));
             }
           },
         },
@@ -1666,13 +1811,18 @@ export default function AttendanceControlScreen() {
                   </TouchableOpacity>
                   {!!record.id && (
                     <TouchableOpacity
-                      style={[styles.listItemButton, styles.changesButton]}
+                      style={[styles.listItemButton, styles.changesButton, isRefreshingColaboradores && styles.buttonDisabled]}
                       onPress={() => refreshColaboradoresFromServer(String(record.id), true)}
+                      disabled={isRefreshingColaboradores}
                     >
-                      <Ionicons name="list-outline" size={20} color="#FFFFFF" />
-                      <ThemedText style={styles.listItemButtonText}>
-                        {isRefreshingColaboradores ? 'Actualizando...' : 'Ver lista'}
-                      </ThemedText>
+                      {isRefreshingColaboradores ? (
+                        <ActivityIndicator size="small" color="#FFFFFF" />
+                      ) : (
+                        <>
+                          <Ionicons name="list-outline" size={20} color="#FFFFFF" />
+                          <ThemedText style={styles.listItemButtonText}>Ver lista</ThemedText>
+                        </>
+                      )}
                     </TouchableOpacity>
                   )}
                   {!(record.id_local || String(record.id).startsWith('local-') || String(record.id) === '0') && (
@@ -1688,11 +1838,22 @@ export default function AttendanceControlScreen() {
                     </TouchableOpacity>
                   )}
                   <TouchableOpacity
-                    style={[styles.listItemButton, styles.deleteButton]}
+                    style={[
+                      styles.listItemButton,
+                      styles.deleteButton,
+                      deletingControlId === (record.id || record.id_local) && styles.buttonDisabled,
+                    ]}
                     onPress={() => deleteControlHandler(record)}
+                    disabled={deletingControlId === (record.id || record.id_local)}
                   >
-                    {getActionIcon('delete')}
-                    <ThemedText style={styles.listItemButtonText}>Eliminar</ThemedText>
+                    {deletingControlId === (record.id || record.id_local) ? (
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                      <>
+                        {getActionIcon('delete')}
+                        <ThemedText style={styles.listItemButtonText}>Eliminar</ThemedText>
+                      </>
+                    )}
                   </TouchableOpacity>
                 </ThemedView>
               </ThemedView>
@@ -1732,7 +1893,7 @@ export default function AttendanceControlScreen() {
             </ThemedView>
           )}
 
-          {hasCurrentMarca && !isCreating && !editingRecord && !isLoading && (
+          {hasCurrentMarca && !isCreating && !editingRecord && (
             <ThemedView style={styles.filtersContainer}>
               <TouchableOpacity
                 style={styles.filtersHeader}
@@ -2186,15 +2347,13 @@ export default function AttendanceControlScreen() {
                 )}
                 <TouchableOpacity
                   style={[styles.confirmButton, isSubmitting && styles.buttonDisabled]}
-                  onPress={editingRecord ? updateControlHandler : saveControlHandler}
+                  onPress={editingRecord ? handleConfirmUpdateControl : handleConfirmSaveControl}
                   disabled={isSubmitting}
                 >
                   {isSubmitting ? (
                     <ActivityIndicator size="small" color="#FFFFFF" />
                   ) : (
-                    <ThemedText style={styles.confirmButtonText}>
-                      {getActionIcon('confirm')}
-                    </ThemedText>
+                    <ThemedText style={styles.confirmButtonText}>Aceptar</ThemedText>
                   )}
                 </TouchableOpacity>
               </ThemedView>

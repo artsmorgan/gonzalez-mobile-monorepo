@@ -2,6 +2,38 @@ import { NextRequest } from "next/server";
 import { callDynamicPrisma } from "./callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
 
+/** Plazas “vivas” alineadas con main_structure_cache (misma regla que dynamic-prisma/main-structure). */
+export async function fetchActivePlazaIdsForPuestos(req: NextRequest, puestoIds: number[]): Promise<number[]> {
+    const ids = Array.from(
+        new Set(puestoIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0))
+    );
+    if (ids.length === 0) return [];
+
+    const nowCostaRica = toZonedTime(new Date(), "America/Costa_Rica");
+    const rows = await callDynamicPrisma({
+        req,
+        data: {
+            action: "GET",
+            table: "e_estructura_plazas",
+            operation: "findMany",
+            where: {
+                puesto_id: { in: ids },
+                deleted: null,
+                OR: [{ fecha_inactivacion: null }, { fecha_inactivacion: { gte: nowCostaRica } }],
+            },
+            select: { id: true },
+        },
+    });
+    const arr = Array.isArray(rows) ? rows : [];
+    return Array.from(
+        new Set(
+            arr
+                .map((p: { id?: unknown }) => Number(p?.id))
+                .filter((id: number) => Number.isFinite(id) && id > 0)
+        )
+    );
+}
+
 export async function sendNotificationByRole(req: NextRequest, corpoId: number, plazaSenders: number[], title: string, description: string, roles: string[]) {
 
     const receiver: number[] = [];
@@ -92,21 +124,23 @@ export async function sendNotificationByRole(req: NextRequest, corpoId: number, 
         });
 
         if (notification) {
-            for (const plazaId of receiver) {
-                if (!plazaSenders.includes(plazaId)) {
-                    await callDynamicPrisma({
-                        req,
-                        data: {
-                            action: "POST",
-                            table: "c_plaza_notification",
-                            data: {
-                                plazaId: plazaId,
-                                notificationId: notification.id,
-                                watched: false,
-                            }
-                        }
-                    });
-                }
+            // Crear lista que excluya los resultados de receiver que no estén en plazaSenders
+            const receiverIds = receiver.filter((plazaId) => !plazaSenders.includes(plazaId));
+            if (receiverIds.length > 0) {
+                await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "POST",
+                        table: "c_plaza_notification",
+                        operation: "createMany",
+                        many: true,
+                        data: receiverIds.map((plazaId) => ({
+                            plazaId: plazaId,
+                            notificationId: notification.id,
+                            watched: false,
+                        })),
+                    }
+                });
             }
         }
     }

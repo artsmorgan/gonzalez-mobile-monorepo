@@ -30,7 +30,7 @@ export type ListDocumentosEntregadosResponse = {
 };
 
 type ListParams = {
-  marcaId: number;
+  corpoId: number;
   refreshAccessToken?: () => Promise<boolean>;
   logout?: () => Promise<any>;
 };
@@ -50,7 +50,8 @@ type UpdateParams = {
 
 type DeleteParams = {
   id: number;
-  marcaId: number;
+  corpoId: number;
+  clienteId: number;
   refreshAccessToken?: () => Promise<boolean>;
   logout?: () => Promise<any>;
 };
@@ -75,7 +76,7 @@ const requireAuthHandlers = (refreshAccessToken?: () => Promise<boolean>, logout
 };
 
 export async function listDocumentosEntregados({
-  marcaId,
+  corpoId,
   refreshAccessToken,
   logout,
 }: ListParams): Promise<ListDocumentosEntregadosResponse> {
@@ -84,7 +85,7 @@ export async function listDocumentosEntregados({
     const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
 
     const response = await authedFetch({
-      url: `${apiUrl}/api/documentos-entregados?m=${marcaId}`,
+      url: `${apiUrl}/api/documentos-entregados?corpo_id=${encodeURIComponent(String(corpoId))}`,
       init: {
         method: 'GET',
         headers: {
@@ -174,7 +175,8 @@ export async function updateDocumentoEntregado({
 
 export async function deleteDocumentoEntregado({
   id,
-  marcaId,
+  corpoId,
+  clienteId,
   refreshAccessToken,
   logout,
 }: DeleteParams): Promise<BasicResponse> {
@@ -183,7 +185,7 @@ export async function deleteDocumentoEntregado({
     const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
 
     const response = await authedFetch({
-      url: `${apiUrl}/api/documentos-entregados/${id}?m=${marcaId}`,
+      url: `${apiUrl}/api/documentos-entregados/${id}?corpo_id=${encodeURIComponent(String(corpoId))}&cliente_id=${encodeURIComponent(String(clienteId))}`,
       init: {
         method: 'DELETE',
         headers: {

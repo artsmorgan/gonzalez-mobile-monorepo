@@ -110,7 +110,6 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         }
 
         if (!last_marca) return NextResponse.json({ message: "No se encontró la última marca" }, { status: 404 });
-        if (marcaDia.id !== last_marca.id) return NextResponse.json({ message: "Hay una nueva marca más reciente" }, { status: 400 });
 
         const horario = await callDynamicPrisma({
             req,

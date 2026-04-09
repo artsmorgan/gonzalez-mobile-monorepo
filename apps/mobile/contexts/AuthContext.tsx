@@ -3,6 +3,7 @@ import Constants from 'expo-constants';
 import { router } from 'expo-router';
 import React, { createContext, ReactNode, useContext, useEffect, useState, useRef } from 'react';
 import { eventBus } from '../hooks/eventBus';
+import { FORCE_OFFLINE_SYNC } from '../constants/syncFlags';
 
 interface Role {
   id: number;
@@ -187,9 +188,11 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       setEmployee(employeeData);
 
       // Tras login: sincronizar cachés pendientes (mismo flujo que reconexión / foco en App.tsx)
-      queueMicrotask(() => {
-        eventBus.emit('syncCachesRequested');
-      });
+      if (!FORCE_OFFLINE_SYNC) {
+        queueMicrotask(() => {
+          eventBus.emit('syncCachesRequested');
+        });
+      }
 
       const currentMarca = await AsyncStorage.getItem('current_marca');
       if (currentMarca) {

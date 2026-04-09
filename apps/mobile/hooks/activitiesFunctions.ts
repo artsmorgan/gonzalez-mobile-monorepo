@@ -66,6 +66,40 @@ export const listCreatedActivitiesByPuesto = async ({
   }
 };
 
+export const appendCreatedActivityPuestos = async ({
+  activityId,
+  marcaId,
+  puestosIds,
+  refreshAccessToken,
+  logout,
+}: {
+  activityId: number;
+  marcaId: number;
+  puestosIds: number[];
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}): Promise<ApiResponse & { created_count?: number; skipped_already_linked?: number }> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) throw new Error('Server URL not configured');
+    const response = await authedFetch({
+      url: `${apiUrl}/api/activities/created/${activityId}/puestos`,
+      init: {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ marca_id: marcaId, puestos_ids: puestosIds }),
+      },
+      refreshAccessToken,
+      logout,
+    });
+    if (!response) throw new Error('Sesión expirada');
+    return await response.json();
+  } catch (error) {
+    console.error('Error appendCreatedActivityPuestos:', error);
+    return { status: false, message: 'Error al actualizar puestos de la actividad' };
+  }
+};
+
 export const updateCreatedActivity = async ({
   activityId,
   requestData,

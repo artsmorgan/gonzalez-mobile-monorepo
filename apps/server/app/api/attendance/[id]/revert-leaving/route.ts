@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
-import { sendNotificationByRole } from "../../../../../utils/sendNotification";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
@@ -11,6 +10,19 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         const { id } = await context.params;
         const idNum = parseInt(String(id), 10);
         if (!idNum) return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
+
+        let horaAccion: number | undefined;
+        try {
+            const body = await req.json();
+            const raw = body?.horaAccion;
+            const n = raw != null ? Number(raw) : NaN;
+            if (Number.isFinite(n)) horaAccion = n;
+        } catch {
+            /* cuerpo vacío permitido por compatibilidad */
+        }
+        if (horaAccion == null || !Number.isFinite(horaAccion)) {
+            return NextResponse.json({ status: false, message: "horaAccion requerida" }, { status: 200 });
+        }
 
         const marcaDia = await callDynamicPrisma({
             req,

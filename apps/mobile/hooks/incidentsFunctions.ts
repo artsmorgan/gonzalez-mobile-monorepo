@@ -14,7 +14,7 @@ import type {
 } from './incidentsTypes';
 
 type ListIncidentsParams = {
-  marcaId: number;
+  corpoId: number;
   refreshAccessToken?: () => Promise<boolean>;
   logout?: () => Promise<any>;
 };
@@ -97,14 +97,14 @@ const requireAuthHandlers = (refreshAccessToken?: () => Promise<boolean>, logout
   };
 };
 
-export const listIncidentsByMarca = async ({ marcaId, refreshAccessToken, logout }: ListIncidentsParams): Promise<IncidentsListResponse> => {
+export const listIncidentsByCorpo = async ({ corpoId, refreshAccessToken, logout }: ListIncidentsParams): Promise<IncidentsListResponse> => {
   try {
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) throw new Error('Server URL not configured');
     const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
 
     const response = await authedFetch({
-      url: `${apiUrl}/api/incidents?m=${marcaId}`,
+      url: `${apiUrl}/api/incidents?corpo_id=${corpoId}`,
       init: {
         method: 'GET',
         headers: {

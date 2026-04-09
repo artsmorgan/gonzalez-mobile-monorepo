@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, ActivityIndicator, View, Image, Modal, Dimensions, Platform } from 'react-native';
+import { StyleSheet, ScrollView, TouchableOpacity, TextInput, Text, Alert, ActivityIndicator, View, Image, Modal, Dimensions, Platform } from 'react-native';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import { useAuth } from '@/contexts/AuthContext';
@@ -19,6 +19,11 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import { eventBus } from '@/hooks/eventBus';
 import authedFetch from '@/hooks/authedFetch';
+import {
+  filterVisitorsCacheForCorpo,
+  readVisitorsCacheRaw,
+  syncVisitorsCacheFromNetwork,
+} from '@/hooks/visitorsCacheHelpers';
 import DateTimePicker from '@react-native-community/datetimepicker';
 
 type VisitorsScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Visitors'>;
@@ -64,6 +69,8 @@ interface Visitor {
   created_at?: string;
   updated_at: string;
   id_local: string;
+  /** Sucursal (`e_registro_personas.corpo_id`) para caché / listado */
+  corpo_id?: number;
 }
 
 interface EditingVisitor {
@@ -101,6 +108,37 @@ interface EditingDetalle {
   descripcion: string;
 }
 
+function stripQueuedVisitorUpdatesForVisitorId(actions: any[], visitorId: number): any[] {
+  const id = Number(visitorId);
+  if (!Number.isFinite(id)) return actions;
+  return actions.filter(
+    (a: any) => !(a?.type === 'update' && Number(a.id) === id)
+  );
+}
+
+function stripQueuedVisitorDeletesForVisitorId(actions: any[], visitorId: number): any[] {
+  const id = Number(visitorId);
+  if (!Number.isFinite(id)) return actions;
+  return actions.filter(
+    (a: any) => !(a?.type === 'delete' && Number(a.id) === id)
+  );
+}
+
+function appendOfflineVisitorDelete(actions: any[], visitorId: number): any[] {
+  let next = stripQueuedVisitorDeletesForVisitorId(actions, visitorId);
+  next = stripQueuedVisitorUpdatesForVisitorId(next, visitorId);
+  next.push({ id: visitorId, type: 'delete' });
+  return next;
+}
+
+function stripErroneousVisitorUpdatesForLocalQueueId(actions: any[], idLocal: string): any[] {
+  if (!idLocal) return actions;
+  const k = String(idLocal);
+  return actions.filter(
+    (a: any) => !(a?.type === 'update' && a.id != null && String(a.id) === k)
+  );
+}
+
 export default function VisitorsScreen() {
   const { employee, refreshAccessToken, logout, accessToken } = useAuth();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
@@ -128,6 +166,7 @@ export default function VisitorsScreen() {
   const [visitors, setVisitors] = useState<Visitor[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [offlineMessage, setOfflineMessage] = useState<string | null>(null);
   const [hasCurrentMarca, setHasCurrentMarca] = useState<boolean>(false);
 
   // Editing state
@@ -135,6 +174,11 @@ export default function VisitorsScreen() {
 
   // Creating state
   const [isCreating, setIsCreating] = useState(false);
+  const [isSubmittingForm, setIsSubmittingForm] = useState(false);
+  const [deletingVisitorKey, setDeletingVisitorKey] = useState<string | null>(null);
+
+  const getVisitorRowKey = (visitorId: number, id_local: string) =>
+    id_local ? `local:${id_local}` : `id:${visitorId}`;
   const [newVisitor, setNewVisitor] = useState<EditingVisitor>({
     id: null,
     id_local: '',
@@ -234,6 +278,17 @@ export default function VisitorsScreen() {
   const getConnectionStatus = async () => {
     const networkState = await Network.getNetworkStateAsync();
     return networkState.isConnected && networkState.isInternetReachable;
+  };
+
+  const isProbablyNetworkError = (err: unknown) => {
+    const msg = String((err as Error)?.message ?? err ?? '').toLowerCase();
+    return (
+      msg.includes('network request failed') ||
+      msg.includes('failed to fetch') ||
+      msg.includes('networkerror') ||
+      msg.includes('timeout') ||
+      msg.includes('timed out')
+    );
   };
 
   const closeCambiosModal = () => {
@@ -408,8 +463,8 @@ export default function VisitorsScreen() {
     try {
       setIsLoading(true);
       setError(null);
+      setOfflineMessage(null);
 
-      // Verificar si existe current_marca
       const currentMarca = await AsyncStorage.getItem('current_marca');
       if (!currentMarca) {
         setHasCurrentMarca(false);
@@ -418,75 +473,107 @@ export default function VisitorsScreen() {
       }
 
       const currentMarcaData = JSON.parse(currentMarca);
-      const marcaId = currentMarcaData.id;
+      const marcaId = Number(currentMarcaData?.id);
+      const corpoIdRaw =
+        currentMarcaData?.corpo?.id ?? currentMarcaData?.corpo_id;
+      const corpoId =
+        corpoIdRaw != null && corpoIdRaw !== '' ? Number(corpoIdRaw) : NaN;
+
       setHasCurrentMarca(true);
 
-      // Verificar conectividad
+      if (
+        !Number.isFinite(marcaId) ||
+        marcaId <= 0 ||
+        !Number.isFinite(corpoId) ||
+        corpoId <= 0
+      ) {
+        setVisitors([]);
+        setOfflineMessage(
+          'No hay sucursal válida en la marca actual; no se puede cargar el listado.'
+        );
+        setIsLoading(false);
+        return;
+      }
+
       const isConnected = await getConnectionStatus();
 
+      const applyFilteredCache = async (hint: string | null) => {
+        const cached = await readVisitorsCacheRaw();
+        const filtered = filterVisitorsCacheForCorpo(cached as Visitor[], corpoId);
+        setVisitors(filtered as Visitor[]);
+        if (hint) setOfflineMessage(hint);
+      };
+
       if (isConnected) {
-        // Con internet: hacer fetch normal
         const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
         if (!apiUrl) {
           throw new Error('Server URL not configured');
         }
 
-        const response = await authedFetch({
-          url: `${apiUrl}/api/visitors?m=${marcaId}`,
-          init: {
-            method: 'GET',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-          },
+        const syncResult = await syncVisitorsCacheFromNetwork({
+          marcaId,
+          corpoId,
           refreshAccessToken,
           logout,
         });
-        if (!response) return;
 
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        const data = await response.json();
-
-        if (data.status && data.data) {
-          setVisitors(data.data);
-          // Actualizar visitors_cache
-          await AsyncStorage.setItem('visitors_cache', JSON.stringify(data.data));
+        if (syncResult.ok) {
+          await applyFilteredCache(null);
         } else {
-          setError(data.message || 'Error al cargar las visitas');
-          Alert.alert('Error', data.message || 'Error al cargar las visitas');
+          await applyFilteredCache(
+            'No se pudo actualizar desde el servidor; mostrando visitas en caché para esta sucursal.'
+          );
+          if (syncResult.message) {
+            setError(syncResult.message);
+          }
         }
       } else {
-        // Sin internet: cargar desde cache
-        const visitorsCache = await AsyncStorage.getItem('visitors_cache');
-        if (visitorsCache) {
-          const cachedVisitors = JSON.parse(visitorsCache);
-          setVisitors(cachedVisitors);
-          Alert.alert('Modo Offline', 'No hay conexión a internet. Mostrando datos guardados.');
-        } else {
-          setError('No hay datos guardados y no hay conexión a internet');
-          Alert.alert('Sin conexión', 'No hay conexión a internet y no hay datos guardados previamente.');
-          setVisitors([]);
-        }
+        const cached = await readVisitorsCacheRaw();
+        const filtered = filterVisitorsCacheForCorpo(cached as Visitor[], corpoId);
+        setVisitors(filtered as Visitor[]);
+        setOfflineMessage(
+          filtered.length > 0
+            ? 'Modo Offline: mostrando visitas guardadas para esta sucursal.'
+            : 'Sin conexión: no hay visitas guardadas para esta sucursal.'
+        );
       }
     } catch (err) {
       console.error('Error fetching visitors:', err);
-      // En caso de error, intentar cargar desde cache
       try {
-        const visitorsCache = await AsyncStorage.getItem('visitors_cache');
-        if (visitorsCache) {
-          const cachedVisitors = JSON.parse(visitorsCache);
-          setVisitors(cachedVisitors);
-          Alert.alert('Modo Offline', 'Error de conexión. Mostrando datos guardados.');
+        const currentMarca = await AsyncStorage.getItem('current_marca');
+        if (!currentMarca) {
+          setVisitors([]);
+          return;
+        }
+        const currentMarcaData = JSON.parse(currentMarca);
+        const corpoIdRaw =
+          currentMarcaData?.corpo?.id ?? currentMarcaData?.corpo_id;
+        const corpoId =
+          corpoIdRaw != null && corpoIdRaw !== '' ? Number(corpoIdRaw) : NaN;
+        if (!Number.isFinite(corpoId) || corpoId <= 0) {
+          setVisitors([]);
+          return;
+        }
+        const cached = await readVisitorsCacheRaw();
+        const filtered = filterVisitorsCacheForCorpo(cached as Visitor[], corpoId);
+        if (filtered.length > 0) {
+          setVisitors(filtered as Visitor[]);
+          setOfflineMessage(
+            'Error de conexión. Mostrando visitas guardadas para esta sucursal.'
+          );
+        } else if (isProbablyNetworkError(err)) {
+          setOfflineMessage('Sin conexión: no hay visitas guardadas para esta sucursal.');
+          setVisitors([]);
         } else {
           setError('Error al cargar las visitas');
-          Alert.alert('Error', 'No se pudieron cargar las visitas');
         }
-      } catch (cacheErr) {
-        setError('Error al cargar las visitas');
-        Alert.alert('Error', 'No se pudieron cargar las visitas');
+      } catch {
+        if (isProbablyNetworkError(err)) {
+          setOfflineMessage('Sin conexión: no hay visitas guardadas para esta sucursal.');
+          setVisitors([]);
+        } else {
+          setError('Error al cargar las visitas');
+        }
       }
     } finally {
       setIsLoading(false);
@@ -653,6 +740,7 @@ export default function VisitorsScreen() {
   };
 
   const cancelCreating = () => {
+    if (isSubmittingForm) return;
     setIsCreating(false);
     setShowVisitorDatePicker(false);
     setShowVisitorTimePicker(false);
@@ -800,6 +888,7 @@ export default function VisitorsScreen() {
   };
 
   const cancelEditing = () => {
+    if (isSubmittingForm) return;
     setShowVisitorDatePicker(false);
     setShowVisitorTimePicker(false);
     setVisitorPickerField(null);
@@ -807,6 +896,7 @@ export default function VisitorsScreen() {
   };
 
   const createVisitor = async () => {
+    if (isSubmittingForm) return;
     if (!nombreRef.current.trim()) {
       Alert.alert('Error', 'El nombre es requerido');
       return;
@@ -866,13 +956,14 @@ export default function VisitorsScreen() {
     }
 
     Alert.alert(
-      'Confirmar registro',
-      '¿Estás seguro de que deseas registrar este visitante?',
+      'Confirmar ubicación',
+      '¿Deseas registrar este visitante con los datos ingresados?',
       [
         { text: 'Cancelar', style: 'cancel' },
         {
-          text: 'Confirmar',
+          text: 'Aceptar',
           onPress: async () => {
+            setIsSubmittingForm(true);
             try {
               const currentMarca = await AsyncStorage.getItem('current_marca');
               if (!currentMarca) {
@@ -947,8 +1038,11 @@ export default function VisitorsScreen() {
 
                 // Guardar en visitors_actions
                 const actionsStr = await AsyncStorage.getItem('visitors_actions');
-                const actions = actionsStr ? JSON.parse(actionsStr) : [];
-
+                let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+                if (!Array.isArray(actions)) actions = [];
+                actions = actions.filter(
+                  (a: any) => !(a?.type === 'create' && String(a?.id) === String(localId))
+                );
                 actions.push({
                   requestData: requestBody,
                   marcaId: currentMarcaData.id,
@@ -956,14 +1050,18 @@ export default function VisitorsScreen() {
                   type: 'create',
                 });
 
-                console.log("Acción create guardada");
-
                 await AsyncStorage.setItem('visitors_actions', JSON.stringify(actions));
 
                 // Guardar en visitors_cache
                 const cacheStr = await AsyncStorage.getItem('visitors_cache');
                 const cache = cacheStr ? JSON.parse(cacheStr) : [];
 
+                const corpoOffline =
+                  currentMarcaData?.corpo?.id != null
+                    ? Number(currentMarcaData.corpo.id)
+                    : currentMarcaData?.corpo_id != null
+                      ? Number(currentMarcaData.corpo_id)
+                      : NaN;
                 const newVisitorCache: Visitor = {
                   id: 0,
                   nombre: nombreRef.current,
@@ -990,6 +1088,9 @@ export default function VisitorsScreen() {
                   })),
                   updated_at: new Date(horaAccion).toISOString(),
                   id_local: localId,
+                  ...(Number.isFinite(corpoOffline) && corpoOffline > 0
+                    ? { corpo_id: corpoOffline }
+                    : {}),
                 };
 
                 cache.push(newVisitorCache);
@@ -1002,6 +1103,8 @@ export default function VisitorsScreen() {
             } catch (err) {
               console.error('Error creating visitor:', err);
               Alert.alert('Error', 'No se pudo registrar el visitante');
+            } finally {
+              setIsSubmittingForm(false);
             }
           },
         },
@@ -1010,6 +1113,7 @@ export default function VisitorsScreen() {
   };
 
   const updateVisitor = async () => {
+    if (isSubmittingForm) return;
     if (!editingVisitor) return;
 
     if (!nombreRef.current.trim()) {
@@ -1071,19 +1175,21 @@ export default function VisitorsScreen() {
     }
 
     Alert.alert(
-      'Confirmar actualización',
-      '¿Estás seguro de que deseas actualizar este visitante?',
+      'Confirmar modificación',
+      '¿Deseas guardar los cambios en este visitante?',
       [
         { text: 'Cancelar', style: 'cancel' },
         {
-          text: 'Confirmar',
+          text: 'Aceptar',
           onPress: async () => {
+            setIsSubmittingForm(true);
             try {
               const currentMarca = await AsyncStorage.getItem('current_marca');
               if (!currentMarca) {
                 Alert.alert('Error', 'No hay marca registrada');
                 return;
               }
+              const currentMarcaData = JSON.parse(currentMarca);
 
               const converted_hora_entrada = buildIsoFromDateAndTime(
                 horaEntradaFechaRef.current,
@@ -1146,11 +1252,16 @@ export default function VisitorsScreen() {
               } else {
                 // Sin internet: guardar en visitors_actions y actualizar visitors_cache
                 const actionsStr = await AsyncStorage.getItem('visitors_actions');
-                const actions = actionsStr ? JSON.parse(actionsStr) : [];
+                let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+                if (!Array.isArray(actions)) actions = [];
 
                 // Si id_local !== '', buscar acción "create" y modificar su requestData
                 if (editingVisitor.id_local !== '') {
-                  const createActionIndex = actions.findIndex((a: any) => a.id === editingVisitor.id_local && a.type === 'create');
+                  actions = stripErroneousVisitorUpdatesForLocalQueueId(actions, editingVisitor.id_local);
+                  const createActionIndex = actions.findIndex(
+                    (a: any) =>
+                      a?.type === 'create' && String(a.id) === String(editingVisitor.id_local)
+                  );
 
                   if (createActionIndex !== -1) {
                     // Modificar requestData de la acción create, ignorando foto_cedula si no hay nueva imagen
@@ -1181,15 +1292,16 @@ export default function VisitorsScreen() {
                     }
 
                     actions[createActionIndex].requestData = updatedRequestData;
-                    await AsyncStorage.setItem('visitors_actions', JSON.stringify(actions));
-                  }
-                } else {
-                  // Si id_local === '', buscar acción "update" existente o crear nueva
-                  const updateActionIndex = actions.findIndex((a: any) => a.id === editingVisitor.id && a.type === 'update');
-
-                  if (updateActionIndex !== -1) {
-                    // Modificar requestData de la acción update existente
-                    const updatedRequestData = {
+                    if (actions[createActionIndex].marcaId == null && currentMarcaData.id != null) {
+                      actions[createActionIndex].marcaId = currentMarcaData.id;
+                    }
+                  } else {
+                    const fotoCedula =
+                      editingVisitor.foto_cedula_nueva ||
+                      editingVisitor.foto_cedula ||
+                      null;
+                    const newCreateBody = {
+                      marca_id: currentMarcaData.id,
                       nombre: nombreRef.current,
                       cedula: cedulaRef.current,
                       hora_entrada: converted_hora_entrada,
@@ -1200,7 +1312,7 @@ export default function VisitorsScreen() {
                       observaciones: editingVisitor.es_funcionario ? observacionesRef.current : null,
                       tipo_accion: editingVisitor.es_funcionario && editingVisitor.tipo_accion ? editingVisitor.tipo_accion : null,
                       pers_autoriza_salida: editingVisitor.es_funcionario && persAutorizaSalidaRef.current ? persAutorizaSalidaRef.current : null,
-                      foto_cedula: editingVisitor.foto_cedula_nueva || null,
+                      foto_cedula: fotoCedula,
                       activos: editingVisitor.activos.map(activo => ({
                         tipo_id: activo.tipo_id,
                         nombre: activo.nombre ?? '',
@@ -1209,19 +1321,23 @@ export default function VisitorsScreen() {
                         numero_activo: activo.numero_activo,
                       })),
                     };
-
-                    actions[updateActionIndex].requestData = updatedRequestData;
-                  } else {
-                    // Crear nueva acción update
-                    const newAction = {
-                      requestData: requestBody,
-                      id: editingVisitor.id!,
-                      type: 'update',
-                    };
-                    actions.push(newAction);
+                    actions.push({
+                      requestData: newCreateBody,
+                      marcaId: currentMarcaData.id,
+                      id: editingVisitor.id_local,
+                      type: 'create',
+                    });
                   }
 
-                  console.log("Acción update guardada");
+                  await AsyncStorage.setItem('visitors_actions', JSON.stringify(actions));
+                } else {
+                  const vid = Number(editingVisitor.id);
+                  actions = stripQueuedVisitorUpdatesForVisitorId(actions, vid);
+                  actions.push({
+                    requestData: requestBody,
+                    id: vid,
+                    type: 'update',
+                  });
 
                   await AsyncStorage.setItem('visitors_actions', JSON.stringify(actions));
                 }
@@ -1267,6 +1383,8 @@ export default function VisitorsScreen() {
             } catch (err) {
               console.error('Error updating visitor:', err);
               Alert.alert('Error', 'No se pudo actualizar el visitante');
+            } finally {
+              setIsSubmittingForm(false);
             }
           },
         },
@@ -1274,7 +1392,8 @@ export default function VisitorsScreen() {
     )
   };
 
-  const deleteVisitor = async (visitor: Visitor) => {
+  const deleteVisitor = (visitor: Visitor) => {
+    if (deletingVisitorKey) return;
     Alert.alert(
       'Confirmar eliminación',
       `¿Está seguro de eliminar el registro de ${visitor.nombre}?`,
@@ -1284,62 +1403,62 @@ export default function VisitorsScreen() {
           style: 'cancel',
         },
         {
-          text: 'Eliminar',
+          text: 'Aceptar',
           style: 'destructive',
-          onPress: async () => {
-            try {
-              // Verificar conectividad
-              const isConnected = await getConnectionStatus();
+          onPress: () => {
+            const key = getVisitorRowKey(visitor.id, visitor.id_local);
+            void (async () => {
+              setDeletingVisitorKey(key);
+              try {
+                const isConnected = await getConnectionStatus();
 
-              if (isConnected) {
-                // Con internet: hacer llamado API normal
-                const data = await deleteVisitorAPI({
-                  visitorId: visitor.id,
-                  refreshAccessToken,
-                  logout,
-                });
-
-                if (data.status) {
-                  Alert.alert('Éxito', 'Visitante eliminado correctamente');
-                  fetchVisitors();
-                } else {
-                  Alert.alert('Error', data.message || 'Error al eliminar visitante');
-                }
-              } else {
-                // Sin internet: guardar en visitors_actions y actualizar visitors_cache
-                const actionsStr = await AsyncStorage.getItem('visitors_actions');
-                const actions = actionsStr ? JSON.parse(actionsStr) : [];
-
-                // Si id_local !== '', eliminar acciones relacionadas con este id_local
-                if (visitor.id_local !== '') {
-                  // Filtrar todas las acciones que tengan este id_local
-                  const filteredActions = actions.filter((a: any) => a.id !== visitor.id_local);
-                  await AsyncStorage.setItem('visitors_actions', JSON.stringify(filteredActions));
-                } else {
-                  // Si id_local === '', agregar acción delete
-                  actions.push({
-                    id: visitor.id,
-                    type: 'delete',
+                if (isConnected) {
+                  const data = await deleteVisitorAPI({
+                    visitorId: visitor.id,
+                    refreshAccessToken,
+                    logout,
                   });
-                  await AsyncStorage.setItem('visitors_actions', JSON.stringify(actions));
+
+                  if (data.status) {
+                    Alert.alert('Éxito', 'Visitante eliminado correctamente');
+                    fetchVisitors();
+                  } else {
+                    Alert.alert('Error', data.message || 'Error al eliminar visitante');
+                  }
+                } else {
+                  const actionsStr = await AsyncStorage.getItem('visitors_actions');
+                  let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+                  if (!Array.isArray(actions)) actions = [];
+
+                  if (visitor.id_local !== '') {
+                    const filteredActions = actions.filter(
+                      (a: any) =>
+                        !(a?.type === 'create' && String(a?.id) === String(visitor.id_local))
+                    );
+                    await AsyncStorage.setItem('visitors_actions', JSON.stringify(filteredActions));
+                  } else {
+                    actions = appendOfflineVisitorDelete(actions, visitor.id);
+                    await AsyncStorage.setItem('visitors_actions', JSON.stringify(actions));
+                  }
+
+                  const cacheStr = await AsyncStorage.getItem('visitors_cache');
+                  const cache = cacheStr ? JSON.parse(cacheStr) : [];
+
+                  const filteredCache = cache.filter((v: Visitor) =>
+                    visitor.id_local !== '' ? v.id_local !== visitor.id_local : v.id !== visitor.id
+                  );
+                  await AsyncStorage.setItem('visitors_cache', JSON.stringify(filteredCache));
+
+                  Alert.alert('Modo Offline', 'Visitante eliminado localmente. Se sincronizará cuando haya conexión.');
+                  fetchVisitors();
                 }
-
-                // Eliminar de visitors_cache
-                const cacheStr = await AsyncStorage.getItem('visitors_cache');
-                const cache = cacheStr ? JSON.parse(cacheStr) : [];
-
-                const filteredCache = cache.filter((v: Visitor) =>
-                  visitor.id_local !== '' ? v.id_local !== visitor.id_local : v.id !== visitor.id
-                );
-                await AsyncStorage.setItem('visitors_cache', JSON.stringify(filteredCache));
-
-                Alert.alert('Modo Offline', 'Visitante eliminado localmente. Se sincronizará cuando haya conexión.');
-                fetchVisitors();
+              } catch (err) {
+                console.error('Error deleting visitor:', err);
+                Alert.alert('Error', 'No se pudo eliminar el visitante');
+              } finally {
+                setDeletingVisitorKey(null);
               }
-            } catch (err) {
-              console.error('Error deleting visitor:', err);
-              Alert.alert('Error', 'No se pudo eliminar el visitante');
-            }
+            })();
           },
         },
       ]
@@ -2087,18 +2206,25 @@ export default function VisitorsScreen() {
         {/* Botones de acción */}
         <ThemedView style={styles.formActions}>
           <TouchableOpacity
-            style={[styles.actionButton, styles.cancelButton]}
+            style={[styles.actionButton, styles.cancelButton, isSubmittingForm && styles.disabledButton]}
             onPress={() => isEditing ? cancelEditing() : cancelCreating()}
+            disabled={isSubmittingForm}
           >
             <ThemedText style={styles.cancelButtonText}> <Ionicons name="close" size={20} color="#FFFFFF" /> </ThemedText>
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.actionButton, styles.saveButton]}
-            onPress={() => isEditing ? updateVisitor() : createVisitor()}
+            style={[styles.actionButton, styles.saveButton, isSubmittingForm && styles.disabledButton]}
+            onPress={() => (isEditing ? updateVisitor() : createVisitor())}
+            disabled={isSubmittingForm}
           >
-            <ThemedText style={styles.saveButtonText}>
-              {isEditing ? <Ionicons name="save" size={20} color="#FFFFFF" /> : <Ionicons name="add" size={20} color="#FFFFFF" />}
-            </ThemedText>
+            {isSubmittingForm ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <View style={styles.saveButtonInner}>
+                <Ionicons name="checkmark-sharp" size={20} color="#FFFFFF" />
+                <Text style={styles.saveButtonText}>Aceptar</Text>
+              </View>
+            )}
           </TouchableOpacity>
         </ThemedView>
       </ThemedView>
@@ -2106,11 +2232,13 @@ export default function VisitorsScreen() {
   };
 
   const renderVisitorItem = (visitor: Visitor) => {
+    const rowKey = getVisitorRowKey(visitor.id, visitor.id_local);
+    const isDeletingThis = deletingVisitorKey === rowKey;
     const isExpanded = expandedVisitorIds.includes(visitor.id);
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
 
     return (
-      <ThemedView key={visitor.id} style={styles.visitorCard}>
+      <ThemedView key={rowKey} style={styles.visitorCard}>
         <ThemedView style={styles.visitorHeader}>
           <ThemedText style={styles.visitorName}>{visitor.nombre}</ThemedText>
         </ThemedView>
@@ -2304,10 +2432,18 @@ export default function VisitorsScreen() {
             >
               <Ionicons name="list-outline" size={18} color="#FFFFFF" />
             </TouchableOpacity>
-            <TouchableOpacity style={styles.deleteButton} onPress={() => deleteVisitor(visitor)}>
-              <ThemedText style={styles.deleteButtonText}>
-                <Ionicons name="trash-outline" size={20} color="#FFFFFF" />
-              </ThemedText>
+            <TouchableOpacity
+              style={[styles.deleteButton, isDeletingThis && styles.disabledButton]}
+              onPress={() => deleteVisitor(visitor)}
+              disabled={isDeletingThis}
+            >
+              {isDeletingThis ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <ThemedText style={styles.deleteButtonText}>
+                  <Ionicons name="trash-outline" size={20} color="#FFFFFF" />
+                </ThemedText>
+              )}
             </TouchableOpacity>
           </ThemedView>
         )}
@@ -2318,6 +2454,18 @@ export default function VisitorsScreen() {
   return (
     <ThemedView style={styles.container}>
       <AppHeader onMenuPress={() => setIsMenuVisible(true)} title="Registro de Visitantes" />
+      {!!error && (
+        <ThemedView style={styles.errorBanner}>
+          <Ionicons name="alert-circle-outline" size={18} color="#B00020" />
+          <ThemedText style={styles.errorBannerText}>{error}</ThemedText>
+        </ThemedView>
+      )}
+      {!!offlineMessage && !error && (
+        <ThemedView style={styles.offlineBanner}>
+          <Ionicons name="cloud-offline-outline" size={18} color="#8A6D00" />
+          <ThemedText style={styles.offlineBannerText}>{offlineMessage}</ThemedText>
+        </ThemedView>
+      )}
 
       {isLoading ? (
         <ThemedView style={styles.loadingContainer}>
@@ -2648,6 +2796,44 @@ export default function VisitorsScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  errorBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 20,
+    marginTop: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#F5C2C7',
+    backgroundColor: '#F8D7DA',
+  },
+  errorBannerText: {
+    flex: 1,
+    color: '#B00020',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  offlineBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 20,
+    marginTop: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#FFEBAA',
+    backgroundColor: '#FFF3CD',
+  },
+  offlineBannerText: {
+    flex: 1,
+    color: '#8A6D00',
+    fontSize: 14,
+    fontWeight: '600',
   },
   scrollView: {
     flex: 1,
@@ -3081,10 +3267,20 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     alignItems: 'center',
   },
+  saveButtonInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: 'transparent',
+  },
   saveButtonText: {
-    color: '#fff',
+    color: '#FFFFFF',
     fontSize: 14,
     fontWeight: '600',
+  },
+  disabledButton: {
+    opacity: 0.7,
   },
   visitorsList: {
     width: '100%',

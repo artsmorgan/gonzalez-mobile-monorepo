@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   StyleSheet,
   ScrollView,
@@ -67,6 +67,10 @@ interface Complaint {
   firma_responsable?: string | null;
   created_at: string;
   synced?: boolean;
+  corpo_id?: number | null;
+  empresa_id?: number | null;
+  cliente_id?: number | null;
+  contrato_id?: number | null;
 }
 
 interface EditingComplaint {
@@ -148,6 +152,126 @@ const getComplaintFileDisplayName = (file: ComplaintFile) => {
   return file.name;
 };
 
+type ComplaintsStructureTree = { id: number; codigo?: string; nombre: string; clientes?: any[] }[];
+
+const getComplaintsMarcaDivisionIdFromCurrent = (current: any): number | null => {
+  const raw =
+    current?.roleDivision?.division?.id ??
+    current?.role_division?.division?.id ??
+    current?.division?.id ??
+    current?.division_id;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
+
+const resolveComplaintsDivisionInTree = (
+  tree: ComplaintsStructureTree,
+  empresaId: number | null,
+  clienteId: number | null,
+  divisionId: number | null
+): number | null => {
+  if (!Array.isArray(tree) || tree.length === 0 || divisionId == null) return divisionId;
+  const empresa = tree.find((e) => Number(e?.id) === Number(empresaId));
+  const clientes = Array.isArray(empresa?.clientes) ? empresa.clientes : [];
+  const cliente = clientes.find((c) => Number(c?.id) === Number(clienteId));
+  const divisiones = Array.isArray(cliente?.division) ? cliente.division : [];
+  if (divisiones.some((d: { id?: number }) => Number(d?.id) === Number(divisionId))) return divisionId;
+  return null;
+};
+
+const findContratoIdForSucursalInTree = (
+  tree: ComplaintsStructureTree,
+  sucursalId: number | null
+): number | null => {
+  if (sucursalId == null) return null;
+  for (const empresa of tree || []) {
+    for (const cliente of empresa.clientes || []) {
+      for (const division of cliente.division || []) {
+        for (const contrato of division.contratos || []) {
+          for (const sucursal of contrato.sucursales || []) {
+            if (Number(sucursal.id) === Number(sucursalId)) {
+              return contrato.id;
+            }
+          }
+        }
+      }
+    }
+  }
+  return null;
+};
+
+/** c_maestro_quejas no guarda division_id; se deduce del árbol con empresa/cliente/contrato/corpo. */
+const resolveDivisionIdForComplaintPath = (
+  tree: ComplaintsStructureTree,
+  empresaId: number | null,
+  clienteId: number | null,
+  contratoId: number | null,
+  corpoId: number | null
+): number | null => {
+  if (empresaId == null || clienteId == null || contratoId == null || corpoId == null) return null;
+  const empresa = tree.find((e) => Number(e?.id) === Number(empresaId));
+  if (!empresa) return null;
+  const clientes = Array.isArray(empresa.clientes) ? empresa.clientes : [];
+  const cliente = clientes.find((c) => Number(c?.id) === Number(clienteId));
+  if (!cliente) return null;
+  const divisiones = Array.isArray((cliente as { division?: unknown[] }).division)
+    ? (cliente as { division: any[] }).division
+    : [];
+  for (const division of divisiones) {
+    const contratos = Array.isArray(division?.contratos) ? division.contratos : [];
+    const contrato = contratos.find((c: any) => Number(c?.id) === Number(contratoId));
+    if (!contrato) continue;
+    const sucursales = Array.isArray(contrato.sucursales) ? contrato.sucursales : [];
+    if (sucursales.some((s: any) => Number(s?.id) === Number(corpoId))) {
+      return Number(division.id);
+    }
+  }
+  return null;
+};
+
+const complaintCacheCorpoId = (item: any): number | null => {
+  const fromItem = item?.corpo_id;
+  if (fromItem != null && Number.isFinite(Number(fromItem))) return Number(fromItem);
+  const fromPayload = item?.payload?.corpo_id;
+  if (fromPayload != null && Number.isFinite(Number(fromPayload))) return Number(fromPayload);
+  return null;
+};
+
+const EVALUATIONS_CACHE_KEY = 'evaluations_cache';
+const COMPLAINTS_MASTER_CACHE_TYPE = 'complaints_master';
+
+function complaintsMasterIsPendingInCache(item: any): boolean {
+  if (item?.type !== COMPLAINTS_MASTER_CACHE_TYPE) return false;
+  if (item.synced === false) return true;
+  if (item.id_local && String(item.id_local).startsWith('local-')) return true;
+  return false;
+}
+
+/**
+ * Sustituye en evaluations_cache solo las filas complaints_master sincronizadas de esta sucursal;
+ * conserva otros tipos, quejas de otras sucursales y borradores locales de esta sucursal.
+ */
+async function mergeComplaintsMasterServerIntoEvaluationsCache(serverRecords: any[], corpoId: number): Promise<void> {
+  let cache: any[] = [];
+  try {
+    const cacheStr = await AsyncStorage.getItem(EVALUATIONS_CACHE_KEY);
+    const parsed = cacheStr ? JSON.parse(cacheStr) : [];
+    cache = Array.isArray(parsed) ? parsed : [];
+  } catch {
+    cache = [];
+  }
+
+  const preserved = cache.filter((item: any) => {
+    if (item.type !== COMPLAINTS_MASTER_CACHE_TYPE) return true;
+    const c = complaintCacheCorpoId(item);
+    if (c == null || Number(c) !== Number(corpoId)) return true;
+    if (complaintsMasterIsPendingInCache(item)) return true;
+    return false;
+  });
+
+  await AsyncStorage.setItem(EVALUATIONS_CACHE_KEY, JSON.stringify([...preserved, ...serverRecords]));
+}
+
 export default function ComplaintsMasterScreen() {
   const { employee, refreshAccessToken, logout, accessToken } = useAuth();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
@@ -156,7 +280,7 @@ export default function ComplaintsMasterScreen() {
 
   // Data states
   const [complaints, setComplaints] = useState<Complaint[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isListLoading, setIsListLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasCurrentMarca, setHasCurrentMarca] = useState<boolean>(false);
 
@@ -210,7 +334,34 @@ export default function ComplaintsMasterScreen() {
   const [cambiosItems, setCambiosItems] = useState<any[]>([]);
   const [expandedCambioId, setExpandedCambioId] = useState<number | null>(null);
 
+  type RoleName = 'OPERATIVO' | 'SUPERVISOR' | 'ADMINISTRATIVO' | string | null;
+  const [roleName, setRoleName] = useState<RoleName>(null);
+  const [structure, setStructure] = useState<ComplaintsStructureTree>([]);
+  const [isStructureLoading, setIsStructureLoading] = useState(false);
+  const [isFiltersExpanded, setIsFiltersExpanded] = useState(false);
+  const [filterEmpresaId, setFilterEmpresaId] = useState<number | null>(null);
+  const [filterClienteId, setFilterClienteId] = useState<number | null>(null);
+  const [filterDivisionId, setFilterDivisionId] = useState<number | null>(null);
+  const [filterContratoId, setFilterContratoId] = useState<number | null>(null);
+  const [filterCorpoId, setFilterCorpoId] = useState<number | null>(null);
+  const [marcaEmpresaId, setMarcaEmpresaId] = useState<number | null>(null);
+  const [marcaClienteId, setMarcaClienteId] = useState<number | null>(null);
+  const [marcaDivisionId, setMarcaDivisionId] = useState<number | null>(null);
+  const [marcaContratoId, setMarcaContratoId] = useState<number | null>(null);
+  const [marcaCorpoId, setMarcaCorpoId] = useState<number | null>(null);
+
+  const [formEmpresaId, setFormEmpresaId] = useState<number | null>(null);
+  const [formClienteId, setFormClienteId] = useState<number | null>(null);
+  const [formDivisionId, setFormDivisionId] = useState<number | null>(null);
+  const [formContratoId, setFormContratoId] = useState<number | null>(null);
+  const [formCorpoId, setFormCorpoId] = useState<number | null>(null);
+
+  const [deletingRecordKey, setDeletingRecordKey] = useState<string | null>(null);
+
+  const isOperativo = roleName === 'OPERATIVO';
+
   const getConnectionStatus = async (): Promise<boolean> => {
+    //return false;
     const networkState = await Network.getNetworkStateAsync();
     return networkState.isConnected && networkState.isInternetReachable ? true : false;
   };
@@ -247,6 +398,354 @@ export default function ComplaintsMasterScreen() {
     }
     return String(value);
   };
+
+  const loadMarcaContext = async () => {
+    const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+    if (!currentMarcaStr) {
+      setHasCurrentMarca(false);
+      setMarcaEmpresaId(null);
+      setMarcaClienteId(null);
+      setMarcaDivisionId(null);
+      setMarcaContratoId(null);
+      setMarcaCorpoId(null);
+      return null;
+    }
+    try {
+      const current = JSON.parse(currentMarcaStr);
+      if (!current?.id) {
+        setHasCurrentMarca(false);
+        setMarcaEmpresaId(null);
+        setMarcaClienteId(null);
+        setMarcaDivisionId(null);
+        setMarcaContratoId(null);
+        setMarcaCorpoId(null);
+        return null;
+      }
+      setHasCurrentMarca(true);
+
+      const empresaIdRaw = current?.empresa?.id ?? current?.empresa_id;
+      const clienteIdRaw = current?.cliente?.id ?? current?.cliente_id;
+      const contratoIdRaw = current?.contrato?.id ?? current?.contrato_id;
+      const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
+      const divisionIdRaw = getComplaintsMarcaDivisionIdFromCurrent(current);
+
+      setMarcaEmpresaId(empresaIdRaw !== undefined && empresaIdRaw !== null ? Number(empresaIdRaw) : null);
+      setMarcaClienteId(clienteIdRaw !== undefined && clienteIdRaw !== null ? Number(clienteIdRaw) : null);
+      setMarcaDivisionId(divisionIdRaw !== undefined && divisionIdRaw !== null ? Number(divisionIdRaw) : null);
+      setMarcaContratoId(contratoIdRaw !== undefined && contratoIdRaw !== null ? Number(contratoIdRaw) : null);
+      setMarcaCorpoId(corpoIdRaw !== undefined && corpoIdRaw !== null ? Number(corpoIdRaw) : null);
+
+      return current;
+    } catch {
+      setHasCurrentMarca(false);
+      setMarcaEmpresaId(null);
+      setMarcaClienteId(null);
+      setMarcaDivisionId(null);
+      setMarcaContratoId(null);
+      setMarcaCorpoId(null);
+      return null;
+    }
+  };
+
+  const fetchMainStructure = useCallback(async (): Promise<ComplaintsStructureTree> => {
+    setIsStructureLoading(true);
+    try {
+      const cacheStr = await AsyncStorage.getItem('main_structure_cache');
+      if (cacheStr) {
+        try {
+          const parsed = JSON.parse(cacheStr);
+          if (Array.isArray(parsed)) {
+            setStructure(parsed);
+            return parsed as ComplaintsStructureTree;
+          }
+          setStructure([]);
+          return [];
+        } catch {
+          setStructure([]);
+          return [];
+        }
+      }
+      setStructure([]);
+      return [];
+    } catch (e) {
+      console.error('Error loading main structure for complaints master:', e);
+      return [];
+    } finally {
+      setIsStructureLoading(false);
+    }
+  }, []);
+
+  const applyHierarchyFiltersFromMarca = useCallback((current: any, tree: ComplaintsStructureTree) => {
+    if (!current) return;
+    const empresaIdRaw = current?.empresa?.id ?? current?.empresa_id;
+    const clienteIdRaw = current?.cliente?.id ?? current?.cliente_id;
+    const contratoIdRaw = current?.contrato?.id ?? current?.contrato_id;
+    const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
+    const divisionIdRaw = getComplaintsMarcaDivisionIdFromCurrent(current);
+
+    const empresaId = empresaIdRaw !== undefined && empresaIdRaw !== null ? Number(empresaIdRaw) : null;
+    const clienteId = clienteIdRaw !== undefined && clienteIdRaw !== null ? Number(clienteIdRaw) : null;
+    const contratoId = contratoIdRaw !== undefined && contratoIdRaw !== null ? Number(contratoIdRaw) : null;
+    const corpoId = corpoIdRaw !== undefined && corpoIdRaw !== null ? Number(corpoIdRaw) : null;
+    const divisionId = resolveComplaintsDivisionInTree(tree, empresaId, clienteId, divisionIdRaw);
+
+    setFilterEmpresaId(empresaId);
+    setFilterClienteId(clienteId);
+    setFilterDivisionId(divisionId);
+    setFilterContratoId(contratoId);
+    setFilterCorpoId(corpoId);
+  }, []);
+
+  const filterEmpresas = useMemo(() => (Array.isArray(structure) ? structure : []), [structure]);
+
+  const filterClientes = useMemo(() => {
+    const empresa = filterEmpresas.find((e: any) => e.id === filterEmpresaId);
+    return empresa?.clientes || [];
+  }, [filterEmpresas, filterEmpresaId]);
+
+  const filterDivisiones = useMemo(() => {
+    const cliente = filterClientes.find((c: any) => c.id === filterClienteId);
+    return cliente?.division || [];
+  }, [filterClientes, filterClienteId]);
+
+  const filterContratos = useMemo(() => {
+    const division = filterDivisiones.find((d: any) => d.id === filterDivisionId);
+    return division?.contratos || [];
+  }, [filterDivisiones, filterDivisionId]);
+
+  const filterSucursales = useMemo(() => {
+    const contrato = filterContratos.find((c: any) => c.id === filterContratoId);
+    return contrato?.sucursales || [];
+  }, [filterContratos, filterContratoId]);
+
+  const formEmpresas = useMemo(() => (Array.isArray(structure) ? structure : []), [structure]);
+
+  const formClientes = useMemo(() => {
+    const empresa = formEmpresas.find((e: any) => e.id === formEmpresaId);
+    return empresa?.clientes || [];
+  }, [formEmpresas, formEmpresaId]);
+
+  const formDivisiones = useMemo(() => {
+    if (!formClienteId) return [];
+    const cliente = formClientes.find((c: any) => c.id === formClienteId);
+    return cliente?.division || [];
+  }, [formClientes, formClienteId]);
+
+  const formContratos = useMemo(() => {
+    if (!formDivisionId) return [];
+    const division = formDivisiones.find((d: any) => d.id === formDivisionId);
+    return division?.contratos || [];
+  }, [formDivisiones, formDivisionId]);
+
+  const formSucursales = useMemo(() => {
+    if (!formContratoId) return [];
+    const division = formDivisiones.find((d: any) => d.id === formDivisionId);
+    if (!division) return [];
+    const contrato = division.contratos?.find((c: any) => c.id === formContratoId);
+    return contrato?.sucursales || [];
+  }, [formDivisiones, formDivisionId, formContratoId]);
+
+  useEffect(() => {
+    if ((!isCreating && !editingRecord) || isOperativo) return;
+    if (formEmpresaId == null) {
+      setSociedad('');
+      return;
+    }
+    const e = structure.find((x: any) => Number(x?.id) === Number(formEmpresaId));
+    const nombre = e?.nombre != null ? String(e.nombre).trim() : '';
+    if (nombre) setSociedad(nombre);
+  }, [isCreating, editingRecord, isOperativo, formEmpresaId, structure]);
+
+  useEffect(() => {
+    if ((!isCreating && !editingRecord) || isOperativo) return;
+    if (formClienteId == null) {
+      setCliente('');
+      return;
+    }
+    const empresaNode = structure.find((x: any) => Number(x?.id) === Number(formEmpresaId));
+    const c = (empresaNode?.clientes || []).find((x: any) => Number(x?.id) === Number(formClienteId));
+    const nombre = c?.nombre != null ? String(c.nombre).trim() : '';
+    if (nombre) setCliente(nombre);
+  }, [isCreating, editingRecord, isOperativo, formClienteId, formEmpresaId, structure]);
+
+  useEffect(() => {
+    if (!filterEmpresaId) {
+      setFilterClienteId(null);
+      setFilterDivisionId(null);
+      setFilterContratoId(null);
+      setFilterCorpoId(null);
+    }
+  }, [filterEmpresaId]);
+
+  useEffect(() => {
+    if (!filterClienteId) {
+      setFilterDivisionId(null);
+      setFilterContratoId(null);
+      setFilterCorpoId(null);
+    }
+  }, [filterClienteId]);
+
+  useEffect(() => {
+    if (!filterDivisionId) {
+      setFilterContratoId(null);
+      setFilterCorpoId(null);
+    }
+  }, [filterDivisionId]);
+
+  useEffect(() => {
+    if (!filterContratoId) {
+      setFilterCorpoId(null);
+    }
+  }, [filterContratoId]);
+
+  const refreshAccessTokenRef = useRef(refreshAccessToken);
+  const logoutRef = useRef(logout);
+  useEffect(() => {
+    refreshAccessTokenRef.current = refreshAccessToken;
+    logoutRef.current = logout;
+  }, [refreshAccessToken, logout]);
+
+  const fetchComplaintsForCorpo = useCallback(async (corpoId: number) => {
+    try {
+      setIsListLoading(true);
+      setError(null);
+
+      const corpoIdStr = String(corpoId);
+
+      const isConnected = await getConnectionStatus();
+
+      if (isConnected) {
+        const result = await listComplaintsMasterByCorpo({
+          corpo_id: corpoIdStr,
+          refreshAccessToken: () => refreshAccessTokenRef.current(),
+          logout: () => logoutRef.current(),
+        });
+
+        if (result.status && result.data) {
+          const serverRecords = (result.data as any[]).map((r) => ({
+            ...r,
+            id_local: r?.id_local || '',
+            synced: true,
+            type: COMPLAINTS_MASTER_CACHE_TYPE,
+            corpo_id: r.corpo_id ?? corpoId,
+            files: Array.isArray(r?.files) ? r.files : [],
+          }));
+
+          setComplaints(serverRecords as any);
+          await mergeComplaintsMasterServerIntoEvaluationsCache(serverRecords, corpoId);
+        } else {
+          setComplaints([]);
+        }
+      } else {
+        const cacheStr = await AsyncStorage.getItem(EVALUATIONS_CACHE_KEY);
+        if (cacheStr) {
+          try {
+            const cache = JSON.parse(cacheStr);
+            const complaintsCache = (Array.isArray(cache) ? cache : []).filter((item: any) => {
+              if (item.type !== COMPLAINTS_MASTER_CACHE_TYPE) return false;
+              const c = complaintCacheCorpoId(item);
+              return c != null && Number(c) === Number(corpoId);
+            });
+            setComplaints(complaintsCache);
+          } catch {
+            setComplaints([]);
+          }
+        } else {
+          setComplaints([]);
+        }
+      }
+    } catch (err) {
+      console.error('Error fetching complaints:', err);
+      setError('Error al cargar las quejas');
+      try {
+        const cacheStr = await AsyncStorage.getItem(EVALUATIONS_CACHE_KEY);
+        if (cacheStr) {
+          const cache = JSON.parse(cacheStr);
+          const complaintsCache = (Array.isArray(cache) ? cache : []).filter((item: any) => {
+            if (item.type !== COMPLAINTS_MASTER_CACHE_TYPE) return false;
+            const c = complaintCacheCorpoId(item);
+            return c != null && Number(c) === Number(corpoId);
+          });
+          setComplaints(complaintsCache);
+        }
+      } catch (cacheErr) {
+        console.error('Error loading from cache:', cacheErr);
+      }
+    } finally {
+      setIsListLoading(false);
+    }
+  }, []);
+
+  const refetchComplaintsList = useCallback(async () => {
+    const current = await loadMarcaContext();
+    if (!current?.id) return;
+    const role = current?.roleDivision?.role?.nombre ?? current?.role_division?.role?.nombre ?? null;
+    if (role === 'OPERATIVO') {
+      const cid = current?.corpo?.id != null ? Number(current.corpo.id) : null;
+      if (cid) await fetchComplaintsForCorpo(cid);
+      return;
+    }
+    if (filterCorpoId) await fetchComplaintsForCorpo(filterCorpoId);
+  }, [filterCorpoId, fetchComplaintsForCorpo]);
+
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      (async () => {
+        const current = await loadMarcaContext();
+        if (cancelled) return;
+        const role = current?.roleDivision?.role?.nombre ?? current?.role_division?.role?.nombre ?? null;
+        setRoleName(typeof role === 'string' ? role : null);
+
+        const tree = await fetchMainStructure();
+        if (cancelled || !current?.id) return;
+
+        if (role !== 'OPERATIVO') {
+          applyHierarchyFiltersFromMarca(current, tree);
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }, [applyHierarchyFiltersFromMarca, fetchMainStructure])
+  );
+
+  useEffect(() => {
+    if (!hasCurrentMarca) return;
+    if (roleName === 'OPERATIVO') return;
+    if (!filterCorpoId) {
+      setComplaints([]);
+      setIsListLoading(false);
+      return;
+    }
+    void fetchComplaintsForCorpo(filterCorpoId);
+  }, [hasCurrentMarca, roleName, filterCorpoId, fetchComplaintsForCorpo]);
+
+  useEffect(() => {
+    if (!hasCurrentMarca) return;
+    if (roleName !== 'OPERATIVO') return;
+    (async () => {
+      const str = await AsyncStorage.getItem('current_marca');
+      if (!str) return;
+      const c = JSON.parse(str);
+      const cid = c?.corpo?.id != null ? Number(c.corpo.id) : null;
+      if (cid) await fetchComplaintsForCorpo(cid);
+      else {
+        setComplaints([]);
+        setIsListLoading(false);
+      }
+    })();
+  }, [hasCurrentMarca, roleName, fetchComplaintsForCorpo]);
+
+  useEffect(() => {
+    const handler = () => {
+      void refetchComplaintsList();
+    };
+    eventBus.on('connectionRestored', handler);
+    return () => {
+      eventBus.off('connectionRestored', handler);
+    };
+  }, [refetchComplaintsList]);
 
   const fetchCambios = useCallback(async (tabla: string, registroId: number) => {
     const isConnected = await getConnectionStatus();
@@ -703,118 +1202,31 @@ export default function ComplaintsMasterScreen() {
     );
   };
 
-  useFocusEffect(
-    useCallback(() => {
-      fetchComplaints();
-    }, [])
-  );
-
-  useEffect(() => {
-    const handler = () => {
-      fetchComplaints();
-    };
-
-    eventBus.on('connectionRestored', handler);
-    return () => {
-      eventBus.off('connectionRestored', handler);
-    };
-  }, []);
-
-  const fetchComplaints = async () => {
-    try {
-      setIsLoading(true);
-      setError(null);
-
-      const currentMarca = await AsyncStorage.getItem('current_marca');
-      if (!currentMarca) {
-        setHasCurrentMarca(false);
-        setIsLoading(false);
-        return;
-      }
-
-      setHasCurrentMarca(true);
-      const currentMarcaData = JSON.parse(currentMarca);
-      const corpoId = currentMarcaData.corpo?.id?.toString();
-
-      if (!corpoId) {
-        setError('No se encontró el ID del corpo');
-        setIsLoading(false);
-        return;
-      }
-
-      const isConnected = await getConnectionStatus();
-
-      if (isConnected) {
-        const result = await listComplaintsMasterByCorpo({
-          corpo_id: corpoId,
-          refreshAccessToken,
-          logout,
-        });
-
-        if (result.status && result.data) {
-          const serverRecords = (result.data as any[]).map((r) => ({
-            ...r,
-            id_local: r?.id_local || '',
-            synced: true,
-            type: 'complaints_master',
-            files: Array.isArray(r?.files) ? r.files : [],
-          }));
-
-          setComplaints(serverRecords as any);
-
-          // Overwrite cache "complaints_master" synced items, keep offline pending items
-          const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-          const cache = cacheStr ? JSON.parse(cacheStr) : [];
-          const nonComplaints = cache.filter((item: any) => item.type !== 'complaints_master');
-          const pendingComplaints = cache.filter((item: any) => item.type === 'complaints_master' && (item.synced === false || (item.id_local && String(item.id_local).startsWith('local-'))));
-          await AsyncStorage.setItem('evaluations_cache', JSON.stringify([...nonComplaints, ...pendingComplaints, ...serverRecords]));
-        } else {
-          setComplaints([]);
-        }
-      } else {
-        const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-        if (cacheStr) {
-          const cache = JSON.parse(cacheStr);
-          const complaintsCache = cache.filter((item: any) => item.type === 'complaints_master');
-          setComplaints(complaintsCache);
-        } else {
-          setComplaints([]);
-        }
-      }
-    } catch (err) {
-      console.error('Error fetching complaints:', err);
-      setError('Error al cargar las quejas');
-      try {
-        const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-        if (cacheStr) {
-          const cache = JSON.parse(cacheStr);
-          const complaintsCache = cache.filter((item: any) => item.type === 'complaints_master');
-          setComplaints(complaintsCache);
-        }
-      } catch (cacheErr) {
-        console.error('Error loading from cache:', cacheErr);
-      }
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const startCreating = () => {
+  const startCreating = async () => {
     setIsCreating(true);
+
+    let fechaHoy = formatDate(new Date());
+    try {
+      const ha = await getHoraAccion();
+      if (ha != null) fechaHoy = formatDate(new Date(ha));
+    } catch {
+      // Sin server_time se deja la fecha local
+    }
+
     setSociedad('');
     setNombreRealizaQueja('');
     setCliente('');
     setEmpresaPresentaQueja('');
     setPersonaPresentaQueja('');
-    setMedioRecepcionQueja('');
-    setTipoQueja('');
+    setMedioRecepcionQueja('Correo');
+    setTipoQueja('Publico');
     setUbicacion('');
-    setNivelQueja('');
-    setFechaQueja('');
+    setNivelQueja('Leve');
+    setFechaQueja(fechaHoy);
     setMotivoQueja('');
     setDescripcionQueja('');
-    setFechaInicio('');
-    setFechaRevision('');
+    setFechaInicio(fechaHoy);
+    setFechaRevision(fechaHoy);
     setResolucionQueja('');
     setEstado('');
     setAccionCorrectivaPreventiva('');
@@ -823,13 +1235,52 @@ export default function ComplaintsMasterScreen() {
     setVideoFiles([]);
     setDocumentFiles([]);
     setFirmaResponsable(null);
+
+    const current = await loadMarcaContext();
+    const tree = structure.length ? structure : await fetchMainStructure();
+    const role = current?.roleDivision?.role?.nombre ?? current?.role_division?.role?.nombre ?? null;
+    if (role !== 'OPERATIVO' && current) {
+      const empresaIdRaw = current?.empresa?.id ?? current?.empresa_id;
+      const clienteIdRaw = current?.cliente?.id ?? current?.cliente_id;
+      const contratoIdRaw = current?.contrato?.id ?? current?.contrato_id;
+      const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
+      const divisionIdRaw = getComplaintsMarcaDivisionIdFromCurrent(current);
+
+      const empresaId = empresaIdRaw !== undefined && empresaIdRaw !== null ? Number(empresaIdRaw) : null;
+      const clienteId = clienteIdRaw !== undefined && clienteIdRaw !== null ? Number(clienteIdRaw) : null;
+      const contratoId = contratoIdRaw !== undefined && contratoIdRaw !== null ? Number(contratoIdRaw) : null;
+      const corpoId = corpoIdRaw !== undefined && corpoIdRaw !== null ? Number(corpoIdRaw) : null;
+      const divisionId = resolveComplaintsDivisionInTree(tree, empresaId, clienteId, divisionIdRaw);
+
+      setFormEmpresaId(empresaId);
+      setFormClienteId(clienteId);
+      setFormDivisionId(divisionId);
+      setFormContratoId(contratoId);
+      setFormCorpoId(corpoId);
+    } else {
+      setFormEmpresaId(null);
+      setFormClienteId(null);
+      setFormDivisionId(null);
+      setFormContratoId(null);
+      setFormCorpoId(null);
+      const en = current?.empresa?.nombre;
+      if (en != null && String(en).trim()) setSociedad(String(en).trim());
+      const cn = current?.cliente?.nombre;
+      if (cn != null && String(cn).trim()) setCliente(String(cn).trim());
+    }
   };
 
   const cancelCreating = () => {
+    setFormEmpresaId(null);
+    setFormClienteId(null);
+    setFormDivisionId(null);
+    setFormContratoId(null);
+    setFormCorpoId(null);
     setIsCreating(false);
   };
 
-  const startEditing = (record: Complaint) => {
+  const startEditing = async (record: Complaint) => {
+    setIsCreating(false);
     // Reset first (avoid leaking previous form state between records)
     setImageFiles([]);
     setAudioFiles([]);
@@ -878,6 +1329,30 @@ export default function ComplaintsMasterScreen() {
     setEstado(record.estado || '');
     setAccionCorrectivaPreventiva(record.accion_correctiva_preventiva || '');
 
+    if (!isOperativo) {
+      const tree = structure.length ? structure : await fetchMainStructure();
+      const eid =
+        record.empresa_id != null && Number.isFinite(Number(record.empresa_id)) ? Number(record.empresa_id) : null;
+      const cid =
+        record.cliente_id != null && Number.isFinite(Number(record.cliente_id)) ? Number(record.cliente_id) : null;
+      const ctid =
+        record.contrato_id != null && Number.isFinite(Number(record.contrato_id)) ? Number(record.contrato_id) : null;
+      const coidRaw = record.corpo_id ?? complaintCacheCorpoId(record);
+      const coid = coidRaw != null && Number.isFinite(Number(coidRaw)) ? Number(coidRaw) : null;
+      const did = resolveDivisionIdForComplaintPath(tree, eid, cid, ctid, coid);
+      setFormEmpresaId(eid);
+      setFormClienteId(cid);
+      setFormDivisionId(did);
+      setFormContratoId(ctid);
+      setFormCorpoId(coid);
+    } else {
+      setFormEmpresaId(null);
+      setFormClienteId(null);
+      setFormDivisionId(null);
+      setFormContratoId(null);
+      setFormCorpoId(null);
+    }
+
     // Si ya existe firma guardada, mostrarla en el UI
     setFirmaFromHashIfPossible(record.firma_responsable || null);
 
@@ -890,6 +1365,11 @@ export default function ComplaintsMasterScreen() {
 
   const cancelEditing = () => {
     setEditingRecord(null);
+    setFormEmpresaId(null);
+    setFormClienteId(null);
+    setFormDivisionId(null);
+    setFormContratoId(null);
+    setFormCorpoId(null);
   };
 
   const handleDateChangeQueja = (event: any, selectedDate?: Date) => {
@@ -919,7 +1399,65 @@ export default function ComplaintsMasterScreen() {
     }
   };
 
-  const saveComplaint = async () => {
+  const buildCreateFkIds = (
+    currentMarcaData: any,
+    tree: ComplaintsStructureTree
+  ): {
+    empresa_id: number;
+    cliente_id: number;
+    contrato_id: number;
+    corpo_id: number;
+    puesto_id: number;
+    plaza_id: number;
+  } | null => {
+    const puestoRaw = currentMarcaData?.puesto?.id ?? currentMarcaData?.puesto_id;
+    const plazaRaw = currentMarcaData?.plaza?.id ?? currentMarcaData?.plaza_id;
+    const puesto_id = puestoRaw != null ? Number(puestoRaw) : NaN;
+    const plaza_id = plazaRaw != null ? Number(plazaRaw) : NaN;
+    if (!Number.isFinite(puesto_id) || puesto_id <= 0 || !Number.isFinite(plaza_id) || plaza_id <= 0) {
+      return null;
+    }
+
+    if (isOperativo) {
+      const empresa_id = Number(currentMarcaData?.empresa?.id ?? currentMarcaData?.empresa_id);
+      const cliente_id = Number(currentMarcaData?.cliente?.id ?? currentMarcaData?.cliente_id);
+      let contrato_id = Number(currentMarcaData?.contrato?.id ?? currentMarcaData?.contrato_id);
+      const corpo_id = Number(currentMarcaData?.corpo?.id ?? currentMarcaData?.corpo_id);
+      if (![empresa_id, cliente_id, corpo_id].every((n) => Number.isFinite(n) && n > 0)) return null;
+      if (!Number.isFinite(contrato_id) || contrato_id <= 0) {
+        const resolved = findContratoIdForSucursalInTree(tree, corpo_id);
+        if (resolved == null) return null;
+        contrato_id = resolved;
+      }
+      return { empresa_id, cliente_id, contrato_id, corpo_id, puesto_id, plaza_id };
+    }
+
+    if (
+      formEmpresaId == null ||
+      formClienteId == null ||
+      formDivisionId == null ||
+      formContratoId == null ||
+      formCorpoId == null
+    ) {
+      return null;
+    }
+    const empresa_id = Number(formEmpresaId);
+    const cliente_id = Number(formClienteId);
+    const contrato_id = Number(formContratoId);
+    const corpo_id = Number(formCorpoId);
+    if (![empresa_id, cliente_id, contrato_id, corpo_id].every((n) => Number.isFinite(n) && n > 0)) return null;
+
+    return { empresa_id, cliente_id, contrato_id, corpo_id, puesto_id, plaza_id };
+  };
+
+  const saveComplaint = () => {
+    Alert.alert('Confirmar', '¿Desea registrar esta queja?', [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Aceptar', onPress: () => void saveComplaintConfirmed() },
+    ]);
+  };
+
+  const saveComplaintConfirmed = async () => {
     const currentMarca = await AsyncStorage.getItem('current_marca');
     if (!currentMarca) {
       Alert.alert('Error', 'No se encontró la marca actual');
@@ -934,6 +1472,19 @@ export default function ComplaintsMasterScreen() {
 
       if (!firmaResponsable) {
         Alert.alert('Error', 'La firma del responsable es requerida');
+        setIsSubmitting(false);
+        return;
+      }
+
+      const treeForFk = structure.length ? structure : (await fetchMainStructure());
+      const fk = buildCreateFkIds(currentMarcaData, treeForFk);
+      if (!fk) {
+        Alert.alert(
+          'Error',
+          isOperativo
+            ? 'No se pudieron obtener empresa, cliente, contrato, corpo, puesto o plaza desde la marca actual.'
+            : 'Seleccione la jerarquía completa hasta Sucursal y verifique puesto y plaza en la marca actual.'
+        );
         setIsSubmitting(false);
         return;
       }
@@ -966,6 +1517,12 @@ export default function ComplaintsMasterScreen() {
           ...videoFiles.map(f => ({ type: 'video', extension: f.extension, original_name: f.name, file_base64: f.base64 })),
           ...documentFiles.map(f => ({ type: 'document', extension: f.extension, original_name: f.name, file_base64: f.base64 })),
         ],
+        empresa_id: fk.empresa_id,
+        cliente_id: fk.cliente_id,
+        contrato_id: fk.contrato_id,
+        corpo_id: fk.corpo_id,
+        puesto_id: fk.puesto_id,
+        plaza_id: fk.plaza_id,
       };
 
       const isConnected = await getConnectionStatus();
@@ -981,7 +1538,7 @@ export default function ComplaintsMasterScreen() {
           Alert.alert('Éxito', result.message || 'Queja guardada correctamente');
           setTimeout(() => {
             cancelCreating();
-            fetchComplaints();
+            void refetchComplaintsList();
           }, 2000);
         } else {
           Alert.alert('Error', result.message || 'Error al guardar la queja');
@@ -1006,6 +1563,7 @@ export default function ComplaintsMasterScreen() {
         const horaAccion = await getHoraAccion();
         if (!horaAccion) {
           Alert.alert('Error', 'No se pudo obtener la hora');
+          setIsSubmitting(false);
           return;
         }
 
@@ -1033,6 +1591,10 @@ export default function ComplaintsMasterScreen() {
           firma_responsable: requestData.firma_responsable || null,
           created_at: new Date(horaAccion).toISOString(),
           synced: false,
+          corpo_id: fk.corpo_id,
+          empresa_id: fk.empresa_id,
+          cliente_id: fk.cliente_id,
+          contrato_id: fk.contrato_id,
         };
 
         cache.push({ ...newRecordCache, type: 'complaints_master' });
@@ -1041,7 +1603,7 @@ export default function ComplaintsMasterScreen() {
         Alert.alert('Éxito', 'Queja registrada localmente. Se sincronizará cuando haya conexión.');
         setTimeout(() => {
           cancelCreating();
-          fetchComplaints();
+          void refetchComplaintsList();
         }, 2000);
       }
     } catch (err) {
@@ -1052,7 +1614,15 @@ export default function ComplaintsMasterScreen() {
     }
   };
 
-  const updateComplaintHandler = async () => {
+  const updateComplaintHandler = () => {
+    if (!editingRecord) return;
+    Alert.alert('Confirmar', '¿Desea guardar los cambios de esta queja?', [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Aceptar', onPress: () => void updateComplaintConfirmed() },
+    ]);
+  };
+
+  const updateComplaintConfirmed = async () => {
     if (!editingRecord) return;
 
     setIsSubmitting(true);
@@ -1061,6 +1631,26 @@ export default function ComplaintsMasterScreen() {
     try {
       if (!firmaResponsable && (!editingRecord.firma_responsable || editingRecord.firma_responsable.trim().length === 0)) {
         Alert.alert('Error', 'La firma del responsable es requerida');
+        setIsSubmitting(false);
+        return;
+      }
+
+      const currentMarca = await AsyncStorage.getItem('current_marca');
+      if (!currentMarca) {
+        Alert.alert('Error', 'No se encontró la marca actual');
+        setIsSubmitting(false);
+        return;
+      }
+      const currentMarcaData = JSON.parse(currentMarca);
+      const treeForFk = structure.length ? structure : (await fetchMainStructure());
+      const fk = buildCreateFkIds(currentMarcaData, treeForFk);
+      if (!fk) {
+        Alert.alert(
+          'Error',
+          isOperativo
+            ? 'No se pudieron obtener empresa, cliente, contrato, corpo, puesto o plaza desde la marca actual.'
+            : 'Seleccione empresa, cliente, división, contrato y sucursal, y verifique puesto/plaza en la marca actual.'
+        );
         setIsSubmitting(false);
         return;
       }
@@ -1092,6 +1682,12 @@ export default function ComplaintsMasterScreen() {
           ...videoFiles.map(f => ({ type: 'video', extension: f.extension, original_name: f.name, file_base64: f.base64 })),
           ...documentFiles.map(f => ({ type: 'document', extension: f.extension, original_name: f.name, file_base64: f.base64 })),
         ],
+        empresa_id: fk.empresa_id,
+        cliente_id: fk.cliente_id,
+        contrato_id: fk.contrato_id,
+        corpo_id: fk.corpo_id,
+        puesto_id: fk.puesto_id,
+        plaza_id: fk.plaza_id,
       };
 
       const isConnected = await getConnectionStatus();
@@ -1109,21 +1705,61 @@ export default function ComplaintsMasterScreen() {
           Alert.alert('Éxito', result.message || 'Queja actualizada correctamente');
           setTimeout(() => {
             cancelEditing();
-            fetchComplaints();
+            void refetchComplaintsList();
           }, 2000);
         } else {
           Alert.alert('Error', result.message || 'Error al actualizar la queja');
         }
       } else {
         const actionsStr = await AsyncStorage.getItem('evaluations_actions');
-        const actions = actionsStr ? JSON.parse(actionsStr) : [];
-        actions.push({
-          id: recordId,
-          action: 'update',
-          type: 'complaints_master',
-          payload: requestData,
-          synced: false,
-        });
+        let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+        const eid = editingRecord.id;
+        const isLocalOnly =
+          eid == null ||
+          (typeof eid === 'string' && eid.trim() === '') ||
+          String(eid).startsWith('local-');
+
+        if (isLocalOnly && editingRecord.id_local) {
+          const lid = String(editingRecord.id_local);
+          actions = actions.filter(
+            (a: any) =>
+              !(
+                a.type === 'complaints_master' &&
+                a.action === 'update' &&
+                String(a.id) === lid
+              )
+          );
+          const createIdx = actions.findIndex(
+            (a: any) =>
+              a.type === 'complaints_master' && a.action === 'create' && String(a.id) === lid
+          );
+          if (createIdx !== -1) {
+            actions[createIdx] = {
+              ...actions[createIdx],
+              payload: {
+                ...actions[createIdx].payload,
+                ...requestData,
+                marca_id: currentMarcaData.id,
+              },
+            };
+          } else {
+            actions.push({
+              id: editingRecord.id_local,
+              action: 'create',
+              type: 'complaints_master',
+              payload: { marca_id: currentMarcaData.id, ...requestData },
+              synced: false,
+            });
+          }
+        } else {
+          actions.push({
+            id: recordId,
+            action: 'update',
+            type: 'complaints_master',
+            payload: requestData,
+            synced: false,
+          });
+        }
         await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
 
         const cacheStr = await AsyncStorage.getItem('evaluations_cache');
@@ -1151,6 +1787,10 @@ export default function ComplaintsMasterScreen() {
                 estado: estado.trim() || null,
                 accion_correctiva_preventiva: accionCorrectivaPreventiva.trim() || null,
                 firma_responsable: requestData.firma_responsable || item.firma_responsable,
+                empresa_id: fk.empresa_id,
+                cliente_id: fk.cliente_id,
+                contrato_id: fk.contrato_id,
+                corpo_id: fk.corpo_id,
               };
             }
             return item;
@@ -1161,7 +1801,7 @@ export default function ComplaintsMasterScreen() {
         Alert.alert('Éxito', 'Queja actualizada localmente. Se sincronizará cuando haya conexión.');
         setTimeout(() => {
           cancelEditing();
-          fetchComplaints();
+          void refetchComplaintsList();
         }, 2000);
       }
     } catch (err) {
@@ -1173,6 +1813,7 @@ export default function ComplaintsMasterScreen() {
   };
 
   const deleteComplaintHandler = async (record: Complaint) => {
+    const recordKey = String(record.id || record.id_local || '');
     Alert.alert(
       'Confirmar',
       '¿Estás seguro de que deseas eliminar esta queja?',
@@ -1183,10 +1824,16 @@ export default function ComplaintsMasterScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
+              setDeletingRecordKey(recordKey);
               const isConnected = await getConnectionStatus();
               const recordId = record.id || record.id_local;
+              const hasServerId =
+                record.id != null &&
+                record.id !== '' &&
+                String(record.id).trim() !== '' &&
+                !String(record.id).startsWith('local-');
 
-              if (isConnected && record.id && !String(record.id).startsWith('local-')) {
+              if (isConnected && hasServerId) {
                 const result = await deleteComplaintsMaster({
                   id: String(record.id),
                   refreshAccessToken,
@@ -1195,11 +1842,11 @@ export default function ComplaintsMasterScreen() {
 
                 if (result.status) {
                   Alert.alert('Éxito', result.message || 'Queja eliminada correctamente');
-                  fetchComplaints();
+                  void refetchComplaintsList();
                 } else {
                   Alert.alert('Error', result.message || 'Error al eliminar la queja');
                 }
-              } else {
+              } else if (!isConnected && hasServerId) {
                 const actionsStr = await AsyncStorage.getItem('evaluations_actions');
                 const actions = actionsStr ? JSON.parse(actionsStr) : [];
                 actions.push({
@@ -1219,11 +1866,34 @@ export default function ComplaintsMasterScreen() {
                 }
 
                 Alert.alert('Modo Offline', 'Queja eliminada localmente. Se sincronizará cuando haya conexión.');
-                fetchComplaints();
+                void refetchComplaintsList();
+              } else if (record.id_local) {
+                const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+                const actions = actionsStr ? JSON.parse(actionsStr) : [];
+                const lid = String(record.id_local);
+                const filtered = actions.filter(
+                  (a: any) => !(a.type === 'complaints_master' && String(a.id) === lid)
+                );
+                await AsyncStorage.setItem('evaluations_actions', JSON.stringify(filtered));
+
+                const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                if (cacheStr) {
+                  const cache = JSON.parse(cacheStr);
+                  const updatedCache = cache.filter(
+                    (item: any) =>
+                      !(item.type === 'complaints_master' && String(item.id_local) === lid)
+                  );
+                  await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                }
+
+                Alert.alert('Éxito', 'Queja pendiente eliminada (no requiere borrado en servidor).');
+                void refetchComplaintsList();
               }
             } catch (err) {
               console.error('Error deleting complaint:', err);
               Alert.alert('Error', 'No se pudo eliminar la queja');
+            } finally {
+              setDeletingRecordKey(null);
             }
           },
         },
@@ -1245,6 +1915,129 @@ export default function ComplaintsMasterScreen() {
         <ThemedText style={styles.formTitle}>
           {isEditing ? 'Editar Queja' : 'Nueva Queja'}
         </ThemedText>
+
+        {!isOperativo && (isCreating || isEditing) && (
+          <ThemedView>
+            <ThemedText style={styles.sectionTitle}>Jerarquía</ThemedText>
+            {isStructureLoading ? (
+              <ThemedText style={styles.formHintText}>Cargando estructura…</ThemedText>
+            ) : (
+              <>
+                <ThemedView style={styles.formGroup}>
+                  <ThemedText style={styles.formLabel}>Empresa *</ThemedText>
+                  <View style={styles.pickerWrapper}>
+                    <Picker
+                      selectedValue={formEmpresaId || ''}
+                      onValueChange={(value) => {
+                        setFormEmpresaId(value && value !== '' ? Number(value) : null);
+                        setFormClienteId(null);
+                        setFormDivisionId(null);
+                        setFormContratoId(null);
+                        setFormCorpoId(null);
+                      }}
+                      style={styles.picker}
+                    >
+                      <Picker.Item label="Seleccionar..." value="" color="#000000" />
+                      {formEmpresas.map((e: any) => (
+                        <Picker.Item
+                          key={e.id}
+                          label={`${e.codigo ? `${e.codigo} - ` : ''}${e.nombre}`}
+                          value={e.id}
+                          color="#000000"
+                        />
+                      ))}
+                    </Picker>
+                  </View>
+                </ThemedView>
+                {!!formEmpresaId && (
+                  <ThemedView style={styles.formGroup}>
+                    <ThemedText style={styles.formLabel}>Cliente *</ThemedText>
+                    <View style={styles.pickerWrapper}>
+                      <Picker
+                        selectedValue={formClienteId || ''}
+                        onValueChange={(value) => {
+                          setFormClienteId(value && value !== '' ? Number(value) : null);
+                          setFormDivisionId(null);
+                          setFormContratoId(null);
+                          setFormCorpoId(null);
+                        }}
+                        style={styles.picker}
+                      >
+                        <Picker.Item label="Seleccionar..." value="" color="#000000" />
+                        {formClientes.map((c: any) => (
+                          <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                        ))}
+                      </Picker>
+                    </View>
+                  </ThemedView>
+                )}
+                {!!formClienteId && (
+                  <ThemedView style={styles.formGroup}>
+                    <ThemedText style={styles.formLabel}>División *</ThemedText>
+                    <View style={styles.pickerWrapper}>
+                      <Picker
+                        selectedValue={formDivisionId || ''}
+                        onValueChange={(value) => {
+                          setFormDivisionId(value && value !== '' ? Number(value) : null);
+                          setFormContratoId(null);
+                          setFormCorpoId(null);
+                        }}
+                        style={styles.picker}
+                      >
+                        <Picker.Item label="Seleccionar..." value="" color="#000000" />
+                        {formDivisiones.map((d: any) => (
+                          <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
+                        ))}
+                      </Picker>
+                    </View>
+                  </ThemedView>
+                )}
+                {!!formDivisionId && (
+                  <ThemedView style={styles.formGroup}>
+                    <ThemedText style={styles.formLabel}>Contrato *</ThemedText>
+                    <View style={styles.pickerWrapper}>
+                      <Picker
+                        selectedValue={formContratoId || ''}
+                        onValueChange={(value) => {
+                          setFormContratoId(value && value !== '' ? Number(value) : null);
+                          setFormCorpoId(null);
+                        }}
+                        style={styles.picker}
+                      >
+                        <Picker.Item label="Seleccionar..." value="" color="#000000" />
+                        {formContratos.map((c: any) => (
+                          <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                        ))}
+                      </Picker>
+                    </View>
+                  </ThemedView>
+                )}
+                {!!formContratoId && (
+                  <ThemedView style={styles.formGroup}>
+                    <ThemedText style={styles.formLabel}>Sucursal *</ThemedText>
+                    <View style={styles.pickerWrapper}>
+                      <Picker
+                        selectedValue={formCorpoId || ''}
+                        onValueChange={(value) => setFormCorpoId(value && value !== '' ? Number(value) : null)}
+                        style={styles.picker}
+                      >
+                        <Picker.Item label="Seleccionar..." value="" color="#000000" />
+                        {formSucursales.map((s: any) => (
+                          <Picker.Item
+                            key={s.id}
+                            label={`${s.nro_sucursal ? `${s.nro_sucursal} - ` : ''}${s.nombre}`}
+                            value={s.id}
+                            color="#000000"
+                          />
+                        ))}
+                      </Picker>
+                    </View>
+                  </ThemedView>
+                )}
+              </>
+            )}
+          </ThemedView>
+        )}
 
         {/* Sociedad */}
         <ThemedView style={styles.formGroup}>
@@ -1311,11 +2104,11 @@ export default function ComplaintsMasterScreen() {
           <ThemedText style={styles.formLabel}>Medio Recepcion Queja</ThemedText>
           <ThemedView style={styles.pickerContainer}>
             <Picker
-              selectedValue={medioRecepcionQueja}
+              selectedValue={isEditing ? medioRecepcionQueja : (medioRecepcionQueja || 'Correo')}
               onValueChange={setMedioRecepcionQueja}
               style={styles.picker}
             >
-              <Picker.Item label="Seleccionar" value="" color="#000000" />
+              {isEditing ? <Picker.Item label="Seleccionar" value="" color="#000000" /> : null}
               <Picker.Item label="Correo" value="Correo" color="#000000" />
               <Picker.Item label="Teléfono" value="Telefono" color="#000000" />
               <Picker.Item label="Presencial" value="Presencial" color="#000000" />
@@ -1329,11 +2122,11 @@ export default function ComplaintsMasterScreen() {
           <ThemedText style={styles.formLabel}>Tipo de queja</ThemedText>
           <ThemedView style={styles.pickerContainer}>
             <Picker
-              selectedValue={tipoQueja}
+              selectedValue={isEditing ? tipoQueja : (tipoQueja || 'Publico')}
               onValueChange={setTipoQueja}
               style={styles.picker}
             >
-              <Picker.Item label="Seleccionar" value="" color="#000000" />
+              {isEditing ? <Picker.Item label="Seleccionar" value="" color="#000000" /> : null}
               <Picker.Item label="Público" value="Publico" color="#000000" />
               <Picker.Item label="Privado" value="Privado" color="#000000" />
               <Picker.Item label="Interno" value="Interno" color="#000000" />
@@ -1358,11 +2151,11 @@ export default function ComplaintsMasterScreen() {
           <ThemedText style={styles.formLabel}>Nivel Queja</ThemedText>
           <ThemedView style={styles.pickerContainer}>
             <Picker
-              selectedValue={nivelQueja}
+              selectedValue={isEditing ? nivelQueja : (nivelQueja || 'Leve')}
               onValueChange={setNivelQueja}
               style={styles.picker}
             >
-              <Picker.Item label="Seleccionar" value="" color="#000000" />
+              {isEditing ? <Picker.Item label="Seleccionar" value="" color="#000000" /> : null}
               <Picker.Item label="Leve" value="Leve" color="#000000" />
               <Picker.Item label="Moderada" value="Moderada" color="#000000" />
               <Picker.Item label="Grave" value="Grave" color="#000000" />
@@ -1671,7 +2464,7 @@ export default function ComplaintsMasterScreen() {
   };
 
   const renderList = () => {
-    if (isLoading) {
+    if (isListLoading) {
       return (
         <ThemedView style={styles.centerContainer}>
           <ActivityIndicator size="large" color="#007AFF" />
@@ -1689,9 +2482,15 @@ export default function ComplaintsMasterScreen() {
     }
 
     if (complaints.length === 0) {
+      const needSucursal =
+        hasCurrentMarca && !isOperativo && filterCorpoId == null;
       return (
         <ThemedView style={styles.centerContainer}>
-          <ThemedText style={styles.emptyText}>No hay quejas registradas</ThemedText>
+          <ThemedText style={styles.emptyText}>
+            {needSucursal
+              ? 'Seleccione sucursal (corpo) en los filtros o use la marca actual con sucursal para ver quejas.'
+              : 'No hay quejas registradas para esta sucursal'}
+          </ThemedText>
         </ThemedView>
       );
     }
@@ -1700,6 +2499,7 @@ export default function ComplaintsMasterScreen() {
       <ThemedView style={styles.listContainer}>
         {complaints.map((record, index) => {
           const recordId = String(record.id || record.id_local || index);
+          const isDeletingThis = deletingRecordKey === recordId;
           const isExpanded = expandedRecordIds.includes(recordId);
           const isOffline = !record.synced || record.id_local;
 
@@ -1826,7 +2626,7 @@ export default function ComplaintsMasterScreen() {
               <ThemedView style={styles.listItemButtons}>
                 <TouchableOpacity
                   style={[styles.listItemButton, styles.editButton]}
-                  onPress={() => startEditing(record)}
+                  onPress={() => void startEditing(record)}
                 >
                   <Ionicons name="pencil" size={20} color="#FFFFFF" />
                   <ThemedText style={styles.listItemButtonText}>Editar</ThemedText>
@@ -1844,11 +2644,18 @@ export default function ComplaintsMasterScreen() {
                   </TouchableOpacity>
                 )}
                 <TouchableOpacity
-                  style={[styles.listItemButton, styles.deleteButton]}
+                  style={[styles.listItemButton, styles.deleteButton, isDeletingThis && styles.buttonDisabled]}
                   onPress={() => deleteComplaintHandler(record)}
+                  disabled={isDeletingThis}
                 >
-                  <Ionicons name="trash" size={20} color="#FFFFFF" />
-                  <ThemedText style={styles.listItemButtonText}>Eliminar</ThemedText>
+                  {isDeletingThis ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <>
+                      <Ionicons name="trash" size={20} color="#FFFFFF" />
+                      <ThemedText style={styles.listItemButtonText}>Eliminar</ThemedText>
+                    </>
+                  )}
                 </TouchableOpacity>
               </ThemedView>
             </ThemedView>
@@ -1900,8 +2707,150 @@ export default function ComplaintsMasterScreen() {
 
           {hasCurrentMarca && (
             <>
-              {!isCreating && !editingRecord && !isLoading && (
-                <TouchableOpacity style={styles.createButton} onPress={startCreating}>
+              {!isCreating && !editingRecord && !isOperativo && (
+                <ThemedView style={styles.filtersMain}>
+                  <ThemedView style={styles.filterHeader}>
+                    <TouchableOpacity
+                      style={styles.filterToggleButton}
+                      onPress={() => setIsFiltersExpanded(!isFiltersExpanded)}
+                    >
+                      <ThemedText style={styles.filterToggleText}>Filtros</ThemedText>
+                      <Ionicons
+                        name={isFiltersExpanded ? 'chevron-up' : 'chevron-down'}
+                        size={20}
+                        color="#007AFF"
+                      />
+                    </TouchableOpacity>
+                    {isFiltersExpanded && (
+                      <TouchableOpacity
+                        style={styles.resetFiltersButton}
+                        onPress={() => {
+                          setFilterEmpresaId(marcaEmpresaId);
+                          setFilterClienteId(marcaClienteId);
+                          setFilterDivisionId(marcaDivisionId);
+                          setFilterContratoId(marcaContratoId);
+                          setFilterCorpoId(marcaCorpoId);
+                        }}
+                      >
+                        <Ionicons name="refresh" size={16} color="#FF3B30" />
+                        <ThemedText style={styles.resetFiltersText}>Reiniciar</ThemedText>
+                      </TouchableOpacity>
+                    )}
+                  </ThemedView>
+                  {isFiltersExpanded && (
+                    <ThemedView style={styles.filterContent}>
+                      <ThemedView style={styles.filterGroup}>
+                        <ThemedText style={styles.filterLabel}>Empresa</ThemedText>
+                        <View style={styles.pickerWrapper}>
+                          <Picker
+                            selectedValue={filterEmpresaId || ''}
+                            onValueChange={(value) => {
+                              setFilterEmpresaId(value && value !== '' ? Number(value) : null);
+                            }}
+                            style={styles.picker}
+                          >
+                            <Picker.Item label="Seleccionar…" value="" color="#000000" />
+                            {filterEmpresas.map((e: any) => (
+                              <Picker.Item
+                                key={e.id}
+                                label={`${e.codigo ? `${e.codigo} - ` : ''}${e.nombre}`}
+                                value={e.id}
+                                color="#000000"
+                              />
+                            ))}
+                          </Picker>
+                        </View>
+                      </ThemedView>
+                      {filterEmpresaId != null && (
+                        <ThemedView style={styles.filterGroup}>
+                          <ThemedText style={styles.filterLabel}>Cliente</ThemedText>
+                          <View style={styles.pickerWrapper}>
+                            <Picker
+                              selectedValue={filterClienteId || ''}
+                              onValueChange={(value) => {
+                                setFilterClienteId(value && value !== '' ? Number(value) : null);
+                              }}
+                              style={styles.picker}
+                            >
+                              <Picker.Item label="Seleccionar…" value="" color="#000000" />
+                              {filterClientes.map((c: any) => (
+                                <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                              ))}
+                            </Picker>
+                          </View>
+                        </ThemedView>
+                      )}
+                      {filterClienteId != null && (
+                        <ThemedView style={styles.filterGroup}>
+                          <ThemedText style={styles.filterLabel}>División</ThemedText>
+                          <View style={styles.pickerWrapper}>
+                            <Picker
+                              selectedValue={filterDivisionId || ''}
+                              onValueChange={(value) => {
+                                setFilterDivisionId(value && value !== '' ? Number(value) : null);
+                              }}
+                              style={styles.picker}
+                            >
+                              <Picker.Item label="Seleccionar…" value="" color="#000000" />
+                              {filterDivisiones.map((d: any) => (
+                                <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
+                              ))}
+                            </Picker>
+                          </View>
+                        </ThemedView>
+                      )}
+                      {filterDivisionId != null && (
+                        <ThemedView style={styles.filterGroup}>
+                          <ThemedText style={styles.filterLabel}>Contrato</ThemedText>
+                          <View style={styles.pickerWrapper}>
+                            <Picker
+                              selectedValue={filterContratoId || ''}
+                              onValueChange={(value) => {
+                                setFilterContratoId(value && value !== '' ? Number(value) : null);
+                              }}
+                              style={styles.picker}
+                            >
+                              <Picker.Item label="Seleccionar…" value="" color="#000000" />
+                              {filterContratos.map((c: any) => (
+                                <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                              ))}
+                            </Picker>
+                          </View>
+                        </ThemedView>
+                      )}
+                      {filterContratoId != null && (
+                        <ThemedView style={styles.filterGroup}>
+                          <ThemedText style={styles.filterLabel}>Sucursal (Corpo)</ThemedText>
+                          <ThemedText style={[styles.subtitle, { textAlign: 'left', marginBottom: 6 }]}>
+                            El listado se carga solo al elegir sucursal (o con la sucursal de la marca actual).
+                          </ThemedText>
+                          <View style={styles.pickerWrapper}>
+                            <Picker
+                              selectedValue={filterCorpoId || ''}
+                              onValueChange={(value) => {
+                                setFilterCorpoId(value && value !== '' ? Number(value) : null);
+                              }}
+                              style={styles.picker}
+                            >
+                              <Picker.Item label="Seleccionar…" value="" color="#000000" />
+                              {filterSucursales.map((s: any) => (
+                                <Picker.Item
+                                  key={s.id}
+                                  label={`${s.nro_sucursal ? `${s.nro_sucursal} - ` : ''}${s.nombre}`}
+                                  value={s.id}
+                                  color="#000000"
+                                />
+                              ))}
+                            </Picker>
+                          </View>
+                        </ThemedView>
+                      )}
+                    </ThemedView>
+                  )}
+                </ThemedView>
+              )}
+              {!isCreating && !editingRecord && !isListLoading && (
+                <TouchableOpacity style={styles.createButton} onPress={() => void startCreating()}>
                   <Ionicons name="add" size={24} color="#FFFFFF" />
                 </TouchableOpacity>
               )}
@@ -2053,6 +3002,65 @@ const styles = StyleSheet.create({
     fontSize: 14,
     textAlign: 'center',
   },
+  filtersMain: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 10,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    width: '100%',
+  },
+  filterHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+  },
+  filterToggleButton: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  filterToggleText: { fontSize: 14, fontWeight: '600', color: '#007AFF' },
+  resetFiltersButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6,
+    backgroundColor: '#FFECEC',
+  },
+  resetFiltersText: { fontSize: 12, color: '#FF3B30', fontWeight: '600' },
+  filterContent: { padding: 12, backgroundColor: '#F9F9F9', gap: 8 },
+  filterGroup: { marginBottom: 12 },
+  filterLabel: { fontSize: 13, fontWeight: '600', marginBottom: 4, color: '#333' },
+  pickerWrapper: {
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 10,
+    overflow: 'hidden',
+    backgroundColor: '#FFFFFF',
+    justifyContent: 'center',
+  },
+  formHierarchySection: {
+    marginBottom: 16,
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E5E5EA',
+    backgroundColor: '#F9F9F9',
+  },
+  formHierarchyTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#007AFF',
+    marginBottom: 8,
+  },
+  formHintText: {
+    fontSize: 12,
+    opacity: 0.7,
+    marginTop: 8,
+    color: '#000000',
+  },
   createButton: {
     backgroundColor: '#007AFF',
     padding: 16,
@@ -2084,6 +3092,12 @@ const styles = StyleSheet.create({
     color: '#007AFF',
     marginBottom: 16,
     textAlign: 'center',
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#333',
+    marginBottom: 8,
   },
   formGroup: {
     marginBottom: 16,
@@ -2356,12 +3370,6 @@ const styles = StyleSheet.create({
   },
   filterGroupSearch: {
     marginBottom: 12,
-  },
-  filterLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#333',
-    marginBottom: 4,
   },
   emptyContainer: {
     padding: 24,

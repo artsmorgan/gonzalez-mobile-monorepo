@@ -70,7 +70,7 @@ module.exports = {
         process.env.API_SERVER ||
         process.env.NEXT_PUBLIC_API_SERVER ||
         // https://api-gonzalez-mobile-monorepo-production.up.railway.app
-        "https://api-gonzalez-mobile-monorepo-production.up.railway.app", // Local dev fallback
+        "https://barrett-nondelirious-denisha.ngrok-free.dev",
       APP_VERSION_INFO: {
         "version": "1.0.0",
         "id": "34cd939c-893f-4a98-9279-d76c82cbca3c",
@@ -86,7 +86,7 @@ module.exports = {
           "Módulo de personas: visitas, rutas, capacitaciones, evaluaciones de personal y encuestas de satisfacción."
         ]
       },
-      MINUTES_LIFE_TIME_TOKEN: 15, // 15 minutes (default)
+      MINUTES_LIFE_TIME_TOKEN: 24 * 60, // 24 hours (default)
       APP_MODE: process.env.APP_MODE || process.env.NODE_ENV || "dev",
       router: {},
       eas: {

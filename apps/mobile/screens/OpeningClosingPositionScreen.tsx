@@ -39,6 +39,10 @@ import {
   deleteOpeningClosingPosition,
   listOpeningClosingPositionByCorpo,
 } from '@/hooks/evaluationFunctions';
+import {
+  filterOcpFromEvaluationsCacheByCorpo,
+  mergeEvaluationsCacheOcpForCorpo,
+} from '@/hooks/openingClosingPositionCacheHelpers';
 import { eventBus } from '@/hooks/eventBus';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import { useQRScanner } from '@/hooks/useQRScanner';
@@ -55,6 +59,14 @@ type MainStructureDivisionNode = { id: number; nombre: string; contratos: MainSt
 type MainStructureClienteNode = { id: number; nombre: string; division: MainStructureDivisionNode[] };
 type MainStructureEmpresaNode = { id: number; nombre: string; clientes: MainStructureClienteNode[] };
 type MainStructureTree = MainStructureEmpresaNode[];
+type HierarchyPath = {
+  empresaId: number | null;
+  clienteId: number | null;
+  divisionId: number | null;
+  contratoId: number | null;
+  sucursalId: number | null;
+  puestoId: number | null;
+};
 
 type ArticuloCatalogItem = { id: number; nombre: string };
 
@@ -145,6 +157,87 @@ const ACTIVIDADES_SEGURIDAD = [
   "Apertura o cierre de Libro de Novedades, donde se detallan las actividades de apertura de puesto.",
 ];
 
+const getMarcaRoleDivisionId = (current: any): number | null => {
+  const raw = current?.roleDivision?.division?.id
+    ?? current?.role_division?.division?.id
+    ?? current?.division?.id
+    ?? current?.division_id;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
+
+const resolveHierarchyByPuestoId = (tree: MainStructureTree, puestoId: number | null): HierarchyPath | null => {
+  if (!Array.isArray(tree) || tree.length === 0 || puestoId == null) return null;
+  for (const empresa of tree as any[]) {
+    for (const cliente of empresa?.clientes || []) {
+      for (const division of cliente?.division || []) {
+        for (const contrato of division?.contratos || []) {
+          for (const sucursal of contrato?.sucursales || []) {
+            const found = (sucursal?.puestos || []).find((p: any) => Number(p?.id) === Number(puestoId));
+            if (!found) continue;
+            return {
+              empresaId: Number(empresa?.id),
+              clienteId: Number(cliente?.id),
+              divisionId: Number(division?.id),
+              contratoId: Number(contrato?.id),
+              sucursalId: Number(sucursal?.id),
+              puestoId: Number(found?.id),
+            };
+          }
+        }
+      }
+    }
+  }
+  return null;
+};
+
+const OCP_EVAL_TYPE = 'opening_closing_position';
+
+/** Offline: ediciones de borrador fusionan en el pending `create`; quita `update` erróneos con id local. */
+async function mergeOrPushOpeningClosingCreateEvaluationsActions(
+  localId: string,
+  payload: any,
+  marcaIdFallback?: number
+) {
+  const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+  let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+  if (!Array.isArray(actions)) actions = [];
+  actions = actions.filter(
+    (a: any) =>
+      !(
+        a.type === OCP_EVAL_TYPE &&
+        a.action === 'update' &&
+        (String(a.id) === String(localId) || String(a.id_local) === String(localId))
+      )
+  );
+  const idx = actions.findIndex(
+    (a: any) => a.type === OCP_EVAL_TYPE && a.action === 'create' && String(a.id) === String(localId)
+  );
+  const marcaId =
+    (idx !== -1 && actions[idx].payload && actions[idx].payload.marca_id) ||
+    payload.marca_id ||
+    marcaIdFallback;
+  if (idx !== -1) {
+    const prev = actions[idx].payload || {};
+    actions[idx] = {
+      ...actions[idx],
+      id_local: localId,
+      payload: { ...prev, ...payload, marca_id: prev.marca_id ?? payload.marca_id ?? marcaId },
+      synced: false,
+    };
+  } else {
+    actions.push({
+      id: localId,
+      id_local: localId,
+      action: 'create',
+      type: OCP_EVAL_TYPE,
+      payload: { ...payload, marca_id: marcaId },
+      synced: false,
+    });
+  }
+  await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+}
+
 export default function OpeningClosingPositionScreen() {
   const { employee, refreshAccessToken, logout } = useAuth();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
@@ -175,7 +268,7 @@ export default function OpeningClosingPositionScreen() {
   // Marca context (para division automática)
   const [marcaId, setMarcaId] = useState<number | null>(null);
   const [marcaDivisionId, setMarcaDivisionId] = useState<number | null>(null); // current_marca.roleDivision.division.id
-
+  const [roleName, setRoleName] = useState<string | null>(null);
   // Estructura principal (árbol) + loading + selección
   const [mainStructureFetched, setMainStructureFetched] = useState(false);
   const [structure, setStructure] = useState<MainStructureTree>([]);
@@ -186,6 +279,9 @@ export default function OpeningClosingPositionScreen() {
   const [selectedContratoId, setSelectedContratoId] = useState<number | null>(null);
   const [selectedSucursalId, setSelectedSucursalId] = useState<number | null>(null);
   const [selectedPuestoId, setSelectedPuestoId] = useState<number | null>(null); // solo 1 puesto
+  const isRestoringHierarchyRef = useRef(false);
+  const pendingFormHierarchyRef = useRef<HierarchyPath | null>(null);
+  const isApplyingFormHierarchyRef = useRef(false);
 
   // Filtros jerárquicos de la lista principal (Empresa -> Sucursal)
   const [filterEmpresaId, setFilterEmpresaId] = useState<number | null>(null);
@@ -193,8 +289,11 @@ export default function OpeningClosingPositionScreen() {
   const [filterDivisionId, setFilterDivisionId] = useState<number | null>(null);
   const [filterContratoId, setFilterContratoId] = useState<number | null>(null);
   const [filterCorpoId, setFilterCorpoId] = useState<number | null>(null);
+  const filterCorpoIdRef = useRef<number | null>(null);
 
   const [isConnected, setIsConnected] = useState<boolean>(true);
+  const [deletingRecordId, setDeletingRecordId] = useState<string | null>(null);
+  const fetchPositionsRef = useRef<(corpoIdOverride?: string | null) => Promise<void>>(async () => {});
 
   // Catálogo artículos (inventario - solo Seguridad)
   const [articulosCatalog, setArticulosCatalog] = useState<ArticuloCatalogItem[]>([]);
@@ -280,6 +379,7 @@ export default function OpeningClosingPositionScreen() {
   `;
 
   const getConnectionStatus = async (): Promise<boolean> => {
+    return false;
     const networkState = await Network.getNetworkStateAsync();
     return networkState.isConnected && networkState.isInternetReachable ? true : false;
   };
@@ -588,6 +688,33 @@ export default function OpeningClosingPositionScreen() {
     }
   }, [refreshAccessToken, logout]);
 
+  const buildHierarchyFromCurrentMarca = useCallback((currentMarcaData: any, tree: MainStructureTree): HierarchyPath => {
+    const marcaPuestoId = currentMarcaData?.puesto?.id != null ? Number(currentMarcaData.puesto.id) : null;
+    const pathByPuesto = resolveHierarchyByPuestoId(tree, marcaPuestoId);
+    if (pathByPuesto) return pathByPuesto;
+
+    const empresaId = currentMarcaData?.empresa?.id != null ? Number(currentMarcaData.empresa.id) : null;
+    const clienteId = currentMarcaData?.cliente?.id != null ? Number(currentMarcaData.cliente.id) : null;
+    const contratoId = currentMarcaData?.contrato?.id != null ? Number(currentMarcaData.contrato.id) : null;
+    const sucursalId = currentMarcaData?.corpo?.id != null ? Number(currentMarcaData.corpo.id) : null;
+    const divisionId = getMarcaRoleDivisionId(currentMarcaData);
+    return {
+      empresaId,
+      clienteId,
+      divisionId,
+      contratoId,
+      sucursalId,
+      puestoId: marcaPuestoId,
+    };
+  }, []);
+
+  const applyFormHierarchySequential = useCallback((path: HierarchyPath) => {
+    pendingFormHierarchyRef.current = path;
+    isApplyingFormHierarchyRef.current = true;
+    isRestoringHierarchyRef.current = true;
+    setSelectedEmpresaId(path.empresaId);
+  }, []);
+
   const loadArticulosCatalog = useCallback(async () => {
     setIsArticulosLoading(true);
     try {
@@ -635,6 +762,7 @@ export default function OpeningClosingPositionScreen() {
   }, [refreshAccessToken, logout]);
 
   const fetchPositions = useCallback(async (corpoIdOverride?: string | null) => {
+    let searchCorpoIdNum: number | null = null;
     try {
       setIsLoading(true);
       setError(null);
@@ -652,25 +780,18 @@ export default function OpeningClosingPositionScreen() {
       const effectiveCorpoId = (corpoIdOverride !== undefined && corpoIdOverride !== null ? corpoIdOverride : null) ?? corpoIdFromMarca;
 
       setMarcaId(typeof currentMarcaData?.id === 'number' ? currentMarcaData.id : (currentMarcaData?.id ? Number(currentMarcaData.id) : null));
-      const divIdRaw = currentMarcaData?.roleDivision?.division?.id;
+      const divIdRaw =
+        currentMarcaData?.roleDivision?.division?.id ?? currentMarcaData?.role_division?.division?.id;
       setMarcaDivisionId(divIdRaw !== undefined && divIdRaw !== null ? Number(divIdRaw) : null);
-
-      // Preselección solo empresa y cliente; división, contrato, sucursal y puesto se eligen manualmente
-      setSelectedEmpresaId(currentMarcaData?.empresa?.id ?? null);
-      setSelectedClienteId(currentMarcaData?.cliente?.id ?? null);
-      setSelectedDivisionId(null);
-      setSelectedContratoId(null);
-      setSelectedSucursalId(null);
-      setSelectedPuestoId(null);
-
-      // Estructura principal (cache-first + refresh online)
-      await fetchMainStructure();
 
       if (!effectiveCorpoId) {
         setError('No se encontró el ID del corpo');
         setIsLoading(false);
         return;
       }
+
+      const cid = Number(effectiveCorpoId);
+      searchCorpoIdNum = Number.isFinite(cid) && cid > 0 ? cid : null;
 
       const connected = await getConnectionStatus();
       setIsConnected(connected);
@@ -683,30 +804,75 @@ export default function OpeningClosingPositionScreen() {
           logout,
         });
 
-        if (result.status && result.data) {
-          setPositions(result.data as OpeningClosingPosition[]);
+        const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+        let fullCache: any[] = [];
+        if (cacheStr) {
+          try {
+            const p = JSON.parse(cacheStr);
+            if (Array.isArray(p)) fullCache = p;
+          } catch {
+            /* ignore */
+          }
+        }
+
+        if (result.status && Array.isArray(result.data) && searchCorpoIdNum != null) {
+          const merged = mergeEvaluationsCacheOcpForCorpo(fullCache, result.data, searchCorpoIdNum);
+          await AsyncStorage.setItem('evaluations_cache', JSON.stringify(merged));
+          const forList = filterOcpFromEvaluationsCacheByCorpo(merged, searchCorpoIdNum);
+          setPositions(forList as OpeningClosingPosition[]);
+        } else if (searchCorpoIdNum != null) {
+          const forList = filterOcpFromEvaluationsCacheByCorpo(fullCache, searchCorpoIdNum);
+          setPositions(forList as OpeningClosingPosition[]);
         } else {
           setPositions([]);
         }
       } else {
         const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+        let fullCache: any[] = [];
         if (cacheStr) {
-          const cache = JSON.parse(cacheStr);
-          const positionsCache = cache.filter((item: any) => item.type === 'opening_closing_position');
-          setPositions(positionsCache);
-        } else {
-          setPositions([]);
+          try {
+            const p = JSON.parse(cacheStr);
+            if (Array.isArray(p)) fullCache = p;
+          } catch {
+            /* ignore */
+          }
         }
+        const forList = filterOcpFromEvaluationsCacheByCorpo(fullCache, searchCorpoIdNum);
+        setPositions(forList as OpeningClosingPosition[]);
       }
     } catch (err) {
       console.error('Error fetching positions:', err);
       setError('Error al cargar las aperturas-cierres de puesto');
       try {
+        const raw = await AsyncStorage.getItem('current_marca');
+        let currentMarcaData: any = null;
+        if (raw) {
+          try {
+            currentMarcaData = JSON.parse(raw);
+          } catch {
+            currentMarcaData = null;
+          }
+        }
+        const fallbackMc = Number(
+          filterCorpoIdRef.current ??
+            currentMarcaData?.corpo?.id ??
+            currentMarcaData?.corpo_id
+        );
+        const corpoForCache =
+          searchCorpoIdNum ??
+          (Number.isFinite(fallbackMc) && fallbackMc > 0 ? fallbackMc : null);
+
         const cacheStr = await AsyncStorage.getItem('evaluations_cache');
         if (cacheStr) {
-          const cache = JSON.parse(cacheStr);
-          const positionsCache = cache.filter((item: any) => item.type === 'opening_closing_position');
-          setPositions(positionsCache);
+          let fullCache: any[] = [];
+          try {
+            const p = JSON.parse(cacheStr);
+            if (Array.isArray(p)) fullCache = p;
+          } catch {
+            /* ignore */
+          }
+          const forList = filterOcpFromEvaluationsCacheByCorpo(fullCache, corpoForCache);
+          setPositions(forList as OpeningClosingPosition[]);
         }
       } catch (cacheErr) {
         console.error('Error loading from cache:', cacheErr);
@@ -714,24 +880,80 @@ export default function OpeningClosingPositionScreen() {
     } finally {
       setIsLoading(false);
     }
-  }, [refreshAccessToken, logout, fetchMainStructure]);
+  }, [refreshAccessToken, logout]);
+
+  useEffect(() => {
+    filterCorpoIdRef.current = filterCorpoId;
+  }, [filterCorpoId]);
+
+  useEffect(() => {
+    fetchPositionsRef.current = fetchPositions;
+  }, [fetchPositions]);
 
   useFocusEffect(
     useCallback(() => {
       (async () => {
         const connected = await getConnectionStatus();
         setIsConnected(connected);
+        const currentMarca = await AsyncStorage.getItem('current_marca');
+        if (currentMarca) {
+          const currentMarcaData = JSON.parse(currentMarca);
+          setMarcaId(typeof currentMarcaData?.id === 'number' ? currentMarcaData.id : (currentMarcaData?.id ? Number(currentMarcaData.id) : null));
+          const divIdRaw =
+            currentMarcaData?.roleDivision?.division?.id ?? currentMarcaData?.role_division?.division?.id;
+          setMarcaDivisionId(divIdRaw !== undefined && divIdRaw !== null ? Number(divIdRaw) : null);
+          const rnRaw =
+            currentMarcaData?.roleDivision?.role?.nombre ??
+            currentMarcaData?.role_division?.role?.nombre ??
+            null;
+          setRoleName(typeof rnRaw === 'string' ? rnRaw : null);
+          await fetchMainStructure();
+          const treeCache = await AsyncStorage.getItem('main_structure_cache');
+          const tree = treeCache ? (JSON.parse(treeCache) as MainStructureTree) : [];
+          const hierarchy = buildHierarchyFromCurrentMarca(currentMarcaData, tree);
+          if (rnRaw === 'OPERATIVO') {
+            setFilterEmpresaId(null);
+            setFilterClienteId(null);
+            setFilterDivisionId(null);
+            setFilterContratoId(null);
+            setFilterCorpoId(null);
+          } else {
+            setFilterEmpresaId(hierarchy.empresaId);
+            setFilterClienteId(hierarchy.clienteId);
+            setFilterDivisionId(hierarchy.divisionId);
+            setFilterContratoId(hierarchy.contratoId);
+            setFilterCorpoId(hierarchy.sucursalId);
+          }
+        } else {
+          setRoleName(null);
+        }
       })();
-      fetchPositions();
       const onRestored = () => {
         setIsConnected(true);
-        fetchPositions();
+        void (async () => {
+          const raw = await AsyncStorage.getItem('current_marca');
+          let operativo = false;
+          if (raw) {
+            try {
+              const d = JSON.parse(raw);
+              const rn = d?.roleDivision?.role?.nombre ?? d?.role_division?.role?.nombre;
+              operativo = rn === 'OPERATIVO';
+            } catch {
+              operativo = false;
+            }
+          }
+          if (operativo) {
+            fetchPositionsRef.current(undefined);
+          } else if (filterCorpoIdRef.current != null) {
+            fetchPositionsRef.current(String(filterCorpoIdRef.current));
+          }
+        })();
       };
       eventBus.on('connectionRestored', onRestored);
       return () => {
         eventBus.off('connectionRestored', onRestored);
       };
-    }, [fetchPositions])
+    }, [fetchMainStructure, buildHierarchyFromCurrentMarca])
   );
 
   const selectedEmpresaNode = useMemo(() => {
@@ -763,6 +985,7 @@ export default function OpeningClosingPositionScreen() {
 
   // Cuando la división cambia, validar/limpiar selecciones inferiores si ya no pertenecen
   useEffect(() => {
+    if (isRestoringHierarchyRef.current) return;
     if (!selectedDivisionNode) {
       setSelectedContratoId(null);
       setSelectedSucursalId(null);
@@ -776,6 +999,7 @@ export default function OpeningClosingPositionScreen() {
   }, [selectedDivisionNode]);
 
   useEffect(() => {
+    if (isRestoringHierarchyRef.current) return;
     if (!selectedContratoNode) {
       setSelectedSucursalId(null);
       setSelectedPuestoId(null);
@@ -788,6 +1012,7 @@ export default function OpeningClosingPositionScreen() {
   }, [selectedContratoNode]);
 
   useEffect(() => {
+    if (isRestoringHierarchyRef.current) return;
     if (!selectedSucursalNode) {
       setSelectedPuestoId(null);
       return;
@@ -797,6 +1022,50 @@ export default function OpeningClosingPositionScreen() {
       if (!exists) setSelectedPuestoId(null);
     }
   }, [selectedSucursalNode]);
+
+  useEffect(() => {
+    const pending = pendingFormHierarchyRef.current;
+    if (!pending || !isApplyingFormHierarchyRef.current) return;
+    if (!isCreating && !editingRecord) return;
+
+    if ((pending.empresaId ?? null) !== (selectedEmpresaId ?? null)) {
+      setSelectedEmpresaId(pending.empresaId ?? null);
+      return;
+    }
+    if ((pending.clienteId ?? null) !== (selectedClienteId ?? null)) {
+      setSelectedClienteId(pending.clienteId ?? null);
+      return;
+    }
+    if ((pending.divisionId ?? null) !== (selectedDivisionId ?? null)) {
+      setSelectedDivisionId(pending.divisionId ?? null);
+      return;
+    }
+    if ((pending.contratoId ?? null) !== (selectedContratoId ?? null)) {
+      setSelectedContratoId(pending.contratoId ?? null);
+      return;
+    }
+    if ((pending.sucursalId ?? null) !== (selectedSucursalId ?? null)) {
+      setSelectedSucursalId(pending.sucursalId ?? null);
+      return;
+    }
+    if ((pending.puestoId ?? null) !== (selectedPuestoId ?? null)) {
+      setSelectedPuestoId(pending.puestoId ?? null);
+      return;
+    }
+
+    pendingFormHierarchyRef.current = null;
+    isApplyingFormHierarchyRef.current = false;
+    isRestoringHierarchyRef.current = false;
+  }, [
+    isCreating,
+    editingRecord,
+    selectedEmpresaId,
+    selectedClienteId,
+    selectedDivisionId,
+    selectedContratoId,
+    selectedSucursalId,
+    selectedPuestoId,
+  ]);
 
   const empresaOptions = useMemo(() => structure.map((e) => ({ id: e.id, nombre: e.nombre })), [structure]);
   const clienteOptions = useMemo(() => (selectedEmpresaNode?.clientes || []).map((c) => ({ id: c.id, nombre: c.nombre })), [selectedEmpresaNode]);
@@ -832,6 +1101,9 @@ export default function OpeningClosingPositionScreen() {
   const filterSucursales = useMemo(() => (filterContratoNode?.sucursales || []).map((s) => ({ id: s.id, nombre: s.nombre })), [filterContratoNode]);
 
   const filteredPositions = useMemo(() => {
+    if (roleName === 'OPERATIVO') {
+      return positions || [];
+    }
     return (positions || []).filter((record) => {
       const recordClienteId = Number(record.cliente_id);
       const recordDivisionId = Number(record.division_id);
@@ -854,7 +1126,36 @@ export default function OpeningClosingPositionScreen() {
       if (filterCorpoId !== null && recordCorpoId !== Number(filterCorpoId)) return false;
       return true;
     });
-  }, [positions, structure, filterEmpresaId, filterClienteId, filterDivisionId, filterContratoId, filterCorpoId, filterContratoNode]);
+  }, [
+    positions,
+    structure,
+    filterEmpresaId,
+    filterClienteId,
+    filterDivisionId,
+    filterContratoId,
+    filterCorpoId,
+    filterContratoNode,
+    roleName,
+  ]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (roleName == null) return;
+      if (roleName === 'OPERATIVO') {
+        if (!cancelled) await fetchPositions(undefined);
+        return;
+      }
+      if (filterCorpoId == null) {
+        if (!cancelled) setPositions([]);
+        return;
+      }
+      if (!cancelled) await fetchPositions(String(filterCorpoId));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [filterCorpoId, fetchPositions, roleName]);
 
   const isSeguridadDivision = selectedDivisionId === 4;
 
@@ -903,15 +1204,32 @@ export default function OpeningClosingPositionScreen() {
   const startCreating = async () => {
     setIsCreating(true);
     setEditingRecord(null);
+    pendingFormHierarchyRef.current = null;
+    isApplyingFormHierarchyRef.current = false;
+    isRestoringHierarchyRef.current = false;
     await resetForm();
+    const currentMarca = await AsyncStorage.getItem('current_marca');
+    if (currentMarca) {
+      const currentMarcaData = JSON.parse(currentMarca);
+      const treeCache = await AsyncStorage.getItem('main_structure_cache');
+      const tree = treeCache ? (JSON.parse(treeCache) as MainStructureTree) : structure;
+      const hierarchy = buildHierarchyFromCurrentMarca(currentMarcaData, Array.isArray(tree) ? tree : []);
+      applyFormHierarchySequential(hierarchy);
+    }
   };
 
   const cancelCreating = async () => {
+    pendingFormHierarchyRef.current = null;
+    isApplyingFormHierarchyRef.current = false;
+    isRestoringHierarchyRef.current = false;
     setIsCreating(false);
     await resetForm();
   };
 
   const startEditing = async (record: OpeningClosingPosition) => {
+    pendingFormHierarchyRef.current = null;
+    isApplyingFormHierarchyRef.current = false;
+    isRestoringHierarchyRef.current = false;
     setIsCreating(false);
     let actividadesArray: ActividadItem[] = [];
     let inventarioArray: InventarioItem[] = [];
@@ -932,20 +1250,22 @@ export default function OpeningClosingPositionScreen() {
 
     setEditingRecord({ id: record.id, id_local: record.id_local });
 
-    // Intentar setear el árbol desde cliente/división/contrato/sucursal/puesto
-    const empresaFound = structure.find((e) => (e.clientes || []).some((c) => c.id === record.cliente_id)) ?? null;
-    if (empresaFound) setSelectedEmpresaId(empresaFound.id);
-    setSelectedClienteId(record.cliente_id);
-    setSelectedDivisionId(record.division_id);
-    setSelectedSucursalId(record.corpo_id);
-    setSelectedPuestoId(record.puesto_id);
-
-    // Contrato: buscar el contrato que contiene la sucursal seleccionada
-    const clienteNode = empresaFound?.clientes?.find((c) => c.id === record.cliente_id);
-    const divisionNode = clienteNode?.division?.find((d) => d.id === record.division_id);
-    const contratoFound =
-      divisionNode?.contratos?.find((ct) => (ct.sucursales || []).some((s) => s.id === record.corpo_id)) ?? null;
-    if (contratoFound) setSelectedContratoId(contratoFound.id);
+    const treeCache = await AsyncStorage.getItem('main_structure_cache');
+    const tree = treeCache ? (JSON.parse(treeCache) as MainStructureTree) : structure;
+    const pathByPuesto = resolveHierarchyByPuestoId(Array.isArray(tree) ? tree : [], Number(record.puesto_id));
+    if (pathByPuesto) {
+      applyFormHierarchySequential(pathByPuesto);
+    } else {
+      // fallback por datos directos del registro si no aparece en el árbol
+      applyFormHierarchySequential({
+        empresaId: null,
+        clienteId: Number(record.cliente_id),
+        divisionId: Number(record.division_id),
+        contratoId: null,
+        sucursalId: Number(record.corpo_id),
+        puestoId: Number(record.puesto_id),
+      });
+    }
 
     const horaAccion = await getHoraAccion();
     if (!horaAccion) {
@@ -974,6 +1294,9 @@ export default function OpeningClosingPositionScreen() {
   };
 
   const cancelEditing = async () => {
+    pendingFormHierarchyRef.current = null;
+    isApplyingFormHierarchyRef.current = false;
+    isRestoringHierarchyRef.current = false;
     setEditingRecord(null);
     await resetForm();
   };
@@ -1263,16 +1586,7 @@ export default function OpeningClosingPositionScreen() {
       } else {
         const localId = generateRandomId();
 
-        const actionsStr = await AsyncStorage.getItem('evaluations_actions');
-        const actions = actionsStr ? JSON.parse(actionsStr) : [];
-        actions.push({
-          id: localId,
-          action: 'create',
-          type: 'opening_closing_position',
-          payload: requestData,
-          synced: false,
-        });
-        await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+        await mergeOrPushOpeningClosingCreateEvaluationsActions(localId, requestData, currentMarcaData.id);
 
         const cacheStr = await AsyncStorage.getItem('evaluations_cache');
         const cache = cacheStr ? JSON.parse(cacheStr) : [];
@@ -1419,16 +1733,36 @@ export default function OpeningClosingPositionScreen() {
           Alert.alert('Error', result.message || 'Error al actualizar la apertura-cierre de puesto');
         }
       } else {
-        const actionsStr = await AsyncStorage.getItem('evaluations_actions');
-        const actions = actionsStr ? JSON.parse(actionsStr) : [];
-        actions.push({
-          id: recordIdStr,
-          action: 'update',
-          type: 'opening_closing_position',
-          payload: requestData,
-          synced: false,
-        });
-        await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+        const currentMarcaRaw = await AsyncStorage.getItem('current_marca');
+        const currentMarcaParsed = currentMarcaRaw ? JSON.parse(currentMarcaRaw) : null;
+        const marcaFallback = currentMarcaParsed?.id;
+
+        const isLocalDraft = editingRecord.id == null;
+
+        if (isLocalDraft) {
+          const localKey = String(editingRecord.id_local || recordIdStr);
+          await mergeOrPushOpeningClosingCreateEvaluationsActions(localKey, requestData, marcaFallback);
+        } else {
+          const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+          let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+          if (!Array.isArray(actions)) actions = [];
+          actions = actions.filter(
+            (a: any) =>
+              !(
+                a.type === OCP_EVAL_TYPE &&
+                a.action === 'update' &&
+                (String(a.id) === String(recordIdStr) || Number(a.id) === Number(editingRecord.id))
+              )
+          );
+          actions.push({
+            id: recordIdStr,
+            action: 'update',
+            type: OCP_EVAL_TYPE,
+            payload: requestData,
+            synced: false,
+          });
+          await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+        }
 
         const cacheStr = await AsyncStorage.getItem('evaluations_cache');
         if (cacheStr) {
@@ -1481,6 +1815,21 @@ export default function OpeningClosingPositionScreen() {
     }
   };
 
+  const handleConfirmSubmit = () => {
+    if (isSubmitting) return;
+    Alert.alert(
+      'Confirmar',
+      editingRecord
+        ? '¿Deseas actualizar esta apertura-cierre de puesto?'
+        : '¿Deseas crear esta apertura-cierre de puesto?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Aceptar', onPress: editingRecord ? updatePositionHandler : savePositionHandler },
+      ],
+      { cancelable: false }
+    );
+  };
+
   const deletePositionHandler = async (record: OpeningClosingPosition) => {
     const recordId = record.id || record.id_local;
     if (!recordId) {
@@ -1499,6 +1848,7 @@ export default function OpeningClosingPositionScreen() {
           text: 'Confirmar',
           onPress: async () => {
             try {
+              setDeletingRecordId(recordIdStr);
               const isConnected = await getConnectionStatus();
 
               if (isConnected) {
@@ -1516,14 +1866,45 @@ export default function OpeningClosingPositionScreen() {
                 }
               } else {
                 const actionsStr = await AsyncStorage.getItem('evaluations_actions');
-                const actions = actionsStr ? JSON.parse(actionsStr) : [];
-                actions.push({
-                  id: recordIdStr,
-                  action: 'delete',
-                  type: 'opening_closing_position',
-                  payload: {},
-                  synced: false,
-                });
+                let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+                if (!Array.isArray(actions)) actions = [];
+                const isLocalDraft = record.id == null && !!record.id_local;
+
+                if (isLocalDraft) {
+                  actions = actions.filter(
+                    (a: any) =>
+                      !(
+                        a.type === OCP_EVAL_TYPE &&
+                        (a.action === 'create' || a.action === 'update') &&
+                        (String(a.id) === String(record.id_local) || String(a.id_local) === String(record.id_local))
+                      )
+                  );
+                } else {
+                  actions = actions.filter(
+                    (a: any) =>
+                      !(
+                        a.type === OCP_EVAL_TYPE &&
+                        a.action === 'update' &&
+                        (String(a.id) === String(recordIdStr) || Number(a.id) === Number(record.id))
+                      )
+                  );
+                  actions = actions.filter(
+                    (a: any) =>
+                      !(
+                        a.type === OCP_EVAL_TYPE &&
+                        a.action === 'delete' &&
+                        (String(a.id) === String(recordIdStr) || Number(a.id) === Number(record.id))
+                      )
+                  );
+                  actions.push({
+                    id: recordIdStr,
+                    action: 'delete',
+                    type: OCP_EVAL_TYPE,
+                    payload: {},
+                    synced: false,
+                  });
+                }
+
                 await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
 
                 const cacheStr = await AsyncStorage.getItem('evaluations_cache');
@@ -1539,6 +1920,8 @@ export default function OpeningClosingPositionScreen() {
             } catch (err) {
               console.error('Error deleting position:', err);
               Alert.alert('Error', 'No se pudo eliminar la apertura-cierre de puesto');
+            } finally {
+              setDeletingRecordId((prev) => (prev === recordIdStr ? null : prev));
             }
           },
         },
@@ -1828,11 +2211,18 @@ export default function OpeningClosingPositionScreen() {
                     </TouchableOpacity>
                   )}
                   <TouchableOpacity
-                    style={[styles.listItemButton, styles.deleteButton]}
+                    style={[styles.listItemButton, styles.deleteButton, deletingRecordId === itemKey && styles.buttonDisabled]}
                     onPress={() => deletePositionHandler(record)}
+                    disabled={deletingRecordId === itemKey}
                   >
-                    {getActionIcon('delete')}
-                    <ThemedText style={styles.listItemButtonText}>Eliminar</ThemedText>
+                    {deletingRecordId === itemKey ? (
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                      <>
+                        {getActionIcon('delete')}
+                        <ThemedText style={styles.listItemButtonText}>Eliminar</ThemedText>
+                      </>
+                    )}
                   </TouchableOpacity>
                 </ThemedView>
               </ThemedView>
@@ -2066,6 +2456,16 @@ export default function OpeningClosingPositionScreen() {
                   <ThemedView style={styles.loadingInline}>
                     <ActivityIndicator size="small" color="#007AFF" />
                     <ThemedText style={styles.loadingInlineText}>Cargando estructura...</ThemedText>
+                  </ThemedView>
+                ) : roleName == null ? (
+                  <ThemedView style={styles.sectionBody}>
+                    <ThemedText style={[styles.hintText, { opacity: 0.85 }]}>Cargando contexto de marca...</ThemedText>
+                  </ThemedView>
+                ) : roleName === 'OPERATIVO' ? (
+                  <ThemedView style={styles.sectionBody}>
+                    <ThemedText style={[styles.hintText, { opacity: 0.85, marginBottom: 8 }]}>
+                      La ubicación (empresa, cliente, división, contrato, sucursal y puesto) se define desde tu marca actual.
+                    </ThemedText>
                   </ThemedView>
                 ) : (
                   <ThemedView style={styles.sectionBody}>
@@ -2510,7 +2910,7 @@ export default function OpeningClosingPositionScreen() {
                 )}
                 <TouchableOpacity
                   style={[styles.actionButton, styles.saveButton, isSubmitting && styles.buttonDisabled]}
-                  onPress={editingRecord ? updatePositionHandler : savePositionHandler}
+                  onPress={handleConfirmSubmit}
                   disabled={isSubmitting}
                 >
                   {isSubmitting ? (
@@ -2519,7 +2919,7 @@ export default function OpeningClosingPositionScreen() {
                     <>
                       {getActionIcon('confirm')}
                       <ThemedText style={[styles.actionButtonText, styles.actionButtonTextLight]}>
-                        {editingRecord ? 'Actualizar' : 'Guardar'}
+                        Aceptar
                       </ThemedText>
                     </>
                   )}
@@ -2528,7 +2928,7 @@ export default function OpeningClosingPositionScreen() {
             </ThemedView>
           ) : (
             <ThemedView style={styles.listSection}>
-              {isConnected && (
+              {roleName != null && roleName !== 'OPERATIVO' && (
                 <Collapsible title="Filtros jerárquicos">
                   <ThemedView style={styles.hierarchyFiltersContainer}>
                     <ThemedView style={styles.hierarchyFiltersHeader}>
@@ -2540,7 +2940,6 @@ export default function OpeningClosingPositionScreen() {
                           setFilterDivisionId(null);
                           setFilterContratoId(null);
                           setFilterCorpoId(null);
-                          fetchPositions();
                         }}
                       >
                         <Ionicons name="refresh" size={16} color="#FF3B30" />
@@ -2646,7 +3045,6 @@ export default function OpeningClosingPositionScreen() {
                         onValueChange={(v) => {
                           const next = Number(v) || null;
                           setFilterCorpoId(next);
-                          fetchPositions(next != null ? String(next) : undefined);
                         }}
                         enabled={filterContratoId !== null && filterSucursales.length > 0}
                         style={styles.picker}

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
-import { sendNotificationByPlaza } from "../../../utils/sendNotification";
+import { sendNotificationByPlaza, fetchActivePlazaIdsForPuestos } from "../../../utils/sendNotification";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
 
@@ -112,22 +112,9 @@ export async function POST(req: NextRequest) {
                 });
             }
 
-            // 3) Buscar todas las plazas de los puestos confirmados para notificar y añadir distinct para evitar duplicados
+            // 3) Plazas activas (misma lógica que main_structure_cache) para notificaciones
             if (confirmedPuestoIds.length > 0) {
-                const plzs = await callDynamicPrisma({
-                        req,
-                        data: {
-                            action: "GET",
-                            table: "e_estructura_plazas",
-                            operation: "findMany",
-                            where: { puesto_id: { in: confirmedPuestoIds } },
-                            select: { id: true },
-                            distinct: ["id"],
-                        },
-                    });
-                    
-                // Extraer los ids de las plazas
-                plazas_ids = plzs.map((p: any) => p.id);
+                plazas_ids = await fetchActivePlazaIdsForPuestos(req, confirmedPuestoIds);
             }
 
             const frecuencia_parse = JSON.parse(frecuencia);

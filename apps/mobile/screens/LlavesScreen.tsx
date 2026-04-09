@@ -21,6 +21,8 @@ import getHoraAccion from '../hooks/getHoraAccion';
 import { useQRScanner } from '../hooks/useQRScanner';
 import authedFetch from '../hooks/authedFetch';
 import { createLlave, deleteLlave, listLlaves, LlaveItem, updateLlave } from '../hooks/llavesFunctions';
+import { filterLlavesByCorpo, mergeLlavesCacheForCorpo, replaceLlavesCorpoSliceInCache } from '../hooks/llavesCacheHelpers';
+import { filterLlaverosByCorpo, mergeLlaverosCacheForCorpo, replaceLlaverosCorpoSliceInCache } from '../hooks/llaverosCacheHelpers';
 import { createMovimientoLlave, deleteMovimientoLlave, updateMovimientoLlave } from '../hooks/movimientosLlavesFunctions';
 import { createLlavero, deleteLlavero, listLlaveros, LlaveroItem, updateLlavero } from '../hooks/llaverosFunctions';
 import { createMovimientoLlavero, deleteMovimientoLlavero, updateMovimientoLlavero } from '../hooks/movimientosLlaverosFunctions';
@@ -60,6 +62,25 @@ type MovimientoLlaveroUI = {
   firma_responsable: string;
 };
 
+const llaveRowKey = (it: LlaveUI) => String(it.id_local || (it.id ?? ''));
+const llaveroRowKey = (it: LlaveroUI) => String(it.id_local || (it.id ?? ''));
+const movimientoLlaveRowKey = (m: MovimientoUI) => String(m.id_local || (m.id ?? ''));
+const movimientoLlaveroRowKey = (m: MovimientoLlaveroUI) => String(m.id_local || (m.id ?? ''));
+
+function resolveCorpoIdFromMarca(marca: any): number | null {
+  const raw = marca?.corpo?.id ?? marca?.corpo_id;
+  if (raw === undefined || raw === null || raw === '') return null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+const normalizeLlavesList = (arr: any[]): LlaveUI[] =>
+  arr.map((it: any) => ({
+    ...it,
+    id_local: it.id_local || '',
+    movimientos: (it.movimientos || []).map((m: any) => ({ ...m, id_local: m.id_local || '' })),
+  }));
+
 export default function LlavesScreen() {
   const navigation = useNavigation<any>();
   const { employee, refreshAccessToken, logout } = useAuth();
@@ -87,7 +108,8 @@ export default function LlavesScreen() {
   const [llaveroNombre, setLlaveroNombre] = useState('');
   const [llaveroObservaciones, setLlaveroObservaciones] = useState('');
   const [llaveroFirmaResponsable, setLlaveroFirmaResponsable] = useState('');
-  const [llaveroSelectedLlaves, setLlaveroSelectedLlaves] = useState<number[]>([]);
+  /** Selección de llaves para llavero: `s:<id servidor>` o `l:<id_local>` (llaves solo offline). */
+  const [llaveroSelectedLlaveKeys, setLlaveroSelectedLlaveKeys] = useState<string[]>([]);
   const [isLlaveroLlavesExpanded, setIsLlaveroLlavesExpanded] = useState(false);
   const [isGeneratingLlaveroFirma, setIsGeneratingLlaveroFirma] = useState(false);
   const [llaveroFilterSearch, setLlaveroFilterSearch] = useState('');
@@ -102,6 +124,10 @@ export default function LlavesScreen() {
   const [llaveroMovIsCreating, setLlaveroMovIsCreating] = useState(false);
   const [llaveroMovEditing, setLlaveroMovEditing] = useState<MovimientoLlaveroUI | null>(null);
   const [isSavingLlaveroMov, setIsSavingLlaveroMov] = useState(false);
+  const [deletingLlaveKey, setDeletingLlaveKey] = useState<string | null>(null);
+  const [deletingLlaveroKey, setDeletingLlaveroKey] = useState<string | null>(null);
+  const [deletingMovLlaveKey, setDeletingMovLlaveKey] = useState<string | null>(null);
+  const [deletingMovLlaveroKey, setDeletingMovLlaveroKey] = useState<string | null>(null);
   const [llaveroMovFilterSearch, setLlaveroMovFilterSearch] = useState('');
   const [llaveroMovFilterFecha, setLlaveroMovFilterFecha] = useState('');
   const [showLlaveroMovFilterFechaPicker, setShowLlaveroMovFilterFechaPicker] = useState(false);
@@ -229,8 +255,16 @@ export default function LlavesScreen() {
   const normalizeTimeValue = (value?: string): string => {
     const raw = String(value || '').trim();
     if (!raw) return '';
-    if (raw.includes('T')) return raw.split('T')[1]?.split('.')[0] || '';
-    return raw.length >= 8 ? raw.slice(0, 8) : raw;
+    let t = raw.includes('T') ? raw.split('T')[1]?.split('.')[0] || '' : raw;
+    if (t.length >= 8 && t[8] !== ':') t = t.slice(0, 8);
+    const parts = t.split(':').map((p) => p.trim());
+    if (parts.length >= 2) {
+      const h = String(Math.min(23, parseInt(parts[0], 10) || 0)).padStart(2, '0');
+      const m = String(Math.min(59, parseInt(parts[1], 10) || 0)).padStart(2, '0');
+      const s = String(Math.min(59, parseInt(parts[2] ?? '0', 10) || 0)).padStart(2, '0');
+      return `${h}:${m}:${s}`;
+    }
+    return t;
   };
 
   const timeStringToPickerDate = (value?: string): Date => {
@@ -243,6 +277,7 @@ export default function LlavesScreen() {
   };
 
   const getConnectionStatus = async (): Promise<boolean> => {
+    return false;
     const state = await Network.getNetworkStateAsync();
     return !!(state.isConnected && state.isInternetReachable);
   };
@@ -329,6 +364,25 @@ export default function LlavesScreen() {
     return current;
   };
 
+  /** Escribe el slice de llaves de la sucursal actual en `llaves_cache` sin borrar otras sucursales. */
+  const persistLlavesCacheSliceForMarcaCorpo = async (nextSlice: LlaveUI[]) => {
+    const current = await loadMarcaContext();
+    const cid = current ? resolveCorpoIdFromMarca(current) : null;
+    const cacheStr = await AsyncStorage.getItem('llaves_cache');
+    const existing: LlaveUI[] = cacheStr ? JSON.parse(cacheStr) : [];
+    const merged = replaceLlavesCorpoSliceInCache(existing, nextSlice, cid);
+    await AsyncStorage.setItem('llaves_cache', JSON.stringify(merged));
+  };
+
+  const persistLlaverosCacheSliceForMarcaCorpo = async (nextSlice: LlaveroUI[]) => {
+    const current = await loadMarcaContext();
+    const cid = current ? resolveCorpoIdFromMarca(current) : null;
+    const cacheStr = await AsyncStorage.getItem('llaveros_cache');
+    const existing: LlaveroUI[] = cacheStr ? JSON.parse(cacheStr) : [];
+    const merged = replaceLlaverosCorpoSliceInCache(existing, nextSlice, cid);
+    await AsyncStorage.setItem('llaveros_cache', JSON.stringify(merged));
+  };
+
   const fetchLlaves = async () => {
     try {
       setIsLoading(true);
@@ -339,35 +393,71 @@ export default function LlavesScreen() {
         return;
       }
 
+      const listCorpoId = resolveCorpoIdFromMarca(current);
+      if (!listCorpoId) {
+        setError('No se encontró sucursal (corpo) en la marca actual. Indique sucursal en la marca.');
+        setLlaves([]);
+        setIsLoading(false);
+        return;
+      }
+
       const isConnected = await getConnectionStatus();
       console.log('isConnected', isConnected);
       if (isConnected) {
         const res = await listLlaves({
-          marcaId: current.id,
+          corpoId: listCorpoId,
           refreshAccessToken,
           logout,
         });
         if (res.status) {
-          const list = (res.data || []).map((it: any) => ({
-            ...it,
-            id_local: it.id_local || '',
-            movimientos: (it.movimientos || []).map((m: any) => ({ ...m, id_local: m.id_local || '' })),
-          }));
-          setLlaves(list);
-          await AsyncStorage.setItem('llaves_cache', JSON.stringify(list));
+          const list = normalizeLlavesList(res.data || []);
+          const cacheStr = await AsyncStorage.getItem('llaves_cache');
+          const existing: LlaveUI[] = cacheStr ? JSON.parse(cacheStr) : [];
+          const merged = mergeLlavesCacheForCorpo(existing, list, listCorpoId);
+          await AsyncStorage.setItem('llaves_cache', JSON.stringify(merged));
+          setLlaves(normalizeLlavesList(filterLlavesByCorpo(merged, listCorpoId)));
         } else {
           setError(res.message || 'Error al cargar llaves');
           const cacheStr = await AsyncStorage.getItem('llaves_cache');
-          if (cacheStr) setLlaves(JSON.parse(cacheStr));
+          if (cacheStr) {
+            try {
+              const all = JSON.parse(cacheStr);
+              setLlaves(normalizeLlavesList(filterLlavesByCorpo(Array.isArray(all) ? all : [], listCorpoId)));
+            } catch {
+              setLlaves([]);
+            }
+          } else {
+            setLlaves([]);
+          }
         }
       } else {
         const cacheStr = await AsyncStorage.getItem('llaves_cache');
-        if (cacheStr) setLlaves(JSON.parse(cacheStr));
+        if (cacheStr) {
+          try {
+            const all = JSON.parse(cacheStr);
+            setLlaves(normalizeLlavesList(filterLlavesByCorpo(Array.isArray(all) ? all : [], listCorpoId)));
+          } catch {
+            setLlaves([]);
+          }
+        } else {
+          setLlaves([]);
+        }
       }
     } catch (e: any) {
       setError(e.message || 'Error al cargar llaves');
-      const cacheStr = await AsyncStorage.getItem('llaves_cache');
-      if (cacheStr) setLlaves(JSON.parse(cacheStr));
+      try {
+        const current = await loadMarcaContext();
+        const listCorpoId = current ? resolveCorpoIdFromMarca(current) : null;
+        const cacheStr = await AsyncStorage.getItem('llaves_cache');
+        if (cacheStr && listCorpoId) {
+          const all = JSON.parse(cacheStr);
+          setLlaves(normalizeLlavesList(filterLlavesByCorpo(Array.isArray(all) ? all : [], listCorpoId)));
+        } else {
+          setLlaves([]);
+        }
+      } catch {
+        setLlaves([]);
+      }
     } finally {
       setIsLoading(false);
     }
@@ -383,10 +473,18 @@ export default function LlavesScreen() {
         return;
       }
 
+      const listCorpoId = resolveCorpoIdFromMarca(current);
+      if (!listCorpoId) {
+        setError('No se encontró sucursal (corpo) en la marca actual. Indique sucursal en la marca.');
+        setLlaveros([]);
+        setIsLoading(false);
+        return;
+      }
+
       const isConnected = await getConnectionStatus();
       if (isConnected) {
         const res = await listLlaveros({
-          marcaId: current.id,
+          corpoId: listCorpoId,
           refreshAccessToken,
           logout,
         });
@@ -397,21 +495,53 @@ export default function LlavesScreen() {
             movimientos: (it.movimientos || []).map((m: any) => ({ ...m, id_local: m.id_local || '' })),
             llaves: (it.llaves || []).map((l: any) => ({ ...l })),
           }));
-          setLlaveros(list);
-          await AsyncStorage.setItem('llaveros_cache', JSON.stringify(list));
+          const cacheStr = await AsyncStorage.getItem('llaveros_cache');
+          const existing: LlaveroUI[] = cacheStr ? JSON.parse(cacheStr) : [];
+          const merged = mergeLlaverosCacheForCorpo(existing, list, listCorpoId);
+          await AsyncStorage.setItem('llaveros_cache', JSON.stringify(merged));
+          setLlaveros(filterLlaverosByCorpo(merged, listCorpoId));
         } else {
           setError(res.message || 'Error al cargar llaveros');
           const cacheStr = await AsyncStorage.getItem('llaveros_cache');
-          if (cacheStr) setLlaveros(JSON.parse(cacheStr));
+          if (cacheStr) {
+            try {
+              const all = JSON.parse(cacheStr);
+              setLlaveros(filterLlaverosByCorpo(Array.isArray(all) ? all : [], listCorpoId));
+            } catch {
+              setLlaveros([]);
+            }
+          } else {
+            setLlaveros([]);
+          }
         }
       } else {
         const cacheStr = await AsyncStorage.getItem('llaveros_cache');
-        if (cacheStr) setLlaveros(JSON.parse(cacheStr));
+        if (cacheStr) {
+          try {
+            const all = JSON.parse(cacheStr);
+            setLlaveros(filterLlaverosByCorpo(Array.isArray(all) ? all : [], listCorpoId));
+          } catch {
+            setLlaveros([]);
+          }
+        } else {
+          setLlaveros([]);
+        }
       }
     } catch (e: any) {
       setError(e.message || 'Error al cargar llaveros');
-      const cacheStr = await AsyncStorage.getItem('llaveros_cache');
-      if (cacheStr) setLlaveros(JSON.parse(cacheStr));
+      try {
+        const current = await loadMarcaContext();
+        const listCorpoId = current ? resolveCorpoIdFromMarca(current) : null;
+        const cacheStr = await AsyncStorage.getItem('llaveros_cache');
+        if (cacheStr && listCorpoId) {
+          const all = JSON.parse(cacheStr);
+          setLlaveros(filterLlaverosByCorpo(Array.isArray(all) ? all : [], listCorpoId));
+        } else {
+          setLlaveros([]);
+        }
+      } catch {
+        setLlaveros([]);
+      }
     } finally {
       setIsLoading(false);
     }
@@ -451,9 +581,15 @@ export default function LlavesScreen() {
     });
     if (found) {
       setMovLlavero(found);
-      setLlaveroMovimientos((found as any).movimientos || []);
+      // No pisar la lista mientras hay formulario de movimiento abierto (evita cierre “visual” o datos inconsistentes)
+      if (!llaveroMovIsCreating && !llaveroMovEditing) {
+        const raw = (found as any).movimientos;
+        if (Array.isArray(raw)) {
+          setLlaveroMovimientos(raw.map((m: any) => ({ ...m, id_local: m.id_local || '' })));
+        }
+      }
     }
-  }, [llaveros, isLlaveroMovModalVisible, movLlavero?.id, movLlavero?.id_local]);
+  }, [llaveros, isLlaveroMovModalVisible, movLlavero?.id, movLlavero?.id_local, llaveroMovIsCreating, llaveroMovEditing]);
 
   // Si el modal de movimientos está abierto, mantenerlo sincronizado cuando cambie la lista principal (online/offline)
   useEffect(() => {
@@ -465,9 +601,14 @@ export default function LlavesScreen() {
     });
     if (found) {
       setMovLlave(found);
-      setMovimientos((found as any).movimientos || []);
+      if (!movIsCreating && !movEditing) {
+        const raw = (found as any).movimientos;
+        if (Array.isArray(raw)) {
+          setMovimientos(raw.map((m: any) => ({ ...m, id_local: m.id_local || '' })));
+        }
+      }
     }
-  }, [llaves, isMovModalVisible, movLlave?.id, movLlave?.id_local]);
+  }, [llaves, isMovModalVisible, movLlave?.id, movLlave?.id_local, movIsCreating, movEditing]);
 
   const resetForm = () => {
     setLugarAbre('');
@@ -572,7 +713,20 @@ export default function LlavesScreen() {
 
   const upsertAction = async (action: any) => {
     const actionsStr = await AsyncStorage.getItem('llaves_actions');
-    const actions = actionsStr ? JSON.parse(actionsStr) : [];
+    let actions = actionsStr ? JSON.parse(actionsStr) : [];
+    if (action.type === 'update') {
+      actions = actions.filter((a: any) => !(a.type === 'update' && String(a.id) === String(action.id)));
+    }
+    if (action.type === 'create') {
+      const idStr = String(action.id);
+      actions = actions.filter(
+        (a: any) =>
+          !(
+            (a.type === 'update' && String(a.id) === idStr) ||
+            (a.type === 'create' && String(a.id) === idStr)
+          )
+      );
+    }
     actions.push(action);
     await AsyncStorage.setItem('llaves_actions', JSON.stringify(actions));
   };
@@ -581,27 +735,30 @@ export default function LlavesScreen() {
     const actionsStr = await AsyncStorage.getItem('llaves_actions');
     if (!actionsStr) return;
     const actions = JSON.parse(actionsStr) || [];
-    const updated = actions.filter((a: any) => a.id !== localId);
+    const updated = actions.filter(
+      (a: any) =>
+        !(
+          (String(a.id) === String(localId) || String(a.id_local) === String(localId)) &&
+          (a.type === 'create' || a.type === 'update')
+        )
+    );
     await AsyncStorage.setItem('llaves_actions', JSON.stringify(updated));
   };
 
   const updateCreateActionForLocalId = async (localId: string, requestData: any) => {
     const actionsStr = await AsyncStorage.getItem('llaves_actions');
-    if (!actionsStr) return false;
-    const actions = JSON.parse(actionsStr) || [];
+    let actions = actionsStr ? JSON.parse(actionsStr) || [] : [];
+    actions = actions.filter((a: any) => !(a.type === 'update' && String(a.id) === String(localId)));
     let updatedAny = false;
     const updated = actions.map((a: any) => {
-      if (a.type === 'create' && a.id === localId) {
+      if (a.type === 'create' && String(a.id) === String(localId)) {
         updatedAny = true;
         return { ...a, requestData };
       }
       return a;
     });
-    if (updatedAny) {
-      await AsyncStorage.setItem('llaves_actions', JSON.stringify(updated));
-      return true;
-    }
-    return false;
+    await AsyncStorage.setItem('llaves_actions', JSON.stringify(updated));
+    return updatedAny;
   };
 
   // ============================
@@ -622,7 +779,20 @@ export default function LlavesScreen() {
 
   const upsertMovAction = async (action: any) => {
     const actionsStr = await AsyncStorage.getItem('movimientos_llaves_actions');
-    const actions = actionsStr ? JSON.parse(actionsStr) : [];
+    let actions = actionsStr ? JSON.parse(actionsStr) : [];
+    if (action.type === 'update') {
+      actions = actions.filter((a: any) => !(a.type === 'update' && String(a.id) === String(action.id)));
+    }
+    if (action.type === 'create') {
+      const idStr = String(action.id);
+      actions = actions.filter(
+        (a: any) =>
+          !(
+            (a.type === 'update' && String(a.id) === idStr) ||
+            (a.type === 'create' && String(a.id) === idStr)
+          )
+      );
+    }
     actions.push(action);
     await AsyncStorage.setItem('movimientos_llaves_actions', JSON.stringify(actions));
   };
@@ -631,27 +801,30 @@ export default function LlavesScreen() {
     const actionsStr = await AsyncStorage.getItem('movimientos_llaves_actions');
     if (!actionsStr) return;
     const actions = JSON.parse(actionsStr) || [];
-    const updated = actions.filter((a: any) => a.id !== localId);
+    const updated = actions.filter(
+      (a: any) =>
+        !(
+          (String(a.id) === String(localId) || String(a.id_local) === String(localId)) &&
+          (a.type === 'create' || a.type === 'update')
+        )
+    );
     await AsyncStorage.setItem('movimientos_llaves_actions', JSON.stringify(updated));
   };
 
   const updateMovCreateActionForLocalId = async (localId: string, requestData: any) => {
     const actionsStr = await AsyncStorage.getItem('movimientos_llaves_actions');
-    if (!actionsStr) return false;
-    const actions = JSON.parse(actionsStr) || [];
+    let actions = actionsStr ? JSON.parse(actionsStr) || [] : [];
+    actions = actions.filter((a: any) => !(a.type === 'update' && String(a.id) === String(localId)));
     let updatedAny = false;
     const updated = actions.map((a: any) => {
-      if (a.type === 'create' && a.id === localId) {
+      if (a.type === 'create' && String(a.id) === String(localId)) {
         updatedAny = true;
         return { ...a, requestData };
       }
       return a;
     });
-    if (updatedAny) {
-      await AsyncStorage.setItem('movimientos_llaves_actions', JSON.stringify(updated));
-      return true;
-    }
-    return false;
+    await AsyncStorage.setItem('movimientos_llaves_actions', JSON.stringify(updated));
+    return updatedAny;
   };
 
   const validateMovForm = () => {
@@ -787,7 +960,7 @@ export default function LlavesScreen() {
       return { ...it, movimientos: nextMovs };
     });
     setLlaves(nextLlaves);
-    await AsyncStorage.setItem('llaves_cache', JSON.stringify(nextLlaves));
+    await persistLlavesCacheSliceForMarcaCorpo(nextLlaves);
 
     setMovimientos(nextMovs);
     setMovLlave((prev) => (prev ? { ...prev, movimientos: nextMovs } : prev));
@@ -837,6 +1010,7 @@ export default function LlavesScreen() {
           await upsertMovAction({
             type: 'create',
             id: localId,
+            id_local: localId,
             llaveId: movLlave.id || 0,
             llaveLocalId: movLlave.id_local || '',
             requestData: payload,
@@ -892,6 +1066,7 @@ export default function LlavesScreen() {
             await upsertMovAction({
               type: 'create',
               id: movEditing.id_local,
+              id_local: movEditing.id_local,
               llaveId: movLlave.id || 0,
               llaveLocalId: movLlave.id_local || '',
               requestData: payload,
@@ -918,53 +1093,75 @@ export default function LlavesScreen() {
     }
   };
 
-  const handleMovDelete = async (m: MovimientoUI) => {
+  const handleMovSaveWithConfirm = () => {
+    if (isSavingMov) return;
+    if (!employee || !movLlave) return;
+    if (!validateMovForm()) return;
+    const isEdit = movEditing != null;
+    Alert.alert(
+      'Confirmar',
+      isEdit ? '¿Guardar los cambios de este movimiento?' : '¿Registrar este movimiento?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Aceptar', onPress: () => void handleMovSave() },
+      ]
+    );
+  };
+
+  const executeMovDelete = async (m: MovimientoUI) => {
     const current = await loadMarcaContext();
     if (!current?.id) return;
     if (!movLlave) return;
 
+    setDeletingMovLlaveKey(movimientoLlaveRowKey(m));
+    try {
+      const isConnected = await getConnectionStatus();
+
+      if (m.id_local || m.id === 0) {
+        const next = movimientos.filter((x) => x.id_local !== m.id_local);
+        await persistMovimientosToLlavesCache(movLlave, next);
+        if (m.id_local) await removeMovActionsForLocalId(m.id_local);
+        return;
+      }
+
+      if (isConnected && movLlave.id && movLlave.id !== 0) {
+        const res = await deleteMovimientoLlave({
+          llaveId: movLlave.id,
+          id: m.id,
+          marcaId: current.id,
+          refreshAccessToken,
+          logout,
+        });
+        if (res.status) {
+          Alert.alert('Éxito', 'Movimiento eliminado correctamente');
+          await fetchLlaves();
+        } else {
+          Alert.alert('Error', res.message || 'No se pudo eliminar el movimiento');
+        }
+      } else {
+        const next = movimientos.filter((x) => x.id !== m.id);
+        await persistMovimientosToLlavesCache(movLlave, next);
+        await upsertMovAction({
+          type: 'delete',
+          id: m.id,
+          llaveId: movLlave.id || 0,
+          llaveLocalId: movLlave.id_local || '',
+          marcaId: current.id,
+        });
+        Alert.alert('Eliminado (offline)', 'La eliminación se sincronizará cuando vuelva la conexión.');
+      }
+    } finally {
+      setDeletingMovLlaveKey(null);
+    }
+  };
+
+  const handleMovDelete = (m: MovimientoUI) => {
     Alert.alert('Confirmar', '¿Deseas eliminar este movimiento?', [
       { text: 'Cancelar', style: 'cancel' },
       {
         text: 'Eliminar',
         style: 'destructive',
-        onPress: async () => {
-          const isConnected = await getConnectionStatus();
-
-          if (m.id_local || m.id === 0) {
-            const next = movimientos.filter((x) => x.id_local !== m.id_local);
-            await persistMovimientosToLlavesCache(movLlave, next);
-            if (m.id_local) await removeMovActionsForLocalId(m.id_local);
-            return;
-          }
-
-          if (isConnected && movLlave.id && movLlave.id !== 0) {
-            const res = await deleteMovimientoLlave({
-              llaveId: movLlave.id,
-              id: m.id,
-              marcaId: current.id,
-              refreshAccessToken,
-              logout,
-            });
-            if (res.status) {
-              Alert.alert('Éxito', 'Movimiento eliminado correctamente');
-              await fetchLlaves();
-            } else {
-              Alert.alert('Error', res.message || 'No se pudo eliminar el movimiento');
-            }
-          } else {
-            const next = movimientos.filter((x) => x.id !== m.id);
-            await persistMovimientosToLlavesCache(movLlave, next);
-            await upsertMovAction({
-              type: 'delete',
-              id: m.id,
-              llaveId: movLlave.id || 0,
-              llaveLocalId: movLlave.id_local || '',
-              marcaId: current.id,
-            });
-            Alert.alert('Eliminado (offline)', 'La eliminación se sincronizará cuando vuelva la conexión.');
-          }
-        },
+        onPress: () => void executeMovDelete(m),
       },
     ]);
   };
@@ -1049,14 +1246,23 @@ export default function LlavesScreen() {
             Alert.alert('Error', res.message || 'No se pudo crear la llave');
           }
         } else {
+          const currentMarca = await loadMarcaContext();
+          const clienteNum = Number(currentMarca?.cliente?.id ?? currentMarca?.cliente_id) || 0;
+          const corpoNum = resolveCorpoIdFromMarca(currentMarca) || 0;
+          const puestoNum = Number(currentMarca?.puesto?.id ?? currentMarca?.puesto_id) || 0;
+          if (!corpoNum) {
+            Alert.alert('Error', 'No se encontró sucursal (corpo) en la marca; no se puede crear la llave offline.');
+            return;
+          }
+
           const localId = `local-${Date.now()}`;
           const nowIso = new Date(horaAccion).toISOString();
           const localItem: LlaveUI = {
             id: 0,
             id_local: localId,
-            cliente_id: 0,
-            corpo_id: 0,
-            puesto_id: 0,
+            cliente_id: clienteNum,
+            corpo_id: corpoNum,
+            puesto_id: puestoNum,
             lugar_abre: payload.lugar_abre,
             cantidad_copias: payload.cantidad_copias,
             observaciones: payload.observaciones,
@@ -1065,10 +1271,13 @@ export default function LlavesScreen() {
             created_at: nowIso,
           };
 
-          const next = [localItem, ...llaves];
-          setLlaves(next);
-          await AsyncStorage.setItem('llaves_cache', JSON.stringify(next));
-          await upsertAction({ type: 'create', id: localId, requestData: payload });
+          const cacheStr0 = await AsyncStorage.getItem('llaves_cache');
+          const existingAll: LlaveUI[] = cacheStr0 ? JSON.parse(cacheStr0) : [];
+          const deduped = existingAll.filter((x) => String(x.id_local) !== String(localId));
+          const nextCache = [localItem, ...deduped];
+          await AsyncStorage.setItem('llaves_cache', JSON.stringify(nextCache));
+          setLlaves([localItem, ...llaves]);
+          await upsertAction({ type: 'create', id: localId, id_local: localId, requestData: payload });
 
           Alert.alert('Éxito', 'La llave se sincronizará cuando vuelva la conexión.');
           setIsCreating(false);
@@ -1104,12 +1313,12 @@ export default function LlavesScreen() {
           };
         });
         setLlaves(next);
-        await AsyncStorage.setItem('llaves_cache', JSON.stringify(next));
+        await persistLlavesCacheSliceForMarcaCorpo(next);
 
         if (editing.id_local) {
           const updated = await updateCreateActionForLocalId(editing.id_local, payload);
           if (!updated) {
-            await upsertAction({ type: 'create', id: editing.id_local, requestData: payload });
+            await upsertAction({ type: 'create', id: editing.id_local, id_local: editing.id_local, requestData: payload });
           }
         } else {
           await upsertAction({ type: 'update', id: editing.id, requestData: payload });
@@ -1127,6 +1336,21 @@ export default function LlavesScreen() {
     }
   };
 
+  const handleSaveWithConfirm = () => {
+    if (isSubmitting) return;
+    if (!employee) return;
+    if (!validateForm()) return;
+    const isEdit = editing != null;
+    Alert.alert(
+      'Confirmar',
+      isEdit ? '¿Guardar los cambios de esta llave?' : '¿Registrar esta llave?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Aceptar', onPress: () => void handleSave() },
+      ]
+    );
+  };
+
   // Funciones CRUD para Llaveros
   const validateLlaveroForm = () => {
     if (!llaveroNombre.trim()) {
@@ -1140,15 +1364,39 @@ export default function LlavesScreen() {
     return true;
   };
 
+  const parseLlaveSelectionKeysToRefs = (keys: string[]) => {
+    const refs: { llave_id?: number; llave_id_local?: string }[] = [];
+    for (const k of keys) {
+      if (k.startsWith('l:')) refs.push({ llave_id_local: k.slice(2) });
+      else if (k.startsWith('s:')) {
+        const n = Number(k.slice(2));
+        if (Number.isFinite(n) && n > 0) refs.push({ llave_id: n });
+      }
+    }
+    return refs;
+  };
+
+  const llaveroLinkRowToSelectionKey = (l: any) => {
+    if (l?.llave_id_local) return `l:${l.llave_id_local}`;
+    if (l?.llave_id && l.llave_id > 0) return `s:${l.llave_id}`;
+    return '';
+  };
+
+  const llaveToSelectionKey = (ll: LlaveUI) =>
+    ll.id && ll.id > 0 ? `s:${ll.id}` : ll.id_local ? `l:${ll.id_local}` : '';
+
   const buildLlaveroPayload = async () => {
     const current = await loadMarcaContext();
     if (!current?.id) throw new Error('Marca no encontrada');
+    const llaves_refs = parseLlaveSelectionKeysToRefs(llaveroSelectedLlaveKeys);
+    const llaves = llaves_refs.map((r) => r.llave_id).filter((n): n is number => typeof n === 'number' && n > 0);
     return {
       marca_id: current.id,
       nombre_llavero: llaveroNombre.trim(),
       observaciones: llaveroObservaciones.trim(),
       firma_responsable: llaveroFirmaResponsable,
-      llaves: llaveroSelectedLlaves,
+      llaves_refs,
+      llaves,
     };
   };
 
@@ -1184,24 +1432,38 @@ export default function LlavesScreen() {
           const localId = `local-llavero-${Date.now()}`;
           const nowIso = new Date(horaAccion).toISOString();
           const current = await loadMarcaContext();
+          const clienteNum = Number(current?.cliente?.id ?? current?.cliente_id) || 0;
+          const corpoNum = resolveCorpoIdFromMarca(current) || 0;
+          const puestoNum = Number(current?.puesto?.id ?? current?.puesto_id) || 0;
+          if (!corpoNum) {
+            Alert.alert('Error', 'No se encontró sucursal (corpo) en la marca; no se puede crear el llavero offline.');
+            return;
+          }
           const localItem: LlaveroUI = {
             id: 0,
             id_local: localId,
-            cliente_id: current?.cliente_id || 0,
-            corpo_id: current?.corpo_id || 0,
-            puesto_id: current?.puesto_id || 0,
+            cliente_id: clienteNum,
+            corpo_id: corpoNum,
+            puesto_id: puestoNum,
             nombre_llavero: payload.nombre_llavero,
             observaciones: payload.observaciones,
             firma_responsable: payload.firma_responsable,
             created_by: Number(employee.id) || 0,
             created_at: nowIso,
-            llaves: payload.llaves.map((llaveId: number) => ({ id: 0, llave_id: llaveId, llavero_id: 0 })),
+            llaves: (payload.llaves_refs || []).map((r: { llave_id?: number; llave_id_local?: string }) =>
+              r.llave_id_local
+                ? { id: 0, llave_id: 0, llave_id_local: r.llave_id_local, llavero_id: 0 }
+                : { id: 0, llave_id: r.llave_id || 0, llavero_id: 0 }
+            ),
           };
 
-          const next = [localItem, ...llaveros];
-          setLlaveros(next);
-          await AsyncStorage.setItem('llaveros_cache', JSON.stringify(next));
-          await upsertLlaveroAction({ type: 'create', id: localId, requestData: payload });
+          const cacheStr0 = await AsyncStorage.getItem('llaveros_cache');
+          const existingAll: LlaveroUI[] = cacheStr0 ? JSON.parse(cacheStr0) : [];
+          const deduped = existingAll.filter((x) => String(x.id_local) !== String(localId));
+          const nextCache = [localItem, ...deduped];
+          await AsyncStorage.setItem('llaveros_cache', JSON.stringify(nextCache));
+          setLlaveros([localItem, ...llaveros]);
+          await upsertLlaveroAction({ type: 'create', id: localId, id_local: localId, requestData: payload });
 
           Alert.alert('Éxito', 'El llavero se sincronizará cuando vuelva la conexión.');
           setIsLlaveroCreating(false);
@@ -1233,14 +1495,23 @@ export default function LlavesScreen() {
             nombre_llavero: payload.nombre_llavero,
             observaciones: payload.observaciones,
             firma_responsable: payload.firma_responsable,
-            llaves: payload.llaves.map((llaveId: number) => ({ id: 0, llave_id: llaveId, llavero_id: it.id || 0 })),
+            llaves: (payload.llaves_refs || []).map((r: { llave_id?: number; llave_id_local?: string }) =>
+              r.llave_id_local
+                ? { id: 0, llave_id: 0, llave_id_local: r.llave_id_local, llavero_id: it.id || 0 }
+                : { id: 0, llave_id: r.llave_id || 0, llavero_id: it.id || 0 }
+            ),
           };
         });
         setLlaveros(next);
-        await AsyncStorage.setItem('llaveros_cache', JSON.stringify(next));
+        await persistLlaverosCacheSliceForMarcaCorpo(next);
 
         if (llaveroEditing.id_local) {
-          await upsertLlaveroAction({ type: 'create', id: llaveroEditing.id_local, requestData: payload });
+          await upsertLlaveroAction({
+            type: 'create',
+            id: llaveroEditing.id_local,
+            id_local: llaveroEditing.id_local,
+            requestData: payload,
+          });
         } else {
           await upsertLlaveroAction({ type: 'update', id: llaveroEditing.id, requestData: payload });
         }
@@ -1257,43 +1528,63 @@ export default function LlavesScreen() {
     }
   };
 
-  const handleLlaveroDelete = async (it: LlaveroUI) => {
+  const handleLlaveroSaveWithConfirm = () => {
+    if (isSubmitting) return;
+    if (!employee) return;
+    if (!validateLlaveroForm()) return;
+    const isEdit = llaveroEditing != null;
+    Alert.alert(
+      'Confirmar',
+      isEdit ? '¿Guardar los cambios de este llavero?' : '¿Registrar este llavero?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Aceptar', onPress: () => void handleLlaveroSave() },
+      ]
+    );
+  };
+
+  const executeLlaveroDelete = async (it: LlaveroUI) => {
     const current = await loadMarcaContext();
     if (!current?.id) return;
+    setDeletingLlaveroKey(llaveroRowKey(it));
+    try {
+      const isConnected = await getConnectionStatus();
 
+      if (it.id_local || it.id === 0) {
+        const next = llaveros.filter((x) => x.id_local !== it.id_local);
+        setLlaveros(next);
+        await persistLlaverosCacheSliceForMarcaCorpo(next);
+        if (it.id_local) await removeLlaveroActionsForLocalId(it.id_local);
+        return;
+      }
+
+      if (isConnected) {
+        const res = await deleteLlavero({ id: it.id, marcaId: current.id, refreshAccessToken, logout });
+        if (res.status) {
+          Alert.alert('Éxito', 'Llavero eliminado correctamente');
+          await fetchLlaveros();
+        } else {
+          Alert.alert('Error', res.message || 'No se pudo eliminar el llavero');
+        }
+      } else {
+        const next = llaveros.filter((x) => x.id !== it.id);
+        setLlaveros(next);
+        await persistLlaverosCacheSliceForMarcaCorpo(next);
+        await upsertLlaveroAction({ type: 'delete', id: it.id, marcaId: current.id });
+        Alert.alert('Eliminado (offline)', 'La eliminación se sincronizará cuando vuelva la conexión.');
+      }
+    } finally {
+      setDeletingLlaveroKey(null);
+    }
+  };
+
+  const handleLlaveroDelete = (it: LlaveroUI) => {
     Alert.alert('Confirmar', '¿Deseas eliminar este llavero?', [
       { text: 'Cancelar', style: 'cancel' },
       {
         text: 'Eliminar',
         style: 'destructive',
-        onPress: async () => {
-          const isConnected = await getConnectionStatus();
-
-          // local-only
-          if (it.id_local || it.id === 0) {
-            const next = llaveros.filter((x) => x.id_local !== it.id_local);
-            setLlaveros(next);
-            await AsyncStorage.setItem('llaveros_cache', JSON.stringify(next));
-            if (it.id_local) await removeLlaveroActionsForLocalId(it.id_local);
-            return;
-          }
-
-          if (isConnected) {
-            const res = await deleteLlavero({ id: it.id, marcaId: current.id, refreshAccessToken, logout });
-            if (res.status) {
-              Alert.alert('Éxito', 'Llavero eliminado correctamente');
-              await fetchLlaveros();
-            } else {
-              Alert.alert('Error', res.message || 'No se pudo eliminar el llavero');
-            }
-          } else {
-            const next = llaveros.filter((x) => x.id !== it.id);
-            setLlaveros(next);
-            await AsyncStorage.setItem('llaveros_cache', JSON.stringify(next));
-            await upsertLlaveroAction({ type: 'delete', id: it.id, marcaId: current.id });
-            Alert.alert('Eliminado (offline)', 'La eliminación se sincronizará cuando vuelva la conexión.');
-          }
-        },
+        onPress: () => void executeLlaveroDelete(it),
       },
     ]);
   };
@@ -1405,6 +1696,55 @@ export default function LlavesScreen() {
     resetLlaveroMovForm();
   };
 
+  const syncLlaveroMovementsMirrorIntoLlavesCache = async (llaveroRef: LlaveroUI, nextMovs: MovimientoLlaveroUI[]) => {
+    const links = (llaveroRef.llaves || []) as any[];
+    if (!links.length) return;
+
+    const nextLlaves = llaves.map((ll) => {
+      const isLinked = links.some((l) => {
+        if (l.llave_id_local) return l.llave_id_local === ll.id_local;
+        return l.llave_id && l.llave_id === ll.id && ll.id > 0;
+      });
+      if (!isLinked || ll.cantidad_copias !== 1) return ll;
+
+      let movs: any[] = Array.isArray(ll.movimientos) ? [...ll.movimientos] : [];
+      const shadowLocals = new Set(
+        nextMovs.map((m) => m.id_local).filter((x): x is string => !!x && String(x).startsWith('local-mov-llavero-'))
+      );
+
+      movs = movs.filter((m) => {
+        if (!m.id_local || !String(m.id_local).startsWith('local-mov-llavero-')) return true;
+        return shadowLocals.has(m.id_local);
+      });
+
+      for (const m of nextMovs) {
+        if (!m.id_local || !String(m.id_local).startsWith('local-mov-llavero-')) continue;
+        const shadow = {
+          id: m.id || 0,
+          id_local: m.id_local,
+          llave_id: ll.id || 0,
+          nombre_persona_recibe: m.nombre_persona_recibe,
+          nombre_persona_entrega: m.nombre_persona_entrega,
+          departamento: m.departamento,
+          telefono: m.telefono,
+          fecha: m.fecha,
+          hora: m.hora,
+          firma_entrega: m.firma_entrega,
+          firma_recibe: m.firma_recibe,
+          firma_responsable: m.firma_responsable,
+        };
+        const idx = movs.findIndex((x) => x.id_local === m.id_local);
+        if (idx >= 0) movs[idx] = shadow;
+        else movs = [shadow, ...movs];
+      }
+
+      return { ...ll, movimientos: movs };
+    });
+
+    setLlaves(nextLlaves);
+    await persistLlavesCacheSliceForMarcaCorpo(nextLlaves);
+  };
+
   const persistMovimientosToLlaverosCache = async (llavero: LlaveroUI, nextMovs: MovimientoLlaveroUI[]) => {
     const nextLlaveros = llaveros.map((it) => {
       const match = (llavero.id_local && it.id_local === llavero.id_local) || (!llavero.id_local && it.id === llavero.id);
@@ -1412,10 +1752,17 @@ export default function LlavesScreen() {
       return { ...it, movimientos: nextMovs };
     });
     setLlaveros(nextLlaveros);
-    await AsyncStorage.setItem('llaveros_cache', JSON.stringify(nextLlaveros));
+    await persistLlaverosCacheSliceForMarcaCorpo(nextLlaveros);
 
     setLlaveroMovimientos(nextMovs);
     setMovLlavero((prev) => (prev ? { ...prev, movimientos: nextMovs } : prev));
+
+    const updatedLlavero = nextLlaveros.find((it) =>
+      (llavero.id_local && it.id_local === llavero.id_local) || (!llavero.id_local && it.id === llavero.id)
+    );
+    if (updatedLlavero) {
+      await syncLlaveroMovementsMirrorIntoLlavesCache(updatedLlavero, nextMovs);
+    }
   };
 
   const handleLlaveroMovSave = async () => {
@@ -1462,6 +1809,7 @@ export default function LlavesScreen() {
           await upsertLlaveroMovAction({
             type: 'create',
             id: localId,
+            id_local: localId,
             llaveroId: movLlavero.id || 0,
             llaveroLocalId: movLlavero.id_local || '',
             requestData: payload,
@@ -1512,6 +1860,7 @@ export default function LlavesScreen() {
           await upsertLlaveroMovAction({
             type: 'create',
             id: llaveroMovEditing.id_local,
+            id_local: llaveroMovEditing.id_local,
             llaveroId: movLlavero.id || 0,
             llaveroLocalId: movLlavero.id_local || '',
             requestData: payload,
@@ -1533,93 +1882,121 @@ export default function LlavesScreen() {
     }
   };
 
-  const handleLlaveroMovDelete = async (m: MovimientoLlaveroUI) => {
+  const handleLlaveroMovSaveWithConfirm = () => {
+    if (isSavingLlaveroMov) return;
+    if (!employee || !movLlavero) return;
+    if (!validateLlaveroMovForm()) return;
+    const isEdit = llaveroMovEditing != null;
+    Alert.alert(
+      'Confirmar',
+      isEdit ? '¿Guardar los cambios de este movimiento?' : '¿Registrar este movimiento?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Aceptar', onPress: () => void handleLlaveroMovSave() },
+      ]
+    );
+  };
+
+  const executeLlaveroMovDelete = async (m: MovimientoLlaveroUI) => {
     if (!movLlavero) return;
     const current = await loadMarcaContext();
     if (!current?.id) return;
 
+    setDeletingMovLlaveroKey(movimientoLlaveroRowKey(m));
+    try {
+      const isConnected = await getConnectionStatus();
+
+      if (m.id_local || m.id === 0) {
+        const next = llaveroMovimientos.filter((x) => x.id_local !== m.id_local);
+        await persistMovimientosToLlaverosCache(movLlavero, next);
+        if (m.id_local) await removeLlaveroMovActionsForLocalId(m.id_local);
+        return;
+      }
+
+      if (isConnected && movLlavero.id && movLlavero.id !== 0) {
+        const res = await deleteMovimientoLlavero({
+          llaveroId: movLlavero.id,
+          id: m.id,
+          marcaId: current.id,
+          refreshAccessToken,
+          logout,
+        });
+        if (res.status) {
+          Alert.alert('Éxito', 'Movimiento eliminado correctamente');
+          await fetchLlaveros();
+        } else {
+          Alert.alert('Error', res.message || 'No se pudo eliminar el movimiento');
+        }
+      } else {
+        const next = llaveroMovimientos.filter((x) => x.id !== m.id);
+        await persistMovimientosToLlaverosCache(movLlavero, next);
+        await upsertLlaveroMovAction({
+          type: 'delete',
+          id: m.id,
+          llaveroId: movLlavero.id || 0,
+          marcaId: current.id,
+        });
+        Alert.alert('Eliminado (offline)', 'La eliminación se sincronizará cuando vuelva la conexión.');
+      }
+    } finally {
+      setDeletingMovLlaveroKey(null);
+    }
+  };
+
+  const handleLlaveroMovDelete = (m: MovimientoLlaveroUI) => {
     Alert.alert('Confirmar', '¿Deseas eliminar este movimiento?', [
       { text: 'Cancelar', style: 'cancel' },
       {
         text: 'Eliminar',
         style: 'destructive',
-        onPress: async () => {
-          const isConnected = await getConnectionStatus();
-
-          if (m.id_local || m.id === 0) {
-            const next = llaveroMovimientos.filter((x) => x.id_local !== m.id_local);
-            await persistMovimientosToLlaverosCache(movLlavero, next);
-            if (m.id_local) await removeLlaveroMovActionsForLocalId(m.id_local);
-            return;
-          }
-
-          if (isConnected && movLlavero.id && movLlavero.id !== 0) {
-            const res = await deleteMovimientoLlavero({
-              llaveroId: movLlavero.id,
-              id: m.id,
-              marcaId: current.id,
-              refreshAccessToken,
-              logout,
-            });
-            if (res.status) {
-              Alert.alert('Éxito', 'Movimiento eliminado correctamente');
-              await fetchLlaveros();
-            } else {
-              Alert.alert('Error', res.message || 'No se pudo eliminar el movimiento');
-            }
-          } else {
-            const next = llaveroMovimientos.filter((x) => x.id !== m.id);
-            await persistMovimientosToLlaverosCache(movLlavero, next);
-            await upsertLlaveroMovAction({
-              type: 'delete',
-              id: m.id,
-              llaveroId: movLlavero.id || 0,
-              marcaId: current.id,
-            });
-            Alert.alert('Eliminado (offline)', 'La eliminación se sincronizará cuando vuelva la conexión.');
-          }
-        },
+        onPress: () => void executeLlaveroMovDelete(m),
       },
     ]);
   };
 
-  const handleDelete = async (it: LlaveUI) => {
+  const executeLlaveDelete = async (it: LlaveUI) => {
     const current = await loadMarcaContext();
     if (!current?.id) return;
 
+    setDeletingLlaveKey(llaveRowKey(it));
+    try {
+      const isConnected = await getConnectionStatus();
+
+      if (it.id_local || it.id === 0) {
+        const next = llaves.filter((x) => x.id_local !== it.id_local);
+        setLlaves(next);
+        await persistLlavesCacheSliceForMarcaCorpo(next);
+        if (it.id_local) await removeActionsForLocalId(it.id_local);
+        return;
+      }
+
+      if (isConnected) {
+        const res = await deleteLlave({ id: it.id, marcaId: current.id, refreshAccessToken, logout });
+        if (res.status) {
+          Alert.alert('Éxito', 'Llave eliminada correctamente');
+          await fetchLlaves();
+        } else {
+          Alert.alert('Error', res.message || 'No se pudo eliminar la llave');
+        }
+      } else {
+        const next = llaves.filter((x) => x.id !== it.id);
+        setLlaves(next);
+        await persistLlavesCacheSliceForMarcaCorpo(next);
+        await upsertAction({ type: 'delete', id: it.id, marcaId: current.id });
+        Alert.alert('Eliminado (offline)', 'La eliminación se sincronizará cuando vuelva la conexión.');
+      }
+    } finally {
+      setDeletingLlaveKey(null);
+    }
+  };
+
+  const handleDelete = (it: LlaveUI) => {
     Alert.alert('Confirmar', '¿Deseas eliminar esta llave?', [
       { text: 'Cancelar', style: 'cancel' },
       {
         text: 'Eliminar',
         style: 'destructive',
-        onPress: async () => {
-          const isConnected = await getConnectionStatus();
-
-          // local-only
-          if (it.id_local || it.id === 0) {
-            const next = llaves.filter((x) => x.id_local !== it.id_local);
-            setLlaves(next);
-            await AsyncStorage.setItem('llaves_cache', JSON.stringify(next));
-            if (it.id_local) await removeActionsForLocalId(it.id_local);
-            return;
-          }
-
-          if (isConnected) {
-            const res = await deleteLlave({ id: it.id, marcaId: current.id, refreshAccessToken, logout });
-            if (res.status) {
-              Alert.alert('Éxito', 'Llave eliminada correctamente');
-              await fetchLlaves();
-            } else {
-              Alert.alert('Error', res.message || 'No se pudo eliminar la llave');
-            }
-          } else {
-            const next = llaves.filter((x) => x.id !== it.id);
-            setLlaves(next);
-            await AsyncStorage.setItem('llaves_cache', JSON.stringify(next));
-            await upsertAction({ type: 'delete', id: it.id, marcaId: current.id });
-            Alert.alert('Eliminado (offline)', 'La eliminación se sincronizará cuando vuelva la conexión.');
-          }
-        },
+        onPress: () => void executeLlaveDelete(it),
       },
     ]);
   };
@@ -1629,7 +2006,7 @@ export default function LlavesScreen() {
     setLlaveroNombre('');
     setLlaveroObservaciones('');
     setLlaveroFirmaResponsable('');
-    setLlaveroSelectedLlaves([]);
+    setLlaveroSelectedLlaveKeys([]);
   };
 
   const startLlaveroCreating = () => {
@@ -1644,8 +2021,8 @@ export default function LlavesScreen() {
     setLlaveroNombre(it.nombre_llavero || '');
     setLlaveroObservaciones(it.observaciones || '');
     setLlaveroFirmaResponsable(it.firma_responsable || '');
-    const selectedLlaves = (it.llaves || []).map((l: any) => l.llave_id).filter((id: number) => id && id > 0);
-    setLlaveroSelectedLlaves(selectedLlaves);
+    const keys = (it.llaves || []).map(llaveroLinkRowToSelectionKey).filter(Boolean) as string[];
+    setLlaveroSelectedLlaveKeys(keys);
   };
 
   const cancelLlaveroCreating = () => {
@@ -1657,8 +2034,12 @@ export default function LlavesScreen() {
   const upsertLlaveroAction = async (action: any) => {
     const actionsStr = await AsyncStorage.getItem('llaveros_actions');
     const actions = actionsStr ? JSON.parse(actionsStr) : [];
-    const filtered = actions.filter((a: any) => !(a.id === action.id && a.type === action.type));
-    filtered.push({ ...action, id: action.id || `local-${Date.now()}` });
+    const idKey = action.id || `local-${Date.now()}`;
+    let filtered = actions.filter((a: any) => !(a.id === idKey && a.type === action.type));
+    if (action.type === 'create') {
+      filtered = filtered.filter((a: any) => !(a.type === 'update' && String(a.id) === String(idKey)));
+    }
+    filtered.push({ ...action, id: idKey });
     await AsyncStorage.setItem('llaveros_actions', JSON.stringify(filtered));
   };
 
@@ -1666,15 +2047,25 @@ export default function LlavesScreen() {
     const actionsStr = await AsyncStorage.getItem('llaveros_actions');
     if (!actionsStr) return;
     const actions = JSON.parse(actionsStr) || [];
-    const updated = actions.filter((a: any) => a.id !== localId);
+    const updated = actions.filter(
+      (a: any) =>
+        !(
+          (String(a.id) === String(localId) || String(a.id_local) === String(localId)) &&
+          (a.type === 'create' || a.type === 'update')
+        )
+    );
     await AsyncStorage.setItem('llaveros_actions', JSON.stringify(updated));
   };
 
   const upsertLlaveroMovAction = async (action: any) => {
     const actionsStr = await AsyncStorage.getItem('movimientos_llaveros_actions');
     const actions = actionsStr ? JSON.parse(actionsStr) : [];
-    const filtered = actions.filter((a: any) => !(a.id === action.id && a.type === action.type));
-    filtered.push({ ...action, id: action.id || `local-${Date.now()}` });
+    const idKey = action.id || `local-${Date.now()}`;
+    let filtered = actions.filter((a: any) => !(a.id === idKey && a.type === action.type));
+    if (action.type === 'create') {
+      filtered = filtered.filter((a: any) => !(a.type === 'update' && String(a.id) === String(idKey)));
+    }
+    filtered.push({ ...action, id: idKey });
     await AsyncStorage.setItem('movimientos_llaveros_actions', JSON.stringify(filtered));
   };
 
@@ -1682,7 +2073,13 @@ export default function LlavesScreen() {
     const actionsStr = await AsyncStorage.getItem('movimientos_llaveros_actions');
     if (!actionsStr) return;
     const actions = JSON.parse(actionsStr) || [];
-    const updated = actions.filter((a: any) => a.id !== localId);
+    const updated = actions.filter(
+      (a: any) =>
+        !(
+          (String(a.id) === String(localId) || String(a.id_local) === String(localId)) &&
+          (a.type === 'create' || a.type === 'update')
+        )
+    );
     await AsyncStorage.setItem('movimientos_llaveros_actions', JSON.stringify(updated));
   };
 
@@ -1724,27 +2121,40 @@ export default function LlavesScreen() {
 
   // Obtener llaves disponibles para seleccionar (desde cache o API)
   const getAvailableLlaves = async (): Promise<LlaveUI[]> => {
+    const current = await loadMarcaContext();
+    const listCorpoId = current ? resolveCorpoIdFromMarca(current) : null;
+    if (!listCorpoId) return [];
+
     const isConnected = await getConnectionStatus();
     if (isConnected) {
-      const current = await loadMarcaContext();
       if (current) {
-        const res = await listLlaves({ marcaId: current.id, refreshAccessToken, logout });
+        const res = await listLlaves({ corpoId: listCorpoId, refreshAccessToken, logout });
         if (res.status && res.data) {
-          return res.data.map((it: any) => ({ ...it, id_local: it.id_local || '' }));
+          const list = normalizeLlavesList(res.data);
+          const cacheStr = await AsyncStorage.getItem('llaves_cache');
+          const existing: LlaveUI[] = cacheStr ? JSON.parse(cacheStr) : [];
+          const merged = mergeLlavesCacheForCorpo(existing, list, listCorpoId);
+          await AsyncStorage.setItem('llaves_cache', JSON.stringify(merged));
+          return normalizeLlavesList(filterLlavesByCorpo(merged, listCorpoId));
         }
       }
     }
     const cacheStr = await AsyncStorage.getItem('llaves_cache');
     if (cacheStr) {
-      return JSON.parse(cacheStr);
+      try {
+        const all = JSON.parse(cacheStr);
+        return normalizeLlavesList(filterLlavesByCorpo(Array.isArray(all) ? all : [], listCorpoId));
+      } catch {
+        return [];
+      }
     }
     return [];
   };
 
   // Componente para seleccionar llaves en llavero
-  const LlaveroLlavesSelector = ({ selectedLlaves, onSelectionChange, getAvailableLlaves, isExpanded }: {
-    selectedLlaves: number[];
-    onSelectionChange: (llaves: number[]) => void;
+  const LlaveroLlavesSelector = ({ selectedKeys, onSelectionChange, getAvailableLlaves, isExpanded }: {
+    selectedKeys: string[];
+    onSelectionChange: (keys: string[]) => void;
     getAvailableLlaves: () => Promise<LlaveUI[]>;
     isExpanded: boolean;
   }) => {
@@ -1771,11 +2181,12 @@ export default function LlavesScreen() {
       }
     }, [isExpanded]);
 
-    const toggleLlave = (llaveId: number) => {
-      if (selectedLlaves.includes(llaveId)) {
-        onSelectionChange(selectedLlaves.filter((id) => id !== llaveId));
+    const toggleLlave = (key: string) => {
+      if (!key) return;
+      if (selectedKeys.includes(key)) {
+        onSelectionChange(selectedKeys.filter((k) => k !== key));
       } else {
-        onSelectionChange([...selectedLlaves, llaveId]);
+        onSelectionChange([...selectedKeys, key]);
       }
     };
 
@@ -1787,12 +2198,14 @@ export default function LlavesScreen() {
           <ThemedText style={styles.emptyText}>No hay llaves disponibles</ThemedText>
         ) : (
           availableLlaves.map((llave) => {
-            const isSelected = selectedLlaves.includes(llave.id);
+            const selKey = llaveToSelectionKey(llave);
+            const isSelected = selKey ? selectedKeys.includes(selKey) : false;
             return (
               <TouchableOpacity
                 key={llave.id || llave.id_local}
                 style={[styles.llaveSelectorItem, isSelected && styles.llaveSelectorItemSelected]}
-                onPress={() => toggleLlave(llave.id)}
+                onPress={() => toggleLlave(selKey)}
+                disabled={!selKey}
               >
                 <Ionicons
                   name={isSelected ? 'checkbox' : 'checkbox-outline'}
@@ -1899,9 +2312,19 @@ export default function LlavesScreen() {
               <ThemedText style={styles.listItemButtonText}>Cambios</ThemedText>
             </TouchableOpacity>
           )}
-          <TouchableOpacity style={[styles.listItemButton, styles.deleteButton]} onPress={() => handleDelete(it)}>
-            <Ionicons name="trash" size={18} color="#FFFFFF" />
-            <ThemedText style={styles.listItemButtonText}>Eliminar</ThemedText>
+          <TouchableOpacity
+            style={[styles.listItemButton, styles.deleteButton]}
+            onPress={() => handleDelete(it)}
+            disabled={deletingLlaveKey === llaveRowKey(it)}
+          >
+            {deletingLlaveKey === llaveRowKey(it) ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <>
+                <Ionicons name="trash" size={18} color="#FFFFFF" />
+                <ThemedText style={styles.listItemButtonText}>Eliminar</ThemedText>
+              </>
+            )}
           </TouchableOpacity>
         </ThemedView>
         <ThemedView style={styles.listItemButtons}>
@@ -2006,9 +2429,19 @@ export default function LlavesScreen() {
               <ThemedText style={styles.listItemButtonText}>Cambios</ThemedText>
             </TouchableOpacity>
           )}
-          <TouchableOpacity style={[styles.listItemButton, styles.deleteButton]} onPress={() => handleLlaveroDelete(it)}>
-            <Ionicons name="trash" size={18} color="#FFFFFF" />
-            <ThemedText style={styles.listItemButtonText}>Eliminar</ThemedText>
+          <TouchableOpacity
+            style={[styles.listItemButton, styles.deleteButton]}
+            onPress={() => handleLlaveroDelete(it)}
+            disabled={deletingLlaveroKey === llaveroRowKey(it)}
+          >
+            {deletingLlaveroKey === llaveroRowKey(it) ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <>
+                <Ionicons name="trash" size={18} color="#FFFFFF" />
+                <ThemedText style={styles.listItemButtonText}>Eliminar</ThemedText>
+              </>
+            )}
           </TouchableOpacity>
         </ThemedView>
         <ThemedView style={styles.listItemButtons}>
@@ -2225,7 +2658,7 @@ export default function LlavesScreen() {
                     </TouchableOpacity>
                     <TouchableOpacity
                       style={[styles.formActionButton, styles.formActionSave, isSubmitting && styles.buttonDisabled]}
-                      onPress={handleSave}
+                      onPress={handleSaveWithConfirm}
                       disabled={isSubmitting}
                     >
                       {isSubmitting ? (
@@ -2368,7 +2801,7 @@ export default function LlavesScreen() {
                       style={styles.expandableHeader}
                       onPress={() => setIsLlaveroLlavesExpanded(!isLlaveroLlavesExpanded)}
                     >
-                      <ThemedText style={styles.label}>Llaves asociadas ({llaveroSelectedLlaves.length})</ThemedText>
+                      <ThemedText style={styles.label}>Llaves asociadas ({llaveroSelectedLlaveKeys.length})</ThemedText>
                       <Ionicons
                         name={isLlaveroLlavesExpanded ? 'chevron-up' : 'chevron-down'}
                         size={20}
@@ -2378,8 +2811,8 @@ export default function LlavesScreen() {
                     {isLlaveroLlavesExpanded && (
                       <ThemedView style={styles.expandableContent}>
                         <LlaveroLlavesSelector
-                          selectedLlaves={llaveroSelectedLlaves}
-                          onSelectionChange={setLlaveroSelectedLlaves}
+                          selectedKeys={llaveroSelectedLlaveKeys}
+                          onSelectionChange={setLlaveroSelectedLlaveKeys}
                           getAvailableLlaves={getAvailableLlaves}
                           isExpanded={isLlaveroLlavesExpanded}
                         />
@@ -2483,7 +2916,7 @@ export default function LlavesScreen() {
                     </TouchableOpacity>
                     <TouchableOpacity
                       style={[styles.formActionButton, styles.formActionSave, isSubmitting && styles.buttonDisabled]}
-                      onPress={handleLlaveroSave}
+                      onPress={handleLlaveroSaveWithConfirm}
                       disabled={isSubmitting}
                     >
                       {isSubmitting ? (
@@ -2583,16 +3016,24 @@ export default function LlavesScreen() {
       )}
 
       {/* Modal Movimientos de llaves */}
-      <Modal visible={isMovModalVisible} animationType="slide" transparent={false} onRequestClose={closeMovimientosModal}>
-        <ThemedView style={styles.modalContainer}>
-          <ThemedView style={styles.modalHeader}>
+      <Modal
+        visible={isMovModalVisible}
+        animationType="fade"
+        transparent
+        presentationStyle="overFullScreen"
+        statusBarTranslucent
+        onRequestClose={closeMovimientosModal}
+      >
+        <View style={styles.overlay}>
+          <ThemedView style={styles.floatModalCardMovimientos}>
+          <ThemedView style={styles.floatModalHeader}>
             <ThemedText style={styles.modalTitle}>Movimiento de llaves</ThemedText>
             <TouchableOpacity onPress={closeMovimientosModal}>
               <Ionicons name="close" size={24} color="#333" />
             </TouchableOpacity>
           </ThemedView>
 
-          <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16 }}>
+          <ScrollView style={styles.floatModalScroll} contentContainerStyle={styles.floatModalScrollContent} keyboardShouldPersistTaps="handled">
             <ThemedView style={styles.modalCard}>
               <ThemedText style={styles.modalCardTitle}>Llave:</ThemedText>
               <ThemedText style={styles.modalCardValue}>{movLlave?.lugar_abre || '-'}</ThemedText>
@@ -2774,7 +3215,7 @@ export default function LlavesScreen() {
                   </TouchableOpacity>
                   <TouchableOpacity
                     style={[styles.formActionButton, styles.formActionSave, isSavingMov && styles.formActionButtonDisabled]}
-                    onPress={handleMovSave}
+                    onPress={handleMovSaveWithConfirm}
                     disabled={isSavingMov}
                   >
                     {isSavingMov ? (
@@ -2874,9 +3315,19 @@ export default function LlavesScreen() {
                               <ThemedText style={styles.listItemButtonText}>Cambios</ThemedText>
                             </TouchableOpacity>
                           )}
-                          <TouchableOpacity style={[styles.listItemButton, styles.deleteButton]} onPress={() => handleMovDelete(m)}>
-                            <Ionicons name="trash" size={18} color="#FFFFFF" />
-                            <ThemedText style={styles.listItemButtonText}>Eliminar</ThemedText>
+                          <TouchableOpacity
+                            style={[styles.listItemButton, styles.deleteButton]}
+                            onPress={() => handleMovDelete(m)}
+                            disabled={deletingMovLlaveKey === movimientoLlaveRowKey(m)}
+                          >
+                            {deletingMovLlaveKey === movimientoLlaveRowKey(m) ? (
+                              <ActivityIndicator size="small" color="#FFFFFF" />
+                            ) : (
+                              <>
+                                <Ionicons name="trash" size={18} color="#FFFFFF" />
+                                <ThemedText style={styles.listItemButtonText}>Eliminar</ThemedText>
+                              </>
+                            )}
                           </TouchableOpacity>
                         </ThemedView>
                       </ThemedView>
@@ -2922,20 +3373,29 @@ export default function LlavesScreen() {
               }}
             />
           )}
-        </ThemedView>
+          </ThemedView>
+        </View>
       </Modal>
 
       {/* Modal Movimientos de llaveros */}
-      <Modal visible={isLlaveroMovModalVisible} animationType="slide" transparent={false} onRequestClose={closeLlaveroMovimientosModal}>
-        <ThemedView style={styles.modalContainer}>
-          <ThemedView style={styles.modalHeader}>
+      <Modal
+        visible={isLlaveroMovModalVisible}
+        animationType="fade"
+        transparent
+        presentationStyle="overFullScreen"
+        statusBarTranslucent
+        onRequestClose={closeLlaveroMovimientosModal}
+      >
+        <View style={styles.overlay}>
+          <ThemedView style={styles.floatModalCardMovimientos}>
+          <ThemedView style={styles.floatModalHeader}>
             <ThemedText style={styles.modalTitle}>Movimientos de llaveros</ThemedText>
             <TouchableOpacity onPress={closeLlaveroMovimientosModal}>
               <Ionicons name="close" size={24} color="#333" />
             </TouchableOpacity>
           </ThemedView>
 
-          <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16 }}>
+          <ScrollView style={styles.floatModalScroll} contentContainerStyle={styles.floatModalScrollContent} keyboardShouldPersistTaps="handled">
             <ThemedView style={styles.modalCard}>
               <ThemedText style={styles.modalCardTitle}>Llavero:</ThemedText>
               <ThemedText style={styles.modalCardValue}>{movLlavero?.nombre_llavero || '-'}</ThemedText>
@@ -3146,7 +3606,7 @@ export default function LlavesScreen() {
                   </TouchableOpacity>
                   <TouchableOpacity
                     style={[styles.formActionButton, styles.formActionSave, isSavingLlaveroMov && styles.formActionButtonDisabled]}
-                    onPress={handleLlaveroMovSave}
+                    onPress={handleLlaveroMovSaveWithConfirm}
                     disabled={isSavingLlaveroMov}
                   >
                     {isSavingLlaveroMov ? (
@@ -3246,9 +3706,19 @@ export default function LlavesScreen() {
                               <ThemedText style={styles.listItemButtonText}>Cambios</ThemedText>
                             </TouchableOpacity>
                           )}
-                          <TouchableOpacity style={[styles.listItemButton, styles.deleteButton]} onPress={() => handleLlaveroMovDelete(m)}>
-                            <Ionicons name="trash" size={18} color="#FFFFFF" />
-                            <ThemedText style={styles.listItemButtonText}>Eliminar</ThemedText>
+                          <TouchableOpacity
+                            style={[styles.listItemButton, styles.deleteButton]}
+                            onPress={() => handleLlaveroMovDelete(m)}
+                            disabled={deletingMovLlaveroKey === movimientoLlaveroRowKey(m)}
+                          >
+                            {deletingMovLlaveroKey === movimientoLlaveroRowKey(m) ? (
+                              <ActivityIndicator size="small" color="#FFFFFF" />
+                            ) : (
+                              <>
+                                <Ionicons name="trash" size={18} color="#FFFFFF" />
+                                <ThemedText style={styles.listItemButtonText}>Eliminar</ThemedText>
+                              </>
+                            )}
                           </TouchableOpacity>
                         </ThemedView>
                       </ThemedView>
@@ -3294,7 +3764,8 @@ export default function LlavesScreen() {
               }}
             />
           )}
-        </ThemedView>
+          </ThemedView>
+        </View>
       </Modal>
 
       {/* Modal flotante para dibujar firma (entrega/recibe) */}
@@ -3916,8 +4387,19 @@ const styles = StyleSheet.create({
     borderBottomColor: '#E0E0E0',
     backgroundColor: '#F8F9FA',
   },
-  floatModalCardMovimientos: { backgroundColor: '#FFFFFF', borderRadius: 12, width: '100%', maxWidth: 500, maxHeight: '80%', borderWidth: 1, borderColor: '#E0E0E0', overflow: 'hidden' },
-  floatModalScroll: { flex: 1 },
+  floatModalCardMovimientos: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    width: '100%',
+    maxWidth: 500,
+    maxHeight: Dimensions.get('window').height * 0.9,
+    flexShrink: 1,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    overflow: 'hidden',
+  },
+  // Altura explícita: flex:1 en ScrollView dentro del card suele colapsar a 0 y el modal parece “vacío”
+  floatModalScroll: { maxHeight: Dimensions.get('window').height * 0.76 },
   floatModalScrollContent: { padding: 16 },
   floatModalFilters: { marginBottom: 16 },
   formGroup: { marginTop: 10, marginBottom: 10 },

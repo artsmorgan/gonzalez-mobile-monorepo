@@ -17,101 +17,18 @@ export async function GET(req: NextRequest) {
         const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
-        const marcaId = req.nextUrl.searchParams.get("m");
-        if (!marcaId) {
+        const puestoIdStr = req.nextUrl.searchParams.get("puesto_id");
+        if (!puestoIdStr || String(puestoIdStr).trim() === "") {
             return NextResponse.json(
-                { status: false, message: "Marca no especificada" },
+                { status: false, message: "Puesto no especificado" },
                 { status: 200 }
             );
         }
 
-        const marca = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "c_marca_dia",
-                operation: "findUnique",
-                where: { id: parseInt(marcaId) },
-            },
-        });
-        if (!marca) {
+        const targetPuestoId = parseInt(String(puestoIdStr), 10);
+        if (!Number.isFinite(targetPuestoId) || targetPuestoId <= 0) {
             return NextResponse.json(
-                { status: false, message: "Marca no encontrada" },
-                { status: 200 }
-            );
-        }
-
-        const marcaObj = marca as any;
-        if (!marcaObj.empleadoFijo_id) {
-            return NextResponse.json(
-                { status: false, message: "Empleado no encontrado" },
-                { status: 200 }
-            );
-        }
-
-        // Obtener la última marca usando callDynamicPrisma directamente
-        const now = toZonedTime(new Date(), "America/Costa_Rica");
-        const nowPlus15 = new Date(now.getTime() + 15 * 60 * 1000);
-        const currentDate = new Date(now.toISOString().split("T")[0]);
-        const currentTime = new Date("1970-01-01 " + now.toTimeString().slice(0, 8));
-
-        const proximo = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "c_marca_dia",
-                operation: "findFirst",
-                where: {
-                    empleadoFijo_id: marcaObj.empleadoFijo_id,
-                    OR: [
-                        { fecha: { gt: now } },
-                        { fecha: { equals: currentDate }, hora_inicio: { gte: currentTime } },
-                    ],
-                },
-                orderBy: [{ fecha: "asc" }, { hora_inicio: "asc" }],
-            },
-        });
-
-        let lastMarca: any = null;
-        if (proximo) {
-            const proximoObj = proximo as any;
-            const proximoDateTime = new Date(`${proximoObj.fecha}T${proximoObj.hora_inicio}`);
-            if (proximoDateTime <= nowPlus15) {
-                lastMarca = proximo;
-            }
-        }
-
-        if (!lastMarca) {
-            const ultimo = await callDynamicPrisma({
-                req,
-                data: {
-                    action: "GET",
-                    table: "c_marca_dia",
-                    operation: "findFirst",
-                    where: {
-                        empleadoFijo_id: marcaObj.empleadoFijo_id,
-                        OR: [
-                            { fecha: { lt: now } },
-                            { fecha: { equals: currentDate }, hora_inicio: { lt: currentTime } },
-                        ],
-                    },
-                    orderBy: [{ fecha: "desc" }, { hora_inicio: "desc" }],
-                },
-            });
-            lastMarca = ultimo;
-        }
-
-        if (!lastMarca) {
-            return NextResponse.json(
-                { status: false, message: "No se encontró la última marca" },
-                { status: 200 }
-            );
-        }
-
-        const lastMarcaObj = lastMarca as any;
-        if (marcaObj.id !== lastMarcaObj.id) {
-            return NextResponse.json(
-                { status: false, message: "Hay una nueva marca más reciente" },
+                { status: false, message: "puesto_id inválido" },
                 { status: 200 }
             );
         }
@@ -122,7 +39,7 @@ export async function GET(req: NextRequest) {
                 action: "GET",
                 table: "e_estructura_puesto",
                 operation: "findUnique",
-                where: { id: marcaObj.puesto_id },
+                where: { id: targetPuestoId },
             },
         });
 

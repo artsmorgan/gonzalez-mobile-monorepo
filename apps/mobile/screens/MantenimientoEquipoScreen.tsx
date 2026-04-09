@@ -491,6 +491,11 @@ export default function MantenimientoEquipoScreen() {
 
     // IDs de current_marca para inicialización
     const [marcaPuestoId, setMarcaPuestoId] = useState<number | null>(null);
+    const [marcaEmpresaId, setMarcaEmpresaId] = useState<number | null>(null);
+    const [marcaClienteId, setMarcaClienteId] = useState<number | null>(null);
+    const [marcaDivisionId, setMarcaDivisionId] = useState<number | null>(null);
+    const [marcaContratoId, setMarcaContratoId] = useState<number | null>(null);
+    const [marcaCorpoId, setMarcaCorpoId] = useState<number | null>(null);
 
     // Estructura principal (main_structure) para filtros jerárquicos (Empresa → ... → Puesto)
     const [structure, setStructure] = useState<any[]>([]);
@@ -621,6 +626,8 @@ export default function MantenimientoEquipoScreen() {
     const [movFirmaRecibe, setMovFirmaRecibe] = useState<string>('');
     const [movFirmaResponsable, setMovFirmaResponsable] = useState('');
     const [isGeneratingMovFirma, setIsGeneratingMovFirma] = useState(false);
+    const [isMovSubmitting, setIsMovSubmitting] = useState(false);
+    const [deletingMovKey, setDeletingMovKey] = useState<string | null>(null);
 
     // Modal: ver cambios (auditoría)
     const [isCambiosModalVisible, setIsCambiosModalVisible] = useState(false);
@@ -1003,19 +1010,39 @@ export default function MantenimientoEquipoScreen() {
         if (!currentMarcaStr) {
             setHasCurrentMarca(false);
             setMarcaPuestoId(null);
+            setMarcaEmpresaId(null);
+            setMarcaClienteId(null);
+            setMarcaDivisionId(null);
+            setMarcaContratoId(null);
+            setMarcaCorpoId(null);
             return null;
         }
         const current = JSON.parse(currentMarcaStr);
         if (!current?.id) {
             setHasCurrentMarca(false);
             setMarcaPuestoId(null);
+            setMarcaEmpresaId(null);
+            setMarcaClienteId(null);
+            setMarcaDivisionId(null);
+            setMarcaContratoId(null);
+            setMarcaCorpoId(null);
             return null;
         }
         setHasCurrentMarca(true);
         setMarcaId(current.id);
 
+        const empresaIdRaw = current?.empresa?.id ?? current?.empresa_id;
+        const clienteIdRaw = current?.cliente?.id ?? current?.cliente_id;
+        const divisionIdRaw = current?.roleDivision?.division?.id ?? current?.division?.id ?? current?.division_id;
+        const contratoIdRaw = current?.contrato?.id ?? current?.contrato_id;
+        const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
         const puestoIdRaw = current?.puesto?.id ?? current?.puesto_id;
 
+        setMarcaEmpresaId(empresaIdRaw !== undefined && empresaIdRaw !== null ? Number(empresaIdRaw) : null);
+        setMarcaClienteId(clienteIdRaw !== undefined && clienteIdRaw !== null ? Number(clienteIdRaw) : null);
+        setMarcaDivisionId(divisionIdRaw !== undefined && divisionIdRaw !== null ? Number(divisionIdRaw) : null);
+        setMarcaContratoId(contratoIdRaw !== undefined && contratoIdRaw !== null ? Number(contratoIdRaw) : null);
+        setMarcaCorpoId(corpoIdRaw !== undefined && corpoIdRaw !== null ? Number(corpoIdRaw) : null);
         setMarcaPuestoId(puestoIdRaw !== undefined && puestoIdRaw !== null ? Number(puestoIdRaw) : null);
 
         return current;
@@ -1102,6 +1129,23 @@ export default function MantenimientoEquipoScreen() {
         setFilterCorpoId(path.sucursalId);
         setFilterPuestoId(path.puestoId);
     }, [filterEmpresas, findPathByPuestoId]);
+
+    const applyFiltersFromMarcaHierarchy = useCallback(() => {
+        const empresaId = marcaEmpresaId ?? null;
+        const clienteId = marcaClienteId ?? null;
+        const divisionId = marcaDivisionId ?? null;
+        const contratoId = marcaContratoId ?? null;
+        const corpoId = marcaCorpoId ?? null;
+        const puestoId = marcaPuestoId ?? null;
+        if (!empresaId && !clienteId && !divisionId && !contratoId && !corpoId && !puestoId) return;
+
+        setFilterEmpresaId(empresaId);
+        setFilterClienteId(clienteId);
+        setFilterDivisionId(divisionId);
+        setFilterContratoId(contratoId);
+        setFilterCorpoId(corpoId);
+        setFilterPuestoId(puestoId);
+    }, [marcaEmpresaId, marcaClienteId, marcaDivisionId, marcaContratoId, marcaCorpoId, marcaPuestoId]);
 
     const resetFiltersToCurrentMarca = useCallback(() => {
         // Reinicia el árbol al puesto de current_marca (si existe)
@@ -1459,15 +1503,25 @@ export default function MantenimientoEquipoScreen() {
             filterPuestoId === null || (prevMarcaPuestoId !== null && Number(filterPuestoId) === Number(prevMarcaPuestoId));
 
         if (!didInitFiltersFromMarca.current) {
-            applyFiltersFromPuestoId(marcaPuestoId);
+            const path = findPathByPuestoId(filterEmpresas, marcaPuestoId);
+            if (path) {
+                applyFiltersFromPuestoId(marcaPuestoId);
+            } else {
+                applyFiltersFromMarcaHierarchy();
+            }
             didInitFiltersFromMarca.current = true;
         } else if (prevMarcaPuestoId !== null && prevMarcaPuestoId !== marcaPuestoId && shouldSyncToMarca) {
-            applyFiltersFromPuestoId(marcaPuestoId);
+            const path = findPathByPuestoId(filterEmpresas, marcaPuestoId);
+            if (path) {
+                applyFiltersFromPuestoId(marcaPuestoId);
+            } else {
+                applyFiltersFromMarcaHierarchy();
+            }
         }
 
         lastMarcaPuestoIdRef.current = marcaPuestoId;
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [marcaPuestoId, filterEmpresas, applyFiltersFromPuestoId]);
+    }, [marcaPuestoId, filterEmpresas, applyFiltersFromPuestoId, applyFiltersFromMarcaHierarchy, findPathByPuestoId]);
 
     // Cargar artículos del puesto (plan + asignados) al entrar / cuando cambia la marca actual
     useEffect(() => {
@@ -2017,17 +2071,15 @@ export default function MantenimientoEquipoScreen() {
         []
     );
 
-    const handleSave = async () => {
-        if (!selectedActivo) return;
+    const handleSaveInternal = async () => {
+        if (!selectedActivo || isSubmitting) return;
 
-        setIsSubmitting(true);
         setSubmitResponse(null);
 
         const isConnected = await getConnectionStatus();
         const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
         if (!apiUrl) {
             Alert.alert('Error', 'Server URL not configured');
-            setIsSubmitting(false);
             return;
         }
 
@@ -2203,8 +2255,6 @@ export default function MantenimientoEquipoScreen() {
                 }
             } catch (error: any) {
                 Alert.alert('Error', error.message || 'No se pudo actualizar el mantenimiento');
-            } finally {
-                setIsSubmitting(false);
             }
         } else {
             // Modo offline
@@ -2300,7 +2350,24 @@ export default function MantenimientoEquipoScreen() {
                 await fetchReportes();
             }, 2000);
         }
-        setIsSubmitting(false);
+    };
+
+    const handleSave = async () => {
+        if (!selectedActivo || isSubmitting) return;
+        Alert.alert('Confirmar', '¿Deseas guardar los cambios del mantenimiento?', [
+            { text: 'Cancelar', style: 'cancel' },
+            {
+                text: 'Aceptar',
+                onPress: async () => {
+                    setIsSubmitting(true);
+                    try {
+                        await handleSaveInternal();
+                    } finally {
+                        setIsSubmitting(false);
+                    }
+                },
+            },
+        ]);
     };
 
     const renderReporte = (reporte: ArticuloPuestoMantenimientoItem) => {
@@ -2484,7 +2551,20 @@ export default function MantenimientoEquipoScreen() {
 
     const upsertMovAction = async (action: any) => {
         const actionsStr = await AsyncStorage.getItem('movimientos_articulos_mantenimiento_actions');
-        const actions = actionsStr ? JSON.parse(actionsStr) : [];
+        let actions = actionsStr ? JSON.parse(actionsStr) : [];
+        if (action.type === 'update') {
+            actions = actions.filter((a: any) => !(a.type === 'update' && String(a.id) === String(action.id)));
+        }
+        if (action.type === 'create') {
+            const idStr = String(action.id);
+            actions = actions.filter(
+                (a: any) =>
+                    !(
+                        (a.type === 'update' && String(a.id) === idStr) ||
+                        (a.type === 'create' && String(a.id) === idStr)
+                    )
+            );
+        }
         actions.push(action);
         await AsyncStorage.setItem('movimientos_articulos_mantenimiento_actions', JSON.stringify(actions));
     };
@@ -2493,27 +2573,30 @@ export default function MantenimientoEquipoScreen() {
         const actionsStr = await AsyncStorage.getItem('movimientos_articulos_mantenimiento_actions');
         if (!actionsStr) return;
         const actions = JSON.parse(actionsStr) || [];
-        const updated = actions.filter((a: any) => a.id !== localId);
+        const updated = actions.filter(
+            (a: any) =>
+                !(
+                    (String(a.id) === String(localId) || String(a.id_local) === String(localId)) &&
+                    (a.type === 'create' || a.type === 'update')
+                )
+        );
         await AsyncStorage.setItem('movimientos_articulos_mantenimiento_actions', JSON.stringify(updated));
     };
 
     const updateMovCreateActionForLocalId = async (localId: string, requestData: any) => {
         const actionsStr = await AsyncStorage.getItem('movimientos_articulos_mantenimiento_actions');
-        if (!actionsStr) return false;
-        const actions = JSON.parse(actionsStr) || [];
+        let actions = actionsStr ? JSON.parse(actionsStr) || [] : [];
+        actions = actions.filter((a: any) => !(a.type === 'update' && String(a.id) === String(localId)));
         let updatedAny = false;
         const updated = actions.map((a: any) => {
-            if (a.type === 'create' && a.id === localId) {
+            if (a.type === 'create' && String(a.id) === String(localId)) {
                 updatedAny = true;
                 return { ...a, requestData };
             }
             return a;
         });
-        if (updatedAny) {
-            await AsyncStorage.setItem('movimientos_articulos_mantenimiento_actions', JSON.stringify(updated));
-            return true;
-        }
-        return false;
+        await AsyncStorage.setItem('movimientos_articulos_mantenimiento_actions', JSON.stringify(updated));
+        return updatedAny;
     };
 
     const validateMovForm = () => {
@@ -2729,7 +2812,12 @@ export default function MantenimientoEquipoScreen() {
         setMovActivo((prev) => (prev ? { ...prev, movimientos: nextMovs } : prev));
     };
 
-    const handleMovSave = async () => {
+    const getMovItemKey = useCallback((m: MovimientoArticuloMantenimientoItem): string => {
+        if (m.id_local) return `l:${m.id_local}`;
+        return `i:${String(m.id)}`;
+    }, []);
+
+    const handleMovSaveInternal = async () => {
         if (!employee) return;
         if (!movActivo) return;
         if (!validateMovForm()) return;
@@ -2773,6 +2861,7 @@ export default function MantenimientoEquipoScreen() {
                 await upsertMovAction({
                     type: 'create',
                     id: localId,
+                    id_local: localId,
                     parent,
                     puestoId: activePuestoId,
                     parentKey: movActivo.key,
@@ -2824,6 +2913,7 @@ export default function MantenimientoEquipoScreen() {
                     await upsertMovAction({
                         type: 'create',
                         id: movEditing.id_local,
+                        id_local: movEditing.id_local,
                         parent,
                         puestoId: activePuestoId,
                         parentKey: movActivo.key,
@@ -2847,6 +2937,29 @@ export default function MantenimientoEquipoScreen() {
         }
     };
 
+    const handleMovSave = async () => {
+        if (isMovSubmitting) return;
+        const isEditingMov = !!movEditing;
+        Alert.alert(
+            'Confirmar',
+            isEditingMov ? '¿Deseas actualizar este movimiento?' : '¿Deseas crear este movimiento?',
+            [
+                { text: 'Cancelar', style: 'cancel' },
+                {
+                    text: 'Aceptar',
+                    onPress: async () => {
+                        setIsMovSubmitting(true);
+                        try {
+                            await handleMovSaveInternal();
+                        } finally {
+                            setIsMovSubmitting(false);
+                        }
+                    },
+                },
+            ]
+        );
+    };
+
     const handleMovDelete = async (m: MovimientoArticuloMantenimientoItem) => {
         const current = await loadMarcaContext();
         if (!current?.id) return;
@@ -2859,35 +2972,39 @@ export default function MantenimientoEquipoScreen() {
                 style: 'destructive',
                 onPress: async () => {
                     const isConnected = await getConnectionStatus();
+                    setDeletingMovKey(getMovItemKey(m));
 
-                    if (m.id_local || m.id === 0) {
-                        const next = movimientos.filter((x) => x.id_local !== m.id_local);
-                        await persistMovimientosToActivosCache(movActivo, next);
-                        if (m.id_local) await removeMovActionsForLocalId(m.id_local);
-                        return;
-                    }
-
-                    const parent = { source: movActivo.source, estructuraId: movActivo.estructura_id };
-                    if (isConnected && movActivo.estructura_id) {
-                        const res = await deleteMovimientoArticuloMantenimiento({ parent, id: m.id, marcaId: current.id, refreshAccessToken, logout });
-                        if (res.status) {
-                            Alert.alert('Éxito', 'Movimiento eliminado correctamente');
-                            await openMovimientosModal(movActivo);
+                    try {
+                        if (m.id_local || m.id === 0) {
+                            const next = movimientos.filter((x) => x.id_local !== m.id_local);
+                            await persistMovimientosToActivosCache(movActivo, next);
+                            if (m.id_local) await removeMovActionsForLocalId(m.id_local);
                         } else {
-                            Alert.alert('Error', res.message || 'No se pudo eliminar el movimiento');
+                            const parent = { source: movActivo.source, estructuraId: movActivo.estructura_id };
+                            if (isConnected && movActivo.estructura_id) {
+                                const res = await deleteMovimientoArticuloMantenimiento({ parent, id: m.id, marcaId: current.id, refreshAccessToken, logout });
+                                if (res.status) {
+                                    Alert.alert('Éxito', 'Movimiento eliminado correctamente');
+                                    await openMovimientosModal(movActivo);
+                                } else {
+                                    Alert.alert('Error', res.message || 'No se pudo eliminar el movimiento');
+                                }
+                            } else {
+                                const next = movimientos.filter((x) => x.id !== m.id);
+                                await persistMovimientosToActivosCache(movActivo, next);
+                                await upsertMovAction({
+                                    type: 'delete',
+                                    id: m.id,
+                                    parent,
+                                    marcaId: current.id,
+                                    puestoId: activePuestoId,
+                                    parentKey: movActivo.key,
+                                });
+                                Alert.alert('Eliminado (offline)', 'La eliminación se sincronizará cuando vuelva la conexión.');
+                            }
                         }
-                    } else {
-                        const next = movimientos.filter((x) => x.id !== m.id);
-                        await persistMovimientosToActivosCache(movActivo, next);
-                        await upsertMovAction({
-                            type: 'delete',
-                            id: m.id,
-                            parent,
-                            marcaId: current.id,
-                            puestoId: activePuestoId,
-                            parentKey: movActivo.key,
-                        });
-                        Alert.alert('Eliminado (offline)', 'La eliminación se sincronizará cuando vuelva la conexión.');
+                    } finally {
+                        setDeletingMovKey(null);
                     }
                 },
             },
@@ -3807,7 +3924,7 @@ export default function MantenimientoEquipoScreen() {
                     ) : null}
 
                     {/* Filtros jerárquicos (Empresa → ... → Puesto) */}
-                    {!isUpdating && !showActivos && hasCurrentMarca && !isLoading && (
+                    {!isUpdating && !showActivos && hasCurrentMarca && (
                         <ThemedView style={styles.filtersMain}>
                             <ThemedView style={styles.filterHeader}>
                                 <TouchableOpacity
@@ -4302,13 +4419,23 @@ export default function MantenimientoEquipoScreen() {
                                     )}
 
                                     <ThemedView style={styles.formActions}>
-                                        <TouchableOpacity style={[styles.formActionButton, styles.formActionCancel]} onPress={cancelMovCreating}>
+                                        <TouchableOpacity style={[styles.formActionButton, styles.formActionCancel]} onPress={cancelMovCreating} disabled={isMovSubmitting}>
                                             <Ionicons name="close" size={18} color="#000" />
                                             <ThemedText style={styles.formActionCancelText}>Cancelar</ThemedText>
                                         </TouchableOpacity>
-                                        <TouchableOpacity style={[styles.formActionButton, styles.formActionSave]} onPress={handleMovSave}>
-                                            <Ionicons name="save" size={18} color="#fff" />
-                                            <ThemedText style={styles.formActionSaveText}>Guardar</ThemedText>
+                                        <TouchableOpacity
+                                            style={[styles.formActionButton, styles.formActionSave, isMovSubmitting && styles.buttonDisabled]}
+                                            onPress={handleMovSave}
+                                            disabled={isMovSubmitting}
+                                        >
+                                            {isMovSubmitting ? (
+                                                <ActivityIndicator size="small" color="#fff" />
+                                            ) : (
+                                                <>
+                                                    <Ionicons name="save" size={18} color="#fff" />
+                                                    <ThemedText style={styles.formActionSaveText}>Aceptar</ThemedText>
+                                                </>
+                                            )}
                                         </TouchableOpacity>
                                     </ThemedView>
                                 </ThemedView>
@@ -4386,9 +4513,19 @@ export default function MantenimientoEquipoScreen() {
                                                             <Ionicons name="pencil" size={18} color="#FFFFFF" />
                                                             <ThemedText style={styles.listItemButtonText}>Editar</ThemedText>
                                                         </TouchableOpacity>
-                                                        <TouchableOpacity style={[styles.listItemButton, styles.deleteButtonMov]} onPress={() => handleMovDelete(m)}>
-                                                            <Ionicons name="trash" size={18} color="#FFFFFF" />
-                                                            <ThemedText style={styles.listItemButtonText}>Eliminar</ThemedText>
+                                                        <TouchableOpacity
+                                                            style={[styles.listItemButton, styles.deleteButtonMov, deletingMovKey === getMovItemKey(m) && styles.buttonDisabled]}
+                                                            onPress={() => handleMovDelete(m)}
+                                                            disabled={!!deletingMovKey}
+                                                        >
+                                                            {deletingMovKey === getMovItemKey(m) ? (
+                                                                <ActivityIndicator size="small" color="#FFFFFF" />
+                                                            ) : (
+                                                                <>
+                                                                    <Ionicons name="trash" size={18} color="#FFFFFF" />
+                                                                    <ThemedText style={styles.listItemButtonText}>Eliminar</ThemedText>
+                                                                </>
+                                                            )}
                                                         </TouchableOpacity>
                                                     </ThemedView>
 

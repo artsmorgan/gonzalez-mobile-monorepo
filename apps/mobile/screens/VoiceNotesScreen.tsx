@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import {
   StyleSheet,
   ScrollView,
@@ -9,6 +9,7 @@ import {
   View,
   Platform,
 } from 'react-native';
+import { Picker } from '@react-native-picker/picker';
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
@@ -28,7 +29,7 @@ import { useQRScanner } from '@/hooks/useQRScanner';
 import { useAudioRecorder, useAudioRecorderState, useAudioPlayer, useAudioPlayerStatus, RecordingPresets, requestRecordingPermissionsAsync } from 'expo-audio';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import * as Network from 'expo-network';
-import { createVoiceNote as createVoiceNoteAPI, deleteVoiceNote as deleteVoiceNoteAPI } from '@/hooks/voiceNotesFunctions';
+import { createVoiceNote as createVoiceNoteAPI, deleteVoiceNote as deleteVoiceNoteAPI, updateVoiceNote as updateVoiceNoteAPI } from '@/hooks/voiceNotesFunctions';
 import { eventBus } from '@/hooks/eventBus';
 import authedFetch from '@/hooks/authedFetch';
 import getValidAccessTokenOrLogout from '@/hooks/getValidAccessTokenOrLogout';
@@ -85,6 +86,61 @@ interface VoiceNote {
   created_at: string;
   created_by: number;
   nombre_firma: string;
+}
+
+type RoleName = 'OPERATIVO' | 'SUPERVISOR' | 'ADMINISTRATIVO' | string | null;
+
+type MainStructurePlazaNode = { id: number; nombre: string };
+type MainStructurePuestoNode = { id: number; nombre: string; plazas: MainStructurePlazaNode[] };
+type MainStructureSucursalNode = { id: number; nombre: string; puestos: MainStructurePuestoNode[] };
+type MainStructureContratoNode = { id: number; nombre: string; sucursales: MainStructureSucursalNode[] };
+type MainStructureDivisionNode = { id: number; nombre: string; contratos: MainStructureContratoNode[] };
+type MainStructureClienteNode = { id: number; nombre: string; division: MainStructureDivisionNode[] };
+type MainStructureEmpresaNode = { id: number; nombre: string; clientes: MainStructureClienteNode[] };
+type MainStructureTree = MainStructureEmpresaNode[];
+
+type TracedVoiceNotePath = {
+  empresaId: number;
+  clienteId: number;
+  divisionId: number;
+  contratoId: number;
+  sucursalId: number;
+  puestoId: number | null;
+};
+
+/** Rastrea en main_structure la ruta hasta corpo (sucursal) y opcionalmente puesto. */
+function traceVoiceNoteInStructure(
+  tree: MainStructureTree,
+  corpoId: number,
+  puestoId: number | null
+): TracedVoiceNotePath | null {
+  const wantPuesto =
+    puestoId != null && Number.isFinite(Number(puestoId)) && Number(puestoId) > 0 ? Number(puestoId) : null;
+  for (const e of tree) {
+    for (const c of e.clientes ?? []) {
+      for (const d of c.division ?? []) {
+        for (const co of d.contratos ?? []) {
+          for (const s of co.sucursales ?? []) {
+            if (Number(s.id) !== Number(corpoId)) continue;
+            let resolvedPuesto: number | null = null;
+            if (wantPuesto != null) {
+              const inTree = (s.puestos ?? []).some((p) => Number(p.id) === wantPuesto);
+              resolvedPuesto = inTree ? wantPuesto : wantPuesto;
+            }
+            return {
+              empresaId: e.id,
+              clienteId: c.id,
+              divisionId: d.id,
+              contratoId: co.id,
+              sucursalId: s.id,
+              puestoId: resolvedPuesto,
+            };
+          }
+        }
+      }
+    }
+  }
+  return null;
 }
 
 // Componente para reproducir audio de notas de voz con cleanup
@@ -182,6 +238,90 @@ function VoiceNoteAudioPlayer({
   return null; // Este componente no renderiza nada, solo maneja el audio
 }
 
+function stripQueuedVoiceNoteUpdatesForNoteId(actions: any[], voiceNoteId: number): any[] {
+  const id = Number(voiceNoteId);
+  if (!Number.isFinite(id)) return actions;
+  return actions.filter(
+    (a: any) => !(a?.type === 'update' && Number(a.id) === id)
+  );
+}
+
+function stripQueuedVoiceNoteDeletesForNoteId(actions: any[], voiceNoteId: number): any[] {
+  const id = Number(voiceNoteId);
+  if (!Number.isFinite(id)) return actions;
+  return actions.filter(
+    (a: any) => !(a?.type === 'delete' && Number(a.id) === id)
+  );
+}
+
+function appendOfflineVoiceNoteDelete(actions: any[], voiceNoteId: number): any[] {
+  let next = stripQueuedVoiceNoteDeletesForNoteId(actions, voiceNoteId);
+  next = stripQueuedVoiceNoteUpdatesForNoteId(next, voiceNoteId);
+  next.push({ id: voiceNoteId, type: 'delete' });
+  return next;
+}
+
+function stripErroneousVoiceNoteUpdatesForLocalQueueId(actions: any[], idLocal: string): any[] {
+  if (!idLocal) return actions;
+  const k = String(idLocal);
+  return actions.filter(
+    (a: any) => !(a?.type === 'update' && a.id != null && String(a.id) === k)
+  );
+}
+
+/** `puesto` o `puesto_id` en el JSON de `current_marca`. */
+function getMarcaPuestoIdFromJson(marca: any): number | null {
+  const raw =
+    marca?.puesto?.id != null
+      ? Number(marca.puesto.id)
+      : marca?.puesto_id != null
+        ? Number(marca.puesto_id)
+        : NaN;
+  return Number.isFinite(raw) && raw > 0 ? raw : null;
+}
+
+/**
+ * Misma visibilidad que GET /api/voice-notes?corpo_id=&puesto_id= (con puesto > 0):
+ * misma sucursal y la nota es de ese puesto o a nivel sucursal (sin puesto).
+ */
+function voiceNoteInPuestoFetchScope(vn: VoiceNote, corpoId: number, puestoId: number): boolean {
+  if (Number(vn?.corpo?.id) !== Number(corpoId)) return false;
+  if (vn.puesto == null) return true;
+  return Number(vn.puesto?.id) === Number(puestoId);
+}
+
+function isPendingOfflineVoiceNoteCreate(vn: VoiceNote): boolean {
+  return Boolean(
+    vn?.id_local &&
+      String(vn.id_local) !== '' &&
+      (!Number.isFinite(Number(vn.id)) || Number(vn.id) === 0)
+  );
+}
+
+/** Sustituye en caché solo las notas del alcance (corpo+puesto); conserva otras jerarquías y borradores locales del alcance. */
+function mergeVoiceNotesCacheForPuestoScope(
+  previous: VoiceNote[],
+  corpoId: number,
+  puestoId: number,
+  fromApi: VoiceNote[]
+): VoiceNote[] {
+  const prev = Array.isArray(previous) ? previous : [];
+  const rest = prev.filter(
+    (v) =>
+      !voiceNoteInPuestoFetchScope(v, corpoId, puestoId) || isPendingOfflineVoiceNoteCreate(v)
+  );
+  return [...rest, ...fromApi];
+}
+
+function filterVoiceNotesToPuestoFetchScope(
+  cache: VoiceNote[],
+  corpoId: number,
+  puestoId: number
+): VoiceNote[] {
+  const arr = Array.isArray(cache) ? cache : [];
+  return arr.filter((v) => voiceNoteInPuestoFetchScope(v, corpoId, puestoId));
+}
+
 export default function VoiceNotesScreen() {
   const { employee, refreshAccessToken, logout, accessToken } = useAuth();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
@@ -189,10 +329,47 @@ export default function VoiceNotesScreen() {
 
   // Data states
   const [voiceNotes, setVoiceNotes] = useState<VoiceNote[]>([]);
+  /** Carga de la lista (inicial o al cambiar sucursal/puesto en filtro). Oculta lista + botón nueva nota. */
   const [isLoading, setIsLoading] = useState(true);
+  const [marcaChecked, setMarcaChecked] = useState(false);
   const [hasMarca, setHasMarca] = useState<boolean>(false);
   const [marcaId, setMarcaId] = useState<number | null>(null);
   const [corpoId, setCorpoId] = useState<number | null>(null);
+  const [roleName, setRoleName] = useState<RoleName>(null);
+  const [marcaPuestoIdFromMarca, setMarcaPuestoIdFromMarca] = useState<number | null>(null);
+
+  const [structure, setStructure] = useState<MainStructureTree>([]);
+  const [isStructureLoading, setIsStructureLoading] = useState(false);
+
+  const [filterEmpresaId, setFilterEmpresaId] = useState<number | null>(null);
+  const [filterClienteId, setFilterClienteId] = useState<number | null>(null);
+  const [filterDivisionId, setFilterDivisionId] = useState<number | null>(null);
+  const [filterContratoId, setFilterContratoId] = useState<number | null>(null);
+  const [filterSucursalId, setFilterSucursalId] = useState<number | null>(null);
+  const [filterPuestoId, setFilterPuestoId] = useState<number | null>(null);
+
+  const [createEmpresaId, setCreateEmpresaId] = useState<number | null>(null);
+  const [createClienteId, setCreateClienteId] = useState<number | null>(null);
+  const [createDivisionId, setCreateDivisionId] = useState<number | null>(null);
+  const [createContratoId, setCreateContratoId] = useState<number | null>(null);
+  const [createSucursalId, setCreateSucursalId] = useState<number | null>(null);
+  const [createPuestoId, setCreatePuestoId] = useState<number | null>(null);
+
+  const [editEmpresaId, setEditEmpresaId] = useState<number | null>(null);
+  const [editClienteId, setEditClienteId] = useState<number | null>(null);
+  const [editDivisionId, setEditDivisionId] = useState<number | null>(null);
+  const [editContratoId, setEditContratoId] = useState<number | null>(null);
+  const [editSucursalId, setEditSucursalId] = useState<number | null>(null);
+  const [editPuestoId, setEditPuestoId] = useState<number | null>(null);
+  const [editSetPuesto, setEditSetPuesto] = useState(false);
+
+  const [isSubmittingCreate, setIsSubmittingCreate] = useState(false);
+  const [isSubmittingEdit, setIsSubmittingEdit] = useState(false);
+  const [deletingKey, setDeletingKey] = useState<string | null>(null);
+  const [editingVoiceNote, setEditingVoiceNote] = useState<VoiceNote | null>(null);
+  const editTituloRef = useRef('');
+  const editDescripcionRef = useRef('');
+  const [editFormKey, setEditFormKey] = useState(0);
 
   // Form states
   const [isCreating, setIsCreating] = useState(false);
@@ -236,11 +413,7 @@ export default function VoiceNotesScreen() {
   const [audioDurations, setAudioDurations] = useState<Map<string, number>>(new Map());
   const [resetFlags, setResetFlags] = useState<Map<string, boolean>>(new Map());
 
-  // Filter states
-  const [filterEmpresa, setFilterEmpresa] = useState('');
-  const [filterCliente, setFilterCliente] = useState('');
-  const [filterSucursal, setFilterSucursal] = useState('');
-  const [filterPuesto, setFilterPuesto] = useState('');
+  // Filter states (texto)
   const [filterTitulo, setFilterTitulo] = useState('');
   const [filterDescripcion, setFilterDescripcion] = useState('');
   const [filterTranscripcion, setFilterTranscripcion] = useState('');
@@ -259,38 +432,173 @@ export default function VoiceNotesScreen() {
     [accessToken]
   );
 
-  useFocusEffect(
-    useCallback(() => {
-      fetchData();
-    }, [])
-  );
+  const getDivisionIdFromMarcaJson = (marca: any): number | null => {
+    const raw =
+      marca?.roleDivision?.division?.id ??
+      marca?.role_division?.division?.id ??
+      marca?.division?.id ??
+      marca?.division_id;
+    const n = Number(raw);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  };
 
-  useEffect(() => {
-    const handler = () => {
-      fetchData();
-    };
-    eventBus.on('connectionRestored', handler);
-    return () => {
-      eventBus.off('connectionRestored', handler);
-    };
+  const applyMarcaToHierarchyIds = useCallback((marca: any) => {
+    const divId = getDivisionIdFromMarcaJson(marca);
+    setFilterEmpresaId(marca.empresa?.id != null ? Number(marca.empresa.id) : null);
+    setFilterClienteId(marca.cliente?.id != null ? Number(marca.cliente.id) : null);
+    setFilterDivisionId(divId);
+    setFilterContratoId(marca.contrato?.id != null ? Number(marca.contrato.id) : null);
+    setFilterSucursalId(marca.corpo?.id != null ? Number(marca.corpo.id) : null);
+    setFilterPuestoId(getMarcaPuestoIdFromJson(marca));
   }, []);
 
-  // El estado de grabación ahora se obtiene de recorderState
-  // No necesitamos el useEffect porque useAudioRecorderState ya actualiza automáticamente
+  const fetchMainStructure = useCallback(async () => {
+    try {
+      setIsStructureLoading(true);
+      const cacheStr = await AsyncStorage.getItem('main_structure_cache');
+      if (cacheStr) {
+        try {
+          const cached = JSON.parse(cacheStr);
+          if (Array.isArray(cached)) setStructure(cached);
+          else setStructure([]);
+        } catch {
+          setStructure([]);
+        }
+      } else {
+        setStructure([]);
+      }
+    } catch (e) {
+      console.error('fetchMainStructure voice notes:', e);
+      setStructure([]);
+    } finally {
+      setIsStructureLoading(false);
+    }
+  }, []);
+
+  const resetListFiltersFromCurrentMarca = useCallback(async () => {
+    try {
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      if (!currentMarcaStr) return;
+      const currentMarca = JSON.parse(currentMarcaStr);
+      const rn =
+        currentMarca?.roleDivision?.role?.nombre ??
+        currentMarca?.role_division?.role?.nombre ??
+        null;
+      if (rn === 'OPERATIVO') {
+        setFilterEmpresaId(null);
+        setFilterClienteId(null);
+        setFilterDivisionId(null);
+        setFilterContratoId(null);
+        setFilterSucursalId(null);
+        setFilterPuestoId(null);
+      } else {
+        applyMarcaToHierarchyIds(currentMarca);
+      }
+    } catch (e) {
+      console.error('resetListFiltersFromCurrentMarca:', e);
+    }
+  }, [applyMarcaToHierarchyIds]);
+
+  const applyMarcaToCreateHierarchy = useCallback(async () => {
+    try {
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      if (!currentMarcaStr) return;
+      const marca = JSON.parse(currentMarcaStr);
+      const divId = getDivisionIdFromMarcaJson(marca);
+      setCreateEmpresaId(marca.empresa?.id != null ? Number(marca.empresa.id) : null);
+      setCreateClienteId(marca.cliente?.id != null ? Number(marca.cliente.id) : null);
+      setCreateDivisionId(divId);
+      setCreateContratoId(marca.contrato?.id != null ? Number(marca.contrato.id) : null);
+      setCreateSucursalId(marca.corpo?.id != null ? Number(marca.corpo.id) : null);
+      setCreatePuestoId(null);
+    } catch (e) {
+      console.error('applyMarcaToCreateHierarchy:', e);
+    }
+  }, []);
 
   const checkConnection = async () => {
+    //return false;
     const networkState = await Network.getNetworkStateAsync();
     return networkState.isConnected && networkState.isInternetReachable ? true : false;
   };
 
-  const fetchData = async () => {
+  const refetchVoiceNotesForFilter = useCallback(
+    async (corpoIdQuery: number, puestoIdQuery: number | null) => {
+      try {
+        setIsLoading(true);
+        if (
+          !Number.isFinite(Number(corpoIdQuery)) ||
+          Number(corpoIdQuery) <= 0 ||
+          puestoIdQuery == null ||
+          !Number.isFinite(Number(puestoIdQuery)) ||
+          Number(puestoIdQuery) <= 0
+        ) {
+          setVoiceNotes([]);
+          return;
+        }
+        const cid = Number(corpoIdQuery);
+        const pid = Number(puestoIdQuery);
+        const hasConnection = await checkConnection();
+        if (!hasConnection) {
+          try {
+            const raw = await AsyncStorage.getItem('voice_notes_cache');
+            const prev = raw ? JSON.parse(raw) : [];
+            const arr = Array.isArray(prev) ? prev : [];
+            setVoiceNotes(filterVoiceNotesToPuestoFetchScope(arr, cid, pid));
+          } catch {
+            setVoiceNotes([]);
+          }
+          return;
+        }
+        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        if (!apiUrl) {
+          return;
+        }
+        const url = `${apiUrl}/api/voice-notes?corpo_id=${cid}&puesto_id=${pid}`;
+        const response = await authedFetch({
+          url,
+          init: {
+            method: 'GET',
+            headers: { 'Content-Type': 'application/json' },
+          },
+          refreshAccessToken,
+          logout,
+        });
+        if (!response?.ok) {
+          return;
+        }
+        const data = await response.json();
+        if (data.status && data.voiceNotes) {
+          let prev: VoiceNote[] = [];
+          try {
+            const rawCache = await AsyncStorage.getItem('voice_notes_cache');
+            const parsed = rawCache ? JSON.parse(rawCache) : [];
+            prev = Array.isArray(parsed) ? parsed : [];
+          } catch {
+            prev = [];
+          }
+          const merged = mergeVoiceNotesCacheForPuestoScope(prev, cid, pid, data.voiceNotes);
+          await AsyncStorage.setItem('voice_notes_cache', JSON.stringify(merged));
+          setVoiceNotes(filterVoiceNotesToPuestoFetchScope(merged, cid, pid));
+        } else {
+          setVoiceNotes([]);
+        }
+      } catch (e) {
+        console.error('refetchVoiceNotesForFilter:', e);
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [refreshAccessToken, logout]
+  );
+
+  const fetchData = useCallback(async () => {
     try {
       setIsLoading(true);
 
       const marcaStr = await AsyncStorage.getItem('current_marca');
       if (!marcaStr) {
         setHasMarca(false);
-        setIsLoading(false);
         return;
       }
 
@@ -300,16 +608,47 @@ export default function VoiceNotesScreen() {
       setCorpoId(marca.corpo?.id || null);
       setPuestoActualNombre(marca.puesto?.nombre || '');
 
-      // Check connection
+      const role = marca.roleDivision?.role?.nombre ?? marca.role_division?.role?.nombre ?? null;
+      setRoleName(typeof role === 'string' ? role : null);
+
+      setMarcaPuestoIdFromMarca(getMarcaPuestoIdFromJson(marca));
+
+      if (role === 'OPERATIVO') {
+        setFilterEmpresaId(null);
+        setFilterClienteId(null);
+        setFilterDivisionId(null);
+        setFilterContratoId(null);
+        setFilterSucursalId(null);
+        setFilterPuestoId(null);
+      } else {
+        applyMarcaToHierarchyIds(marca);
+      }
+      await fetchMainStructure();
+
       const hasConnection = await checkConnection();
+
+      const corpoIdQuery = marca.corpo?.id != null ? Number(marca.corpo.id) : null;
+      const listPuestoId = getMarcaPuestoIdFromJson(marca);
 
       if (hasConnection) {
         const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
         if (!apiUrl) {
           throw new Error('Server URL not configured');
         }
+        if (!corpoIdQuery || corpoIdQuery <= 0) {
+          Alert.alert('Error', 'La marca no tiene sucursal (corpo) asociada');
+          setVoiceNotes([]);
+          return;
+        }
+        if (listPuestoId == null) {
+          if (role === 'OPERATIVO') {
+            setVoiceNotes([]);
+          }
+          return;
+        }
+        const listUrl = `${apiUrl}/api/voice-notes?corpo_id=${corpoIdQuery}&puesto_id=${listPuestoId}`;
         const response = await authedFetch({
-          url: `${apiUrl}/api/voice-notes?m=${marca.id}`,
+          url: listUrl,
           init: {
             method: 'GET',
             headers: {
@@ -328,9 +667,22 @@ export default function VoiceNotesScreen() {
         const data = await response.json();
 
         if (data.status && data.voiceNotes) {
-          setVoiceNotes(data.voiceNotes);
-          // Actualizar voice_notes_cache
-          await AsyncStorage.setItem('voice_notes_cache', JSON.stringify(data.voiceNotes));
+          let prev: VoiceNote[] = [];
+          try {
+            const rawCache = await AsyncStorage.getItem('voice_notes_cache');
+            const parsed = rawCache ? JSON.parse(rawCache) : [];
+            prev = Array.isArray(parsed) ? parsed : [];
+          } catch {
+            prev = [];
+          }
+          const merged = mergeVoiceNotesCacheForPuestoScope(
+            prev,
+            corpoIdQuery,
+            listPuestoId,
+            data.voiceNotes
+          );
+          await AsyncStorage.setItem('voice_notes_cache', JSON.stringify(merged));
+          setVoiceNotes(filterVoiceNotesToPuestoFetchScope(merged, corpoIdQuery, listPuestoId));
         } else {
           setVoiceNotes([]);
           if (data.message) {
@@ -338,27 +690,67 @@ export default function VoiceNotesScreen() {
           }
         }
       } else {
-        // Sin internet: cargar desde cache
-        const voiceNotesCache = await AsyncStorage.getItem('voice_notes_cache');
-        if (voiceNotesCache) {
-          const cachedVoiceNotes = JSON.parse(voiceNotesCache);
-          setVoiceNotes(cachedVoiceNotes);
-          Alert.alert('Modo Offline', 'No hay conexión a internet. Mostrando datos guardados.');
-        } else {
+        if (!corpoIdQuery || corpoIdQuery <= 0) {
           setVoiceNotes([]);
-          Alert.alert('Modo Offline', 'No hay conexión a internet y no hay datos guardados.');
+          Alert.alert('Modo Offline', 'La marca no tiene sucursal asociada.');
+        } else if (listPuestoId == null) {
+          if (role === 'OPERATIVO') {
+            setVoiceNotes([]);
+            Alert.alert(
+              'Modo Offline',
+              'Se requiere puesto en la marca para ver notas en caché.'
+            );
+          } else {
+            setVoiceNotes([]);
+          }
+        } else {
+          const voiceNotesCache = await AsyncStorage.getItem('voice_notes_cache');
+          if (voiceNotesCache) {
+            const cachedVoiceNotes = JSON.parse(voiceNotesCache);
+            const arr = Array.isArray(cachedVoiceNotes) ? cachedVoiceNotes : [];
+            setVoiceNotes(filterVoiceNotesToPuestoFetchScope(arr, corpoIdQuery, listPuestoId));
+            Alert.alert('Modo Offline', 'No hay conexión a internet. Mostrando datos guardados.');
+          } else {
+            setVoiceNotes([]);
+            Alert.alert('Modo Offline', 'No hay conexión a internet y no hay datos guardados.');
+          }
         }
       }
-
     } catch (error) {
       console.error('Error fetching data:', error);
-      // En caso de error, intentar cargar desde cache
       try {
+        let corpoIdForCache: number | null = null;
+        let puestoIdForCache: number | null = null;
+        const marcaStrErr = await AsyncStorage.getItem('current_marca');
+        if (marcaStrErr) {
+          try {
+            const m = JSON.parse(marcaStrErr);
+            corpoIdForCache = m.corpo?.id != null ? Number(m.corpo.id) : null;
+            puestoIdForCache = getMarcaPuestoIdFromJson(m);
+          } catch {
+            corpoIdForCache = null;
+            puestoIdForCache = null;
+          }
+        }
         const voiceNotesCache = await AsyncStorage.getItem('voice_notes_cache');
         if (voiceNotesCache) {
           const cachedVoiceNotes = JSON.parse(voiceNotesCache);
-          setVoiceNotes(cachedVoiceNotes);
-          Alert.alert('Modo Offline', 'Error de conexión. Mostrando datos guardados.');
+          const arr = Array.isArray(cachedVoiceNotes) ? cachedVoiceNotes : [];
+          if (
+            corpoIdForCache != null &&
+            corpoIdForCache > 0 &&
+            puestoIdForCache != null &&
+            puestoIdForCache > 0
+          ) {
+            setVoiceNotes(filterVoiceNotesToPuestoFetchScope(arr, corpoIdForCache, puestoIdForCache));
+            Alert.alert('Modo Offline', 'Error de conexión. Mostrando datos guardados.');
+          } else {
+            setVoiceNotes([]);
+            Alert.alert(
+              'Modo Offline',
+              'Error de conexión. Se requiere puesto en la marca para mostrar datos guardados.'
+            );
+          }
         } else {
           setVoiceNotes([]);
           Alert.alert('Error', 'No se pudieron cargar las notas de voz');
@@ -369,9 +761,26 @@ export default function VoiceNotesScreen() {
         Alert.alert('Error', 'No se pudieron cargar las notas de voz');
       }
     } finally {
+      setMarcaChecked(true);
       setIsLoading(false);
     }
-  };
+  }, [applyMarcaToHierarchyIds, fetchMainStructure, refreshAccessToken, logout]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void fetchData();
+    }, [fetchData])
+  );
+
+  useEffect(() => {
+    const handler = () => {
+      void fetchData();
+    };
+    eventBus.on('connectionRestored', handler);
+    return () => {
+      eventBus.off('connectionRestored', handler);
+    };
+  }, [fetchData]);
 
 
   const generateDateTime = (time: string) => {
@@ -403,9 +812,21 @@ export default function VoiceNotesScreen() {
       const loc = await Location.getCurrentPositionAsync({});
       setLocation(loc);
 
+      setEditingVoiceNote(null);
+      setEditEmpresaId(null);
+      setEditClienteId(null);
+      setEditDivisionId(null);
+      setEditContratoId(null);
+      setEditSucursalId(null);
+      setEditPuestoId(null);
+      setEditSetPuesto(false);
+      editTituloRef.current = '';
+      editDescripcionRef.current = '';
+
       setIsCreating(true);
       setFormKey(prev => prev + 1); // Incrementar key para forzar re-render
       resetForm();
+      await applyMarcaToCreateHierarchy();
     } catch (error) {
       console.error('Error starting creation:', error);
       Alert.alert('Error', 'No se pudo iniciar la creación');
@@ -415,6 +836,7 @@ export default function VoiceNotesScreen() {
   const cancelCreating = () => {
     setIsCreating(false);
     resetForm();
+    void applyMarcaToCreateHierarchy();
     stopRecordedAudioPlayback();
     if (recorderState.isRecording) {
       stopRecording();
@@ -429,7 +851,6 @@ export default function VoiceNotesScreen() {
     setRecordedAudioUri(null);
     setRecordedAudioBase64(null);
     stopRecordedAudioPlayback();
-    // Stop recording if active
     if (recorderState.isRecording) {
       audioRecorder.stop();
     }
@@ -722,221 +1143,678 @@ export default function VoiceNotesScreen() {
       return false;
     }
 
+    if (roleName === 'OPERATIVO') {
+      if (setPuesto && (marcaPuestoIdFromMarca == null || marcaPuestoIdFromMarca <= 0)) {
+        Alert.alert('Error', 'La marca actual no tiene puesto para asignar');
+        return false;
+      }
+    } else {
+      if (
+        createEmpresaId == null ||
+        createClienteId == null ||
+        createSucursalId == null ||
+        createDivisionId == null ||
+        createContratoId == null
+      ) {
+        Alert.alert('Error', 'Complete al menos hasta sucursal (corpo)');
+        return false;
+      }
+    }
+
     return true;
   };
 
-  const createVoiceNote = async () => {
+  const resolveCreateHierarchyLabels = () => {
+    const em = structure.find((e) => e.id === createEmpresaId);
+    const cl = em?.clientes?.find((c) => c.id === createClienteId);
+    const div = cl?.division?.find((d) => d.id === createDivisionId);
+    const co = div?.contratos?.find((c) => c.id === createContratoId);
+    const su = co?.sucursales?.find((s) => s.id === createSucursalId);
+    const pu = su?.puestos?.find((p) => p.id === createPuestoId);
+    return { em, cl, su, pu };
+  };
+
+  const resolveEditHierarchyLabels = () => {
+    const em = structure.find((e) => e.id === editEmpresaId);
+    const cl = em?.clientes?.find((c) => c.id === editClienteId);
+    const div = cl?.division?.find((d) => d.id === editDivisionId);
+    const co = div?.contratos?.find((c) => c.id === editContratoId);
+    const su = co?.sucursales?.find((s) => s.id === editSucursalId);
+    const pu = su?.puestos?.find((p) => p.id === editPuestoId);
+    return { em, cl, su, pu };
+  };
+
+  const runCreateVoiceNoteConfirmed = async () => {
+    if (isSubmittingCreate) return;
+    if (!validateForm()) return;
+
+    setIsSubmittingCreate(true);
     try {
-      if (!validateForm()) return;
+      const signatureString = `${firmaResponsable!.sessionId}:${firmaResponsable!.empleadoId}:${firmaResponsable!.latitud}:${firmaResponsable!.longitud}:${firmaResponsable!.timestamp}`;
+      const signatureHash = btoa(signatureString);
 
-      Alert.alert(
-        'Confirmar',
-        '¿Está seguro de que desea crear esta nota de voz?',
-        [
-          { text: 'Cancelar', style: 'cancel' },
-          {
-            text: 'Aceptar',
-            onPress: async () => {
-              try {
-                // Re-encode signature
-                const signatureString = `${firmaResponsable!.sessionId}:${firmaResponsable!.empleadoId}:${firmaResponsable!.latitud}:${firmaResponsable!.longitud}:${firmaResponsable!.timestamp}`;
-                const signatureHash = btoa(signatureString);
+      const horaAccion = await getHoraAccion();
+      if (!horaAccion) {
+        Alert.alert('Error', 'No se pudo obtener la hora');
+        return;
+      }
 
-                const horaAccion = await getHoraAccion();
+      const useHierarchy = roleName !== 'OPERATIVO';
+      const requestData: Record<string, unknown> = {
+        marca_id: marcaId,
+        titulo: tituloRef.current,
+        descripcion: descripcionRef.current,
+        setPuesto: useHierarchy ? false : setPuesto,
+        firma_responsable: signatureHash,
+        file_base64: recordedAudioBase64,
+        created_at: horaAccion,
+        use_structure_from_hierarchy: useHierarchy,
+      };
 
-                const requestData = {
-                  marca_id: marcaId,
-                  titulo: tituloRef.current,
-                  descripcion: descripcionRef.current,
-                  setPuesto: setPuesto,
-                  firma_responsable: signatureHash,
-                  file_base64: recordedAudioBase64,
-                  created_at: horaAccion,
-                };
+      if (useHierarchy) {
+        requestData.structure_empresa_id = createEmpresaId;
+        requestData.structure_cliente_id = createClienteId;
+        requestData.structure_corpo_id = createSucursalId;
+        requestData.structure_puesto_id =
+          createPuestoId != null && createPuestoId > 0 ? createPuestoId : null;
+      }
 
-                // Check internet connection
-                const hasConnection = await checkConnection();
+      const hasConnection = await checkConnection();
 
-                if (hasConnection) {
-                  // Con internet: llamar API
-                  const result = await createVoiceNoteAPI({
-                    requestData,
-                    marcaId: marcaId!,
-                    refreshAccessToken,
-                    logout,
-                  });
+      if (hasConnection) {
+        const result = await createVoiceNoteAPI({
+          requestData,
+          marcaId: marcaId!,
+          refreshAccessToken,
+          logout,
+        });
 
-                  if (result.status) {
-                    Alert.alert('Éxito', 'Nota de voz creada correctamente');
-                    setIsCreating(false);
-                    resetForm();
-                    fetchData();
-                  } else {
-                    Alert.alert('Error', result.message || 'No se pudo crear la nota de voz');
-                  }
-                } else {
-                  // Sin internet: modo offline
-                  const localId = `local_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+        if (result.status) {
+          Alert.alert('Éxito', 'Nota de voz creada correctamente');
+          setIsCreating(false);
+          resetForm();
+          await applyMarcaToCreateHierarchy();
+          void fetchData();
+        } else {
+          Alert.alert('Error', result.message || 'No se pudo crear la nota de voz');
+        }
+      } else {
+        const localId = `local_${Date.now()}_${Math.random().toString(36).substring(7)}`;
 
-                  // Crear entrada en voice_notes_actions
-                  const actionsStr = await AsyncStorage.getItem('voice_notes_actions');
-                  const actions = actionsStr ? JSON.parse(actionsStr) : [];
-                  actions.push({
-                    requestData,
-                    marcaId,
-                    id: localId,
-                    type: 'create',
-                  });
-                  await AsyncStorage.setItem('voice_notes_actions', JSON.stringify(actions));
+        const actionsStr = await AsyncStorage.getItem('voice_notes_actions');
+        let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+        if (!Array.isArray(actions)) actions = [];
+        actions = actions.filter(
+          (a: any) => !(a?.type === 'create' && String(a?.id) === String(localId))
+        );
+        actions.push({
+          requestData,
+          marcaId,
+          id: localId,
+          type: 'create',
+        });
+        await AsyncStorage.setItem('voice_notes_actions', JSON.stringify(actions));
 
-                  // Crear nota de voz en cache
-                  const cacheStr = await AsyncStorage.getItem('voice_notes_cache');
-                  const cache = cacheStr ? JSON.parse(cacheStr) : [];
+        const cacheStr = await AsyncStorage.getItem('voice_notes_cache');
+        const cache = cacheStr ? JSON.parse(cacheStr) : [];
 
-                  const currentMarcaStr = await AsyncStorage.getItem('current_marca');
-                  if (!currentMarcaStr) throw new Error('No current_marca');
+        const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+        if (!currentMarcaStr) throw new Error('No current_marca');
 
-                  const currentMarca = JSON.parse(currentMarcaStr);
+        const currentMarca = JSON.parse(currentMarcaStr);
 
-                  const newVoiceNoteCache: VoiceNote = {
-                    id: 0,
-                    empresa: currentMarca.empresa,
-                    cliente: currentMarca.cliente,
-                    corpo: currentMarca.corpo,
-                    puesto: setPuesto ? currentMarca.puesto : null,
-                    titulo: tituloRef.current,
-                    descripcion: descripcionRef.current,
-                    transcripcion: null,
-                    firma_responsable: signatureHash,
-                    nombre_creator: employee?.name || '-',
-                    id_local: localId,
-                    file_base64: recordedAudioBase64!,
-                    created_at: new Date(horaAccion).toISOString(),
-                    created_by: (employee?.id || 0) as number,
-                    nombre_firma: firmaResponsable?.empleadoDetalle
-                      ? `${firmaResponsable?.empleadoDetalle.nombre} ${firmaResponsable?.empleadoDetalle.primer_apellido} ${firmaResponsable?.empleadoDetalle.segundo_apellido}`
-                      : '-',
-                  };
+        let empresaVo: Empresa;
+        let clienteVo: Cliente;
+        let corpoVo: Corpo;
+        let puestoVo: Puesto | null;
 
-                  cache.push(newVoiceNoteCache);
-                  await AsyncStorage.setItem('voice_notes_cache', JSON.stringify(cache));
-
-                  Alert.alert('Modo Offline', 'Nota de voz registrada localmente. Se sincronizará cuando haya conexión.');
-                  setIsCreating(false);
-                  resetForm();
-                  fetchData();
+        if (useHierarchy) {
+          const { em, cl, su, pu } = resolveCreateHierarchyLabels();
+          empresaVo = { id: createEmpresaId!, nombre: em?.nombre ?? '' };
+          clienteVo = { id: createClienteId!, nombre: cl?.nombre ?? '' };
+          corpoVo = { id: createSucursalId!, nombre: su?.nombre ?? '' };
+          puestoVo =
+            createPuestoId != null && createPuestoId > 0
+              ? { id: createPuestoId, nombre: pu?.nombre ?? '' }
+              : null;
+        } else {
+          empresaVo = currentMarca.empresa;
+          clienteVo = currentMarca.cliente;
+          corpoVo = currentMarca.corpo;
+          puestoVo =
+            setPuesto && currentMarca.puesto?.id != null
+              ? {
+                  id: Number(currentMarca.puesto.id),
+                  nombre: String(currentMarca.puesto.nombre ?? ''),
                 }
-              } catch (error) {
-                console.error('Error creating voice note:', error);
-                Alert.alert('Error', 'No se pudo crear la nota de voz');
-              }
-            },
-          },
-        ]
-      );
+              : null;
+        }
+
+        const newVoiceNoteCache: VoiceNote = {
+          id: 0,
+          empresa: empresaVo,
+          cliente: clienteVo,
+          corpo: corpoVo,
+          puesto: puestoVo,
+          titulo: tituloRef.current,
+          descripcion: descripcionRef.current,
+          transcripcion: null,
+          firma_responsable: signatureHash,
+          nombre_creator: employee?.name || '-',
+          id_local: localId,
+          file_base64: recordedAudioBase64!,
+          created_at: new Date(horaAccion).toISOString(),
+          created_by: (employee?.id || 0) as number,
+          nombre_firma: firmaResponsable?.empleadoDetalle
+            ? `${firmaResponsable?.empleadoDetalle.nombre} ${firmaResponsable?.empleadoDetalle.primer_apellido} ${firmaResponsable?.empleadoDetalle.segundo_apellido}`
+            : '-',
+        };
+
+        const cacheArr = Array.isArray(cache) ? cache : [];
+        cacheArr.push(newVoiceNoteCache);
+        await AsyncStorage.setItem('voice_notes_cache', JSON.stringify(cacheArr));
+
+        if (useHierarchy) {
+          const cid = createSucursalId != null ? Number(createSucursalId) : 0;
+          const pid =
+            createPuestoId != null && createPuestoId > 0 ? Number(createPuestoId) : NaN;
+          if (cid > 0 && Number.isFinite(pid) && pid > 0) {
+            setVoiceNotes(filterVoiceNotesToPuestoFetchScope(cacheArr, cid, pid));
+          }
+        } else {
+          const cid =
+            currentMarca.corpo?.id != null ? Number(currentMarca.corpo.id) : null;
+          const pid = getMarcaPuestoIdFromJson(currentMarca);
+          if (cid != null && cid > 0 && pid != null) {
+            setVoiceNotes(filterVoiceNotesToPuestoFetchScope(cacheArr, cid, pid));
+          }
+        }
+
+        Alert.alert('Modo Offline', 'Nota de voz registrada localmente. Se sincronizará cuando haya conexión.');
+        setIsCreating(false);
+        resetForm();
+        await applyMarcaToCreateHierarchy();
+      }
     } catch (error) {
-      console.error('Error in createVoiceNote:', error);
-      Alert.alert('Error', 'Ocurrió un error al crear la nota de voz');
+      console.error('Error creating voice note:', error);
+      Alert.alert('Error', 'No se pudo crear la nota de voz');
+    } finally {
+      setIsSubmittingCreate(false);
     }
   };
 
-  const deleteVoiceNote = async (voiceNote: VoiceNote) => {
-    Alert.alert(
-      'Confirmar',
-      '¿Está seguro de que desea eliminar esta nota de voz?',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Eliminar',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              const voiceNoteId = voiceNote.id;
-              const id_local = voiceNote.id_local;
-              const key = getUniqueKey(voiceNote);
+  const handleCreateVoiceNote = () => {
+    if (isSubmittingCreate) return;
+    if (!validateForm()) return;
+    Alert.alert('Confirmar', '¿Está seguro de que desea crear esta nota de voz?', [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Aceptar', onPress: () => void runCreateVoiceNoteConfirmed() },
+    ]);
+  };
 
-              // Clean up audio states before deletion
-              setAudioUris(prev => {
-                const newMap = new Map(prev);
-                newMap.delete(key);
-                return newMap;
-              });
-              setPlayingStates(prev => {
-                const newMap = new Map(prev);
-                newMap.delete(key);
-                return newMap;
-              });
-              setAudioDurations(prev => {
-                const newMap = new Map(prev);
-                newMap.delete(key);
-                return newMap;
-              });
-              setAudioPositions(prev => {
-                const newMap = new Map(prev);
-                newMap.delete(key);
-                return newMap;
-              });
-              setExpandedVoiceNotes(prev => {
-                const newSet = new Set(prev);
-                newSet.delete(key);
-                return newSet;
-              });
+  const runDeleteVoiceNoteConfirmed = async (voiceNote: VoiceNote) => {
+    const key = getUniqueKey(voiceNote);
+    setDeletingKey(key);
+    try {
+      const voiceNoteId = voiceNote.id;
+      const id_local = voiceNote.id_local;
 
-              // Check internet connection
-              const hasConnection = await checkConnection();
+      setAudioUris((prev) => {
+        const newMap = new Map(prev);
+        newMap.delete(key);
+        return newMap;
+      });
+      setPlayingStates((prev) => {
+        const newMap = new Map(prev);
+        newMap.delete(key);
+        return newMap;
+      });
+      setAudioDurations((prev) => {
+        const newMap = new Map(prev);
+        newMap.delete(key);
+        return newMap;
+      });
+      setAudioPositions((prev) => {
+        const newMap = new Map(prev);
+        newMap.delete(key);
+        return newMap;
+      });
+      setExpandedVoiceNotes((prev) => {
+        const newSet = new Set(prev);
+        newSet.delete(key);
+        return newSet;
+      });
 
-              if (hasConnection) {
-                // Con internet: llamar API
-                const result = await deleteVoiceNoteAPI({
-                  voiceNoteId,
-                  refreshAccessToken,
-                  logout,
-                });
+      const hasConnection = await checkConnection();
 
-                if (result.status) {
-                  Alert.alert('Éxito', 'Nota de voz eliminada correctamente');
-                  fetchData();
-                } else {
-                  Alert.alert('Error', result.message || 'No se pudo eliminar la nota de voz');
-                }
-              } else {
-                // Sin internet: modo offline
-                const actionsStr = await AsyncStorage.getItem('voice_notes_actions');
-                const actions = actionsStr ? JSON.parse(actionsStr) : [];
+      if (hasConnection) {
+        const result = await deleteVoiceNoteAPI({
+          voiceNoteId,
+          refreshAccessToken,
+          logout,
+        });
 
-                if (id_local !== '') {
-                  // Eliminar acciones con este id_local
-                  const filteredActions = actions.filter((a: any) => a.id !== id_local);
-                  await AsyncStorage.setItem('voice_notes_actions', JSON.stringify(filteredActions));
-                } else {
-                  // Agregar acción de delete
-                  actions.push({
-                    id: voiceNoteId,
-                    type: 'delete',
-                  });
-                  await AsyncStorage.setItem('voice_notes_actions', JSON.stringify(actions));
-                }
+        if (result.status) {
+          Alert.alert('Éxito', 'Nota de voz eliminada correctamente');
+          void fetchData();
+        } else {
+          Alert.alert('Error', result.message || 'No se pudo eliminar la nota de voz');
+        }
+      } else {
+        const actionsStr = await AsyncStorage.getItem('voice_notes_actions');
+        let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+        if (!Array.isArray(actions)) actions = [];
 
-                // Eliminar de voice_notes_cache
-                const cacheStr = await AsyncStorage.getItem('voice_notes_cache');
-                const cache = cacheStr ? JSON.parse(cacheStr) : [];
+        if (id_local !== '') {
+          const filteredActions = actions.filter(
+            (a: any) =>
+              !(a?.type === 'create' && String(a?.id) === String(id_local))
+          );
+          await AsyncStorage.setItem('voice_notes_actions', JSON.stringify(filteredActions));
+        } else {
+          actions = appendOfflineVoiceNoteDelete(actions, voiceNoteId);
+          await AsyncStorage.setItem('voice_notes_actions', JSON.stringify(actions));
+        }
 
-                const filteredCache = cache.filter((v: VoiceNote) =>
-                  id_local !== '' ? v.id_local !== id_local : v.id !== voiceNoteId
-                );
-                await AsyncStorage.setItem('voice_notes_cache', JSON.stringify(filteredCache));
+        const cacheStr = await AsyncStorage.getItem('voice_notes_cache');
+        const cache = cacheStr ? JSON.parse(cacheStr) : [];
 
-                Alert.alert('Modo Offline', 'Nota de voz eliminada localmente. Se sincronizará cuando haya conexión.');
-                fetchData();
-              }
-            } catch (error) {
-              console.error('Error deleting voice note:', error);
-              Alert.alert('Error', 'No se pudo eliminar la nota de voz');
+        const filteredCache = cache.filter((v: VoiceNote) =>
+          id_local !== '' ? v.id_local !== id_local : v.id !== voiceNoteId
+        );
+        await AsyncStorage.setItem('voice_notes_cache', JSON.stringify(filteredCache));
+
+        setVoiceNotes((prev) =>
+          prev.filter((v) => (id_local !== '' ? v.id_local !== id_local : v.id !== voiceNoteId))
+        );
+
+        Alert.alert('Modo Offline', 'Nota de voz eliminada localmente. Se sincronizará cuando haya conexión.');
+      }
+    } catch (error) {
+      console.error('Error deleting voice note:', error);
+      Alert.alert('Error', 'No se pudo eliminar la nota de voz');
+    } finally {
+      setDeletingKey(null);
+    }
+  };
+
+  const deleteVoiceNote = (voiceNote: VoiceNote) => {
+    if (deletingKey !== null) return;
+    Alert.alert('Confirmar', '¿Está seguro de que desea eliminar esta nota de voz?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Eliminar',
+        style: 'destructive',
+        onPress: () => void runDeleteVoiceNoteConfirmed(voiceNote),
+      },
+    ]);
+  };
+
+  const openEditVoiceNote = (voiceNote: VoiceNote) => {
+    setIsCreating(false);
+    editTituloRef.current = voiceNote.titulo;
+    editDescripcionRef.current = voiceNote.descripcion;
+    setEditFormKey((k) => k + 1);
+    setEditingVoiceNote(voiceNote);
+
+    const corpoRaw = voiceNote.corpo?.id != null ? Number(voiceNote.corpo.id) : null;
+    const puestoRaw = voiceNote.puesto?.id != null ? Number(voiceNote.puesto.id) : null;
+    const corpoId = corpoRaw != null && Number.isFinite(corpoRaw) && corpoRaw > 0 ? corpoRaw : null;
+    const puestoId = puestoRaw != null && Number.isFinite(puestoRaw) && puestoRaw > 0 ? puestoRaw : null;
+
+    if (roleName !== 'OPERATIVO' && structure.length > 0 && corpoId != null) {
+      const traced = traceVoiceNoteInStructure(structure, corpoId, puestoId);
+      if (traced) {
+        setEditEmpresaId(traced.empresaId);
+        setEditClienteId(traced.clienteId);
+        setEditDivisionId(traced.divisionId);
+        setEditContratoId(traced.contratoId);
+        setEditSucursalId(traced.sucursalId);
+        setEditPuestoId(traced.puestoId ?? puestoId);
+      } else {
+        setEditEmpresaId(voiceNote.empresa?.id != null ? Number(voiceNote.empresa.id) : null);
+        setEditClienteId(voiceNote.cliente?.id != null ? Number(voiceNote.cliente.id) : null);
+        setEditDivisionId(null);
+        setEditContratoId(null);
+        setEditSucursalId(corpoId);
+        setEditPuestoId(puestoId);
+      }
+      setEditSetPuesto(false);
+    } else if (roleName === 'OPERATIVO') {
+      setEditEmpresaId(null);
+      setEditClienteId(null);
+      setEditDivisionId(null);
+      setEditContratoId(null);
+      setEditSucursalId(null);
+      setEditPuestoId(null);
+      setEditSetPuesto(puestoId != null);
+    } else {
+      setEditEmpresaId(null);
+      setEditClienteId(null);
+      setEditDivisionId(null);
+      setEditContratoId(null);
+      setEditSucursalId(null);
+      setEditPuestoId(null);
+      setEditSetPuesto(false);
+    }
+  };
+
+  const closeEditVoiceNote = () => {
+    setEditingVoiceNote(null);
+    editTituloRef.current = '';
+    editDescripcionRef.current = '';
+    setEditEmpresaId(null);
+    setEditClienteId(null);
+    setEditDivisionId(null);
+    setEditContratoId(null);
+    setEditSucursalId(null);
+    setEditPuestoId(null);
+    setEditSetPuesto(false);
+  };
+
+  const validateEditForm = (): boolean => {
+    if (!editTituloRef.current.trim()) {
+      Alert.alert('Error', 'El título es requerido');
+      return false;
+    }
+    if (!editDescripcionRef.current.trim()) {
+      Alert.alert('Error', 'La descripción es requerida');
+      return false;
+    }
+    if (roleName === 'OPERATIVO') {
+      if (editSetPuesto && (marcaPuestoIdFromMarca == null || marcaPuestoIdFromMarca <= 0)) {
+        Alert.alert('Error', 'La marca actual no tiene puesto para asignar');
+        return false;
+      }
+    } else if (structure.length > 0) {
+      if (
+        editEmpresaId == null ||
+        editClienteId == null ||
+        editSucursalId == null ||
+        editDivisionId == null ||
+        editContratoId == null
+      ) {
+        Alert.alert('Error', 'Complete al menos hasta sucursal (corpo)');
+        return false;
+      }
+    }
+    return true;
+  };
+
+  const runUpdateVoiceNoteConfirmed = async () => {
+    if (!editingVoiceNote || isSubmittingEdit) return;
+    if (!validateEditForm()) return;
+
+    setIsSubmittingEdit(true);
+    try {
+      const useHierarchy = roleName !== 'OPERATIVO' && structure.length > 0;
+      const patchPayload: Record<string, unknown> = {
+        titulo: editTituloRef.current.trim(),
+        descripcion: editDescripcionRef.current.trim(),
+      };
+      if (useHierarchy) {
+        patchPayload.marca_id = marcaId;
+        patchPayload.use_structure_from_hierarchy = true;
+        patchPayload.setPuesto = false;
+        patchPayload.structure_empresa_id = editEmpresaId;
+        patchPayload.structure_cliente_id = editClienteId;
+        patchPayload.structure_corpo_id = editSucursalId;
+        patchPayload.structure_puesto_id =
+          editPuestoId != null && editPuestoId > 0 ? editPuestoId : null;
+      } else if (roleName === 'OPERATIVO') {
+        patchPayload.marca_id = marcaId;
+        patchPayload.use_structure_from_hierarchy = false;
+        patchPayload.setPuesto = editSetPuesto;
+      }
+
+      const hasConnection = await checkConnection();
+
+      // Borrador local (aún no sincronizado): fusionar en cola `create`
+      if (editingVoiceNote.id <= 0) {
+        if (!editingVoiceNote.id_local) {
+          Alert.alert('Error', 'No se puede actualizar esta nota sin referencia local');
+          return;
+        }
+        const actionsStr = await AsyncStorage.getItem('voice_notes_actions');
+        let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+        if (!Array.isArray(actions)) actions = [];
+        actions = stripErroneousVoiceNoteUpdatesForLocalQueueId(actions, editingVoiceNote.id_local);
+        const idx = actions.findIndex(
+          (a: any) => a?.type === 'create' && String(a.id) === String(editingVoiceNote.id_local)
+        );
+        if (idx === -1) {
+          Alert.alert(
+            'Error',
+            'No se encontró la acción pendiente de creación. Intente crear de nuevo o sincronice.'
+          );
+          return;
+        }
+        const rd: Record<string, unknown> = {
+          ...(actions[idx].requestData as Record<string, unknown>),
+          titulo: editTituloRef.current.trim(),
+          descripcion: editDescripcionRef.current.trim(),
+        };
+        if (useHierarchy) {
+          rd.marca_id = marcaId;
+          rd.use_structure_from_hierarchy = true;
+          rd.setPuesto = false;
+          rd.structure_empresa_id = editEmpresaId;
+          rd.structure_cliente_id = editClienteId;
+          rd.structure_corpo_id = editSucursalId;
+          rd.structure_puesto_id =
+            editPuestoId != null && editPuestoId > 0 ? editPuestoId : null;
+        } else if (roleName === 'OPERATIVO') {
+          rd.marca_id = marcaId;
+          rd.use_structure_from_hierarchy = false;
+          rd.setPuesto = editSetPuesto;
+        }
+        actions[idx].requestData = rd;
+        if (actions[idx].marcaId == null && marcaId != null) {
+          actions[idx].marcaId = marcaId;
+        }
+        await AsyncStorage.setItem('voice_notes_actions', JSON.stringify(actions));
+
+        const cacheStr = await AsyncStorage.getItem('voice_notes_cache');
+        const cache = cacheStr ? JSON.parse(cacheStr) : [];
+        const vi = Array.isArray(cache)
+          ? cache.findIndex(
+              (v: VoiceNote) => String(v.id_local) === String(editingVoiceNote.id_local)
+            )
+          : -1;
+        if (vi !== -1) {
+          let nextEmpresa: Empresa;
+          let nextCliente: Cliente;
+          let nextCorpo: Corpo;
+          let nextPuesto: Puesto | null;
+          if (useHierarchy) {
+            const { em, cl, su, pu } = resolveEditHierarchyLabels();
+            nextEmpresa = { id: editEmpresaId!, nombre: em?.nombre ?? '' };
+            nextCliente = { id: editClienteId!, nombre: cl?.nombre ?? '' };
+            nextCorpo = { id: editSucursalId!, nombre: su?.nombre ?? '' };
+            nextPuesto =
+              editPuestoId != null && editPuestoId > 0
+                ? { id: editPuestoId, nombre: pu?.nombre ?? '' }
+                : null;
+          } else {
+            const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+            if (!currentMarcaStr) throw new Error('No current_marca');
+            const currentMarca = JSON.parse(currentMarcaStr);
+            nextEmpresa = currentMarca.empresa;
+            nextCliente = currentMarca.cliente;
+            nextCorpo = currentMarca.corpo;
+            nextPuesto =
+              editSetPuesto && currentMarca.puesto?.id != null
+                ? {
+                    id: Number(currentMarca.puesto.id),
+                    nombre: String(currentMarca.puesto.nombre ?? ''),
+                  }
+                : null;
+          }
+          cache[vi] = {
+            ...cache[vi],
+            empresa: nextEmpresa,
+            cliente: nextCliente,
+            corpo: nextCorpo,
+            puesto: nextPuesto,
+            titulo: editTituloRef.current.trim(),
+            descripcion: editDescripcionRef.current.trim(),
+          };
+          await AsyncStorage.setItem('voice_notes_cache', JSON.stringify(cache));
+        }
+
+        Alert.alert(
+          hasConnection ? 'Éxito' : 'Modo Offline',
+          hasConnection
+            ? 'Nota actualizada. Se sincronizará la creación cuando corresponda.'
+            : 'Nota actualizada localmente. Se sincronizará cuando haya conexión.'
+        );
+        closeEditVoiceNote();
+        try {
+          const rawList = await AsyncStorage.getItem('voice_notes_cache');
+          const parsedList = rawList ? JSON.parse(rawList) : [];
+          const arrList = Array.isArray(parsedList) ? parsedList : [];
+          if (useHierarchy) {
+            const cid = editSucursalId != null ? Number(editSucursalId) : 0;
+            const pid =
+              editPuestoId != null && editPuestoId > 0 ? Number(editPuestoId) : NaN;
+            if (cid > 0 && Number.isFinite(pid) && pid > 0) {
+              setVoiceNotes(filterVoiceNotesToPuestoFetchScope(arrList, cid, pid));
             }
-          },
-        },
-      ]
-    );
+          } else {
+            const currentMarcaStrUpd = await AsyncStorage.getItem('current_marca');
+            if (currentMarcaStrUpd) {
+              const mUpd = JSON.parse(currentMarcaStrUpd);
+              const cid = mUpd.corpo?.id != null ? Number(mUpd.corpo.id) : null;
+              const pid = getMarcaPuestoIdFromJson(mUpd);
+              if (cid != null && cid > 0 && pid != null) {
+                setVoiceNotes(filterVoiceNotesToPuestoFetchScope(arrList, cid, pid));
+              }
+            }
+          }
+        } catch {
+          /* ignore */
+        }
+        return;
+      }
+
+      if (hasConnection) {
+        const result = await updateVoiceNoteAPI({
+          voiceNoteId: editingVoiceNote.id,
+          payload: patchPayload,
+          refreshAccessToken,
+          logout,
+        });
+
+        if (result.status) {
+          Alert.alert('Éxito', result.message || 'Nota actualizada');
+          closeEditVoiceNote();
+          void fetchData();
+        } else {
+          Alert.alert('Error', result.message || 'No se pudo actualizar la nota');
+        }
+        return;
+      }
+
+      const vid = Number(editingVoiceNote.id);
+      const actionsStrOff = await AsyncStorage.getItem('voice_notes_actions');
+      let actionsOff: any[] = actionsStrOff ? JSON.parse(actionsStrOff) : [];
+      if (!Array.isArray(actionsOff)) actionsOff = [];
+      actionsOff = stripQueuedVoiceNoteUpdatesForNoteId(actionsOff, vid);
+      actionsOff.push({
+        type: 'update',
+        id: vid,
+        payload: patchPayload,
+      });
+      await AsyncStorage.setItem('voice_notes_actions', JSON.stringify(actionsOff));
+
+      const cacheStrOff = await AsyncStorage.getItem('voice_notes_cache');
+      const cacheOff = cacheStrOff ? JSON.parse(cacheStrOff) : [];
+      const vidx = Array.isArray(cacheOff)
+        ? cacheOff.findIndex((v: VoiceNote) => Number(v.id) === vid)
+        : -1;
+      if (vidx !== -1) {
+        let nextEmpresa: Empresa;
+        let nextCliente: Cliente;
+        let nextCorpo: Corpo;
+        let nextPuesto: Puesto | null;
+        if (useHierarchy) {
+          const { em, cl, su, pu } = resolveEditHierarchyLabels();
+          nextEmpresa = { id: editEmpresaId!, nombre: em?.nombre ?? '' };
+          nextCliente = { id: editClienteId!, nombre: cl?.nombre ?? '' };
+          nextCorpo = { id: editSucursalId!, nombre: su?.nombre ?? '' };
+          nextPuesto =
+            editPuestoId != null && editPuestoId > 0
+              ? { id: editPuestoId, nombre: pu?.nombre ?? '' }
+              : null;
+        } else {
+          const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+          if (!currentMarcaStr) throw new Error('No current_marca');
+          const currentMarca = JSON.parse(currentMarcaStr);
+          nextEmpresa = currentMarca.empresa;
+          nextCliente = currentMarca.cliente;
+          nextCorpo = currentMarca.corpo;
+          nextPuesto =
+            editSetPuesto && currentMarca.puesto?.id != null
+              ? {
+                  id: Number(currentMarca.puesto.id),
+                  nombre: String(currentMarca.puesto.nombre ?? ''),
+                }
+              : null;
+        }
+        cacheOff[vidx] = {
+          ...cacheOff[vidx],
+          empresa: nextEmpresa,
+          cliente: nextCliente,
+          corpo: nextCorpo,
+          puesto: nextPuesto,
+          titulo: editTituloRef.current.trim(),
+          descripcion: editDescripcionRef.current.trim(),
+        };
+        await AsyncStorage.setItem('voice_notes_cache', JSON.stringify(cacheOff));
+      }
+
+      Alert.alert('Modo Offline', 'Nota actualizada localmente. Se sincronizará cuando haya conexión.');
+      closeEditVoiceNote();
+      try {
+        const rawOff = await AsyncStorage.getItem('voice_notes_cache');
+        const parsedOff = rawOff ? JSON.parse(rawOff) : [];
+        const arrOff = Array.isArray(parsedOff) ? parsedOff : [];
+        if (useHierarchy) {
+          const cid = editSucursalId != null ? Number(editSucursalId) : 0;
+          const pid =
+            editPuestoId != null && editPuestoId > 0 ? Number(editPuestoId) : NaN;
+          if (cid > 0 && Number.isFinite(pid) && pid > 0) {
+            setVoiceNotes(filterVoiceNotesToPuestoFetchScope(arrOff, cid, pid));
+          }
+        } else {
+          const currentMarcaStrOff = await AsyncStorage.getItem('current_marca');
+          if (currentMarcaStrOff) {
+            const mOff = JSON.parse(currentMarcaStrOff);
+            const cid = mOff.corpo?.id != null ? Number(mOff.corpo.id) : null;
+            const pid = getMarcaPuestoIdFromJson(mOff);
+            if (cid != null && cid > 0 && pid != null) {
+              setVoiceNotes(filterVoiceNotesToPuestoFetchScope(arrOff, cid, pid));
+            }
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    } catch (e) {
+      console.error(e);
+      Alert.alert('Error', 'No se pudo actualizar la nota de voz');
+    } finally {
+      setIsSubmittingEdit(false);
+    }
+  };
+
+  const handleUpdateVoiceNote = () => {
+    if (isSubmittingEdit) return;
+    if (!validateEditForm()) return;
+    Alert.alert('Confirmar', '¿Guardar los cambios en esta nota de voz?', [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Aceptar', onPress: () => void runUpdateVoiceNoteConfirmed() },
+    ]);
   };
 
   const toggleVoiceNoteExpanded = (voiceNote: VoiceNote) => {
@@ -1003,57 +1881,6 @@ export default function VoiceNotesScreen() {
     }
   };
 
-  // Estados para controlar los reproductores de la lista
-  const [playingStates, setPlayingStates] = useState<Map<string, boolean>>(new Map());
-  const [audioPositions, setAudioPositions] = useState<Map<string, number>>(new Map());
-
-  const playVoiceNoteAudio = (voiceNote: VoiceNote) => {
-    const key = getUniqueKey(voiceNote);
-    const audioUri = audioUris.get(key);
-
-    if (!audioUri) {
-      Alert.alert('Error', 'El audio no está cargado. Por favor, expanda el componente de Audio primero.');
-      return;
-    }
-
-    // El control se hace a través del componente VoiceNoteAudioPlayer
-    // Solo alternamos el estado de reproducción
-    setPlayingStates(prev => {
-      const newMap = new Map(prev);
-      const isCurrentlyPlaying = newMap.get(key) || false;
-      newMap.set(key, !isCurrentlyPlaying);
-      return newMap;
-    });
-  };
-
-  const resetVoiceNoteAudio = (voiceNote: VoiceNote) => {
-    const key = getUniqueKey(voiceNote);
-    setAudioPositions(prev => {
-      const newMap = new Map(prev);
-      newMap.set(key, 0);
-      return newMap;
-    });
-    setPlayingStates(prev => {
-      const newMap = new Map(prev);
-      newMap.set(key, false);
-      return newMap;
-    });
-    // Activar flag de reset
-    setResetFlags(prev => {
-      const newMap = new Map(prev);
-      newMap.set(key, true);
-      return newMap;
-    });
-    // Desactivar flag después de un momento para permitir resetear nuevamente
-    setTimeout(() => {
-      setResetFlags(prev => {
-        const newMap = new Map(prev);
-        newMap.set(key, false);
-        return newMap;
-      });
-    }, 100);
-  };
-
   const formatTime = (seconds: number): string => {
     if (!seconds || isNaN(seconds) || seconds < 0) {
       return '0:00';
@@ -1072,47 +1899,187 @@ export default function VoiceNotesScreen() {
     return `${day}-${month}-${year}`;
   };
 
+  const filterClienteOptionsMemo = useMemo(() => {
+    const empresa = structure.find((e) => e.id === filterEmpresaId);
+    return empresa?.clientes ?? [];
+  }, [structure, filterEmpresaId]);
+
+  const filterDivisionOptionsMemo = useMemo(() => {
+    const cliente = filterClienteOptionsMemo.find((c) => c.id === filterClienteId);
+    return cliente?.division ?? [];
+  }, [filterClienteOptionsMemo, filterClienteId]);
+
+  const filterContratoOptionsMemo = useMemo(() => {
+    const division = filterDivisionOptionsMemo.find((d) => d.id === filterDivisionId);
+    return division?.contratos ?? [];
+  }, [filterDivisionOptionsMemo, filterDivisionId]);
+
+  const filterSucursalOptionsMemo = useMemo(() => {
+    const contrato = filterContratoOptionsMemo.find((c) => c.id === filterContratoId);
+    return contrato?.sucursales ?? [];
+  }, [filterContratoOptionsMemo, filterContratoId]);
+
+  const filterPuestoOptionsMemo = useMemo(() => {
+    const sucursal = filterSucursalOptionsMemo.find((s) => s.id === filterSucursalId);
+    return sucursal?.puestos ?? [];
+  }, [filterSucursalOptionsMemo, filterSucursalId]);
+
+  const createClienteOptionsMemo = useMemo(() => {
+    const empresa = structure.find((e) => e.id === createEmpresaId);
+    return empresa?.clientes ?? [];
+  }, [structure, createEmpresaId]);
+
+  const createDivisionOptionsMemo = useMemo(() => {
+    const cliente = createClienteOptionsMemo.find((c) => c.id === createClienteId);
+    return cliente?.division ?? [];
+  }, [createClienteOptionsMemo, createClienteId]);
+
+  const createContratoOptionsMemo = useMemo(() => {
+    const division = createDivisionOptionsMemo.find((d) => d.id === createDivisionId);
+    return division?.contratos ?? [];
+  }, [createDivisionOptionsMemo, createDivisionId]);
+
+  const createSucursalOptionsMemo = useMemo(() => {
+    const contrato = createContratoOptionsMemo.find((c) => c.id === createContratoId);
+    return contrato?.sucursales ?? [];
+  }, [createContratoOptionsMemo, createContratoId]);
+
+  const createPuestoOptionsMemo = useMemo(() => {
+    const sucursal = createSucursalOptionsMemo.find((s) => s.id === createSucursalId);
+    return sucursal?.puestos ?? [];
+  }, [createSucursalOptionsMemo, createSucursalId]);
+
+  const editClienteOptionsMemo = useMemo(() => {
+    const empresa = structure.find((e) => e.id === editEmpresaId);
+    return empresa?.clientes ?? [];
+  }, [structure, editEmpresaId]);
+
+  const editDivisionOptionsMemo = useMemo(() => {
+    const cliente = editClienteOptionsMemo.find((c) => c.id === editClienteId);
+    return cliente?.division ?? [];
+  }, [editClienteOptionsMemo, editClienteId]);
+
+  const editContratoOptionsMemo = useMemo(() => {
+    const division = editDivisionOptionsMemo.find((d) => d.id === editDivisionId);
+    return division?.contratos ?? [];
+  }, [editDivisionOptionsMemo, editDivisionId]);
+
+  const editSucursalOptionsMemo = useMemo(() => {
+    const contrato = editContratoOptionsMemo.find((c) => c.id === editContratoId);
+    return contrato?.sucursales ?? [];
+  }, [editContratoOptionsMemo, editContratoId]);
+
+  const editPuestoOptionsMemo = useMemo(() => {
+    const sucursal = editSucursalOptionsMemo.find((s) => s.id === editSucursalId);
+    return sucursal?.puestos ?? [];
+  }, [editSucursalOptionsMemo, editSucursalId]);
+
+  const listScopedVoiceNotes = useMemo(() => {
+    if (roleName === 'OPERATIVO') {
+      const cid = corpoId;
+      const pid = marcaPuestoIdFromMarca;
+      if (cid == null || !Number.isFinite(Number(cid)) || Number(cid) <= 0) return [];
+      if (pid == null || !Number.isFinite(Number(pid)) || Number(pid) <= 0) return [];
+      return voiceNotes.filter((vn) => voiceNoteInPuestoFetchScope(vn, Number(cid), Number(pid)));
+    }
+    const cid = filterSucursalId;
+    const pid = filterPuestoId;
+    if (cid == null || !Number.isFinite(Number(cid)) || Number(cid) <= 0) return [];
+    if (pid == null || !Number.isFinite(Number(pid)) || Number(pid) <= 0) return [];
+    return voiceNotes.filter((vn) => voiceNoteInPuestoFetchScope(vn, Number(cid), Number(pid)));
+  }, [
+    voiceNotes,
+    filterSucursalId,
+    filterPuestoId,
+    roleName,
+    corpoId,
+    marcaPuestoIdFromMarca,
+  ]);
+
   const resetAllFilters = () => {
-    setFilterEmpresa('');
-    setFilterCliente('');
-    setFilterSucursal('');
-    setFilterPuesto('');
+    void resetListFiltersFromCurrentMarca();
     setFilterTitulo('');
     setFilterDescripcion('');
     setFilterTranscripcion('');
     setFilterCreatedAt('');
   };
 
-  // Filtered voice notes
-  const filteredVoiceNotes = voiceNotes.filter(voiceNote => {
-    const matchesEmpresa = !filterEmpresa ||
-      (voiceNote.empresa?.nombre && voiceNote.empresa.nombre.toLowerCase().includes(filterEmpresa.toLowerCase()));
+  const filteredVoiceNotes = useMemo(
+    () =>
+      listScopedVoiceNotes.filter((voiceNote) => {
+        const matchesTitulo =
+          !filterTitulo ||
+          (voiceNote.titulo && voiceNote.titulo.toLowerCase().includes(filterTitulo.toLowerCase()));
 
-    const matchesCliente = !filterCliente ||
-      (voiceNote.cliente?.nombre && voiceNote.cliente.nombre.toLowerCase().includes(filterCliente.toLowerCase()));
+        const matchesDescripcion =
+          !filterDescripcion ||
+          (voiceNote.descripcion && voiceNote.descripcion.toLowerCase().includes(filterDescripcion.toLowerCase()));
 
-    const matchesSucursal = !filterSucursal ||
-      (voiceNote.corpo?.nombre && voiceNote.corpo.nombre.toLowerCase().includes(filterSucursal.toLowerCase()));
+        const matchesTranscripcion =
+          !filterTranscripcion ||
+          (voiceNote.transcripcion &&
+            voiceNote.transcripcion.toLowerCase().includes(filterTranscripcion.toLowerCase()));
 
-    const matchesPuesto = !filterPuesto ||
-      (voiceNote.puesto?.nombre && voiceNote.puesto.nombre.toLowerCase().includes(filterPuesto.toLowerCase()));
+        const matchesCreatedAt =
+          !filterCreatedAt ||
+          (voiceNote.created_at && voiceNote.created_at.split('T')[0] === filterCreatedAt);
 
-    const matchesTitulo = !filterTitulo ||
-      (voiceNote.titulo && voiceNote.titulo.toLowerCase().includes(filterTitulo.toLowerCase()));
+        return matchesTitulo && matchesDescripcion && matchesTranscripcion && matchesCreatedAt;
+      }),
+    [
+      listScopedVoiceNotes,
+      filterTitulo,
+      filterDescripcion,
+      filterTranscripcion,
+      filterCreatedAt,
+    ]
+  );
 
-    const matchesDescripcion = !filterDescripcion ||
-      (voiceNote.descripcion && voiceNote.descripcion.toLowerCase().includes(filterDescripcion.toLowerCase()));
+  const [playingStates, setPlayingStates] = useState<Map<string, boolean>>(new Map());
+  const [audioPositions, setAudioPositions] = useState<Map<string, number>>(new Map());
 
-    const matchesTranscripcion = !filterTranscripcion ||
-      (voiceNote.transcripcion && voiceNote.transcripcion.toLowerCase().includes(filterTranscripcion.toLowerCase()));
+  const playVoiceNoteAudio = (voiceNote: VoiceNote) => {
+    const key = getUniqueKey(voiceNote);
+    const audioUri = audioUris.get(key);
 
-    const matchesCreatedAt = !filterCreatedAt ||
-      (voiceNote.created_at && voiceNote.created_at.split('T')[0] === filterCreatedAt);
+    if (!audioUri) {
+      Alert.alert('Error', 'El audio no está cargado. Por favor, expanda el componente de Audio primero.');
+      return;
+    }
 
-    return matchesEmpresa && matchesCliente && matchesSucursal &&
-      matchesPuesto && matchesTitulo && matchesDescripcion &&
-      matchesTranscripcion && matchesCreatedAt;
-  });
+    setPlayingStates((prev) => {
+      const newMap = new Map(prev);
+      const isCurrentlyPlaying = newMap.get(key) || false;
+      newMap.set(key, !isCurrentlyPlaying);
+      return newMap;
+    });
+  };
+
+  const resetVoiceNoteAudio = (voiceNote: VoiceNote) => {
+    const key = getUniqueKey(voiceNote);
+    setAudioPositions((prev) => {
+      const newMap = new Map(prev);
+      newMap.set(key, 0);
+      return newMap;
+    });
+    setPlayingStates((prev) => {
+      const newMap = new Map(prev);
+      newMap.set(key, false);
+      return newMap;
+    });
+    setResetFlags((prev) => {
+      const newMap = new Map(prev);
+      newMap.set(key, true);
+      return newMap;
+    });
+    setTimeout(() => {
+      setResetFlags((prev) => {
+        const newMap = new Map(prev);
+        newMap.set(key, false);
+        return newMap;
+      });
+    }, 100);
+  };
 
   const getActionIcon = (action: string) => {
     switch (action) {
@@ -1159,26 +2126,7 @@ export default function VoiceNotesScreen() {
     setIsMenuVisible(false);
   };
 
-  if (isLoading) {
-    return (
-      <ThemedView style={styles.container}>
-        <AppHeader onMenuPress={handleMenuPress} title="Notas de Voz" />
-        <ThemedView style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#007AFF" />
-          <ThemedText style={styles.loadingText}>Cargando...</ThemedText>
-        </ThemedView>
-        <AppFooter />
-        <SlideMenu
-          isVisible={isMenuVisible}
-          onClose={handleMenuClose}
-          onHomePress={handleHomePress}
-          currentRoute="VoiceNotes"
-        />
-      </ThemedView>
-    );
-  }
-
-  if (!hasMarca) {
+  if (marcaChecked && !hasMarca) {
     return (
       <ThemedView style={styles.container}>
         <AppHeader onMenuPress={handleMenuPress} title="Notas de Voz" />
@@ -1212,7 +2160,7 @@ export default function VoiceNotesScreen() {
         </ThemedView>
 
         {/* Filtros */}
-        {!isCreating && (
+        {hasMarca && !isCreating && !editingVoiceNote && (
           <ThemedView style={styles.filtersContainer}>
             <ThemedView style={styles.filtersHeader}>
               <TouchableOpacity
@@ -1243,49 +2191,184 @@ export default function VoiceNotesScreen() {
             {/* Filter Content */}
             {isFiltersExpanded && (
               <ThemedView style={styles.filtersContent}>
-                <ThemedView style={styles.filterGroup}>
-                  <ThemedText style={styles.filterLabel}>Empresa:</ThemedText>
-                  <TextInput
-                    style={styles.filterInput}
-                    value={filterEmpresa}
-                    onChangeText={setFilterEmpresa}
-                    placeholder="Filtrar por empresa..."
-                    placeholderTextColor="#999"
-                  />
-                </ThemedView>
+                <>
+                  {roleName != null && roleName !== 'OPERATIVO' && (
+                    <>
+                    <ThemedText style={styles.hierarchyHint}>
+                      Filtro por sucursal y puesto (precarga hasta sucursal desde la marca actual):
+                    </ThemedText>
+                    {isStructureLoading ? (
+                      <ThemedView style={styles.inlineLoader}>
+                        <ActivityIndicator size="small" color="#007AFF" />
+                        <ThemedText style={styles.inlineLoaderText}>Cargando estructura…</ThemedText>
+                      </ThemedView>
+                    ) : structure.length === 0 ? (
+                      <ThemedText style={styles.emptyText}>Sin estructura en caché.</ThemedText>
+                    ) : (
+                      <>
+                        <ThemedView style={styles.filterGroup}>
+                          <ThemedText style={styles.filterLabel}>Empresa</ThemedText>
+                          <View style={styles.pickerWrapper}>
+                            <Picker
+                              selectedValue={filterEmpresaId ?? 0}
+                              onValueChange={(v) => {
+                                const next = Number(v) || 0;
+                                setFilterEmpresaId(next === 0 ? null : next);
+                                setFilterClienteId(null);
+                                setFilterDivisionId(null);
+                                setFilterContratoId(null);
+                                setFilterSucursalId(null);
+                                setFilterPuestoId(null);
+                              }}
+                            >
+                              <Picker.Item label="Seleccione empresa…" value={0} color="#000000" />
+                              {structure.map((e) => (
+                                <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
+                              ))}
+                            </Picker>
+                          </View>
+                        </ThemedView>
 
-                <ThemedView style={styles.filterGroup}>
-                  <ThemedText style={styles.filterLabel}>Cliente:</ThemedText>
-                  <TextInput
-                    style={styles.filterInput}
-                    value={filterCliente}
-                    onChangeText={setFilterCliente}
-                    placeholder="Filtrar por cliente..."
-                    placeholderTextColor="#999"
-                  />
-                </ThemedView>
+                        <ThemedView style={styles.filterGroup}>
+                          <ThemedText style={styles.filterLabel}>Cliente</ThemedText>
+                          <View style={styles.pickerWrapper}>
+                            <Picker
+                              enabled={filterEmpresaId != null && filterClienteOptionsMemo.length > 0}
+                              selectedValue={filterClienteId ?? 0}
+                              onValueChange={(v) => {
+                                const next = Number(v) || 0;
+                                setFilterClienteId(next === 0 ? null : next);
+                                setFilterDivisionId(null);
+                                setFilterContratoId(null);
+                                setFilterSucursalId(null);
+                                setFilterPuestoId(null);
+                              }}
+                            >
+                              <Picker.Item
+                                label={filterEmpresaId ? 'Seleccione cliente…' : 'Seleccione empresa primero'}
+                                value={0}
+                                color="#000000"
+                              />
+                              {filterClienteOptionsMemo.map((c) => (
+                                <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                              ))}
+                            </Picker>
+                          </View>
+                        </ThemedView>
 
-                <ThemedView style={styles.filterGroup}>
-                  <ThemedText style={styles.filterLabel}>Sucursal:</ThemedText>
-                  <TextInput
-                    style={styles.filterInput}
-                    value={filterSucursal}
-                    onChangeText={setFilterSucursal}
-                    placeholder="Filtrar por sucursal..."
-                    placeholderTextColor="#999"
-                  />
-                </ThemedView>
+                        <ThemedView style={styles.filterGroup}>
+                          <ThemedText style={styles.filterLabel}>División</ThemedText>
+                          <View style={styles.pickerWrapper}>
+                            <Picker
+                              enabled={filterClienteId != null && filterDivisionOptionsMemo.length > 0}
+                              selectedValue={filterDivisionId ?? 0}
+                              onValueChange={(v) => {
+                                const next = Number(v) || 0;
+                                setFilterDivisionId(next === 0 ? null : next);
+                                setFilterContratoId(null);
+                                setFilterSucursalId(null);
+                                setFilterPuestoId(null);
+                              }}
+                            >
+                              <Picker.Item
+                                label={filterClienteId ? 'Seleccione división…' : 'Seleccione cliente primero'}
+                                value={0}
+                                color="#000000"
+                              />
+                              {filterDivisionOptionsMemo.map((d) => (
+                                <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
+                              ))}
+                            </Picker>
+                          </View>
+                        </ThemedView>
 
-                <ThemedView style={styles.filterGroup}>
-                  <ThemedText style={styles.filterLabel}>Puesto:</ThemedText>
-                  <TextInput
-                    style={styles.filterInput}
-                    value={filterPuesto}
-                    onChangeText={setFilterPuesto}
-                    placeholder="Filtrar por puesto..."
-                    placeholderTextColor="#999"
-                  />
-                </ThemedView>
+                        <ThemedView style={styles.filterGroup}>
+                          <ThemedText style={styles.filterLabel}>Contrato</ThemedText>
+                          <View style={styles.pickerWrapper}>
+                            <Picker
+                              enabled={filterDivisionId != null && filterContratoOptionsMemo.length > 0}
+                              selectedValue={filterContratoId ?? 0}
+                              onValueChange={(v) => {
+                                const next = Number(v) || 0;
+                                setFilterContratoId(next === 0 ? null : next);
+                                setFilterSucursalId(null);
+                                setFilterPuestoId(null);
+                              }}
+                            >
+                              <Picker.Item
+                                label={filterDivisionId ? 'Seleccione contrato…' : 'Seleccione división primero'}
+                                value={0}
+                                color="#000000"
+                              />
+                              {filterContratoOptionsMemo.map((c) => (
+                                <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                              ))}
+                            </Picker>
+                          </View>
+                        </ThemedView>
+
+                        <ThemedView style={styles.filterGroup}>
+                          <ThemedText style={styles.filterLabel}>Sucursal (corpo)</ThemedText>
+                          <View style={styles.pickerWrapper}>
+                            <Picker
+                              enabled={filterContratoId != null && filterSucursalOptionsMemo.length > 0}
+                              selectedValue={filterSucursalId ?? 0}
+                              onValueChange={(v) => {
+                                const next = Number(v) || 0;
+                                const nextSuc = next === 0 ? null : next;
+                                setFilterSucursalId(nextSuc);
+                                setFilterPuestoId(null);
+                                setVoiceNotes([]);
+                              }}
+                            >
+                              <Picker.Item
+                                label={filterContratoId ? 'Seleccione sucursal…' : 'Seleccione contrato primero'}
+                                value={0}
+                                color="#000000"
+                              />
+                              {filterSucursalOptionsMemo.map((s) => (
+                                <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
+                              ))}
+                            </Picker>
+                          </View>
+                        </ThemedView>
+
+                        <ThemedView style={styles.filterGroup}>
+                          <ThemedText style={styles.filterLabel}>Puesto</ThemedText>
+                          <View style={styles.pickerWrapper}>
+                            <Picker
+                              enabled={filterSucursalId != null && filterPuestoOptionsMemo.length > 0}
+                              selectedValue={filterPuestoId ?? 0}
+                              onValueChange={(v) => {
+                                const next = Number(v) || 0;
+                                const nextP = next === 0 ? null : next;
+                                setFilterPuestoId(nextP);
+                                if (filterSucursalId != null && filterSucursalId > 0) {
+                                  void refetchVoiceNotesForFilter(filterSucursalId, nextP);
+                                }
+                              }}
+                            >
+                              <Picker.Item
+                                label={filterSucursalId ? 'Seleccione puesto…' : 'Seleccione sucursal primero'}
+                                value={0}
+                                color="#000000"
+                              />
+                              {filterPuestoOptionsMemo.map((p) => (
+                                <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
+                              ))}
+                            </Picker>
+                          </View>
+                        </ThemedView>
+                      </>
+                    )}
+                    </>
+                  )}
+                  {roleName === 'OPERATIVO' && (
+                    <ThemedText style={[styles.hierarchyHint, { marginBottom: 8 }]}>
+                      La lista muestra las notas de la sucursal y puesto de tu marca actual; edita los filtros de texto abajo para acotar resultados.
+                    </ThemedText>
+                  )}
+                </>
 
                 <ThemedView style={styles.filterGroup}>
                   <ThemedText style={styles.filterLabel}>Título:</ThemedText>
@@ -1347,20 +2430,20 @@ export default function VoiceNotesScreen() {
         )}
 
         {/* Create Button */}
-        {!isCreating && (
+        {hasMarca && !isCreating && !editingVoiceNote && !isLoading && (
           <TouchableOpacity
-            style={styles.createButton}
+            style={styles.createVoiceNoteButton}
             onPress={startCreating}
+            activeOpacity={0.85}
           >
-            <ThemedText style={styles.createButtonText}>
-              {getActionIcon('add')}
-            </ThemedText>
+            <Ionicons name="add" size={22} color="#fff" />
+            <ThemedText style={styles.createVoiceNoteButtonText}>Nueva nota de voz</ThemedText>
           </TouchableOpacity>
         )}
 
-        {/* Create Form */}
-        {isCreating && (
-          <ThemedView style={styles.formContainer}>
+        {isCreating && !editingVoiceNote && (
+          <ThemedView style={styles.formFrame}>
+            <ThemedView style={styles.formContainer}>
             <ThemedText style={styles.formTitle}>Nueva Nota de Voz</ThemedText>
 
             {/* Título */}
@@ -1391,28 +2474,177 @@ export default function VoiceNotesScreen() {
               />
             </ThemedView>
 
-            {/* Asignar al puesto actual */}
-            <ThemedView style={styles.formGroup}>
-              <ThemedView style={styles.checkboxContainer}>
-                <TouchableOpacity
-                  style={[
-                    styles.checkbox,
-                    setPuesto ? styles.checkboxChecked : styles.checkboxUnchecked
-                  ]}
-                  onPress={() => setSetPuesto(!setPuesto)}
-                >
-                  {setPuesto && (
-                    <Ionicons name="checkmark" size={16} color="#000000" />
-                  )}
-                </TouchableOpacity>
-                <ThemedText style={styles.checkboxLabel}>Asignar al puesto actual</ThemedText>
-              </ThemedView>
-              {puestoActualNombre ? (
-                <ThemedView style={styles.puestoActualContainer}>
-                  <ThemedText style={styles.puestoActualText}>{puestoActualNombre}</ThemedText>
+            {roleName !== 'OPERATIVO' && structure.length > 0 && (
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.label}>Ubicación (empresa → sucursal) * — puesto opcional</ThemedText>
+                <ThemedView style={styles.filterGroup}>
+                  <ThemedText style={styles.filterLabel}>Empresa</ThemedText>
+                  <View style={styles.pickerWrapper}>
+                    <Picker
+                      selectedValue={createEmpresaId ?? 0}
+                      onValueChange={(v) => {
+                        const next = Number(v) || 0;
+                        setCreateEmpresaId(next === 0 ? null : next);
+                        setCreateClienteId(null);
+                        setCreateDivisionId(null);
+                        setCreateContratoId(null);
+                        setCreateSucursalId(null);
+                        setCreatePuestoId(null);
+                      }}
+                    >
+                      <Picker.Item label="Seleccione empresa…" value={0} color="#000000" />
+                      {structure.map((e) => (
+                        <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
+                      ))}
+                    </Picker>
+                  </View>
                 </ThemedView>
-              ) : null}
-            </ThemedView>
+                <ThemedView style={styles.filterGroup}>
+                  <ThemedText style={styles.filterLabel}>Cliente</ThemedText>
+                  <View style={styles.pickerWrapper}>
+                    <Picker
+                      enabled={createEmpresaId != null && createClienteOptionsMemo.length > 0}
+                      selectedValue={createClienteId ?? 0}
+                      onValueChange={(v) => {
+                        const next = Number(v) || 0;
+                        setCreateClienteId(next === 0 ? null : next);
+                        setCreateDivisionId(null);
+                        setCreateContratoId(null);
+                        setCreateSucursalId(null);
+                        setCreatePuestoId(null);
+                      }}
+                    >
+                      <Picker.Item
+                        label={createEmpresaId ? 'Seleccione cliente…' : 'Seleccione empresa primero'}
+                        value={0}
+                        color="#000000"
+                      />
+                      {createClienteOptionsMemo.map((c) => (
+                        <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                      ))}
+                    </Picker>
+                  </View>
+                </ThemedView>
+                <ThemedView style={styles.filterGroup}>
+                  <ThemedText style={styles.filterLabel}>División</ThemedText>
+                  <View style={styles.pickerWrapper}>
+                    <Picker
+                      enabled={createClienteId != null && createDivisionOptionsMemo.length > 0}
+                      selectedValue={createDivisionId ?? 0}
+                      onValueChange={(v) => {
+                        const next = Number(v) || 0;
+                        setCreateDivisionId(next === 0 ? null : next);
+                        setCreateContratoId(null);
+                        setCreateSucursalId(null);
+                        setCreatePuestoId(null);
+                      }}
+                    >
+                      <Picker.Item
+                        label={createClienteId ? 'Seleccione división…' : 'Seleccione cliente primero'}
+                        value={0}
+                        color="#000000"
+                      />
+                      {createDivisionOptionsMemo.map((d) => (
+                        <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
+                      ))}
+                    </Picker>
+                  </View>
+                </ThemedView>
+                <ThemedView style={styles.filterGroup}>
+                  <ThemedText style={styles.filterLabel}>Contrato</ThemedText>
+                  <View style={styles.pickerWrapper}>
+                    <Picker
+                      enabled={createDivisionId != null && createContratoOptionsMemo.length > 0}
+                      selectedValue={createContratoId ?? 0}
+                      onValueChange={(v) => {
+                        const next = Number(v) || 0;
+                        setCreateContratoId(next === 0 ? null : next);
+                        setCreateSucursalId(null);
+                        setCreatePuestoId(null);
+                      }}
+                    >
+                      <Picker.Item
+                        label={createDivisionId ? 'Seleccione contrato…' : 'Seleccione división primero'}
+                        value={0}
+                        color="#000000"
+                      />
+                      {createContratoOptionsMemo.map((c) => (
+                        <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                      ))}
+                    </Picker>
+                  </View>
+                </ThemedView>
+                <ThemedView style={styles.filterGroup}>
+                  <ThemedText style={styles.filterLabel}>Sucursal (corpo)</ThemedText>
+                  <View style={styles.pickerWrapper}>
+                    <Picker
+                      enabled={createContratoId != null && createSucursalOptionsMemo.length > 0}
+                      selectedValue={createSucursalId ?? 0}
+                      onValueChange={(v) => {
+                        const next = Number(v) || 0;
+                        setCreateSucursalId(next === 0 ? null : next);
+                        setCreatePuestoId(null);
+                      }}
+                    >
+                      <Picker.Item
+                        label={createContratoId ? 'Seleccione sucursal…' : 'Seleccione contrato primero'}
+                        value={0}
+                        color="#000000"
+                      />
+                      {createSucursalOptionsMemo.map((s) => (
+                        <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
+                      ))}
+                    </Picker>
+                  </View>
+                </ThemedView>
+                <ThemedView style={styles.filterGroup}>
+                  <ThemedText style={styles.filterLabel}>Puesto (opcional)</ThemedText>
+                  <View style={styles.pickerWrapper}>
+                    <Picker
+                      enabled={createSucursalId != null && createPuestoOptionsMemo.length > 0}
+                      selectedValue={createPuestoId ?? 0}
+                      onValueChange={(v) => {
+                        const next = Number(v) || 0;
+                        setCreatePuestoId(next === 0 ? null : next);
+                      }}
+                    >
+                      <Picker.Item
+                        label={createSucursalId ? 'Sin puesto específico' : 'Seleccione sucursal primero'}
+                        value={0}
+                        color="#000000"
+                      />
+                      {createPuestoOptionsMemo.map((p) => (
+                        <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
+                      ))}
+                    </Picker>
+                  </View>
+                </ThemedView>
+              </ThemedView>
+            )}
+
+            {roleName === 'OPERATIVO' && (
+              <ThemedView style={styles.formGroup}>
+                <ThemedView style={styles.checkboxContainer}>
+                  <TouchableOpacity
+                    style={[
+                      styles.checkbox,
+                      setPuesto ? styles.checkboxChecked : styles.checkboxUnchecked
+                    ]}
+                    onPress={() => setSetPuesto(!setPuesto)}
+                  >
+                    {setPuesto && (
+                      <Ionicons name="checkmark" size={16} color="#000000" />
+                    )}
+                  </TouchableOpacity>
+                  <ThemedText style={styles.checkboxLabel}>Asignar SOLAMENTE al puesto actual</ThemedText>
+                </ThemedView>
+                {puestoActualNombre ? (
+                  <ThemedView style={styles.puestoActualContainer}>
+                    <ThemedText style={styles.puestoActualText}>{puestoActualNombre}</ThemedText>
+                  </ThemedView>
+                ) : null}
+              </ThemedView>
+            )}
 
             {/* Audio Recording */}
             <ThemedView style={styles.formGroup}>
@@ -1535,23 +2767,276 @@ export default function VoiceNotesScreen() {
             {/* Form Actions */}
             <ThemedView style={styles.formActions}>
               <TouchableOpacity
-                style={styles.cancelButton}
+                style={[styles.formActionBtn, styles.formCancelBtn, isSubmittingCreate && styles.buttonDisabled]}
                 onPress={cancelCreating}
+                disabled={isSubmittingCreate}
+                activeOpacity={0.85}
               >
-                <ThemedText style={styles.cancelButtonText}>{getActionIcon('cancel')}</ThemedText>
+                <Ionicons name="close" size={18} color="#000" />
+                <ThemedText style={styles.formCancelBtnText}>Cancelar</ThemedText>
               </TouchableOpacity>
               <TouchableOpacity
-                style={styles.submitButton}
-                onPress={createVoiceNote}
+                style={[styles.formActionBtn, styles.formSaveBtn, isSubmittingCreate && styles.buttonDisabled]}
+                onPress={handleCreateVoiceNote}
+                disabled={isSubmittingCreate}
+                activeOpacity={0.85}
               >
-                <ThemedText style={styles.submitButtonText}>{getActionIcon('confirm')}</ThemedText>
+                {isSubmittingCreate ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <>
+                    <Ionicons name="checkmark" size={18} color="#fff" />
+                    <ThemedText style={styles.formSaveBtnText}>Aceptar</ThemedText>
+                  </>
+                )}
               </TouchableOpacity>
+            </ThemedView>
+          </ThemedView>
+          </ThemedView>
+        )}
+
+        {editingVoiceNote && !isCreating && (
+          <ThemedView style={styles.formFrame}>
+            <ThemedView style={styles.formContainer}>
+              <ThemedText style={styles.formTitle}>Modificar nota</ThemedText>
+
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.label}>Título *</ThemedText>
+                <TextInput
+                  key={`edit-titulo-${editFormKey}`}
+                  style={styles.input}
+                  placeholder="Ingrese el título"
+                  placeholderTextColor="#999"
+                  defaultValue={editTituloRef.current}
+                  onChangeText={(t) => { editTituloRef.current = t; }}
+                />
+              </ThemedView>
+
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.label}>Descripción *</ThemedText>
+                <TextInput
+                  key={`edit-desc-${editFormKey}`}
+                  style={[styles.input, styles.textArea]}
+                  placeholder="Ingrese la descripción"
+                  placeholderTextColor="#999"
+                  defaultValue={editDescripcionRef.current}
+                  onChangeText={(t) => { editDescripcionRef.current = t; }}
+                  multiline
+                  numberOfLines={4}
+                />
+              </ThemedView>
+
+              {roleName !== 'OPERATIVO' && structure.length > 0 && (
+                <ThemedView style={styles.formGroup}>
+                  <ThemedText style={styles.label}>Ubicación (empresa → sucursal) * — puesto opcional</ThemedText>
+                  <ThemedView style={styles.filterGroup}>
+                    <ThemedText style={styles.filterLabel}>Empresa</ThemedText>
+                    <View style={styles.pickerWrapper}>
+                      <Picker
+                        selectedValue={editEmpresaId ?? 0}
+                        onValueChange={(v) => {
+                          const next = Number(v) || 0;
+                          setEditEmpresaId(next === 0 ? null : next);
+                          setEditClienteId(null);
+                          setEditDivisionId(null);
+                          setEditContratoId(null);
+                          setEditSucursalId(null);
+                          setEditPuestoId(null);
+                        }}
+                      >
+                        <Picker.Item label="Seleccione empresa…" value={0} color="#000000" />
+                        {structure.map((e) => (
+                          <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
+                        ))}
+                      </Picker>
+                    </View>
+                  </ThemedView>
+                  <ThemedView style={styles.filterGroup}>
+                    <ThemedText style={styles.filterLabel}>Cliente</ThemedText>
+                    <View style={styles.pickerWrapper}>
+                      <Picker
+                        enabled={editEmpresaId != null && editClienteOptionsMemo.length > 0}
+                        selectedValue={editClienteId ?? 0}
+                        onValueChange={(v) => {
+                          const next = Number(v) || 0;
+                          setEditClienteId(next === 0 ? null : next);
+                          setEditDivisionId(null);
+                          setEditContratoId(null);
+                          setEditSucursalId(null);
+                          setEditPuestoId(null);
+                        }}
+                      >
+                        <Picker.Item
+                          label={editEmpresaId ? 'Seleccione cliente…' : 'Seleccione empresa primero'}
+                          value={0}
+                          color="#000000"
+                        />
+                        {editClienteOptionsMemo.map((c) => (
+                          <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                        ))}
+                      </Picker>
+                    </View>
+                  </ThemedView>
+                  <ThemedView style={styles.filterGroup}>
+                    <ThemedText style={styles.filterLabel}>División</ThemedText>
+                    <View style={styles.pickerWrapper}>
+                      <Picker
+                        enabled={editClienteId != null && editDivisionOptionsMemo.length > 0}
+                        selectedValue={editDivisionId ?? 0}
+                        onValueChange={(v) => {
+                          const next = Number(v) || 0;
+                          setEditDivisionId(next === 0 ? null : next);
+                          setEditContratoId(null);
+                          setEditSucursalId(null);
+                          setEditPuestoId(null);
+                        }}
+                      >
+                        <Picker.Item
+                          label={editClienteId ? 'Seleccione división…' : 'Seleccione cliente primero'}
+                          value={0}
+                          color="#000000"
+                        />
+                        {editDivisionOptionsMemo.map((d) => (
+                          <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
+                        ))}
+                      </Picker>
+                    </View>
+                  </ThemedView>
+                  <ThemedView style={styles.filterGroup}>
+                    <ThemedText style={styles.filterLabel}>Contrato</ThemedText>
+                    <View style={styles.pickerWrapper}>
+                      <Picker
+                        enabled={editDivisionId != null && editContratoOptionsMemo.length > 0}
+                        selectedValue={editContratoId ?? 0}
+                        onValueChange={(v) => {
+                          const next = Number(v) || 0;
+                          setEditContratoId(next === 0 ? null : next);
+                          setEditSucursalId(null);
+                          setEditPuestoId(null);
+                        }}
+                      >
+                        <Picker.Item
+                          label={editDivisionId ? 'Seleccione contrato…' : 'Seleccione división primero'}
+                          value={0}
+                          color="#000000"
+                        />
+                        {editContratoOptionsMemo.map((c) => (
+                          <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                        ))}
+                      </Picker>
+                    </View>
+                  </ThemedView>
+                  <ThemedView style={styles.filterGroup}>
+                    <ThemedText style={styles.filterLabel}>Sucursal (corpo)</ThemedText>
+                    <View style={styles.pickerWrapper}>
+                      <Picker
+                        enabled={editContratoId != null && editSucursalOptionsMemo.length > 0}
+                        selectedValue={editSucursalId ?? 0}
+                        onValueChange={(v) => {
+                          const next = Number(v) || 0;
+                          setEditSucursalId(next === 0 ? null : next);
+                          setEditPuestoId(null);
+                        }}
+                      >
+                        <Picker.Item
+                          label={editContratoId ? 'Seleccione sucursal…' : 'Seleccione contrato primero'}
+                          value={0}
+                          color="#000000"
+                        />
+                        {editSucursalOptionsMemo.map((s) => (
+                          <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
+                        ))}
+                      </Picker>
+                    </View>
+                  </ThemedView>
+                  <ThemedView style={styles.filterGroup}>
+                    <ThemedText style={styles.filterLabel}>Puesto (opcional)</ThemedText>
+                    <View style={styles.pickerWrapper}>
+                      <Picker
+                        enabled={editSucursalId != null && editPuestoOptionsMemo.length > 0}
+                        selectedValue={editPuestoId ?? 0}
+                        onValueChange={(v) => {
+                          const next = Number(v) || 0;
+                          setEditPuestoId(next === 0 ? null : next);
+                        }}
+                      >
+                        <Picker.Item
+                          label={editSucursalId ? 'Sin puesto específico' : 'Seleccione sucursal primero'}
+                          value={0}
+                          color="#000000"
+                        />
+                        {editPuestoOptionsMemo.map((p) => (
+                          <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
+                        ))}
+                      </Picker>
+                    </View>
+                  </ThemedView>
+                </ThemedView>
+              )}
+
+              {roleName === 'OPERATIVO' && (
+                <ThemedView style={styles.formGroup}>
+                  <ThemedView style={styles.checkboxContainer}>
+                    <TouchableOpacity
+                      style={[
+                        styles.checkbox,
+                        editSetPuesto ? styles.checkboxChecked : styles.checkboxUnchecked,
+                      ]}
+                      onPress={() => setEditSetPuesto(!editSetPuesto)}
+                    >
+                      {editSetPuesto && (
+                        <Ionicons name="checkmark" size={16} color="#000000" />
+                      )}
+                    </TouchableOpacity>
+                    <ThemedText style={styles.checkboxLabel}>Asignar al puesto actual</ThemedText>
+                  </ThemedView>
+                  {puestoActualNombre ? (
+                    <ThemedView style={styles.puestoActualContainer}>
+                      <ThemedText style={styles.puestoActualText}>{puestoActualNombre}</ThemedText>
+                    </ThemedView>
+                  ) : null}
+                </ThemedView>
+              )}
+
+              <ThemedView style={styles.formActions}>
+                <TouchableOpacity
+                  style={[styles.formActionBtn, styles.formCancelBtn, isSubmittingEdit && styles.buttonDisabled]}
+                  onPress={closeEditVoiceNote}
+                  disabled={isSubmittingEdit}
+                  activeOpacity={0.85}
+                >
+                  <Ionicons name="close" size={18} color="#000" />
+                  <ThemedText style={styles.formCancelBtnText}>Cancelar</ThemedText>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.formActionBtn, styles.formSaveBtn, isSubmittingEdit && styles.buttonDisabled]}
+                  onPress={handleUpdateVoiceNote}
+                  disabled={isSubmittingEdit}
+                  activeOpacity={0.85}
+                >
+                  {isSubmittingEdit ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <>
+                      <Ionicons name="checkmark" size={18} color="#fff" />
+                      <ThemedText style={styles.formSaveBtnText}>Aceptar</ThemedText>
+                    </>
+                  )}
+                </TouchableOpacity>
+              </ThemedView>
             </ThemedView>
           </ThemedView>
         )}
 
-        {/* Voice Notes List */}
-        {!isCreating && filteredVoiceNotes.length > 0 && (
+        {/* Voice Notes List (oculto mientras isLoading) */}
+        {hasMarca && !isCreating && !editingVoiceNote && isLoading && (
+          <ThemedView style={styles.listLoadingArea}>
+            <ActivityIndicator size="large" color="#007AFF" />
+            <ThemedText style={styles.listLoadingText}>Cargando notas…</ThemedText>
+          </ThemedView>
+        )}
+
+        {hasMarca && !isCreating && !editingVoiceNote && !isLoading && filteredVoiceNotes.length > 0 && (
           <ThemedView style={styles.listContainer}>
             {filteredVoiceNotes.map((voiceNote, index) => {
               // Create unique key for each voice note (handles offline notes with id: 0)
@@ -1583,16 +3068,6 @@ export default function VoiceNotesScreen() {
                 <ThemedView key={voiceNoteKey} style={styles.voiceNoteCard}>
                   <ThemedView style={styles.voiceNoteHeader}>
                     <ThemedText style={styles.voiceNoteTitle}>{voiceNote.titulo}</ThemedText>
-                    {voiceNote.created_by === (employee?.id || 0) && (
-                      <TouchableOpacity
-                        style={styles.deleteButton}
-                        onPress={() => deleteVoiceNote(voiceNote)}
-                      >
-                        <ThemedText style={styles.deleteButtonText}>
-                          {getActionIcon('clear')}
-                        </ThemedText>
-                      </TouchableOpacity>
-                    )}
                   </ThemedView>
 
                   <ThemedText style={styles.voiceNoteDetail}>
@@ -1632,18 +3107,6 @@ export default function VoiceNotesScreen() {
                     {generateDateTime(voiceNote.created_at)}
                   </ThemedText>
 
-                  {/* Firma */}
-                  {firmaData && (
-                    <ThemedView style={styles.signatureInfo}>
-                      <ThemedText style={styles.signatureInfoTitle}>Firma:</ThemedText>
-                      <ThemedText style={styles.signatureInfoText}>ID de sesión: {firmaData.sessionId}</ThemedText>
-                      <ThemedText style={styles.signatureInfoText}>ID del empleado: {firmaData.empleadoId}</ThemedText>
-                      <ThemedText style={styles.signatureInfoText}>Latitud: {firmaData.latitud}</ThemedText>
-                      <ThemedText style={styles.signatureInfoText}>Longitud: {firmaData.longitud}</ThemedText>
-                      <ThemedText style={styles.signatureInfoText}>Hora: {generateDateTime(new Date(parseInt(firmaData.timestamp)).toISOString())}</ThemedText>
-                    </ThemedView>
-                  )}
-
                   {/* Collapsable Button - Audio */}
                   <TouchableOpacity
                     style={styles.collapseButton}
@@ -1662,6 +3125,24 @@ export default function VoiceNotesScreen() {
                   {/* Collapsable Content - Audio and Transcription */}
                   {isExpanded && (
                     <ThemedView style={styles.collapsableContent}>
+                      {/* Firma (dentro del colapsable) */}
+                      {firmaData && (
+                        <ThemedView style={styles.signatureInfo}>
+                            <ThemedText style={styles.signatureInfoTitle}>Firma:</ThemedText>
+                            {voiceNote.nombre_firma ? (
+                              <ThemedText style={styles.signatureInfoText}>
+                                <ThemedText style={styles.voiceNoteLabel}>Responsable: </ThemedText>
+                                {voiceNote.nombre_firma}
+                              </ThemedText>
+                            ) : null}
+                            <ThemedText style={styles.signatureInfoText}>ID de sesión: {firmaData.sessionId}</ThemedText>
+                            <ThemedText style={styles.signatureInfoText}>ID del empleado: {firmaData.empleadoId}</ThemedText>
+                            <ThemedText style={styles.signatureInfoText}>Latitud: {firmaData.latitud}</ThemedText>
+                            <ThemedText style={styles.signatureInfoText}>Longitud: {firmaData.longitud}</ThemedText>
+                            <ThemedText style={styles.signatureInfoText}>Hora: {generateDateTime(new Date(parseInt(firmaData.timestamp)).toISOString())}</ThemedText>
+                          </ThemedView>
+                      )}
+
                       {/* Audio Player */}
                       {audioUris.has(key) && (
                         <>
@@ -1725,19 +3206,40 @@ export default function VoiceNotesScreen() {
                       )}
                     </ThemedView>
                   )}
+
+                  {voiceNote.created_by === (employee?.id || 0) && (
+                    <ThemedView style={styles.listItemButtons}>
+                      <TouchableOpacity
+                        style={[
+                          styles.listItemButton,
+                          styles.deleteButton,
+                          deletingKey !== null && styles.buttonDisabled,
+                        ]}
+                        onPress={() => deleteVoiceNote(voiceNote)}
+                        disabled={deletingKey !== null}
+                        activeOpacity={0.85}
+                      >
+                        {deletingKey === key ? (
+                          <ActivityIndicator size="small" color="#FFFFFF" />
+                        ) : (
+                          <Ionicons name="trash" size={18} color="#FFFFFF" />
+                        )}
+                      </TouchableOpacity>
+                    </ThemedView>
+                  )}
                 </ThemedView>
               );
             })}
           </ThemedView>
         )}
 
-        {!isCreating && filteredVoiceNotes.length === 0 && voiceNotes.length > 0 && (
+        {hasMarca && !isCreating && !editingVoiceNote && !isLoading && filteredVoiceNotes.length === 0 && voiceNotes.length > 0 && (
           <ThemedView style={styles.emptyContainer}>
             <ThemedText style={styles.emptyText}>No se encontraron notas de voz con los filtros aplicados</ThemedText>
           </ThemedView>
         )}
 
-        {!isCreating && voiceNotes.length === 0 && (
+        {hasMarca && !isCreating && !editingVoiceNote && !isLoading && voiceNotes.length === 0 && (
           <ThemedView style={styles.emptyContainer}>
             <ThemedText style={styles.emptyText}>No hay notas de voz registradas</ThemedText>
           </ThemedView>
@@ -1751,6 +3253,7 @@ export default function VoiceNotesScreen() {
         onHomePress={handleHomePress}
         currentRoute="VoiceNotes"
       />
+
       {QRScannerComponent}
 
       {showFilterCreatedAtPicker && (
@@ -1783,14 +3286,17 @@ const styles = StyleSheet.create({
   scrollViewContent: {
     padding: 16,
   },
-  loadingContainer: {
-    flex: 1,
+  listLoadingArea: {
+    minHeight: 160,
     justifyContent: 'center',
     alignItems: 'center',
+    paddingVertical: 32,
+    paddingHorizontal: 16,
   },
-  loadingText: {
-    marginTop: 10,
+  listLoadingText: {
+    marginTop: 12,
     fontSize: 16,
+    color: '#666',
   },
   emptyContainer: {
     flex: 1,
@@ -1819,23 +3325,38 @@ const styles = StyleSheet.create({
     fontSize: 14,
     opacity: 0.7,
   },
-  createButton: {
-    backgroundColor: '#007AFF',
-    padding: 15,
-    borderRadius: 8,
+  createVoiceNoteButton: {
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    backgroundColor: '#007AFF',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 12,
     marginBottom: 20,
   },
-  createButtonText: {
+  createVoiceNoteButtonText: {
     color: '#FFF',
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  formFrame: {
+    marginBottom: 20,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    backgroundColor: '#FFFFFF',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    elevation: 2,
+    overflow: 'hidden',
   },
   formContainer: {
     backgroundColor: '#fff',
     padding: 16,
-    borderRadius: 8,
-    marginBottom: 20,
   },
   formTitle: {
     fontSize: 20,
@@ -2090,34 +3611,83 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   formActions: {
+    marginTop: 16,
     flexDirection: 'row',
     gap: 10,
-    marginTop: 16,
+    justifyContent: 'space-between',
     backgroundColor: '#fff',
   },
-  cancelButton: {
+  formActionBtn: {
     flex: 1,
-    backgroundColor: '#999',
-    padding: 15,
-    borderRadius: 8,
+    flexDirection: 'row',
+    gap: 10,
     alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    borderRadius: 12,
   },
-  cancelButtonText: {
-    color: '#FFF',
-    fontSize: 16,
-    fontWeight: '600',
+  formCancelBtn: {
+    backgroundColor: '#EDEDED',
   },
-  submitButton: {
+  formCancelBtnText: {
+    color: '#000',
+    fontWeight: '800',
+    fontSize: 15,
+  },
+  formSaveBtn: {
+    backgroundColor: '#007AFF',
+  },
+  formSaveBtnText: {
+    color: '#fff',
+    fontWeight: '800',
+    fontSize: 15,
+  },
+  buttonDisabled: {
+    opacity: 0.6,
+  },
+  pickerWrapper: {
+    borderWidth: 1,
+    borderColor: '#DDD',
+    borderRadius: 8,
+    overflow: 'hidden',
+    marginBottom: 8,
+    backgroundColor: '#fff',
+  },
+  hierarchyHint: {
+    fontSize: 13,
+    opacity: 0.75,
+    marginBottom: 8,
+    color: '#000',
+  },
+  inlineLoader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 8,
+  },
+  inlineLoaderText: {
+    fontSize: 14,
+    color: '#000',
+  },
+  listItemButtons: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 12,
+    marginBottom: 0,
+    backgroundColor: '#fff',
+  },
+  listItemButton: {
     flex: 1,
-    backgroundColor: '#34C759',
-    padding: 15,
-    borderRadius: 8,
+    padding: 12,
+    borderRadius: 6,
     alignItems: 'center',
+    justifyContent: 'center',
   },
-  submitButtonText: {
-    color: '#FFF',
-    fontSize: 16,
-    fontWeight: '600',
+  editButton: {
+    backgroundColor: '#007AFF',
+  },
+  deleteButton: {
+    backgroundColor: '#FF3B30',
   },
   listContainer: {
     gap: 16,
@@ -2132,8 +3702,8 @@ const styles = StyleSheet.create({
   voiceNoteHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
+    alignItems: 'flex-start',
+    marginBottom: 8,
     backgroundColor: '#fff',
   },
   voiceNoteTitle: {
@@ -2141,14 +3711,7 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     flex: 1,
     color: '#007AFF',
-  },
-  deleteButton: {
-    backgroundColor: '#FF3B30',
-    padding: 8,
-    borderRadius: 8,
-  },
-  deleteButtonText: {
-    color: '#FFF',
+    paddingRight: 8,
   },
   voiceNoteDetail: {
     fontSize: 14,

@@ -2760,6 +2760,12 @@ interface CreateComplaintsMasterParams {
     accion_correctiva_preventiva: string;
     firma_responsable: string;
     archivos?: any; // array o JSON string [{type, extension, original_name, file_base64}]
+    empresa_id?: number;
+    cliente_id?: number;
+    contrato_id?: number;
+    corpo_id?: number;
+    puesto_id?: number;
+    plaza_id?: number;
   };
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;

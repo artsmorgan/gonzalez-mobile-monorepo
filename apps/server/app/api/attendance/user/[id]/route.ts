@@ -42,7 +42,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
 
         let now = toZonedTime(new Date(), "America/Costa_Rica");
-        //now = new Date(now.getTime() - 6 * 60 * 60 * 1000); // Restarle 6 horas para que sea en la zona horaria de Costa Rica
+        now = new Date(now.getTime() - 6 * 60 * 60 * 1000); // Restarle 6 horas para que sea en la zona horaria de Costa Rica
         const nowPlus15 = new Date(now.getTime() + 15 * 60 * 1000);
         const currentDate = new Date(now.toISOString().split("T")[0]);
         const currentTime = new Date("1970-01-01 " + now.toTimeString().slice(0, 8));
@@ -315,7 +315,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             console.log("momento_inicio_marca", inicio_marca);
             console.log("momento_fin_marca", fin_marca);
 
-            if (now > fin_marca && marcaDia.hora_entrada_digitada == null) {
+            if (!marcaDia.hora_entrada_digitada && (now > fin_marca)) {
                 const hora_inicio_string = inicio_marca.toISOString().split("T")[1].split(".")[0];
                 const fecha_marca_string = marcaDia.fecha.split("T")[0].split("-").reverse().join("-");
 
@@ -464,8 +464,8 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
         const marca_return = {
             id: marcaDia.id,
-            hora_entrada_digitada: marcaDia.hora_entrada_digitada,
-            hora_salida_digitada: marcaDia.hora_salida_digitada,
+            hora_entrada_digitada: marcaDia.hora_entrada_digitada ?? null,
+            hora_salida_digitada: marcaDia.hora_salida_digitada ?? null,
             hora_inicio: marcaDia.hora_inicio,
             hora_fin: marcaDia.hora_fin,
             fecha: marcaDia.fecha,
@@ -517,6 +517,8 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             current_time: toZonedTime(new Date(), "America/Costa_Rica"), // Se define aquí
             marca: marca_return
         }
+
+        console.log("Retornamos la marca");
 
         return NextResponse.json(data, { status: 200 });
     } catch (error: unknown) {

@@ -58,4 +58,43 @@ export async function createTraining({
     }
 }
 
+export async function deleteTraining({
+    trainingId,
+    refreshAccessToken,
+    logout,
+}: {
+    trainingId: number;
+    refreshAccessToken?: () => Promise<boolean>;
+    logout?: () => Promise<{ status: boolean; message: string }>;
+}) {
+    try {
+        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        if (!apiUrl) {
+            throw new Error('Server URL not configured');
+        }
+        if (!refreshAccessToken || !logout) {
+            throw new Error('Auth handlers not provided');
+        }
+        const response = await authedFetch({
+            url: `${apiUrl}/api/training/${trainingId}`,
+            init: { method: 'DELETE' },
+            refreshAccessToken,
+            logout,
+        });
+        if (!response) {
+            return { status: false, message: 'Sesión expirada' };
+        }
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            return {
+                status: false,
+                message: (data as { message?: string })?.message || `Error ${response.status}`,
+            };
+        }
+        return data;
+    } catch (error) {
+        console.error('Error deleting training:', error);
+        return { status: false, message: 'Error al eliminar la capacitación' };
+    }
+}
 

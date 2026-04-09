@@ -44,7 +44,61 @@ import {
 import Constants from 'expo-constants';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 
+/** Alcance del listado/caché: sucursal (corpo_id). */
+type ApreciacionListCorpoScope = {
+  filterCorpoId: number | null;
+};
+
+function makeApreciacionCorpoListMatcher(filterCorpoId: number | null): (it: any) => boolean {
+  return (it: any) => {
+    if (filterCorpoId == null) return true;
+    return Number(it?.corpo_id) === Number(filterCorpoId);
+  };
+}
+
+function apreciacionItemIsPendingLocal(it: any): boolean {
+  if (it?.id_local != null && String(it.id_local).trim() !== '') return true;
+  if (Number(it?.id) === 0) return true;
+  return false;
+}
+
+/**
+ * Con respuesta online: solo reemplaza en caché filas del mismo corpo_id (y mantiene borradores locales
+ * y registros de otras sucursales). Sin corpo en alcance (null), sustituye todo lo no local como antes.
+ */
+async function mergeApreciacionVulnerabilidadServerIntoCache(
+  serverList: ApreciacionVulnerabilidadItem[],
+  matchesScope: (it: any) => boolean
+): Promise<ApreciacionVulnerabilidadItem[]> {
+  let raw: any[] = [];
+  try {
+    const cacheStr = await AsyncStorage.getItem('apreciacion_vulnerabilidad_cache');
+    const parsed = cacheStr ? JSON.parse(cacheStr) : [];
+    raw = Array.isArray(parsed) ? parsed : [];
+  } catch {
+    raw = [];
+  }
+
+  const preserved = raw.filter((it: any) => !matchesScope(it) || apreciacionItemIsPendingLocal(it));
+
+  const scopedServer = serverList
+    .filter(matchesScope)
+    .map((it: any) => ({ ...it, id_local: it.id_local || '' }));
+
+  const merged = [...preserved, ...scopedServer] as ApreciacionVulnerabilidadItem[];
+  await AsyncStorage.setItem('apreciacion_vulnerabilidad_cache', JSON.stringify(merged));
+  return merged;
+}
+
 type VulnUI = ApreciacionVulnerabilidadItem & { id_local?: string };
+type HierarchyPath = {
+  empresaId: number | null;
+  clienteId: number | null;
+  divisionId: number | null;
+  contratoId: number | null;
+  corpoId: number | null;
+  puestoId: number | null;
+};
 
 type BoletaItem = {
   id: string;
@@ -177,6 +231,15 @@ const getVulnerabilityLevelLabel = (value: any): string => {
   return VULNERABILITY_LEVEL_OPTIONS.find((o) => o.value === normalized)?.label || 'Baja';
 };
 
+const getMarcaRoleDivisionId = (current: any): number | null => {
+  const raw = current?.roleDivision?.division?.id
+    ?? current?.role_division?.division?.id
+    ?? current?.division?.id
+    ?? current?.division_id;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
+
 const getLegacyVulnerabilityLevelFromItems = (items: any[]): VulnerabilityLevel => {
   const selected = (Array.isArray(items) ? items : []).find((item: any) => item?.answer === 'si');
   const selectedLabel = String(selected?.label || '').toLowerCase();
@@ -281,7 +344,6 @@ export default function ApreciacionVulnerabilidadScreen() {
   const [filterSearch, setFilterSearch] = useState('');
   const [filterClienteId, setFilterClienteId] = useState<number | null>(null);
   const [filterCorpoId, setFilterCorpoId] = useState<number | null>(null);
-  const [filterPuestoId, setFilterPuestoId] = useState<number | null>(null);
   const [filterEmpresaId, setFilterEmpresaId] = useState<number | null>(null);
   const [filterDivisionId, setFilterDivisionId] = useState<number | null>(null);
   const [filterContratoId, setFilterContratoId] = useState<number | null>(null);
@@ -290,6 +352,7 @@ export default function ApreciacionVulnerabilidadScreen() {
   const [isCreating, setIsCreating] = useState(false);
   const [editing, setEditing] = useState<VulnUI | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [submitResponse, setSubmitResponse] = useState<{ type: 'success' | 'error', message: string } | null>(null);
 
   const [fecha, setFecha] = useState<Date>(new Date());
@@ -451,7 +514,7 @@ export default function ApreciacionVulnerabilidadScreen() {
     closeFirmaSolicitanteModal();
   };
 
-  const fetchStructure = async () => {
+  const fetchStructure = useCallback(async () => {
     setIsStructureLoading(true);
     try {
       const cacheStr = await AsyncStorage.getItem('main_structure_cache');
@@ -492,28 +555,59 @@ export default function ApreciacionVulnerabilidadScreen() {
     } finally {
       setIsStructureLoading(false);
     }
-  };
+  }, []);
 
-  const fetchItems = async () => {
+  const refreshAccessTokenRef = useRef(refreshAccessToken);
+  const logoutRef = useRef(logout);
+  useEffect(() => {
+    refreshAccessTokenRef.current = refreshAccessToken;
+    logoutRef.current = logout;
+  }, [refreshAccessToken, logout]);
+
+  const filterCorpoIdRef = useRef(filterCorpoId);
+  filterCorpoIdRef.current = filterCorpoId;
+
+  const fetchItems = useCallback(async (scopeOverride?: ApreciacionListCorpoScope | null) => {
+    const loadCacheToState = async () => {
+      const cacheStr = await AsyncStorage.getItem('apreciacion_vulnerabilidad_cache');
+      if (!cacheStr) {
+        setItems([]);
+        return;
+      }
+      try {
+        const parsed = JSON.parse(cacheStr);
+        setItems(Array.isArray(parsed) ? parsed : []);
+      } catch {
+        setItems([]);
+      }
+    };
+
     try {
       setIsLoading(true);
       setError(null);
       setOfflineMessage(null);
       const isConnected = await getConnectionStatus();
+
+      const scope: ApreciacionListCorpoScope =
+        scopeOverride != null ? scopeOverride : { filterCorpoId: filterCorpoIdRef.current };
+
+      const matchesScope = makeApreciacionCorpoListMatcher(scope.filterCorpoId);
+
       if (isConnected) {
-        const res = await listApreciacionVulnerabilidad({ refreshAccessToken, logout });
+        const res = await listApreciacionVulnerabilidad({
+          refreshAccessToken: () => refreshAccessTokenRef.current(),
+          logout: () => logoutRef.current(),
+        });
         if (res.status) {
           const list = (res.data || []).map((it: any) => ({ ...it, id_local: it.id_local || '' }));
-          setItems(list);
-          await AsyncStorage.setItem('apreciacion_vulnerabilidad_cache', JSON.stringify(list));
+          const merged = await mergeApreciacionVulnerabilidadServerIntoCache(list, matchesScope);
+          setItems(merged);
         } else {
           setError(res.message || 'Error al cargar registros');
-          const cacheStr = await AsyncStorage.getItem('apreciacion_vulnerabilidad_cache');
-          if (cacheStr) setItems(JSON.parse(cacheStr));
+          await loadCacheToState();
         }
       } else {
-        const cacheStr = await AsyncStorage.getItem('apreciacion_vulnerabilidad_cache');
-        if (cacheStr) setItems(JSON.parse(cacheStr));
+        await loadCacheToState();
         setOfflineMessage('Modo Offline: mostrando datos guardados.');
       }
     } catch (e: any) {
@@ -522,30 +616,58 @@ export default function ApreciacionVulnerabilidadScreen() {
       } else {
         setError(e.message || 'Error al cargar registros');
       }
-      const cacheStr = await AsyncStorage.getItem('apreciacion_vulnerabilidad_cache');
-      if (cacheStr) setItems(JSON.parse(cacheStr));
+      await loadCacheToState();
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
+
+  const fetchItemsRef = useRef(fetchItems);
+  fetchItemsRef.current = fetchItems;
 
   useFocusEffect(
     useCallback(() => {
-      fetchStructure();
-      fetchItems();
-    }, [])
+      let cancelled = false;
+      (async () => {
+        await fetchStructure();
+        let marcaScope: ApreciacionListCorpoScope | null = null;
+        const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+        if (currentMarcaStr) {
+          try {
+            const current = JSON.parse(currentMarcaStr);
+            const empresaIdVal = current?.empresa?.id != null ? Number(current.empresa.id) : null;
+            const clienteIdVal = current?.cliente?.id != null ? Number(current.cliente.id) : null;
+            const divisionIdVal = getMarcaRoleDivisionId(current);
+            const contratoIdVal = current?.contrato?.id != null ? Number(current.contrato.id) : null;
+            const corpoIdVal = current?.corpo?.id != null ? Number(current.corpo.id) : null;
+            setFilterEmpresaId(empresaIdVal);
+            setFilterClienteId(clienteIdVal);
+            setFilterDivisionId(divisionIdVal);
+            setFilterContratoId(contratoIdVal);
+            setFilterCorpoId(corpoIdVal);
+            marcaScope = { filterCorpoId: corpoIdVal };
+          } catch {
+            /* ignore */
+          }
+        }
+        if (!cancelled) await fetchItemsRef.current(marcaScope);
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }, [fetchStructure])
   );
 
   useEffect(() => {
     const handler = () => {
       fetchStructure();
-      fetchItems();
+      fetchItemsRef.current();
     };
     eventBus.on('connectionRestored', handler);
     return () => {
       eventBus.off('connectionRestored', handler);
     };
-  }, []);
+  }, [fetchStructure]);
 
   // Cascada helpers (form)
   const empresas = useMemo(() => structure.map((e) => ({ id: e.id, label: e.nombre })), [structure]);
@@ -597,9 +719,6 @@ export default function ApreciacionVulnerabilidadScreen() {
   const filterContratos = useMemo(() => (selectedFilterDivision?.contratos || []).map((c) => ({ id: c.id, label: c.nombre })), [selectedFilterDivision]);
   const selectedFilterContrato = useMemo(() => (selectedFilterDivision?.contratos || []).find((c) => c.id === filterContratoId) || null, [selectedFilterDivision, filterContratoId]);
   const filterCorpos = useMemo(() => (selectedFilterContrato?.sucursales || []).map((s) => ({ id: s.id, label: s.nombre })), [selectedFilterContrato]);
-  const selectedFilterCorpo = useMemo(() => (selectedFilterContrato?.sucursales || []).find((s) => s.id === filterCorpoId) || null, [selectedFilterContrato, filterCorpoId]);
-  const filterPuestos = useMemo(() => (selectedFilterCorpo?.puestos || []).map((p) => ({ id: p.id, label: p.nombre })), [selectedFilterCorpo]);
-  const selectedFilterPuesto = useMemo(() => (selectedFilterCorpo?.puestos || []).find((p) => p.id === filterPuestoId) || null, [selectedFilterCorpo, filterPuestoId]);
 
   const resolveByClienteCorpoPuesto = useCallback(
     (cliente_id?: number | null, corpo_id?: number | null, puesto_id?: number | null) => {
@@ -637,6 +756,45 @@ export default function ApreciacionVulnerabilidadScreen() {
     [structure]
   );
 
+  const resolveByPuestoId = useCallback(
+    (targetPuestoId?: number | null): HierarchyPath | null => {
+      const pid = Number(targetPuestoId || 0);
+      if (!pid) return null;
+      for (const e of structure) {
+        for (const c of e.clientes || []) {
+          for (const d of c.division || []) {
+            for (const co of d.contratos || []) {
+              for (const s of co.sucursales || []) {
+                const found = (s.puestos || []).find((p) => Number(p.id) === pid);
+                if (!found) continue;
+                return {
+                  empresaId: Number(e.id),
+                  clienteId: Number(c.id),
+                  divisionId: Number(d.id),
+                  contratoId: Number(co.id),
+                  corpoId: Number(s.id),
+                  puestoId: Number(found.id),
+                };
+              }
+            }
+          }
+        }
+      }
+      return null;
+    },
+    [structure]
+  );
+
+  const applyFormHierarchy = useCallback((path: HierarchyPath | null) => {
+    if (!path) return;
+    setEmpresaId(path.empresaId);
+    setClienteId(path.clienteId);
+    setDivisionId(path.divisionId);
+    setContratoId(path.contratoId);
+    setCorpoId(path.corpoId);
+    setPuestoId(path.puestoId);
+  }, []);
+
   const resetForm = (horaAccion: number) => {
     setFecha(new Date(horaAccion));
     setEnlace('');
@@ -666,6 +824,24 @@ export default function ApreciacionVulnerabilidadScreen() {
     resetForm(horaAccion);
     setEditing(null);
     setIsCreating(true);
+    const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+    if (currentMarcaStr) {
+      const current = JSON.parse(currentMarcaStr);
+      const marcaPuestoId = current?.puesto?.id != null ? Number(current.puesto.id) : null;
+      const byPuesto = resolveByPuestoId(marcaPuestoId);
+      if (byPuesto) {
+        applyFormHierarchy(byPuesto);
+      } else {
+        applyFormHierarchy({
+          empresaId: current?.empresa?.id != null ? Number(current.empresa.id) : null,
+          clienteId: current?.cliente?.id != null ? Number(current.cliente.id) : null,
+          divisionId: getMarcaRoleDivisionId(current),
+          contratoId: current?.contrato?.id != null ? Number(current.contrato.id) : null,
+          corpoId: current?.corpo?.id != null ? Number(current.corpo.id) : null,
+          puestoId: marcaPuestoId,
+        });
+      }
+    }
   };
 
   const startEditing = async (it: VulnUI) => {
@@ -680,21 +856,23 @@ export default function ApreciacionVulnerabilidadScreen() {
     setEnlace(it.enlace || '');
     setNombreSolicitante(it.nombre_solicitante || '');
     setObservaciones(it.observaciones || '');
-    const path = resolveByClienteCorpoPuesto(it.cliente_id, it.corpo_id, it.puesto_id);
-    if (path) {
-      setEmpresaId(path.empresaId);
-      setClienteId(path.clienteId);
-      setDivisionId(path.divisionId);
-      setContratoId(path.contratoId);
-      setCorpoId(path.corpoId);
-      setPuestoId(path.puestoId);
+    const pathByPuesto = resolveByPuestoId(it.puesto_id);
+    if (pathByPuesto) {
+      applyFormHierarchy(pathByPuesto);
     } else {
-      setEmpresaId(null);
-      setClienteId(it.cliente_id || null);
-      setDivisionId(null);
-      setContratoId(null);
-      setCorpoId(it.corpo_id || null);
-      setPuestoId(it.puesto_id || null);
+      const path = resolveByClienteCorpoPuesto(it.cliente_id, it.corpo_id, it.puesto_id);
+      if (path) {
+        applyFormHierarchy(path);
+      } else {
+        applyFormHierarchy({
+          empresaId: null,
+          clienteId: it.cliente_id || null,
+          divisionId: null,
+          contratoId: null,
+          corpoId: it.corpo_id || null,
+          puestoId: it.puesto_id || null,
+        });
+      }
     }
 
     try {
@@ -731,7 +909,10 @@ export default function ApreciacionVulnerabilidadScreen() {
     const actionsStr = await AsyncStorage.getItem('apreciacion_vulnerabilidad_actions');
     if (!actionsStr) return;
     const actions = JSON.parse(actionsStr) || [];
-    const updated = actions.filter((a: any) => a.id !== localId);
+    const updated = actions.filter(
+      (a: any) =>
+        !(String(a.id) === String(localId) && (a.type === 'create' || a.type === 'update'))
+    );
     await AsyncStorage.setItem('apreciacion_vulnerabilidad_actions', JSON.stringify(updated));
   };
 
@@ -861,8 +1042,18 @@ export default function ApreciacionVulnerabilidadScreen() {
         await AsyncStorage.setItem('apreciacion_vulnerabilidad_cache', JSON.stringify(next));
 
         if (editing.id_local) {
-          const updated = await updateCreateActionForLocalId(editing.id_local, payload);
-          if (!updated) await upsertAction({ type: 'create', id: editing.id_local, requestData: payload });
+          const actionsStr = await AsyncStorage.getItem('apreciacion_vulnerabilidad_actions');
+          let docActions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+          docActions = docActions.filter(
+            (a: any) => !(a.type === 'update' && String(a.id) === String(editing.id_local))
+          );
+          const ci = docActions.findIndex((a: any) => a.type === 'create' && a.id === editing.id_local);
+          if (ci !== -1) {
+            docActions[ci] = { ...docActions[ci], requestData: payload };
+          } else {
+            docActions.push({ type: 'create', id: editing.id_local, requestData: payload });
+          }
+          await AsyncStorage.setItem('apreciacion_vulnerabilidad_actions', JSON.stringify(docActions));
         } else {
           await upsertAction({ type: 'update', id: editing.id, requestData: payload });
         }
@@ -882,6 +1073,19 @@ export default function ApreciacionVulnerabilidadScreen() {
     }
   };
 
+  const handleConfirmSave = () => {
+    if (isSubmitting) return;
+    Alert.alert(
+      'Confirmar',
+      editing ? '¿Deseas actualizar este registro?' : '¿Deseas crear este registro?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Aceptar', onPress: handleSave },
+      ],
+      { cancelable: false }
+    );
+  };
+
   const handleDelete = async (it: VulnUI) => {
     Alert.alert('Confirmar', '¿Deseas eliminar este registro?', [
       { text: 'Cancelar', style: 'cancel' },
@@ -889,27 +1093,33 @@ export default function ApreciacionVulnerabilidadScreen() {
         text: 'Eliminar',
         style: 'destructive',
         onPress: async () => {
+          const currentId = String(it.id_local || it.id);
+          setDeletingId(currentId);
           const isConnected = await getConnectionStatus();
-          if (it.id_local || it.id === 0) {
-            const next = items.filter((x) => x.id_local !== it.id_local);
-            setItems(next);
-            await AsyncStorage.setItem('apreciacion_vulnerabilidad_cache', JSON.stringify(next));
-            if (it.id_local) await removeActionsForLocalId(it.id_local);
-            await fetchItems();
-            return;
-          }
+          try {
+            if (it.id_local || it.id === 0) {
+              const next = items.filter((x) => x.id_local !== it.id_local);
+              setItems(next);
+              await AsyncStorage.setItem('apreciacion_vulnerabilidad_cache', JSON.stringify(next));
+              if (it.id_local) await removeActionsForLocalId(it.id_local);
+              await fetchItems();
+              return;
+            }
 
-          if (isConnected) {
-            const res = await deleteApreciacionVulnerabilidad({ id: it.id, refreshAccessToken, logout });
-            if (res.status) await fetchItems();
-            else Alert.alert('Error', res.message || 'No se pudo eliminar');
-          } else {
-            const next = items.filter((x) => x.id !== it.id);
-            setItems(next);
-            await AsyncStorage.setItem('apreciacion_vulnerabilidad_cache', JSON.stringify(next));
-            await upsertAction({ type: 'delete', id: it.id });
-            Alert.alert('Eliminado (offline)', 'Se sincronizará cuando vuelva la conexión.');
-            await fetchItems();
+            if (isConnected) {
+              const res = await deleteApreciacionVulnerabilidad({ id: it.id, refreshAccessToken, logout });
+              if (res.status) await fetchItems();
+              else Alert.alert('Error', res.message || 'No se pudo eliminar');
+            } else {
+              const next = items.filter((x) => x.id !== it.id);
+              setItems(next);
+              await AsyncStorage.setItem('apreciacion_vulnerabilidad_cache', JSON.stringify(next));
+              await upsertAction({ type: 'delete', id: it.id });
+              Alert.alert('Eliminado (offline)', 'Se sincronizará cuando vuelva la conexión.');
+              await fetchItems();
+            }
+          } finally {
+            setDeletingId((prev) => (prev === currentId ? null : prev));
           }
         },
       },
@@ -984,20 +1194,19 @@ export default function ApreciacionVulnerabilidadScreen() {
     setFilterDivisionId(null);
     setFilterContratoId(null);
     setFilterCorpoId(null);
-    setFilterPuestoId(null);
   };
 
+  /** El listado solo se acota por sucursal (corpo): picker o marca actual. Sin sucursal, no se muestran registros. */
   const filtered = useMemo(() => {
+    if (filterCorpoId == null) return [];
     const q = filterSearch.trim().toLowerCase();
     return items.filter((it) => {
-      if (filterClienteId && it.cliente_id !== filterClienteId) return false;
-      if (filterCorpoId && it.corpo_id !== filterCorpoId) return false;
-      if (filterPuestoId && it.puesto_id !== filterPuestoId) return false;
+      if (Number(it.corpo_id) !== Number(filterCorpoId)) return false;
       if (!q) return true;
       const hay = `${it.enlace || ''} ${it.nombre_solicitante || ''} ${it.observaciones || ''}`.toLowerCase();
       return hay.includes(q);
     });
-  }, [items, filterSearch, filterClienteId, filterCorpoId, filterPuestoId]);
+  }, [items, filterSearch, filterCorpoId]);
 
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const toggleExpanded = (key: string) => {
@@ -1333,9 +1542,19 @@ export default function ApreciacionVulnerabilidadScreen() {
               <ThemedText style={styles.rowButtonText}>Cambios</ThemedText>
             </TouchableOpacity>
           )}
-          <TouchableOpacity style={[styles.rowButton, styles.deleteButton]} onPress={() => handleDelete(it)}>
-            <Ionicons name="trash" size={18} color="#FFFFFF" />
-            <ThemedText style={styles.rowButtonText}>Eliminar</ThemedText>
+          <TouchableOpacity
+            style={[styles.rowButton, styles.deleteButton, deletingId === String(it.id_local || it.id) && styles.buttonDisabled]}
+            onPress={() => handleDelete(it)}
+            disabled={deletingId === String(it.id_local || it.id)}
+          >
+            {deletingId === String(it.id_local || it.id) ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <>
+                <Ionicons name="trash" size={18} color="#FFFFFF" />
+                <ThemedText style={styles.rowButtonText}>Eliminar</ThemedText>
+              </>
+            )}
           </TouchableOpacity>
         </ThemedView>
       </ThemedView>
@@ -1387,6 +1606,9 @@ export default function ApreciacionVulnerabilidadScreen() {
                   </ThemedView>
 
                   <ThemedText style={styles.sectionTitle}>Estructura</ThemedText>
+                  <ThemedText style={styles.subtitle}>
+                    Seleccione sucursal (corpo) para listar registros. La jerarquía sirve para llegar a la sucursal.
+                  </ThemedText>
 
                   {isStructureLoading ? (
                     <ThemedView style={styles.structureLoadingBox}>
@@ -1407,7 +1629,6 @@ export default function ApreciacionVulnerabilidadScreen() {
                           setFilterDivisionId(null);
                           setFilterContratoId(null);
                           setFilterCorpoId(null);
-                          setFilterPuestoId(null);
                         }}
                       >
                         <Picker.Item label="Seleccionar empresa" value={PICKER_NONE} color="#000000" />
@@ -1433,7 +1654,6 @@ export default function ApreciacionVulnerabilidadScreen() {
                           setFilterDivisionId(null);
                           setFilterContratoId(null);
                           setFilterCorpoId(null);
-                          setFilterPuestoId(null);
                         }}
                       >
                         <Picker.Item label="Seleccionar cliente" value={PICKER_NONE} color="#000000" />
@@ -1458,7 +1678,6 @@ export default function ApreciacionVulnerabilidadScreen() {
                           setFilterDivisionId(id === PICKER_NONE ? null : id);
                           setFilterContratoId(null);
                           setFilterCorpoId(null);
-                          setFilterPuestoId(null);
                         }}
                       >
                         <Picker.Item label="Seleccionar división" value={PICKER_NONE} color="#000000" />
@@ -1482,7 +1701,6 @@ export default function ApreciacionVulnerabilidadScreen() {
                           const id = Number(val) || 0;
                           setFilterContratoId(id === PICKER_NONE ? null : id);
                           setFilterCorpoId(null);
-                          setFilterPuestoId(null);
                         }}
                       >
                         <Picker.Item label="Seleccionar contrato" value={PICKER_NONE} color="#000000" />
@@ -1505,34 +1723,11 @@ export default function ApreciacionVulnerabilidadScreen() {
                         onValueChange={(val) => {
                           const id = Number(val) || 0;
                           setFilterCorpoId(id === PICKER_NONE ? null : id);
-                          setFilterPuestoId(null);
                         }}
                       >
                         <Picker.Item label="Seleccionar sucursal (corpo)" value={PICKER_NONE} color="#000000" />
                         {filterCorpos.map((o) => (
                           <Picker.Item key={String(o.id)} label={o.label} value={o.id} color="#000000" />
-                        ))}
-                      </Picker>
-                    </ThemedView>
-                  ) : null}
-                  {filterCorpoId && filterPuestos.length === 0 ? (
-                    <ThemedText style={styles.warningText}>La sucursal seleccionada no tiene puestos.</ThemedText>
-                  ) : null}
-
-                  <ThemedText style={styles.label}>Puesto</ThemedText>
-                  {!isStructureLoading ? (
-                    <ThemedView style={styles.pickerWrapper}>
-                      <Picker
-                        enabled={!!filterCorpoId}
-                        selectedValue={filterPuestoId ?? PICKER_NONE}
-                        onValueChange={(val) => {
-                          const id = Number(val) || 0;
-                          setFilterPuestoId(id === PICKER_NONE ? null : id);
-                        }}
-                      >
-                        <Picker.Item label="Seleccionar puesto" value={PICKER_NONE} color="#000000" />
-                        {filterPuestos.map((o) => (
-                          <Picker.Item key={String(o.id)} label={o.label} value={o.id} color="#000000"  />
                         ))}
                       </Picker>
                     </ThemedView>
@@ -1911,7 +2106,7 @@ export default function ApreciacionVulnerabilidadScreen() {
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.formActionButton, styles.formActionSave, isSubmitting && styles.buttonDisabled]}
-                  onPress={handleSave}
+                  onPress={handleConfirmSave}
                   disabled={isSubmitting}
                 >
                   {isSubmitting ? (
@@ -1919,7 +2114,7 @@ export default function ApreciacionVulnerabilidadScreen() {
                   ) : (
                     <>
                       <Ionicons name="save" size={18} color="#fff" />
-                      <ThemedText style={styles.formActionSaveText}>Guardar</ThemedText>
+                      <ThemedText style={styles.formActionSaveText}>Aceptar</ThemedText>
                     </>
                   )}
                 </TouchableOpacity>
@@ -1936,7 +2131,11 @@ export default function ApreciacionVulnerabilidadScreen() {
                 </ThemedView>
               ) : filtered.length === 0 ? (
                 <ThemedView style={styles.emptyContainer}>
-                  <ThemedText style={styles.emptyText}>No hay registros</ThemedText>
+                  <ThemedText style={styles.emptyText}>
+                    {filterCorpoId == null
+                      ? 'Seleccione una sucursal en los filtros para ver registros. Si hay marca actual con sucursal, se aplicará al entrar.'
+                      : 'No hay registros para esta sucursal'}
+                  </ThemedText>
                 </ThemedView>
               ) : (
                 <ThemedView style={styles.listContainer}>{filtered.map(renderItem)}</ThemedView>

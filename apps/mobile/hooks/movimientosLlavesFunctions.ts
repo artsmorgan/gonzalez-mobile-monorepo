@@ -126,6 +126,9 @@ export async function createMovimientoLlave({
 
     const data: any = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.message || `HTTP error! status: ${response.status}`);
+    if (data.status === false) {
+      return { status: false, message: data.message || 'Error al crear movimiento' };
+    }
     return data;
   } catch (error: any) {
     console.error('Error creating movimiento llave:', error);

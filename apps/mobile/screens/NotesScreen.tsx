@@ -15,7 +15,14 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Picker } from '@react-native-picker/picker';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import * as Network from 'expo-network';
-import { createNote as createNoteAPI, updateNote as updateNoteAPI } from '@/hooks/notesFunctions';
+import { createNote as createNoteAPI, updateNote as updateNoteAPI, deleteNote as deleteNoteAPI } from '@/hooks/notesFunctions';
+import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
+import {
+  filterNotesByPuestoId,
+  mergeNotesBase64FromCache,
+  mergeNotesCacheForPuesto,
+  parseNotesCache,
+} from '@/hooks/notesCacheHelpers';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import { eventBus } from '@/hooks/eventBus';
 import authedFetch from '@/hooks/authedFetch';
@@ -167,6 +174,7 @@ export default function NotesScreen() {
   // Creating state
   const [isCreating, setIsCreating] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [deletingNoteId, setDeletingNoteId] = useState<number | null>(null);
   const [submitResponse, setSubmitResponse] = useState<{ type: 'success' | 'error', message: string } | null>(null);
   const [newNote, setNewNote] = useState<EditingNote>({
     id: null,
@@ -344,35 +352,6 @@ export default function NotesScreen() {
     const builtUrl = buildNoteImageApiUrl(puestoId, noteId, image.name || null);
     if (builtUrl) return appendTokenToUrl(builtUrl);
     return appendTokenToUrl(image.url || '');
-  };
-
-  const mergeNotesBase64FromCache = (freshNotes: any[], cachedNotes: any[]) => {
-    const cachedById = new Map<number, any>(
-      (Array.isArray(cachedNotes) ? cachedNotes : [])
-        .filter((n: any) => Number.isFinite(Number(n?.id)))
-        .map((n: any) => [Number(n.id), n])
-    );
-
-    return (Array.isArray(freshNotes) ? freshNotes : []).map((note: any) => {
-      const cached = cachedById.get(Number(note?.id));
-      if (!cached) return note;
-
-      const cachedImagesByName = new Map<string, any>(
-        (Array.isArray(cached.images) ? cached.images : [])
-          .filter((img: any) => img?.name)
-          .map((img: any) => [String(img.name), img])
-      );
-
-      const mergedImages = (Array.isArray(note.images) ? note.images : []).map((img: any) => {
-        const fromCache = img?.name ? cachedImagesByName.get(String(img.name)) : null;
-        if (fromCache?.base64 && !img?.base64) {
-          return { ...img, base64: fromCache.base64 };
-        }
-        return img;
-      });
-
-      return { ...note, images: mergedImages };
-    });
   };
 
   const decodeFirmaHash = (hash?: string | null) => {
@@ -706,7 +685,6 @@ export default function NotesScreen() {
   };
 
   const fetchNotes = async () => {
-    // Verificar si existe current_marca
     const currentMarca = await AsyncStorage.getItem('current_marca');
     if (!currentMarca) {
       setHasCurrentMarca(false);
@@ -718,22 +696,34 @@ export default function NotesScreen() {
     setCurrentMarca(currentMarcaData);
     setHasCurrentMarca(true);
 
+    const listPuestoId =
+      currentMarcaData?.puesto?.id != null ? Number(currentMarcaData.puesto.id) : null;
+
     try {
       setIsLoading(true);
       setError(null);
       setOfflineMessage(null);
 
-      // Verificar conectividad
+      const notesCacheRaw = await AsyncStorage.getItem('notes_cache');
+      const cachedData = parseNotesCache(notesCacheRaw);
+      const legacyPid = cachedData.puesto?.id ?? listPuestoId;
+
+      if (!listPuestoId || listPuestoId <= 0) {
+        setError('No se encontró el puesto en la marca actual. No se pueden cargar las notas.');
+        setNotes([]);
+        setPuesto(currentMarcaData.puesto || null);
+        return;
+      }
+
       const isConnected = await getConnectionStatus();
 
       if (isConnected) {
-        // Con internet: hacer fetch normal
         const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
         if (!apiUrl) {
           throw new Error('Server URL not configured');
         }
         const response = await authedFetch({
-          url: `${apiUrl}/api/puestos/${currentMarcaData.id}/notas`,
+          url: `${apiUrl}/api/puestos/0/notas?puesto_id=${encodeURIComponent(String(listPuestoId))}`,
           init: {
             method: 'GET',
             headers: {
@@ -752,55 +742,72 @@ export default function NotesScreen() {
         const data = await response.json();
 
         if (data.status) {
-          const notesCache = await AsyncStorage.getItem('notes_cache');
-          const cachedData = notesCache ? JSON.parse(notesCache) : { notas: [] };
-          const mergedNotes = mergeNotesBase64FromCache(data.notas || [], cachedData.notas || []);
-          setNotes(mergedNotes);
+          const mergedAll = mergeNotesCacheForPuesto(
+            cachedData.notas || [],
+            data.notas || [],
+            listPuestoId,
+            legacyPid,
+            mergeNotesBase64FromCache
+          );
+          const forList = filterNotesByPuestoId(mergedAll, listPuestoId, listPuestoId);
+          setNotes(forList);
           setPuesto(currentMarcaData.puesto || null);
-          // Actualizar notes_cache
-          await AsyncStorage.setItem('notes_cache', JSON.stringify({
-            notas: mergedNotes,
-            puesto: currentMarcaData.puesto || null
-          }));
+          await AsyncStorage.setItem(
+            'notes_cache',
+            JSON.stringify({
+              notas: mergedAll,
+              puesto: currentMarcaData.puesto || null,
+            })
+          );
         } else {
-          // Error real del servidor / lógica (sí cuenta como error)
           setError(data.message || 'Error al cargar las notas');
         }
       } else {
-        // Sin internet: cargar desde cache
-        const notesCache = await AsyncStorage.getItem('notes_cache');
-        if (notesCache) {
-          const cachedData = JSON.parse(notesCache);
-          setNotes(cachedData.notas || []);
+        const forList = filterNotesByPuestoId(cachedData.notas || [], listPuestoId, legacyPid);
+        if (forList.length > 0) {
+          setNotes(forList);
           setPuesto(currentMarcaData.puesto || null);
           setOfflineMessage('Modo Offline: no hay conexión a internet. Mostrando datos guardados.');
         } else {
-          // Sin internet NO es error: permitir crear registros offline si aplica
-          setOfflineMessage('Sin conexión: no hay datos guardados previamente. Puedes crear notas offline y se sincronizarán cuando haya conexión.');
+          setOfflineMessage(
+            'Sin conexión: no hay datos guardados previamente. Puedes crear notas offline y se sincronizarán cuando haya conexión.'
+          );
           setNotes([]);
         }
       }
     } catch (err) {
       console.error('Error fetching notes:', err);
-      // En caso de error, intentar cargar desde cache
       try {
-        const notesCache = await AsyncStorage.getItem('notes_cache');
-        if (notesCache) {
-          const cachedData = JSON.parse(notesCache);
-          setNotes(cachedData.notas || []);
-          setPuesto(currentMarcaData.puesto || null);
-          setOfflineMessage('Modo Offline: error de conexión. Mostrando datos guardados.');
-        } else {
-          if (isProbablyNetworkError(err)) {
-            setOfflineMessage('Sin conexión: no hay datos guardados previamente. Puedes crear notas offline y se sincronizarán cuando haya conexión.');
+        const notesCacheRaw = await AsyncStorage.getItem('notes_cache');
+        const cachedData = parseNotesCache(notesCacheRaw);
+        const legacyPid = cachedData.puesto?.id ?? listPuestoId;
+        if (listPuestoId && listPuestoId > 0) {
+          const forList = filterNotesByPuestoId(cachedData.notas || [], listPuestoId, legacyPid);
+          if (forList.length > 0) {
+            setNotes(forList);
+            setPuesto(currentMarcaData.puesto || null);
+            setOfflineMessage('Modo Offline: error de conexión. Mostrando datos guardados.');
+          } else if (isProbablyNetworkError(err)) {
+            setOfflineMessage(
+              'Sin conexión: no hay datos guardados previamente. Puedes crear notas offline y se sincronizarán cuando haya conexión.'
+            );
             setNotes([]);
           } else {
             setError('Error al cargar las notas');
           }
+        } else if (isProbablyNetworkError(err)) {
+          setOfflineMessage(
+            'Sin conexión: no hay datos guardados previamente. Puedes crear notas offline y se sincronizarán cuando haya conexión.'
+          );
+          setNotes([]);
+        } else {
+          setError('Error al cargar las notas');
         }
       } catch (cacheErr) {
         if (isProbablyNetworkError(err) || isProbablyNetworkError(cacheErr)) {
-          setOfflineMessage('Sin conexión: no hay datos guardados previamente. Puedes crear notas offline y se sincronizarán cuando haya conexión.');
+          setOfflineMessage(
+            'Sin conexión: no hay datos guardados previamente. Puedes crear notas offline y se sincronizarán cuando haya conexión.'
+          );
           setNotes([]);
         } else {
           setError('Error al cargar las notas');
@@ -934,7 +941,7 @@ export default function NotesScreen() {
       [
         { text: 'Cancelar', style: 'cancel' },
         {
-          text: 'Crear',
+          text: 'Aceptar',
           onPress: async () => {
             setIsSubmitting(true);
             setSubmitResponse(null);
@@ -1002,21 +1009,27 @@ export default function NotesScreen() {
                 // Crear entrada en notes_actions
                 const actionsStr = await AsyncStorage.getItem('notes_actions');
                 const actions = actionsStr ? JSON.parse(actionsStr) : [];
-                actions.push({
+                const nextActions = actions.filter(
+                  (a: any) => !(a.type === 'create' && String(a.id) === String(localId))
+                );
+                nextActions.push({
                   requestData: requestBody,
                   marcaId: currentMarcaData.id,
                   puestoId: currentMarcaData.puesto.id,
                   id: localId,
                   type: 'create',
                 });
-                await AsyncStorage.setItem('notes_actions', JSON.stringify(actions));
+                await AsyncStorage.setItem('notes_actions', JSON.stringify(nextActions));
 
                 // Crear nota en cache
                 const cacheStr = await AsyncStorage.getItem('notes_cache');
                 const cache = cacheStr ? JSON.parse(cacheStr) : { notas: [], puesto: null };
 
+                const offlinePuestoId =
+                  currentMarcaData?.puesto?.id ?? puestosArray[0] ?? 0;
                 const newNoteCache = {
                   id: 0,
+                  puesto_id: offlinePuestoId,
                   titulo: tituloRef.current,
                   description: descriptionRef.current,
                   division: newNote.division,
@@ -1033,6 +1046,9 @@ export default function NotesScreen() {
                 };
 
                 cache.notas.push(newNoteCache);
+                if (!cache.puesto && currentMarcaData?.puesto) {
+                  cache.puesto = currentMarcaData.puesto;
+                }
                 await AsyncStorage.setItem('notes_cache', JSON.stringify(cache));
 
                 Alert.alert('Éxito', 'Nota creada localmente. Se sincronizará cuando haya conexión.');
@@ -1075,7 +1091,7 @@ export default function NotesScreen() {
       [
         { text: 'Cancelar', style: 'cancel' },
         {
-          text: 'Confirmar',
+          text: 'Aceptar',
           onPress: async () => {
             setIsSubmitting(true);
             setSubmitResponse(null);
@@ -1117,29 +1133,53 @@ export default function NotesScreen() {
                   Alert.alert('Error', data.message || 'Error al actualizar la nota');
                 }
               } else {
-                // Sin internet: modo offline
+                // Sin internet: modo offline — borrador local fusiona en pending create; servidor deduplica update
+                const marcaStr = await AsyncStorage.getItem('current_marca');
+                const marcaData = marcaStr ? JSON.parse(marcaStr) : null;
+                const marcaIdOffline = marcaData?.id ?? currentMarca?.id ?? 0;
+                const puestoIdOffline = marcaData?.puesto?.id ?? currentMarca?.puesto?.id ?? 0;
+
                 const actionsStr = await AsyncStorage.getItem('notes_actions');
-                const actions = actionsStr ? JSON.parse(actionsStr) : [];
+                let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
 
                 if (editingNote.id_local !== '') {
-                  // Editar acción existente en notes_actions
-                  const actionIndex = actions.findIndex((a: any) => a.id === editingNote.id_local);
+                  const localKey = editingNote.id_local;
+                  actions = actions.filter(
+                    (a: any) => !(a.type === 'update' && String(a.id) === String(localKey))
+                  );
+                  const actionIndex = actions.findIndex(
+                    (a: any) => a.type === 'create' && String(a.id) === String(localKey)
+                  );
                   if (actionIndex !== -1) {
-                    actions[actionIndex].requestData = requestBody;
-                    await AsyncStorage.setItem('notes_actions', JSON.stringify(actions));
+                    actions[actionIndex] = {
+                      ...actions[actionIndex],
+                      requestData: requestBody,
+                      marcaId: actions[actionIndex].marcaId ?? marcaIdOffline,
+                      puestoId: actions[actionIndex].puestoId ?? puestoIdOffline,
+                    };
+                  } else {
+                    actions.push({
+                      requestData: requestBody,
+                      marcaId: marcaIdOffline,
+                      puestoId: puestoIdOffline,
+                      id: localKey,
+                      type: 'create',
+                    });
                   }
                 } else {
-                  // Crear nueva acción de update en notes_actions
-                  // Eliminar cualquier acción de update previa para este noteId
-                  const filteredActions = actions.filter((a: any) => !(a.type === 'update' && a.id === noteId));
-                  filteredActions.push({
+                  actions = actions.filter(
+                    (a: any) =>
+                      !(a.type === 'update' && (Number(a.id) === Number(noteId) || String(a.id) === String(noteId)))
+                  );
+                  actions.push({
                     requestData: requestBody,
                     puestoId: currentMarca?.puesto?.id || 0,
                     id: noteId,
                     type: 'update',
                   });
-                  await AsyncStorage.setItem('notes_actions', JSON.stringify(filteredActions));
                 }
+
+                await AsyncStorage.setItem('notes_actions', JSON.stringify(actions));
 
                 // Actualizar notes_cache
                 const cacheStr = await AsyncStorage.getItem('notes_cache');
@@ -1184,7 +1224,7 @@ export default function NotesScreen() {
     );
   };
 
-  const deleteNote = async (noteId: number) => {
+  const deleteNote = async (note: Note) => {
     Alert.alert(
       'Confirmar eliminación',
       '¿Estás seguro de que deseas eliminar esta nota?',
@@ -1194,25 +1234,54 @@ export default function NotesScreen() {
           text: 'Eliminar',
           style: 'destructive',
           onPress: async () => {
+            setDeletingNoteId(note.id);
             try {
-              const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-              if (!apiUrl) {
-                throw new Error('Server URL not configured');
+              const isConnected = await getConnectionStatus();
+              if (!isConnected || note.id === 0 || !!note.id_local) {
+                const cacheStr = await AsyncStorage.getItem('notes_cache');
+                const cache = cacheStr ? JSON.parse(cacheStr) : { notas: [], puesto: null };
+                cache.notas = (cache.notas || []).filter((n: Note) =>
+                  note.id_local ? n.id_local !== note.id_local : n.id !== note.id
+                );
+                await AsyncStorage.setItem('notes_cache', JSON.stringify(cache));
+
+                const actionsStr = await AsyncStorage.getItem('notes_actions');
+                let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+                const puestoIdForQueue = note.puesto_id || currentMarca?.puesto?.id || 0;
+                let filteredActions = actions.filter((a: any) => {
+                  if (note.id_local) {
+                    return !(
+                      String(a.id) === String(note.id_local) &&
+                      (a.type === 'create' || a.type === 'update')
+                    );
+                  }
+                  return !(
+                    (Number(a.id) === Number(note.id) || String(a.id) === String(note.id)) &&
+                    (a.type === 'create' || a.type === 'update')
+                  );
+                });
+                if (!note.id_local && note.id !== 0) {
+                  filteredActions = filteredActions.filter(
+                    (a: any) =>
+                      !(a.type === 'delete' && (Number(a.id) === Number(note.id) || String(a.id) === String(note.id)))
+                  );
+                  filteredActions.push({ id: note.id, type: 'delete', puestoId: puestoIdForQueue });
+                }
+                await AsyncStorage.setItem('notes_actions', JSON.stringify(filteredActions));
+
+                setNotes((prev) => prev.filter((n) =>
+                  note.id_local ? n.id_local !== note.id_local : n.id !== note.id
+                ));
+                Alert.alert('Éxito', 'Nota eliminada localmente. Se sincronizará cuando haya conexión.');
+                return;
               }
-              const response = await authedFetch({
-                url: `${apiUrl}/api/empleados/${employee?.id}/notas/${noteId}`,
-                init: {
-                  method: 'DELETE',
-                  headers: {
-                    'Content-Type': 'application/json',
-                  },
-                },
+
+              const data = await deleteNoteAPI({
+                noteId: note.id,
+                puestoId: note.puesto_id || currentMarca?.puesto?.id || 0,
                 refreshAccessToken,
                 logout,
               });
-              if (!response) return;
-
-              const data = await response.json();
 
               if (data.status) {
                 Alert.alert('Éxito', data.message || 'Nota eliminada correctamente');
@@ -1223,6 +1292,8 @@ export default function NotesScreen() {
             } catch (err) {
               console.error('Error deleting note:', err);
               Alert.alert('Error', 'No se pudo eliminar la nota');
+            } finally {
+              setDeletingNoteId((prev) => (prev === note.id ? null : prev));
             }
           },
         },
@@ -1642,7 +1713,7 @@ export default function NotesScreen() {
                       <ThemedText style={styles.noteDate}>
                         Lat: {info.latitud || 'N/A'} | Long: {info.longitud || 'N/A'}
                       </ThemedText>
-                      <ThemedText style={styles.noteDate}>Hora: {info.timestamp || 'N/A'}</ThemedText>
+                      <ThemedText style={styles.noteDate}>Hora: { convertDateTimestampToLocalString( new Date(Number(info.timestamp)).toISOString() ) || 'N/A'}</ThemedText>
                     </ThemedView>
                   );
                 })()
@@ -1718,7 +1789,7 @@ export default function NotesScreen() {
                 {isSubmitting ? (
                   <ActivityIndicator size="small" color="#FFFFFF" />
                 ) : (
-                  <ThemedText style={styles.confirmButtonText}>{getActionIcon('confirm')}</ThemedText>
+                  <ThemedText style={styles.confirmButtonText}>Aceptar</ThemedText>
                 )}
               </TouchableOpacity>
               <TouchableOpacity style={styles.cancelButton} onPress={cancelEditing} disabled={isSubmitting}>
@@ -1783,7 +1854,7 @@ export default function NotesScreen() {
                           <ThemedText style={styles.noteDate}>Sesión: {info.sessionId}</ThemedText>
                           <ThemedText style={styles.noteDate}>Empleado: {info.empleadoId}</ThemedText>
                           <ThemedText style={styles.noteDate}>Lat/Lng: {info.latitud}, {info.longitud}</ThemedText>
-                          <ThemedText style={styles.noteDate}>Hora: {info.timestamp}</ThemedText>
+                          <ThemedText style={styles.noteDate}>Hora: { convertDateTimestampToLocalString( new Date(Number(info.timestamp)).toISOString() ) }</ThemedText>
                         </ThemedView>
                       );
                     })()}
@@ -1824,6 +1895,17 @@ export default function NotesScreen() {
                 <ThemedView style={styles.buttonRow}>
                   <TouchableOpacity style={styles.editButton} onPress={() => startEditing(note)}>
                     <ThemedText style={styles.editButtonText}>{getActionIcon('edit')}</ThemedText>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.deleteButton, deletingNoteId === note.id && styles.buttonDisabled]}
+                    onPress={() => deleteNote(note)}
+                    disabled={deletingNoteId === note.id}
+                  >
+                    {deletingNoteId === note.id ? (
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                      <ThemedText style={styles.deleteButtonText}>{getActionIcon('delete')}</ThemedText>
+                    )}
                   </TouchableOpacity>
                   <TouchableOpacity style={styles.changesButton} onPress={() => openChangesModal(note.id)}>
                     <ThemedText style={styles.changesButtonText}>{getActionIcon('changes')}</ThemedText>
@@ -1932,7 +2014,7 @@ export default function NotesScreen() {
                       <ThemedText style={styles.signatureInfoValue}>
                         Lat: {info.latitud || 'N/A'} | Long: {info.longitud || 'N/A'}
                       </ThemedText>
-                      <ThemedText style={styles.signatureInfoValue}>Hora: {info.timestamp || 'N/A'}</ThemedText>
+                      <ThemedText style={styles.signatureInfoValue}>Hora: { convertDateTimestampToLocalString( new Date(Number(info.timestamp)).toISOString() ) || 'N/A'}</ThemedText>
                     </>
                   );
                 })()}
@@ -1973,7 +2055,7 @@ export default function NotesScreen() {
                       <ThemedText style={styles.noteDate}>
                         Lat: {info.latitud || 'N/A'} | Long: {info.longitud || 'N/A'}
                       </ThemedText>
-                      <ThemedText style={styles.noteDate}>Hora: {info.timestamp || 'N/A'}</ThemedText>
+                      <ThemedText style={styles.noteDate}>Hora: { convertDateTimestampToLocalString( new Date(Number(info.timestamp)).toISOString() ) || 'N/A'}</ThemedText>
                     </ThemedView>
                   );
                 })()
@@ -2090,7 +2172,7 @@ export default function NotesScreen() {
               {isSubmitting ? (
                 <ActivityIndicator size="small" color="#FFFFFF" />
               ) : (
-                <ThemedText style={styles.confirmButtonText}>{getActionIcon('confirm')}</ThemedText>
+                <ThemedText style={styles.confirmButtonText}>Aceptar</ThemedText>
               )}
             </TouchableOpacity>
             <TouchableOpacity style={styles.cancelButton} onPress={cancelCreating} disabled={isSubmitting}>
@@ -2685,7 +2767,7 @@ export default function NotesScreen() {
                                               <ThemedText style={styles.changeDescription}>
                                                 <ThemedText style={{ fontWeight: '800' }}>{k}: </ThemedText>
                                                 {info
-                                                  ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${info.timestamp || 'N/A'}`
+                                                  ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${ convertDateTimestampToLocalString( new Date(Number(info.timestamp)).toISOString() ) || 'N/A'}`
                                                   : 'Firma (formato no decodificable)'}
                                               </ThemedText>
                                             </ThemedView>
@@ -2725,7 +2807,7 @@ export default function NotesScreen() {
                                       <ThemedText style={styles.changeDescription}>
                                         <ThemedText style={{ fontWeight: '800' }}>{prop}: </ThemedText>
                                         {info
-                                          ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${info.timestamp || 'N/A'}`
+                                          ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${ convertDateTimestampToLocalString( new Date(Number(info.timestamp)).toISOString() ) || 'N/A'}`
                                           : 'Firma (formato no decodificable)'}
                                       </ThemedText>
                                     </ThemedView>

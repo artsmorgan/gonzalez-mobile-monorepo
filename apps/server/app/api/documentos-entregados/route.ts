@@ -18,84 +18,13 @@ export async function GET(req: NextRequest) {
     const { valid, expired, message } = await verifyAccessTokenByApi(req);
     if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
-    const marcaIdStr = req.nextUrl.searchParams.get("m");
-    if (!marcaIdStr) {
-      return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
+    const corpoIdStr = req.nextUrl.searchParams.get("corpo_id");
+    if (!corpoIdStr) {
+      return NextResponse.json({ status: false, message: "Sucursal (corpo_id) no especificada" }, { status: 200 });
     }
-
-    const marcaDia = await callDynamicPrisma({
-      req,
-      data: {
-        action: "GET",
-        table: "c_marca_dia",
-        operation: "findUnique",
-        where: { id: parseInt(marcaIdStr) },
-      },
-    });
-    if (!marcaDia || !marcaDia.id) {
-      return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
-    }
-    if (!marcaDia.empleadoFijo_id) {
-      return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 200 });
-    }
-
-    // Obtener última marca usando callDynamicPrisma directamente
-    const now = toZonedTime(new Date(), "America/Costa_Rica");
-    const nowPlus15 = new Date(now.getTime() + 15 * 60 * 1000);
-    const currentDate = new Date(now.toISOString().split("T")[0]);
-    const currentTime = new Date("1970-01-01 " + now.toTimeString().slice(0, 8));
-
-    const proximo = await callDynamicPrisma({
-      req,
-      data: {
-        action: "GET",
-        table: "c_marca_dia",
-        operation: "findFirst",
-        where: {
-          empleadoFijo_id: marcaDia.empleadoFijo_id,
-          OR: [
-            { fecha: { gt: now } },
-            {
-              fecha: { equals: currentDate },
-              hora_inicio: { gte: currentTime },
-            },
-          ],
-        },
-        orderBy: [{ fecha: "asc" }, { hora_inicio: "asc" }],
-      },
-    });
-
-    let lastMarca = null;
-    if (proximo && proximo.id) {
-      const proximoFecha = proximo.fecha instanceof Date ? proximo.fecha : new Date(proximo.fecha);
-      const proximoHoraInicio = proximo.hora_inicio instanceof Date ? proximo.hora_inicio : (proximo.hora_inicio ? new Date("1970-01-01T" + String(proximo.hora_inicio)) : null);
-      if (proximoHoraInicio && !isNaN(proximoHoraInicio.getTime())) {
-        const proximoDateTime = new Date(`${proximoFecha.toISOString().split("T")[0]}T${proximoHoraInicio.toTimeString().slice(0, 8)}`);
-        if (!isNaN(proximoDateTime.getTime()) && proximoDateTime <= nowPlus15) {
-          lastMarca = proximo;
-        }
-      }
-    }
-
-    if (!lastMarca || !lastMarca.id) {
-      const ultimo = await callDynamicPrisma({
-        req,
-        data: {
-          action: "GET",
-          table: "c_marca_dia",
-          operation: "findFirst",
-          where: { empleadoFijo_id: marcaDia.empleadoFijo_id },
-          orderBy: [{ fecha: "desc" }, { hora_inicio: "desc" }],
-        },
-      });
-      lastMarca = ultimo;
-    }
-
-    if (!lastMarca || !lastMarca.id) {
-      return NextResponse.json({ status: false, message: "No se encontró la última marca" }, { status: 200 });
-    }
-    if (marcaDia.id !== lastMarca.id) {
-      return NextResponse.json({ status: false, message: "Hay una nueva marca más reciente" }, { status: 200 });
+    const corpoId = parseInt(corpoIdStr, 10);
+    if (!Number.isFinite(corpoId) || corpoId <= 0) {
+      return NextResponse.json({ status: false, message: "corpo_id inválido" }, { status: 200 });
     }
 
     const rows = await callDynamicPrisma({
@@ -105,7 +34,7 @@ export async function GET(req: NextRequest) {
         table: "e_control_documento_entregado_cliente",
         operation: "findMany",
         where: {
-          corpo_id: marcaDia.corpo_id,
+          corpo_id: corpoId,
         },
         orderBy: { id: "desc" },
       },
@@ -141,7 +70,8 @@ export async function POST(req: NextRequest) {
 
     const body = await req.json();
     const {
-      marca_id,
+      cliente_id,
+      corpo_id,
       fecha,
       nombre_oficial_entrega,
       nombre_oficial_recibe,
@@ -152,7 +82,8 @@ export async function POST(req: NextRequest) {
     } = body ?? {};
 
     if (
-      !marca_id ||
+      cliente_id == null ||
+      corpo_id == null ||
       !fecha ||
       !nombre_oficial_entrega ||
       !nombre_oficial_recibe ||
@@ -163,17 +94,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 200 });
     }
 
-    const marcaDia = await callDynamicPrisma({
-      req,
-      data: {
-        action: "GET",
-        table: "c_marca_dia",
-        operation: "findUnique",
-        where: { id: parseInt(String(marca_id)) },
-      },
-    });
-    if (!marcaDia || !marcaDia.id) {
-      return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
+    const clienteIdNum = parseInt(String(cliente_id), 10);
+    const corpoIdNum = parseInt(String(corpo_id), 10);
+    if (!Number.isFinite(clienteIdNum) || clienteIdNum <= 0 || !Number.isFinite(corpoIdNum) || corpoIdNum <= 0) {
+      return NextResponse.json({ status: false, message: "cliente_id o corpo_id inválidos" }, { status: 200 });
     }
 
     const fechaDate = parseDateOnly(fecha);
@@ -187,8 +111,8 @@ export async function POST(req: NextRequest) {
         action: "POST",
         table: "e_control_documento_entregado_cliente",
         data: {
-          cliente_id: marcaDia.cliente_id,
-          corpo_id: marcaDia.corpo_id,
+          cliente_id: clienteIdNum,
+          corpo_id: corpoIdNum,
           fecha: fechaDate.toISOString(),
           nombre_oficial_entrega: String(nombre_oficial_entrega),
           nombre_oficial_recibe: String(nombre_oficial_recibe),
@@ -222,37 +146,33 @@ export async function POST(req: NextRequest) {
       }
       let sucursalNombre = "Desconocida";
       let clienteNombre = "Desconocido";
-      if (marcaDia.cliente_id) {
-        const cliente = await callDynamicPrisma({
-          req,
-          data: {
-            action: "GET",
-            table: "e_estructura_cliente",
-            operation: "findUnique",
-            where: { id: marcaDia.cliente_id },
-          },
-        });
-        if (cliente && cliente.id) {
-          clienteNombre = cliente.nombre || "Desconocido";
-        }
+      const cliente = await callDynamicPrisma({
+        req,
+        data: {
+          action: "GET",
+          table: "e_estructura_cliente",
+          operation: "findUnique",
+          where: { id: clienteIdNum },
+        },
+      });
+      if (cliente && cliente.id) {
+        clienteNombre = cliente.nombre || "Desconocido";
       }
-      if (marcaDia.corpo_id) {
-        const sucursal = await callDynamicPrisma({
-          req,
-          data: {
-            action: "GET",
-            table: "e_estructura_sucursal",
-            operation: "findUnique",
-            where: { id: marcaDia.corpo_id },
-          },
-        });
-        if (sucursal && sucursal.id) {
-          sucursalNombre = sucursal.nombre || "Desconocida";
-        }
+      const sucursal = await callDynamicPrisma({
+        req,
+        data: {
+          action: "GET",
+          table: "e_estructura_sucursal",
+          operation: "findUnique",
+          where: { id: corpoIdNum },
+        },
+      });
+      if (sucursal && sucursal.id) {
+        sucursalNombre = sucursal.nombre || "Desconocida";
       }
       const fechaFormatted = fechaDate.toISOString().split("T")[0];
-      const descriptionNotificacion = "El empleado " + empleadoNombre + " ha registrado un documento entregado para la sucursal del cliente " + clienteNombre + " con la fecha " + fechaFormatted;
-      await sendNotificationByRole(req, marcaDia.corpo_id, [typeof empleadoId === 'number' ? empleadoId : parseInt(String(empleadoId || "0"), 10)], "Documento entregado registrado", descriptionNotificacion, ["ADMINISTRATIVO", "SUPERVISOR"]);
+      const descriptionNotificacion = "El empleado " + empleadoNombre + " ha registrado un documento entregado para la sucursal " + sucursalNombre + " del cliente " + clienteNombre + " con la fecha " + fechaFormatted;
+      await sendNotificationByRole(req, corpoIdNum, [typeof empleadoId === 'number' ? empleadoId : parseInt(String(empleadoId || "0"), 10)], "Documento entregado registrado", descriptionNotificacion, ["ADMINISTRATIVO", "SUPERVISOR"]);
     }
 
     // Registrar cambio de creación
@@ -298,5 +218,4 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }
-
 
