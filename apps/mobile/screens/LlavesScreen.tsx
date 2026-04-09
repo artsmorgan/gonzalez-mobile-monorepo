@@ -277,7 +277,7 @@ export default function LlavesScreen() {
   };
 
   const getConnectionStatus = async (): Promise<boolean> => {
-    return false;
+    //return false;
     const state = await Network.getNetworkStateAsync();
     return !!(state.isConnected && state.isInternetReachable);
   };
